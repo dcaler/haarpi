@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rabbithole"
+version = "0.1.0"
+description = "RAbbithole: offline-first Research Assistant for literature reviews and annotated bibliographies, driven by local LLMs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+    "PyMuPDF>=1.24",
+]
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.39"]
+rag = ["chromadb>=0.5"]
+
+[project.scripts]
+rabbitHole = "rabbithole.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rabbithole*"]
