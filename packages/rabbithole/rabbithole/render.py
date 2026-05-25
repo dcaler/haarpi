@@ -44,9 +44,11 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
 
 
 def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
-                 corpus, unmatched: list[str]) -> tuple[Path, Path | None]:
+                 corpus, unmatched: list[str],
+                 cfg_version: int = 1) -> tuple[Path, Path | None]:
     md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched)
-    stem = f"{cfg.project_name}_litreview_{brain_backend}"
+    v = f"_v{cfg_version}" if cfg_version > 1 else ""
+    stem = f"{cfg.project_name}_litreview{v}_{brain_backend}"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
 
