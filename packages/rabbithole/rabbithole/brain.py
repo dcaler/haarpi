@@ -114,19 +114,28 @@ class Brain:
     # ── backends ─────────────────────────────────────────────────────────
     def _ollama(self, model: str, prompt: str, system: str,
                 num_ctx: int, temperature: float, retries: int = 3) -> str:
+        import json as _json
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        payload = {"model": model, "messages": messages, "stream": False,
+        payload = {"model": model, "messages": messages, "stream": True,
                    "options": {"temperature": temperature, "num_ctx": num_ctx}}
         last = None
         for attempt in range(1, retries + 1):
             try:
-                r = httpx.post(f"{self.gc.ollama_url}/api/chat", json=payload,
-                               timeout=_OLLAMA_TIMEOUT)
-                r.raise_for_status()
-                return r.json()["message"]["content"].strip()
+                parts: list[str] = []
+                with httpx.stream("POST", f"{self.gc.ollama_url}/api/chat",
+                                  json=payload, timeout=_OLLAMA_TIMEOUT) as r:
+                    r.raise_for_status()
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        chunk = _json.loads(line)
+                        parts.append(chunk.get("message", {}).get("content", ""))
+                        if chunk.get("done"):
+                            break
+                return "".join(parts).strip()
             except Exception as e:  # noqa: BLE001
                 last = e
                 print(f"  [retry {attempt}/{retries}] ollama {model}: {e}", file=sys.stderr)
