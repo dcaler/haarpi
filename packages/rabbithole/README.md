@@ -155,6 +155,7 @@ sources:
 ranking:
   method: embedding      # embedding | citations | llm
   rerank_top_n: 0        # >0 with method: llm to re-rank the top N
+  max_arxiv_fraction: 0.25  # cap arXiv/preprints to ≤25% of the final list
 brain:
   backend: ollama        # ollama | claude
   coordinator_model: qwen3.6:27b-16k

@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 
 from .brain import Brain
+from .filters import is_arxiv
 from .models import Candidate
 
 
@@ -27,6 +28,24 @@ def _cosine(a: list[float], b: list[float]) -> float:
 def _doc_text(c: Candidate) -> str:
     kw = "; ".join(c.keywords) if c.keywords else ""
     return ". ".join(p for p in (c.title, c.abstract, kw) if p).strip()
+
+
+def _quality_weight(c: Candidate) -> float:
+    """Source-type quality multiplier: peer-reviewed journals rank highest."""
+    if is_arxiv(c):
+        return 0.65
+    if c.item_type == "journal-article" and c.venue:
+        return 1.0
+    if c.doi:   # conference paper, book chapter, etc. — has DOI but not a journal
+        return 0.85
+    return 0.80
+
+
+def _cite_score(c: Candidate, max_cites: int) -> float:
+    """Log-normalised citation count, 0-1. Gives a small boost to seminal works."""
+    if max_cites <= 0:
+        return 0.0
+    return math.log1p(c.cited_by_count) / math.log1p(max_cites)
 
 
 def rank(candidates: list[Candidate], topic: str, focus: str,
@@ -45,13 +64,20 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
     try:
         q_emb = brain.embed(query)
         doc_embs = brain.embed_batch([_doc_text(c) for c in candidates])
-        for c, e in zip(candidates, doc_embs):
-            c.relevance = _cosine(q_emb, e)
+        cosines = [_cosine(q_emb, e) for e in doc_embs]
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] embedding rank failed ({e}); falling back to citations")
         for c in candidates:
             c.relevance = float(c.cited_by_count)
         return sorted(candidates, key=lambda c: c.relevance, reverse=True)
+
+    max_cites = max((c.cited_by_count for c in candidates), default=0)
+    for c, cos in zip(candidates, cosines):
+        # 80% semantic relevance × source quality + 5% citation signal
+        # Quality weight keeps arXiv from crowding out peer-reviewed work.
+        # Citation signal gives a gentle boost to seminal papers.
+        c.relevance = cos * _quality_weight(c) + 0.05 * _cite_score(c, max_cites)
+
     ranked = sorted(candidates, key=lambda c: c.relevance, reverse=True)
 
     # 2) optional expert LLM re-rank of the top N — ONLY when method == "llm".

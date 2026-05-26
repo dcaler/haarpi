@@ -64,6 +64,7 @@ class ProjectConfig:
     ranking: dict = field(default_factory=lambda: {
         "method": "embedding",          # "embedding" | "citations" | "llm"
         "rerank_top_n": 0,              # 0 = no LLM re-rank
+        "max_arxiv_fraction": 0.25,     # cap on arXiv/preprint share of final list
     })
     brain: BrainConfig = field(default_factory=BrainConfig)
     zotero: dict = field(default_factory=lambda: {"collection_key": ""})

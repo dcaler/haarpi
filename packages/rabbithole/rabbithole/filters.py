@@ -32,6 +32,20 @@ def is_mdpi(c: Candidate) -> bool:
     return False
 
 
+def is_arxiv(c: Candidate) -> bool:
+    """True for arXiv preprints and other grey/preprint sources."""
+    doi = (c.doi or "").lower()
+    url = (c.url or "").lower()
+    pdf = (c.oa_pdf_url or "").lower()
+    return (
+        "10.48550" in doi          # arXiv's Crossref DOI prefix
+        or "arxiv.org" in url
+        or "arxiv.org" in pdf
+        or c.source == "arxiv"
+        or c.item_type == "preprint"
+    )
+
+
 def is_excluded(c: Candidate, extra_publishers: list[str]) -> bool:
     if is_mdpi(c):
         return True

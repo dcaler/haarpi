@@ -176,6 +176,8 @@ You are writing the narrative section of a scholarly literature review.
 Requirements:
 - Organise into thematic sections that tell a coherent story about the state of knowledge. Design the sections to fit the material; do not use a rigid template.
 - SYNTHESISE across sources — compare, contrast, and connect them. Do NOT summarise one paper at a time.
+- Anchor the narrative in the established scholarly conversation. Open each thematic section by situating it within the foundational literature: cite the most influential or well-established works (indicated by high citation counts in the digest) before moving to recent developments or preprints.
+- When multiple sources support the same claim, prefer the peer-reviewed journal article over a preprint or grey literature source.
 - Use author-year in-text citations exactly as given in the digest, e.g. (Smith & Jones, 2021).
 - Always use full parenthetical citations: (Author, Year) or (Author et al., Year). Never use narrative form such as "Smith (2021) showed...".
 - Explicitly identify gaps, tensions/disagreements, and emerging directions.
@@ -189,8 +191,9 @@ def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
     lines = []
     for c, a in zip(corpus, notes):
         themes = ", ".join(a.get("themes", []))
+        cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
         lines.append(
-            f"- ({c.author_year()}) {a.get('argument','')} "
+            f"- ({c.author_year()}){cites} {a.get('argument','')} "
             f"Findings: {a.get('findings','')} Themes: {themes}".strip())
     return "\n".join(lines)
 

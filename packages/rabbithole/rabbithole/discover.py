@@ -121,9 +121,12 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     default_floor = 6.0 if rank_method == "llm" else 0.0
     floor = float(cfg.ranking.get("min_score", default_floor))
     qualified = [c for c in ranked if c.relevance >= floor]
-    shortlist = qualified[:cfg.target_max]
+    max_arxiv_frac = float(cfg.ranking.get("max_arxiv_fraction", 0.25))
+    shortlist = _cap_arxiv(qualified, cfg.target_max, max_arxiv_frac)
+    arxiv_n = sum(1 for c in shortlist if filters.is_arxiv(c))
     print(f"Curated: {len(shortlist)} of {len(ranked)} "
-          f"(method={rank_method}, floor={floor:g}) — target {cfg.target_max}")
+          f"(method={rank_method}, floor={floor:g}, arxiv={arxiv_n}/{len(shortlist)}) "
+          f"— target {cfg.target_max}")
 
     # Resolve a direct OA PDF link for the final list only — a convenience, NOT a
     # selection criterion. Paywalled papers stay on the list; the DOI is the fetch
@@ -212,6 +215,29 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
             continue
         kept.append(c)
     return coll, kept, already, added
+
+
+def _cap_arxiv(ranked: list[Candidate], target: int, max_fraction: float) -> list[Candidate]:
+    """Select top `target` candidates, capping arXiv/preprints at max_fraction."""
+    if max_fraction >= 1.0:
+        return ranked[:target]
+    max_arxiv = max(1, round(target * max_fraction))
+    result, arxiv_seen, backlog = [], 0, []
+    for c in ranked:
+        if len(result) >= target:
+            break
+        if filters.is_arxiv(c):
+            if arxiv_seen < max_arxiv:
+                result.append(c)
+                arxiv_seen += 1
+            else:
+                backlog.append(c)
+        else:
+            result.append(c)
+    # If too few non-arXiv candidates exist, backfill from deferred arXiv entries.
+    if len(result) < target:
+        result += backlog[:target - len(result)]
+    return result
 
 
 def _merge_new(extra: list[Candidate], existing: list[Candidate], cfg) -> list[Candidate]:
