@@ -94,6 +94,7 @@ paper text and respond with ONLY a JSON object, no other text:
   "findings": "key findings (1-2 sentences)",
   "limitations": "stated or evident limitations (1 sentence, or empty)",
   "relevance": "how it relates to the review topic (1 sentence)",
+  "gaps": "dimensions of the review topic or focus that this paper does NOT address — be specific about what is missing, e.g. 'does not examine Y or Z' (1 sentence, or empty if the paper covers all focus dimensions)",
   "themes": ["3-6 short theme tags"]
 }
 Base everything strictly on the provided text. Do not invent."""
@@ -180,7 +181,7 @@ Requirements:
 - When multiple sources support the same claim, prefer the peer-reviewed journal article over a preprint or grey literature source.
 - Use author-year in-text citations exactly as given in the digest, e.g. (Smith & Jones, 2021).
 - Always use full parenthetical citations: (Author, Year) or (Author et al., Year). Never use narrative form such as "Smith (2021) showed...".
-- Explicitly identify gaps, tensions/disagreements, and emerging directions.
+- Explicitly identify gaps, tensions/disagreements, and emerging directions. Where the digest flags dimensions the paper does NOT address, state this in the narrative — e.g. "(Author et al., Year) established X and Z but did not examine Y." Name the missing dimension specifically; do not use vague phrases like "further work is needed".
 - Use Markdown headings (##) for themes. Do not write a bibliography (that is added separately).
 - Be concise. Target 800-1200 words total. Every sentence must add new information or connection; cut anything that restates what the previous sentence already said.
 - Prefer precise, specific claims over hedged generalities. Avoid throat-clearing phrases like "it is worth noting", "this highlights the importance of", or "a growing body of research".
@@ -192,9 +193,11 @@ def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
     for c, a in zip(corpus, notes):
         themes = ", ".join(a.get("themes", []))
         cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
+        gaps = a.get("gaps", "").strip()
+        gap_str = f" NOT addressed: {gaps}" if gaps else ""
         lines.append(
             f"- ({c.author_year()}){cites} {a.get('argument','')} "
-            f"Findings: {a.get('findings','')} Themes: {themes}".strip())
+            f"Findings: {a.get('findings','')} Themes: {themes}{gap_str}".strip())
     return "\n".join(lines)
 
 
