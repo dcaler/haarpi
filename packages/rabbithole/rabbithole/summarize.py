@@ -139,7 +139,6 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
         print(flush=True)
         if len(text) > _DIRECT_CHARS:
             if collection is not None:
-                # codePixie pattern: 3 embed calls (fast) replace N LLM chunk summaries
                 queries = [
                     f"{cfg.topic} {cfg.focus} main argument contribution hypothesis",
                     "methodology research design data collection analysis",
