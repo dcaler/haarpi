@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config, filters, ranking, sources
+from . import config, filters, ranking, render, sources
 from .brain import Brain
 from .models import Candidate, norm_doi
 
@@ -310,13 +310,18 @@ def _write_candidates(cfg, paths, shortlist: list[Candidate],
         "",
     ]
     paths.candidates_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out_docx = paths.candidates_md.with_suffix(".docx")
+    if render.pandoc_convert(paths.candidates_md, out_docx):
+        paths.candidates_md.unlink()
 
 
 def _print_next_steps(cfg, paths, shortlist, collection_key: str) -> None:
     print("\n" + "=" * 60)
     print(" gather complete")
     print("=" * 60)
-    print(f"  Candidate list: {paths.candidates_md}")
+    cand_path = paths.candidates_md.with_suffix(".docx") if \
+        paths.candidates_md.with_suffix(".docx").exists() else paths.candidates_md
+    print(f"  Candidate list: {cand_path}")
     label = "Articles missing from Zotero" if collection_key else "Candidates listed"
     print(f"  {label}: {len(shortlist)}")
     if collection_key:
@@ -358,7 +363,7 @@ def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
         f"  Listed ({label}): {len(shortlist)}  "
         f"({stats['oa_links']} with an OA PDF link)",
         "",
-        f"Candidate list: {paths.candidates_md}",
+        f"Candidate list: {paths.candidates_md.with_suffix('.docx') if paths.candidates_md.with_suffix('.docx').exists() else paths.candidates_md}",
     ]
     if collection_key:
         lines.append(f"Zotero collection: {cfg.project_name}")

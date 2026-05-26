@@ -53,12 +53,12 @@ def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
     out_md.write_text(md, encoding="utf-8")
 
     out_docx = paths.output / f"{stem}.docx"
-    if _pandoc(out_md, out_docx):
+    if pandoc_convert(out_md, out_docx):
         return out_md, out_docx
     return out_md, None
 
 
-def _pandoc(src: Path, dst: Path) -> bool:
+def pandoc_convert(src: Path, dst: Path) -> bool:
     if not shutil.which("pandoc"):
         print("  [note] pandoc not found — skipping .docx (md written). "
               "Install pandoc to get .docx output.")
