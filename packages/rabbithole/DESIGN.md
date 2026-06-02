@@ -104,7 +104,8 @@ litReview/
 
 - [x] Never include MDPI (DOI prefix `10.3390`, publisher, `mdpi.com`, journal list).
 - [x] Only sources with verified full-text PDFs (`looks_like_fulltext`).
-- [x] Full parenthetical author-year citations; bibliography sorted by first author.
+- [x] Full parenthetical author-year citations (claim-first; the citation is never
+      the sentence's subject); bibliography sorted by first author.
 - [x] Complete metadata (title, authors, year, venue, DOI, URL, abstract, publisher).
 - [x] Per-source annotation with page-level location pointer and supporting quote.
 - [x] Thematic narrative (synthesise, not summarise; gaps/tensions/directions) +

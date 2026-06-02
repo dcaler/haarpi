@@ -173,7 +173,9 @@ exclude_publishers: []   # extra publishers to drop (MDPI is always excluded)
 - **Never includes MDPI** (checked by DOI prefix `10.3390`, publisher name,
   `mdpi.com`, and a known-journal list — re-checked at ingest).
 - **Only sources with verified full-text PDFs** make it into the review.
-- **Full parenthetical author-year citations**; bibliography sorted alphabetically.
+- **Full parenthetical author-year citations** — claim-first, with the citation
+  trailing in parentheses; the citation is never the subject of the sentence.
+  Bibliography sorted alphabetically.
 - **Citation-integrity check**: any in-text citation not matching a corpus item
   is flagged at the end of the document and in the run log.
 

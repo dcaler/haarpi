@@ -93,8 +93,8 @@ paper text and respond with ONLY a JSON object, no other text:
   "methods": "methods or approach (1 sentence)",
   "findings": "key findings (1-2 sentences)",
   "limitations": "stated or evident limitations (1 sentence, or empty)",
-  "relevance": "how it relates to the review topic (1 sentence)",
-  "gaps": "dimensions of the review topic or focus that this paper does NOT address — be specific about what is missing, e.g. 'does not examine Y or Z' (1 sentence, or empty if the paper covers all focus dimensions)",
+  "relevance": "why this paper matters for the review — what it specifically contributes or enables (1 sentence)",
+  "gaps": "a genuine, load-bearing gap WITHIN the paper's own scope that a reader would expect it to cover but it does not. Leave empty if the only 'gaps' are topics outside the paper's discipline (1 sentence, or empty)",
   "themes": ["3-6 short theme tags"]
 }
 Base everything strictly on the provided text. Do not invent."""
@@ -173,17 +173,28 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
 # ──────────────────────────────────────────────────────────────────────────
 SYNTH_SYS = """\
 You are writing the narrative section of a scholarly literature review.
-Requirements:
-- Organise into thematic sections that tell a coherent story about the state of knowledge. Design the sections to fit the material; do not use a rigid template.
+
+STRUCTURE
+- Organise into thematic sections that tell a coherent story. Fit sections to the material; do not use a fixed template.
 - SYNTHESISE across sources — compare, contrast, and connect them. Do NOT summarise one paper at a time.
-- Anchor the narrative in the established scholarly conversation. Open each thematic section by situating it within the foundational literature: cite the most influential or well-established works (indicated by high citation counts in the digest) before moving to recent developments or preprints.
-- When multiple sources support the same claim, prefer the peer-reviewed journal article over a preprint or grey literature source.
-- Use author-year in-text citations exactly as given in the digest, e.g. (Smith & Jones, 2021).
-- Always use full parenthetical citations: (Author, Year) or (Author et al., Year). Never use narrative form such as "Smith (2021) showed...".
-- Explicitly identify gaps, tensions/disagreements, and emerging directions. Where the digest flags dimensions the paper does NOT address, state this in the narrative — e.g. "(Author et al., Year) established X and Z but did not examine Y." Name the missing dimension specifically; do not use vague phrases like "further work is needed".
-- Use Markdown headings (##) for themes. Do not write a bibliography (that is added separately).
-- Be concise. Target 800-1200 words total. Every sentence must add new information or connection; cut anything that restates what the previous sentence already said.
-- Prefer precise, specific claims over hedged generalities. Avoid throat-clearing phrases like "it is worth noting", "this highlights the importance of", or "a growing body of research".
+- Each "## " heading names ONE idea in <=6 words. Never join concepts with commas or "and" (avoid "Dimensionality, Complexity, and Temporal Evolution"). If a section spans several ideas, split it or pick the single organising idea.
+- Open each section with established, well-cited work (high citation counts in the digest) before recent work or preprints; prefer the peer-reviewed article over a preprint when both support a claim.
+
+EXPLAIN WHY IT MATTERS (the priority)
+- For every claim, make plain why it matters to THIS review's topic and focus. Use the Relevance note in the digest to connect each source to the project's goal.
+- State significance positively: what a source contributes or enables. Only name a gap when it is genuine and load-bearing for the topic. Do NOT note that a source omits a field outside its discipline (e.g. a musicology paper "did not use agent-based modeling") — that is obvious and adds nothing.
+- Name gaps, tensions, and directions specifically; never "further work is needed".
+
+CITATIONS
+- State each finding as a claim in its own right, then attach the source in parentheses: "Modest tolerance thresholds produce exaggerated segregation (Schelling, 1971)."
+- Never make a citation the grammatical subject or agent of a sentence. Do NOT write "(Schelling, 1971) established that...". Rewrite so the claim leads and the citation follows. Use the author-year string exactly as given in the digest; keep it well-formed.
+
+STYLE
+- Be tight. One main idea per sentence; at most one subordinate clause. Prefer plain verbs over nominalisations.
+- Keep paragraphs to 3-5 sentences. Target 700-1000 words total.
+- Cut filler: "it is worth noting", "this highlights", "rests on the demonstration that", "underscores that", "a growing body of research". Every sentence adds a new fact or connection.
+- Use "## " headings for themes. Do not write a bibliography (that is added separately).
+
 Write only the narrative review."""
 
 
@@ -194,9 +205,11 @@ def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
         cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
         gaps = a.get("gaps", "").strip()
         gap_str = f" NOT addressed: {gaps}" if gaps else ""
+        rel = a.get("relevance", "").strip()
+        rel_str = f" Relevance: {rel}" if rel else ""
         lines.append(
             f"- ({c.author_year()}){cites} {a.get('argument','')} "
-            f"Findings: {a.get('findings','')} Themes: {themes}{gap_str}".strip())
+            f"Findings: {a.get('findings','')}{rel_str} Themes: {themes}{gap_str}".strip())
     return "\n".join(lines)
 
 
