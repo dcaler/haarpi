@@ -52,8 +52,8 @@ with your chosen models pulled. `pandoc` is optional but needed for `.docx` outp
 Recommended models (adjust to what you have):
 
 ```
-coordinator: gemma3:27b   (drafting, revision, section refinement)
-worker:      gemma3:12b   (parsing the research description during init)
+coordinator: qwen3.6:27b-16k   (drafting, revision, section refinement)
+worker:      qwen3.5:9b-q4_K_M (parsing the research description during init)
 ```
 
 ---
@@ -224,8 +224,8 @@ author_initials: DCR            # your initials, appended when you revise
 topic: trust in AI systems in high-stakes decision contexts
 focus: the role of explainability in building appropriate reliance
 brain:
-  coordinator: gemma3:27b       # model for drafting and revision
-  worker: gemma3:12b            # model for short structured tasks
+  coordinator: qwen3.6:27b-16k   # model for drafting and revision
+  worker: qwen3.5:9b-q4_K_M     # model for short structured tasks
 ```
 
 ---

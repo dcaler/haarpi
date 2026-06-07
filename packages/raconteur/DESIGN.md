@@ -90,6 +90,7 @@ fields during `init`.
 
 The coordinator model is stored in `raconteur.yaml` so it can be changed per
 project. The global config at `~/.config/raconteur/config.toml` sets the default.
+Same model defaults as RabbitHole: `qwen3.6:27b-16k` / `qwen3.5:9b-q4_K_M`.
 
 Claude API support is a planned option (the `brain.py` abstraction is designed
 for it), but not yet implemented.

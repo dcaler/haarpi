@@ -12,8 +12,8 @@ PROJECT_CONFIG_FILE = "raconteur.yaml"
 
 @dataclass
 class BrainConfig:
-    coordinator: str = "gemma3:27b"
-    worker: str = "gemma3:12b"
+    coordinator: str = "qwen3.6:27b-16k"
+    worker: str = "qwen3.5:9b-q4_K_M"
 
 
 @dataclass
@@ -47,8 +47,8 @@ class ProjectConfig:
 @dataclass
 class GlobalConfig:
     ollama_url: str = "http://localhost:11434"
-    coordinator_model: str = "gemma3:27b"
-    worker_model: str = "gemma3:12b"
+    coordinator_model: str = "qwen3.6:27b-16k"
+    worker_model: str = "qwen3.5:9b-q4_K_M"
 
     @classmethod
     def load(cls) -> "GlobalConfig":
