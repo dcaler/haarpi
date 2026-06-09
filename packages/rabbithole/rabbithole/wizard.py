@@ -138,7 +138,7 @@ def _ask_source_types(default_pre: bool = False, default_news: bool = False) -> 
     modes = {(False, False): "1", (True, False): "2", (False, True): "3", (True, True): "4"}
     default = modes[(default_pre, default_news)]
     print("\nWhat kinds of sources should I include?")
-    print("  1. Peer-reviewed only (journals, books)")
+    print("  1. Peer-reviewed only (journal articles)")
     print("  2. Peer-reviewed + preprints (arXiv, working papers)")
     print("  3. Peer-reviewed + news / trade press")
     print("  4. Peer-reviewed + preprints + news")

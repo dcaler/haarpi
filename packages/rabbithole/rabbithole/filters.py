@@ -79,6 +79,8 @@ JUNK_ITEM_TYPES = {
     "proceedings-abstract", "encyclopedia", "reference-entry", "dataset",
     "grant", "peer-review", "component", "report-component", "other",
 }
+# Whole books are always excluded (not offered in the wizard); book *chapters* stay.
+BOOK_ITEM_TYPES = {"book", "monograph", "edited-book", "reference-book"}
 PREPRINT_ITEM_TYPES = {"preprint", "posted-content"}
 NEWS_ITEM_TYPES = {"news", "magazine-article", "newspaper-article", "blog"}
 
@@ -86,12 +88,12 @@ NEWS_ITEM_TYPES = {"news", "magazine-article", "newspaper-article", "blog"}
 def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool) -> bool:
     """Gate on item type per the project's source-type policy.
 
-    Junk types are always dropped. Preprints/news are admitted only when the
-    project opted in (the wizard's 4-way question). Everything else
-    (journal-article, book, book-chapter, report/working-paper) is kept.
+    Junk types and whole books are always dropped. Preprints/news are admitted
+    only when the project opted in (the wizard's 4-way question). Everything else
+    (journal-article, book-chapter, report/working-paper) is kept.
     """
     t = (c.item_type or "").lower()
-    if t in JUNK_ITEM_TYPES:
+    if t in JUNK_ITEM_TYPES or t in BOOK_ITEM_TYPES:
         return False
     if is_arxiv(c) or t in PREPRINT_ITEM_TYPES:
         return include_preprints
