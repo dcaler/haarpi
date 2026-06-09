@@ -14,6 +14,8 @@ Both gather and report are repeatable.
 from __future__ import annotations
 
 import json
+import re
+import sys
 import time
 
 from . import config, filters, ranking, render, sources
@@ -21,11 +23,62 @@ from .brain import Brain
 from .models import Candidate, norm_doi
 
 
+def _make_gather_brain(cfg, gc) -> Brain:
+    """Build the gather Brain, degrading to local Ollama if the requested backend
+    is unavailable (e.g. 'claude' with no API key) rather than crashing the run."""
+    try:
+        return Brain(cfg.brain, gc)
+    except RuntimeError as e:  # claude requested but not configured
+        print(f"  [warn] {e}\n  Falling back to local Ollama for gather.", file=sys.stderr)
+        return Brain(cfg.brain, gc, backend_override="ollama")
+
+
+_QUERYGEN_SYS = """\
+You generate search queries for academic databases (OpenAlex, Crossref, Semantic
+Scholar). Given a research topic and focus, produce 6-8 SHORT keyword queries
+(3-8 words each) that together cover the topic from several angles:
+- the core concepts, stated plainly;
+- key methods or study designs central to the topic;
+- important synonyms / alternate terminology a different field might use;
+- and CRITICALLY, named seminal works, foundational authors, or specific
+  programs/policies/datasets an expert would search for by name to reach
+  high-value papers whose titles do not contain the obvious keywords.
+Stay strictly within the stated domain; do not drift into adjacent fields.
+Respond with ONLY a JSON array of query strings, no other text."""
+
+
+def _generate_queries(brain: Brain, cfg) -> list[str]:
+    """Decompose topic+focus into several targeted search queries (plus the raw
+    topic). Falls back to the single topic string if generation fails."""
+    base = cfg.topic.strip()
+    prompt = (f"Topic: {cfg.topic}\nFocus: {cfg.focus or '(none)'}\n"
+              f"Must be about: {cfg.domain_anchor or '(the topic above)'}\n"
+              f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+              f"Search queries (JSON array):")
+    try:
+        raw = brain.coordinator(prompt, _QUERYGEN_SYS, num_ctx=4096)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        queries = json.loads(m.group(0)) if m else []
+        queries = [str(q).strip() for q in queries if str(q).strip()]
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] query generation failed ({e}); using the topic as the only query.",
+              file=sys.stderr)
+        queries = []
+    # Always include the raw topic; dedupe case-insensitively, keep order.
+    seen, out = set(), []
+    for q in [base, *queries]:
+        k = q.lower()
+        if q and k not in seen:
+            seen.add(k)
+            out.append(q)
+    return out[:8]
+
+
 def run(directory: str = ".", use_zotero: bool = True) -> int:
     cfg = config.load_project(directory)
     gc = config.load_global()
     paths = config.project_paths(directory).ensure()
-    brain = Brain(cfg.brain, gc)
+    brain = _make_gather_brain(cfg, gc)
 
     t0 = time.time()
     print(f"rabbitHole gather — {cfg.project_name}")
@@ -41,50 +94,70 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     raw: list[Candidate] = []
     source_counts: dict[str, int] = {}
 
-    print("Searching sources...")
+    queries = _generate_queries(brain, cfg)
+    # Spread the budget across query angles so total volume stays comparable to
+    # the old single-query run; dedupe collapses the heavy overlap afterwards.
+    per_query = max(12, per_source // 2)
+    print(f"Searching sources across {len(queries)} query angles...")
+    for q in queries:
+        if cfg.sources.get("openalex"):
+            r = sources.search_openalex(q, per_query, gc.contact_email,
+                                        cfg.date_from, cfg.date_to)
+            source_counts["OpenAlex"] = source_counts.get("OpenAlex", 0) + len(r)
+            raw += r
+        if cfg.sources.get("crossref"):
+            r = sources.search_crossref(q, per_query, gc.contact_email,
+                                        cfg.date_from, cfg.date_to)
+            source_counts["Crossref"] = source_counts.get("Crossref", 0) + len(r)
+            raw += r
+        if cfg.sources.get("semantic_scholar"):
+            r = sources.search_semantic_scholar(q, per_query, gc.contact_email,
+                                                gc.s2_api_key)
+            source_counts["Semantic Scholar"] = source_counts.get("Semantic Scholar", 0) + len(r)
+            raw += r
+        if cfg.sources.get("arxiv") and cfg.include_preprints:
+            r = sources.search_arxiv(q, per_query, gc.contact_email)
+            source_counts["arXiv"] = source_counts.get("arXiv", 0) + len(r)
+            raw += r
+
+    # High-value recall: a dedicated "most-cited in this area" pass pulls the
+    # canonical, well-cited backbone of the field even when keyword search misses it.
     if cfg.sources.get("openalex"):
-        r = sources.search_openalex(cfg.topic, per_source, gc.contact_email,
-                                    cfg.date_from, cfg.date_to)
-        print(f"  OpenAlex: {len(r)}")
-        source_counts["OpenAlex"] = len(r)
-        raw += r
-    if cfg.sources.get("crossref"):
-        r = sources.search_crossref(cfg.topic, per_source, gc.contact_email,
-                                    cfg.date_from, cfg.date_to)
-        print(f"  Crossref: {len(r)}")
-        source_counts["Crossref"] = len(r)
-        raw += r
-    if cfg.sources.get("semantic_scholar"):
-        r = sources.search_semantic_scholar(cfg.topic, per_source, gc.contact_email,
-                                            gc.s2_api_key)
-        print(f"  Semantic Scholar: {len(r)}")
-        source_counts["Semantic Scholar"] = len(r)
-        raw += r
-    if cfg.sources.get("arxiv"):
-        r = sources.search_arxiv(cfg.topic, per_source, gc.contact_email)
-        print(f"  arXiv: {len(r)}")
-        source_counts["arXiv"] = len(r)
-        raw += r
+        mc = sources.search_openalex(cfg.topic, per_source, gc.contact_email,
+                                     cfg.date_from, cfg.date_to,
+                                     sort="cited_by_count:desc")
+        source_counts["OpenAlex (most-cited)"] = len(mc)
+        raw += mc
 
     print(f"\nRaw results: {len(raw)}")
     deduped = filters.dedupe(raw)
     print(f"After de-dup: {len(deduped)}")
 
-    kept, dropped_mdpi, dropped_date = [], 0, 0
+    kept, dropped_excluded, dropped_date, dropped_type, dropped_meta = [], 0, 0, 0, 0
     for c in deduped:
         if filters.is_excluded(c, cfg.exclude_publishers):
-            dropped_mdpi += 1
+            dropped_excluded += 1
             continue
         if not filters.within_dates(c, cfg.date_from, cfg.date_to):
             dropped_date += 1
             continue
+        if not filters.item_type_allowed(c, cfg.include_preprints, cfg.include_news):
+            dropped_type += 1
+            continue
+        if not filters.has_min_metadata(c):
+            dropped_meta += 1
+            continue
         kept.append(c)
-    print(f"Dropped: {dropped_mdpi} MDPI/excluded, {dropped_date} out-of-date-range")
+    print(f"Dropped: {dropped_excluded} MDPI/predatory/excluded, "
+          f"{dropped_date} out-of-date-range, {dropped_type} disallowed type, "
+          f"{dropped_meta} thin metadata")
     print(f"Candidates: {len(kept)}")
 
-    # Snowball: widen the net via OpenAlex citation trails from the strongest seeds.
+    # Snowball: widen via OpenAlex citation trails from the MOST-CITED seeds — the
+    # field's established anchors, whose references and citers are the canonical work.
     snowballed = 0
-    seed_dois = [c.doi_key for c in kept if c.doi_key][:8]
+    by_cites = sorted(kept, key=lambda c: c.cited_by_count, reverse=True)
+    seed_dois = [c.doi_key for c in by_cites if c.doi_key][:8]
     if seed_dois:
         extra = _merge_new(sources.openalex_snowball(seed_dois, gc.contact_email), kept, cfg)
         if extra:
@@ -96,7 +169,9 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     ranked = ranking.rank(kept, cfg.topic, cfg.focus, brain,
                           method=cfg.ranking.get("method", "embedding"),
                           rerank_top_n=cfg.ranking.get("rerank_top_n", 0),
-                          target=cfg.target_max)
+                          target=cfg.target_max,
+                          domain_anchor=cfg.domain_anchor,
+                          exclude_topics=cfg.exclude_topics)
 
     # Reconcile against Zotero: drop what's already in the collection, auto-file
     # anything you already have elsewhere in your library, and keep only the
@@ -142,8 +217,10 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         "sources": source_counts,
         "raw": len(raw),
         "deduped": len(deduped),
-        "dropped_mdpi": dropped_mdpi,
+        "dropped_excluded": dropped_excluded,
         "dropped_date": dropped_date,
+        "dropped_type": dropped_type,
+        "dropped_meta": dropped_meta,
         "candidates": len(kept),
         "snowballed": snowballed,
         "already": already,
@@ -252,6 +329,10 @@ def _merge_new(extra: list[Candidate], existing: list[Candidate], cfg) -> list[C
             continue
         if not filters.within_dates(c, cfg.date_from, cfg.date_to):
             continue
+        if not filters.item_type_allowed(c, cfg.include_preprints, cfg.include_news):
+            continue
+        if not filters.has_min_metadata(c):
+            continue
         seen.add(k)
         out.append(c)
     return out
@@ -350,8 +431,10 @@ def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
         "Activity",
         f"  Searched: {src}",
         f"  Raw results: {stats['raw']}  ->  after de-dup: {stats['deduped']}",
-        f"  Dropped: {stats['dropped_mdpi']} MDPI/excluded, "
-        f"{stats['dropped_date']} out-of-date-range",
+        f"  Dropped: {stats['dropped_excluded']} MDPI/predatory/excluded, "
+        f"{stats['dropped_date']} out-of-date-range, "
+        f"{stats['dropped_type']} disallowed type, "
+        f"{stats['dropped_meta']} thin metadata",
         f"  Candidates after filtering: {stats['candidates']}",
     ]
     if stats.get("snowballed"):

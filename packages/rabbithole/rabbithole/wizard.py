@@ -79,27 +79,35 @@ _EXTRACT_SYS = """\
 You turn a researcher's free-form description into structured fields for an
 academic literature search. Respond with ONLY a JSON object, no other text:
 
-{"topic": "...", "focus": "..."}
+{"topic": "...", "focus": "...", "domain_anchor": "...", "exclude_topics": "..."}
 
 - topic: a concise, search-friendly statement of the core subject (one line).
 - focus: key subtopics, disciplines, or angles to emphasise (one line; "" if none).
+- domain_anchor: one line naming what a paper MUST be about to count as on-topic
+  (the specific field/phenomenon), used to filter out adjacent-but-wrong results.
+- exclude_topics: one line naming adjacent disciplines or topics to keep OUT, e.g.
+  "general health behavior change" for a recycling project ("" if none come to mind).
 Base it strictly on what the user wrote; do not invent scope."""
 
 
-def _extract_topic_focus(research: str, gc) -> tuple[str, str, str]:
-    """Local worker model -> (topic, focus, note). Runs in a background thread,
-    so it must not print or read input; any warning is returned as `note`."""
+def _extract_topic_focus(research: str, gc) -> tuple[str, str, str, str, str]:
+    """Coordinator model -> (topic, focus, domain_anchor, exclude_topics, note).
+    Runs in a background thread, so it must not print or read input; any warning
+    is returned as `note`."""
     try:
         brain = Brain(BrainConfig(), gc)
-        raw = brain.worker(research, _EXTRACT_SYS, num_ctx=4096)
+        raw = brain.coordinator(research, _EXTRACT_SYS, num_ctx=4096)
         data = _parse_json(raw)
         topic = (data.get("topic") or "").strip()
         focus = (data.get("focus") or "").strip()
+        anchor = (data.get("domain_anchor") or "").strip()
+        exclude = (data.get("exclude_topics") or "").strip()
         if topic:
-            return topic, focus, ""
-        return research.strip(), "", "the LLM didn't return a clear topic; using your text as the topic."
+            return topic, focus, anchor, exclude, ""
+        return (research.strip(), "", "", "",
+                "the LLM didn't return a clear topic; using your text as the topic.")
     except Exception as e:  # noqa: BLE001
-        return (research.strip(), "",
+        return (research.strip(), "", "", "",
                 f"couldn't reach the local LLM ({e}); using your text as the topic.")
 
 
@@ -111,16 +119,32 @@ def _kickoff_extract(research: str):
     return pool, fut
 
 
-def _finish_extract(pool, fut) -> tuple[str, str]:
+def _finish_extract(pool, fut) -> tuple[str, str, str, str]:
     """Block on the background extraction (the one pause) and show the result."""
     print("\nParsing your request with the local LLM...")
-    topic, focus, note = fut.result()
+    topic, focus, anchor, exclude, note = fut.result()
     pool.shutdown(wait=False)
     if note:
         print(f"  [note] {note}")
     print(f"  Topic: {topic}")
     print(f"  Focus: {focus or '(none)'}")
-    return topic, focus
+    print(f"  Must be about: {anchor or '(the topic)'}")
+    print(f"  Keep out: {exclude or '(nothing specific)'}")
+    return topic, focus, anchor, exclude
+
+
+def _ask_source_types(default_pre: bool = False, default_news: bool = False) -> tuple[bool, bool]:
+    """4-way source-type question -> (include_preprints, include_news)."""
+    modes = {(False, False): "1", (True, False): "2", (False, True): "3", (True, True): "4"}
+    default = modes[(default_pre, default_news)]
+    print("\nWhat kinds of sources should I include?")
+    print("  1. Peer-reviewed only (journals, books)")
+    print("  2. Peer-reviewed + preprints (arXiv, working papers)")
+    print("  3. Peer-reviewed + news / trade press")
+    print("  4. Peer-reviewed + preprints + news")
+    choice = _ask("Choose 1-4", default).strip()
+    return {"1": (False, False), "2": (True, False),
+            "3": (False, True), "4": (True, True)}.get(choice, (default_pre, default_news))
 
 
 def run(directory: str = ".") -> int:
@@ -154,14 +178,19 @@ def _first_run(root: Path) -> int:
 
     print()
     target = _ask_int("How many articles do you want to target?", 30)
+    include_preprints, include_news = _ask_source_types()
     run_gather = _ask_yesno("Run gather now?", True)
 
-    topic, focus = _finish_extract(pool, fut)
+    topic, focus, anchor, exclude = _finish_extract(pool, fut)
 
     cfg = ProjectConfig(
         project_name=project_name,
         topic=topic,
         focus=focus,
+        domain_anchor=anchor,
+        exclude_topics=exclude,
+        include_preprints=include_preprints,
+        include_news=include_news,
         target_min=target,
         target_max=target,
     )
@@ -190,17 +219,24 @@ def _rerun(root: Path) -> int:
 
     print()
     target = _ask_int("How many articles do you want to target?", prev.target_max)
+    include_preprints, include_news = _ask_source_types(
+        getattr(prev, "include_preprints", False), getattr(prev, "include_news", False))
     run_gather = _ask_yesno("Run gather now?", True)
 
     if fut is not None:
-        topic, focus = _finish_extract(pool, fut)
+        topic, focus, anchor, exclude = _finish_extract(pool, fut)
     else:
         print("\n  Keeping the previous topic and focus.")
         topic, focus = prev.topic, prev.focus
+        anchor, exclude = prev.domain_anchor, prev.exclude_topics
 
-    # Carry everything else over; change only topic/focus/target.
+    # Carry everything else over; change only topic/focus/target/source-types.
     prev.topic = topic
     prev.focus = focus
+    prev.domain_anchor = anchor
+    prev.exclude_topics = exclude
+    prev.include_preprints = include_preprints
+    prev.include_news = include_news
     prev.target_min = target
     prev.target_max = target
 

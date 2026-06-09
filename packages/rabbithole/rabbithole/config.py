@@ -57,13 +57,20 @@ class ProjectConfig:
     target_max: int = 50
     date_from: int | None = None
     date_to: int | None = None
+    # Domain steering (set by the wizard; feed query-gen and the relevance gate).
+    domain_anchor: str = ""             # one line: what a paper MUST be about to count
+    exclude_topics: str = ""            # one line: adjacent disciplines to keep OUT
+    # Source-type policy (the wizard's 4-way question -> two flags).
+    include_preprints: bool = False     # arXiv / working papers
+    include_news: bool = False          # news / trade press
     sources: dict = field(default_factory=lambda: {
         "openalex": True, "crossref": True,
         "semantic_scholar": True, "arxiv": True,
     })
     ranking: dict = field(default_factory=lambda: {
-        "method": "embedding",          # "embedding" | "citations" | "llm"
-        "rerank_top_n": 0,              # 0 = no LLM re-rank
+        "method": "llm",                # "embedding" | "citations" | "llm"
+        "rerank_top_n": 0,              # 0 = re-rank a sensible default-sized head
+        "min_score": 6.0,              # LLM relevance floor (0-10); drops off-domain hits
         "max_arxiv_fraction": 0.25,     # cap on arXiv/preprint share of final list
     })
     brain: BrainConfig = field(default_factory=BrainConfig)

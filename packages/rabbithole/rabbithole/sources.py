@@ -53,11 +53,12 @@ def _openalex_keywords(w: dict) -> list[str]:
 
 
 def search_openalex(query: str, limit: int, email: str,
-                    year_from: int | None = None, year_to: int | None = None) -> list[Candidate]:
+                    year_from: int | None = None, year_to: int | None = None,
+                    sort: str = "relevance_score:desc") -> list[Candidate]:
     params = {
         "search": query,
         "per-page": min(limit, 200),
-        "sort": "relevance_score:desc",
+        "sort": sort,
     }
     if email:
         params["mailto"] = email

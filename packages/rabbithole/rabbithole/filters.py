@@ -46,11 +46,68 @@ def is_arxiv(c: Candidate) -> bool:
     )
 
 
+# ── predatory / very-low-quality venues (conservative, evidence-based) ──────
+# DOI prefixes seen producing predatory output in real runs (Medcrave, and two
+# regional journals flagged in difference analyses). Kept small to avoid false
+# positives; users can add more publisher names via cfg.exclude_publishers.
+PREDATORY_DOI_PREFIXES = ("10.15406", "10.56225", "10.26911")
+PREDATORY_PUBLISHERS = {
+    "medcrave", "scirp", "scientific research publishing",
+    "science publishing group", "sciencedomain", "david publishing",
+    "academic journals", "omics", "bentham",
+}
+
+
+def is_predatory(c: Candidate) -> bool:
+    if norm_doi(c.doi).startswith(PREDATORY_DOI_PREFIXES):
+        return True
+    pub = (c.publisher or "").lower()
+    return any(p in pub for p in PREDATORY_PUBLISHERS)
+
+
 def is_excluded(c: Candidate, extra_publishers: list[str]) -> bool:
-    if is_mdpi(c):
+    if is_mdpi(c) or is_predatory(c):
         return True
     pub = (c.publisher or "").lower()
     return any(x.lower() in pub for x in extra_publishers if x)
+
+
+# ── item-type policy ────────────────────────────────────────────────────────
+# Never useful for a literature review, regardless of the user's source-type choice.
+JUNK_ITEM_TYPES = {
+    "editorial", "erratum", "correction", "retraction", "abstract",
+    "proceedings-abstract", "encyclopedia", "reference-entry", "dataset",
+    "grant", "peer-review", "component", "report-component", "other",
+}
+PREPRINT_ITEM_TYPES = {"preprint", "posted-content"}
+NEWS_ITEM_TYPES = {"news", "magazine-article", "newspaper-article", "blog"}
+
+
+def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool) -> bool:
+    """Gate on item type per the project's source-type policy.
+
+    Junk types are always dropped. Preprints/news are admitted only when the
+    project opted in (the wizard's 4-way question). Everything else
+    (journal-article, book, book-chapter, report/working-paper) is kept.
+    """
+    t = (c.item_type or "").lower()
+    if t in JUNK_ITEM_TYPES:
+        return False
+    if is_arxiv(c) or t in PREPRINT_ITEM_TYPES:
+        return include_preprints
+    if t in NEWS_ITEM_TYPES:
+        return include_news
+    return True
+
+
+def has_min_metadata(c: Candidate) -> bool:
+    """Drop records too thin to cite: no authors, or no venue/publisher.
+    Catches the '(unknown authors)' metadata failures seen in real runs."""
+    if not c.authors:
+        return False
+    if not (c.venue or c.publisher):
+        return False
+    return True
 
 
 def within_dates(c: Candidate, year_from: int | None, year_to: int | None) -> bool:
