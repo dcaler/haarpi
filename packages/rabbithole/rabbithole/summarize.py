@@ -97,7 +97,8 @@ paper text and respond with ONLY a JSON object, no other text:
   "gaps": "a genuine, load-bearing gap WITHIN the paper's own scope that a reader would expect it to cover but it does not. Leave empty if the only 'gaps' are topics outside the paper's discipline (1 sentence, or empty)",
   "themes": ["3-6 short theme tags"]
 }
-Base everything strictly on the provided text. Do not invent."""
+Base everything strictly on the provided text. Do not invent.
+Write each field in plain English; paraphrase rather than copying technical phrases verbatim."""
 
 
 def _read_prompt(c: Candidate, topic: str, focus: str, body: str) -> str:
@@ -188,6 +189,12 @@ EXPLAIN WHY IT MATTERS (the priority)
 CITATIONS
 - State each finding as a claim in its own right, then attach the source in parentheses: "Modest tolerance thresholds produce exaggerated segregation (Schelling, 1971)."
 - Never make a citation the grammatical subject or agent of a sentence. Do NOT write "(Schelling, 1971) established that...". Rewrite so the claim leads and the citation follows. Use the author-year string exactly as given in the digest; keep it well-formed.
+
+LANGUAGE
+- Paraphrase; do not lift technical phrases verbatim from the sources. A reader should not need the original papers' vocabulary to follow your argument.
+- When a field-specific term is genuinely needed — no plain equivalent carries the same precision — introduce it once with a brief gloss in parentheses: "...using principal component analysis (a technique that compresses many correlated variables into a smaller, uncorrelated set)..."
+- Prefer concrete, active verbs. "The study found that participants who received X showed Y" beats "an association between X and Y was observed".
+- Write for an intelligent reader who is not already expert in this exact sub-field. They can follow careful reasoning but should not be expected to know domain acronyms or insider shorthand on sight.
 
 STYLE
 - Be tight. One main idea per sentence; at most one subordinate clause. Prefer plain verbs over nominalisations.
