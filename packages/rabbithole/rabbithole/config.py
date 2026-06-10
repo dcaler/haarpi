@@ -29,7 +29,7 @@ GLOBAL_CONFIG_PATH = Path.home() / ".config" / "rabbithole" / "config.toml"
 
 # Default model assignments — change to match what you have in Ollama.
 DEFAULT_COORDINATOR_MODEL = "qwen3.6:27b-16k"
-DEFAULT_WORKER_MODEL = "qwen3.5:9b-q4_K_M"
+DEFAULT_WORKER_MODEL = "llama3.1:8b"
 DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -45,7 +45,9 @@ class BrainConfig:
     worker_model: str = DEFAULT_WORKER_MODEL
     embed_model: str = DEFAULT_EMBED_MODEL
     claude_model: str = DEFAULT_CLAUDE_MODEL
-    worker_parallel: int = 4           # concurrent worker calls (one per GPU core)
+    worker_parallel: int = 1           # serial: concurrency is sub-1x on Maxwell (Tesla M60)
+                                       # — a model split across cards or batched gives no
+                                       # speedup, so run worker calls back-to-back instead.
 
 
 @dataclass

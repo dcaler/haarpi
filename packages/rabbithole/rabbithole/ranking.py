@@ -97,6 +97,7 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
 
     # 1) embedding pre-sort: title + abstract + keywords vs the topic/focus
     query = f"{topic}. {focus}".strip()
+    print(f"  Embedding {len(candidates)} candidates for relevance pre-sort...", flush=True)
     try:
         q_emb = brain.embed(query)
         doc_embs = brain.embed_batch([_doc_text(c) for c in candidates])
@@ -150,7 +151,9 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
                   f"Abstract: {c.abstract[:1500]}\n\n"
                   f"Relevance score (0-10):")
         jobs.append((sys, prompt))
-    scores = brain.worker_map(jobs, num_ctx=4096)
+    # 2048 ctx is ample for a title + 1500-char abstract; keeps the KV cache small
+    # enough that the worker model fits on a single 8 GB card (no cross-card split).
+    scores = brain.worker_map(jobs, num_ctx=2048, desc="relevance scored")
     for c, s in zip(head, scores):
         try:
             topical = float(next(tok for tok in s.split() if tok.replace(".", "").isdigit()))

@@ -81,10 +81,18 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     brain = _make_gather_brain(cfg, gc)
 
     t0 = time.time()
+
+    def log(msg: str) -> None:
+        """Progress line stamped with elapsed mm:ss, so a long run is legible."""
+        el = int(time.time() - t0)
+        print(f"  [{el // 60}:{el % 60:02d}] {msg}", flush=True)
+
     print(f"rabbitHole gather — {cfg.project_name}")
     print(f"  topic: {cfg.topic}")
     if cfg.focus:
         print(f"  focus: {cfg.focus}")
+    backend = "Claude" if brain.backend == "claude" else f"Ollama ({cfg.brain.coordinator_model})"
+    print(f"  brain: {backend}")
     if not gc.contact_email:
         print("  [note] no contact_email set — APIs may rate-limit. "
               "Set RABBITHOLE_CONTACT_EMAIL or run `rabbitHole init`.")
@@ -94,44 +102,55 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     raw: list[Candidate] = []
     source_counts: dict[str, int] = {}
 
+    log("Generating search queries with the coordinator model...")
     queries = _generate_queries(brain, cfg)
+    log(f"{len(queries)} query angles:")
+    for q in queries:
+        print(f"        • {q}")
     # Spread the budget across query angles so total volume stays comparable to
     # the old single-query run; dedupe collapses the heavy overlap afterwards.
     per_query = max(12, per_source // 2)
-    print(f"Searching sources across {len(queries)} query angles...")
-    for q in queries:
+    for qi, q in enumerate(queries, 1):
+        per_q: list[str] = []
         if cfg.sources.get("openalex"):
             r = sources.search_openalex(q, per_query, gc.contact_email,
                                         cfg.date_from, cfg.date_to)
             source_counts["OpenAlex"] = source_counts.get("OpenAlex", 0) + len(r)
+            per_q.append(f"OpenAlex {len(r)}")
             raw += r
         if cfg.sources.get("crossref"):
             r = sources.search_crossref(q, per_query, gc.contact_email,
                                         cfg.date_from, cfg.date_to)
             source_counts["Crossref"] = source_counts.get("Crossref", 0) + len(r)
+            per_q.append(f"Crossref {len(r)}")
             raw += r
         if cfg.sources.get("semantic_scholar"):
             r = sources.search_semantic_scholar(q, per_query, gc.contact_email,
                                                 gc.s2_api_key)
             source_counts["Semantic Scholar"] = source_counts.get("Semantic Scholar", 0) + len(r)
+            per_q.append(f"S2 {len(r)}")
             raw += r
         if cfg.sources.get("arxiv") and cfg.include_preprints:
             r = sources.search_arxiv(q, per_query, gc.contact_email)
             source_counts["arXiv"] = source_counts.get("arXiv", 0) + len(r)
+            per_q.append(f"arXiv {len(r)}")
             raw += r
+        log(f"[{qi}/{len(queries)}] {q[:55]!r} → {', '.join(per_q) or '(no sources enabled)'}")
 
     # High-value recall: a dedicated "most-cited in this area" pass pulls the
     # canonical, well-cited backbone of the field even when keyword search misses it.
     if cfg.sources.get("openalex"):
+        log("Most-cited pass (OpenAlex, sorted by citation count)...")
         mc = sources.search_openalex(cfg.topic, per_source, gc.contact_email,
                                      cfg.date_from, cfg.date_to,
                                      sort="cited_by_count:desc")
         source_counts["OpenAlex (most-cited)"] = len(mc)
+        log(f"  +{len(mc)} most-cited")
         raw += mc
 
-    print(f"\nRaw results: {len(raw)}")
+    log(f"Raw results: {len(raw)}")
     deduped = filters.dedupe(raw)
-    print(f"After de-dup: {len(deduped)}")
+    log(f"After de-dup: {len(deduped)}")
 
     kept, dropped_excluded, dropped_date, dropped_type, dropped_meta = [], 0, 0, 0, 0
     for c in deduped:
@@ -148,10 +167,10 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
             dropped_meta += 1
             continue
         kept.append(c)
-    print(f"Dropped: {dropped_excluded} MDPI/predatory/excluded, "
-          f"{dropped_date} out-of-date-range, {dropped_type} disallowed type, "
-          f"{dropped_meta} thin metadata")
-    print(f"Candidates: {len(kept)}")
+    log(f"Dropped: {dropped_excluded} MDPI/predatory/excluded, "
+        f"{dropped_date} out-of-date-range, {dropped_type} disallowed type, "
+        f"{dropped_meta} thin metadata")
+    log(f"Candidates: {len(kept)}")
 
     # Snowball: widen via OpenAlex citation trails from the MOST-CITED seeds — the
     # field's established anchors, whose references and citers are the canonical work.
@@ -159,13 +178,14 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     by_cites = sorted(kept, key=lambda c: c.cited_by_count, reverse=True)
     seed_dois = [c.doi_key for c in by_cites if c.doi_key][:8]
     if seed_dois:
+        log(f"Snowball: expanding from {len(seed_dois)} most-cited seeds via citation trails...")
         extra = _merge_new(sources.openalex_snowball(seed_dois, gc.contact_email), kept, cfg)
         if extra:
             snowballed = len(extra)
-            print(f"Snowball: +{snowballed} via OpenAlex citation trails")
+            log(f"Snowball: +{snowballed} via OpenAlex citation trails")
             kept += extra
 
-    print("Ranking by relevance...")
+    log("Ranking by relevance...")
     ranked = ranking.rank(kept, cfg.topic, cfg.focus, brain,
                           method=cfg.ranking.get("method", "embedding"),
                           rerank_top_n=cfg.ranking.get("rerank_top_n", 0),
@@ -178,11 +198,12 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     # genuinely-missing literature on the human search list.
     collection_key, already, auto_added = "", 0, 0
     if use_zotero and gc.have_zotero:
+        log("Reconciling against your Zotero collection...")
         collection_key, ranked, already, auto_added = _zotero_filter(cfg, gc, ranked)
         if collection_key:
-            print(f"In collection: {already} already | "
-                  f"{auto_added} auto-added from your library | "
-                  f"{len(ranked)} still missing")
+            log(f"In collection: {already} already | "
+                f"{auto_added} auto-added from your library | "
+                f"{len(ranked)} still missing")
             cfg.zotero["collection_key"] = collection_key
             config.save_project(cfg, directory)
     elif use_zotero:
@@ -199,14 +220,15 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     max_arxiv_frac = float(cfg.ranking.get("max_arxiv_fraction", 0.25))
     shortlist = _cap_arxiv(qualified, cfg.target_max, max_arxiv_frac)
     arxiv_n = sum(1 for c in shortlist if filters.is_arxiv(c))
-    print(f"Curated: {len(shortlist)} of {len(ranked)} "
-          f"(method={rank_method}, floor={floor:g}, arxiv={arxiv_n}/{len(shortlist)}) "
-          f"— target {cfg.target_max}")
+    log(f"Curated: {len(shortlist)} of {len(ranked)} "
+        f"(method={rank_method}, floor={floor:g}, arxiv={arxiv_n}/{len(shortlist)}) "
+        f"— target {cfg.target_max}")
 
     # Resolve a direct OA PDF link for the final list only — a convenience, NOT a
     # selection criterion. Paywalled papers stay on the list; the DOI is the fetch
     # path (the user has institutional access).
     if gc.contact_email:
+        log("Resolving open-access PDF links (Unpaywall)...")
         for c in shortlist:
             if not c.oa_pdf_url and c.doi:
                 c.oa_pdf_url = sources.unpaywall_pdf(c.doi_key, gc.contact_email)

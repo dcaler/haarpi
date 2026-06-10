@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -47,26 +47,46 @@ class Brain:
         return self._ollama(self.cfg.worker_model, prompt, system,
                             num_ctx=num_ctx, temperature=0.1)
 
-    def worker_map(self, jobs: list[tuple[str, str]], num_ctx: int = 8192) -> list[str]:
-        """Run worker() over (system, prompt) jobs concurrently. Order preserved."""
+    def worker_map(self, jobs: list[tuple[str, str]], num_ctx: int = 8192,
+                   desc: str = "") -> list[str]:
+        """Run worker() over (system, prompt) jobs concurrently. Order preserved.
+
+        If `desc` is given, print a live `desc: done/total` progress counter to
+        stderr as jobs complete — useful for the long relevance-scoring swarm,
+        which is otherwise silent except for retry warnings."""
         n = max(1, int(self.cfg.worker_parallel))
-        results: list[str] = [""] * len(jobs)
+        total = len(jobs)
+        results: list[str] = [""] * total
+        done = 0
+
+        def _tick() -> None:
+            if desc:
+                print(f"\r  {desc}: {done}/{total}", end="", file=sys.stderr, flush=True)
+
         if n == 1:
             for i, (sysmsg, prompt) in enumerate(jobs):
                 try:
                     results[i] = self.worker(prompt, sysmsg, num_ctx=num_ctx)
                 except Exception as e:  # noqa: BLE001
                     print(f"  [warn] worker job {i} failed: {e}", file=sys.stderr)
+                done += 1
+                _tick()
+            if desc:
+                print("", file=sys.stderr)
             return results
         with ThreadPoolExecutor(max_workers=n) as pool:
             futs = {pool.submit(self.worker, prompt, sysmsg, num_ctx): i
                     for i, (sysmsg, prompt) in enumerate(jobs)}
-            for fut in futs:
+            for fut in as_completed(futs):
                 i = futs[fut]
                 try:
                     results[i] = fut.result()
                 except Exception as e:  # noqa: BLE001
                     print(f"  [warn] worker job {i} failed: {e}", file=sys.stderr)
+                done += 1
+                _tick()
+        if desc:
+            print("", file=sys.stderr)
         return results
 
     # ── embeddings (always local) ────────────────────────────────────────
@@ -119,7 +139,10 @@ class Brain:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        payload = {"model": model, "messages": messages, "stream": True,
+        # think=False: reasoning models (e.g. qwen3.x) otherwise emit hundreds of
+        # chain-of-thought tokens before a one-token answer — on Tesla M60s that turned
+        # a 0.5s relevance score into ~120s. Ignored by non-reasoning models (llama3.x).
+        payload = {"model": model, "messages": messages, "stream": True, "think": False,
                    "options": {"temperature": temperature, "num_ctx": num_ctx}}
         last = None
         for attempt in range(1, retries + 1):
