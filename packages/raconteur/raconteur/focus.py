@@ -116,7 +116,7 @@ def run(project_dir: Path, section: str) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator)
     print(f"[raconteur] refining: {heading}…", file=sys.stderr)
-    refined = brain.coordinator(prompt, system=_SYSTEM)
+    refined = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
 
     parts = [p for p in [before, refined.strip(), after] if p.strip()]
     new_text = "\n\n".join(parts) + "\n"

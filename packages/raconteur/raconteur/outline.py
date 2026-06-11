@@ -80,7 +80,7 @@ def run(project_dir: Path) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator)
     print("[raconteur] generating outline…", file=sys.stderr)
-    outline_text = brain.coordinator(prompt, system=_SYSTEM)
+    outline_text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=16384)
 
     output = f"# {cfg.title}\n\n{outline_text.strip()}\n"
     out_path = paper_dir / major_name(cfg.short_title, "md")
