@@ -18,14 +18,38 @@ Create a detailed outline for an academic paper.
 Title: {title}
 Topic: {topic}
 Focus: {focus}
+{venue_scope}
 {litrev_section}
 {code_section}
 Produce a complete, structured outline in markdown. Use numbered sections \
 (## 1. Introduction, ## 2. Related Work, etc.) and for each section include \
 3–5 bullet points describing what should be covered. Follow standard academic \
-conventions for this type of research. Output only the outline — no preamble \
-or closing remarks.
+conventions for this type of research. Calibrate the number of sections and depth \
+of coverage to the scope and venue constraints above. Output only the outline — \
+no preamble or closing remarks.
 """
+
+
+def _venue_scope_block(cfg: ProjectConfig) -> str:
+    lines = []
+    v = cfg.venue
+    if v.name:
+        lines.append(f"Target venue: {v.name}")
+        if v.page_limit:
+            lines.append(f"Page limit: {v.page_limit}")
+        if v.word_limit:
+            lines.append(f"Word limit: {v.word_limit}")
+        if v.citation_style:
+            lines.append(f"Citation style: {v.citation_style}")
+        if v.columns == 2:
+            lines.append("Format: two-column")
+        if v.abstract_limit:
+            lines.append(f"Abstract word limit: {v.abstract_limit}")
+        if v.format_notes:
+            lines.append(f"Format notes: {v.format_notes}")
+    if cfg.scope:
+        lines.append(f"Scope: {cfg.scope}")
+    return "\n".join(lines)
 
 
 def run(project_dir: Path) -> None:
@@ -41,6 +65,7 @@ def run(project_dir: Path) -> None:
     litrev = load_litreview(project_dir)
     code = load_code(project_dir)
 
+    venue_scope = _venue_scope_block(cfg)
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"Analysis Code (for methods/results reference):\n{code}\n" if code else ""
 
@@ -48,6 +73,7 @@ def run(project_dir: Path) -> None:
         title=cfg.title,
         topic=cfg.topic,
         focus=cfg.focus,
+        venue_scope=venue_scope,
         litrev_section=litrev_section,
         code_section=code_section,
     )

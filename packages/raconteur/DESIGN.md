@@ -161,10 +161,25 @@ short_title: short_title      # used in all filenames
 author_initials: DCR          # your initials
 topic: concise research area
 focus: specific angle or contribution
+scope: 4-page conference short paper, focus on empirical findings
+venue:
+  name: CHI 2026
+  page_limit: 4
+  word_limit: null
+  citation_style: ACM
+  columns: 2
+  abstract_limit: 150
+  format_notes: Use ACM reference format; include CCS concepts and keywords
 brain:
-  coordinator: gemma3:27b
-  worker: gemma3:12b
+  coordinator: qwen3.6:27b-16k
+  worker: qwen3.5:9b-q4_K_M
 ```
+
+`venue` and `scope` are optional. Both are passed verbatim into every LLM prompt
+(outline, draft, revision, focus) so the model calibrates depth, breadth, and
+length to the submission target. Venue format specs are looked up by the worker
+LLM during `init` using training knowledge of common venues; they should be
+verified against the official call for papers.
 
 ### `~/.config/raconteur/config.toml` (machine-level)
 

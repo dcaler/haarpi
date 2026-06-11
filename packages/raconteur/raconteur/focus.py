@@ -17,7 +17,7 @@ Refine and strengthen the following section of an academic paper.
 
 Paper title: {title}
 Section: {heading}
-
+{venue_scope}
 Current section text:
 {section_text}
 
@@ -27,15 +27,30 @@ Improve this section for:
 - Flow and transitions
 - Appropriate academic register
 
+Respect the scope and length constraints above — do not expand the section \
+beyond what is appropriate for the target venue and paper type.
+
 Output only the improved section (including its heading). No preamble or explanation.
 """
+
+
+def _venue_scope_block(cfg: ProjectConfig) -> str:
+    lines = []
+    if cfg.venue.name:
+        lines.append(f"Target venue: {cfg.venue.name}")
+        if cfg.venue.page_limit:
+            lines.append(f"Page limit: {cfg.venue.page_limit}")
+        if cfg.venue.word_limit:
+            lines.append(f"Word limit: {cfg.venue.word_limit}")
+    if cfg.scope:
+        lines.append(f"Scope: {cfg.scope}")
+    return ("\n".join(lines) + "\n") if lines else ""
 
 
 def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
     """Split text into (before, section, after) by section number or heading name."""
     lines = text.split("\n")
 
-    # Match "## 2." / "## 2 " / "## 2. Methods" / "## Methods"
     num_re = re.compile(
         rf"^(#{1,4})\s+{re.escape(identifier)}[\s\.]", re.IGNORECASE
     )
@@ -54,7 +69,6 @@ def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
     if start_idx is None:
         return None
 
-    # End at the next heading of same or higher level
     end_idx = len(lines)
     for i in range(start_idx + 1, len(lines)):
         if lines[i].startswith("#"):
@@ -96,6 +110,7 @@ def run(project_dir: Path, section: str) -> None:
     prompt = _PROMPT.format(
         title=cfg.title,
         heading=heading,
+        venue_scope=_venue_scope_block(cfg),
         section_text=section_text,
     )
 
@@ -103,7 +118,6 @@ def run(project_dir: Path, section: str) -> None:
     print(f"[raconteur] refining: {heading}…", file=sys.stderr)
     refined = brain.coordinator(prompt, system=_SYSTEM)
 
-    # Reassemble, dropping empty parts
     parts = [p for p in [before, refined.strip(), after] if p.strip()]
     new_text = "\n\n".join(parts) + "\n"
 

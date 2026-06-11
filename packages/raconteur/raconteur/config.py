@@ -17,12 +17,25 @@ class BrainConfig:
 
 
 @dataclass
+class VenueConfig:
+    name: str = ""
+    page_limit: int | None = None
+    word_limit: int | None = None
+    citation_style: str = ""
+    columns: int = 1
+    abstract_limit: int | None = None
+    format_notes: str = ""
+
+
+@dataclass
 class ProjectConfig:
     title: str = ""
     short_title: str = ""
     author_initials: str = ""
     topic: str = ""
     focus: str = ""
+    scope: str = ""
+    venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 
     def save(self, project_dir: Path) -> None:
@@ -37,7 +50,12 @@ class ProjectConfig:
         with open(path) as f:
             data = yaml.safe_load(f)
         brain_data = data.pop("brain", {})
-        return cls(**data, brain=BrainConfig(**brain_data))
+        venue_data = data.pop("venue", {})
+        return cls(
+            **data,
+            brain=BrainConfig(**brain_data),
+            venue=VenueConfig(**venue_data),
+        )
 
     @classmethod
     def exists(cls, project_dir: Path) -> bool:

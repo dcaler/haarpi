@@ -90,6 +90,16 @@ The wizard asks for:
 - **Research description** — describe your research in plain language. A local LLM
   parses this into a `topic` and `focus` field in the background while the wizard
   continues.
+- **Target venue** — the journal or conference you are writing for (e.g. `CHI 2026`,
+  `Nature Human Behaviour`, `ICML`). Optional. A local LLM looks up the venue's
+  format specifications — page limit, word limit, citation style, column format,
+  abstract length — and stores them in the project config. Always verify these
+  against the venue's official call for papers.
+- **Scope and length target** — a brief description of what kind of paper this is
+  and any constraints on coverage (e.g. `4-page conference short paper, focus on
+  empirical findings only`, `8000-word journal article`). Optional. This is passed
+  directly to the LLM when generating the outline and draft, so it will calibrate
+  depth, breadth, and section count accordingly.
 
 `init` creates:
 
@@ -223,10 +233,24 @@ short_title: trust_ai           # used in all filenames — no spaces
 author_initials: DCR            # your initials, appended when you revise
 topic: trust in AI systems in high-stakes decision contexts
 focus: the role of explainability in building appropriate reliance
+scope: 4-page conference short paper, focus on empirical findings
+venue:
+  name: CHI 2026
+  page_limit: 4
+  word_limit: null
+  citation_style: ACM
+  columns: 2
+  abstract_limit: 150
+  format_notes: Use ACM reference format; include CCS concepts and keywords
 brain:
   coordinator: qwen3.6:27b-16k   # model for drafting and revision
   worker: qwen3.5:9b-q4_K_M     # model for short structured tasks
 ```
+
+`venue` and `scope` are optional. If set, they are passed to the LLM at every
+stage — outline, draft, revision, and focus — to keep the output calibrated to
+the submission target. Venue format specs are looked up by the worker LLM during
+`init`; always cross-check them against the official call for papers.
 
 ---
 

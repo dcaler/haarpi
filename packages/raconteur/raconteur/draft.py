@@ -19,7 +19,7 @@ Write a complete draft of an academic paper based on the outline below.
 Title: {title}
 Topic: {topic}
 Focus: {focus}
-
+{venue_scope}
 Outline:
 {outline}
 {litrev_section}
@@ -27,14 +27,15 @@ Outline:
 Write the full paper in markdown. Use ## for section headings. Use clear, precise \
 academic prose — well-constructed sentences, no unexplained jargon, claims supported \
 by the literature where available. Use [REF] as a placeholder wherever a citation \
-belongs. Do not include a references section. Output only the paper draft.
+belongs. Do not include a references section. Calibrate depth, length, and breadth \
+of coverage to the scope and venue constraints above. Output only the paper draft.
 """
 
 _REVISE_PROMPT = """\
 Revise the following academic paper draft based on the reviewer's annotations.
 
 Title: {title}
-
+{venue_scope}
 Previous draft:
 {draft}
 
@@ -46,10 +47,33 @@ Instructions:
 - Remove all tracked deletions
 - Address each reviewer comment with substantive changes to the relevant passage
 - Maintain consistent tone and flow throughout
+- Respect the scope and venue constraints above
 - Do not add a references section
 
 Output only the revised draft in markdown.
 """
+
+
+def _venue_scope_block(cfg: ProjectConfig) -> str:
+    lines = []
+    v = cfg.venue
+    if v.name:
+        lines.append(f"Target venue: {v.name}")
+        if v.page_limit:
+            lines.append(f"Page limit: {v.page_limit}")
+        if v.word_limit:
+            lines.append(f"Word limit: {v.word_limit}")
+        if v.citation_style:
+            lines.append(f"Citation style: {v.citation_style}")
+        if v.columns == 2:
+            lines.append("Format: two-column")
+        if v.abstract_limit:
+            lines.append(f"Abstract word limit: {v.abstract_limit}")
+        if v.format_notes:
+            lines.append(f"Format notes: {v.format_notes}")
+    if cfg.scope:
+        lines.append(f"Scope: {cfg.scope}")
+    return ("\n".join(lines) + "\n") if lines else ""
 
 
 def run(project_dir: Path) -> None:
@@ -84,6 +108,7 @@ def _draft_fresh(
     litrev = load_litreview(project_dir)
     code = load_code(project_dir)
 
+    venue_scope = _venue_scope_block(cfg)
     litrev_section = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"\nAnalysis Code Reference:\n{code}\n" if code else ""
 
@@ -91,6 +116,7 @@ def _draft_fresh(
         title=cfg.title,
         topic=cfg.topic,
         focus=cfg.focus,
+        venue_scope=venue_scope,
         outline=outline,
         litrev_section=litrev_section,
         code_section=code_section,
@@ -119,8 +145,11 @@ def _revise(
         _draft_fresh(project_dir, cfg, brain, paper_dir)
         return
 
+    venue_scope = _venue_scope_block(cfg)
+
     prompt = _REVISE_PROMPT.format(
         title=cfg.title,
+        venue_scope=venue_scope,
         draft=draft_text,
         revisions=revision_notes,
     )
