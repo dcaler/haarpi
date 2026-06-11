@@ -35,14 +35,20 @@ def _make_gather_brain(cfg, gc) -> Brain:
 
 _QUERYGEN_SYS = """\
 You generate search queries for academic databases (OpenAlex, Crossref, Semantic
-Scholar). Given a research topic and focus, produce 6-8 SHORT keyword queries
+Scholar). Given a research topic and focus, produce 8-10 SHORT keyword queries
 (3-8 words each) that together cover the topic from several angles:
 - the core concepts, stated plainly;
 - key methods or study designs central to the topic;
 - important synonyms / alternate terminology a different field might use;
-- and CRITICALLY, named seminal works, foundational authors, or specific
-  programs/policies/datasets an expert would search for by name to reach
-  high-value papers whose titles do not contain the obvious keywords.
+- named seminal works, foundational authors, or specific programs/policies/datasets
+  an expert would search for by name to reach high-value papers whose titles do not
+  contain the obvious keywords;
+- and ALWAYS 1-2 queries that specifically target underrepresented scholarly voices:
+  name a relevant journal, venue, or publication context where Global South researchers,
+  feminist/gender scholars, indigenous or decolonial thinkers, or other structurally
+  marginalized voices in THIS specific field tend to publish. Use your knowledge of the
+  discipline — pick venues that are genuinely associated with underrepresented scholarship
+  in this domain, not generic diversity terms.
 Stay strictly within the stated domain; do not drift into adjacent fields.
 Respond with ONLY a JSON array of query strings, no other text."""
 
@@ -71,7 +77,7 @@ def _generate_queries(brain: Brain, cfg) -> list[str]:
         if q and k not in seen:
             seen.add(k)
             out.append(q)
-    return out[:8]
+    return out[:10]
 
 
 def run(directory: str = ".", use_zotero: bool = True) -> int:
