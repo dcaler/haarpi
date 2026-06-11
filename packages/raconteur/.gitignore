@@ -9,3 +9,4 @@ venv/
 paper/
 *.yaml
 !raconteur.yaml
+Speedup_Advice.md
