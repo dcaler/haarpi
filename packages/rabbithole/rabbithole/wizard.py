@@ -6,15 +6,16 @@ then run `rabbitHole` (init).
 First run (no litrev yet):
   1. Confirm the project name (defaults to the folder name minus any leading
      datestamp, e.g. 260523_SolarAdopt -> SolarAdopt). Also the Zotero collection.
-  2. "What do you want to research today?" -> a local LLM extracts topic + focus.
+  2. "What do you want to research today?" -> saved verbatim as research_prompt.
   3. How many articles to target.
-  Writes litrev.yaml.
+  Writes litrev.yaml. gather extracts topic/focus from the prompt on first run.
 
 Re-run (a litrev*.yaml exists) — used to declare a new focus:
   - Project name is taken as given from the latest numbered yaml.
   - Shows the current topic + focus.
   - Asks "What do you want to research today?" (Enter keeps the previous topic/
-    focus; otherwise the answer is re-parsed by the LLM).
+    focus; a new answer is stored verbatim and topic/focus cleared so gather
+    re-derives them).
   - Re-asks the target (defaulting to the previous value).
   - Everything else (sources, dates, brain, ranking, collection_key, ...) carries
     over. Writes the next numbered file (litrev_2.yaml, litrev_3.yaml, ...),
@@ -23,14 +24,11 @@ Re-run (a litrev*.yaml exists) — used to declare a new focus:
 
 from __future__ import annotations
 
-import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import config
-from .brain import Brain
-from .config import BrainConfig, ProjectConfig
+from .config import ProjectConfig
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -63,74 +61,6 @@ def _default_name(dirname: str) -> str:
     """Strip a leading datestamp like '260523_' from the folder name."""
     stripped = re.sub(r"^\d+[_-]+", "", dirname).strip()
     return stripped or dirname
-
-
-def _parse_json(raw: str) -> dict:
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
-    return {}
-
-
-_EXTRACT_SYS = """\
-You turn a researcher's free-form description into structured fields for an
-academic literature search. Respond with ONLY a JSON object, no other text:
-
-{"topic": "...", "focus": "...", "domain_anchor": "...", "exclude_topics": "..."}
-
-- topic: a concise, search-friendly statement of the core subject (one line).
-- focus: key subtopics, disciplines, or angles to emphasise (one line; "" if none).
-- domain_anchor: one line naming what a paper MUST be about to count as on-topic
-  (the specific field/phenomenon), used to filter out adjacent-but-wrong results.
-- exclude_topics: one line naming adjacent disciplines or topics to keep OUT, e.g.
-  "general health behavior change" for a recycling project ("" if none come to mind).
-Base it strictly on what the user wrote; do not invent scope."""
-
-
-def _extract_topic_focus(research: str, gc) -> tuple[str, str, str, str, str]:
-    """Coordinator model -> (topic, focus, domain_anchor, exclude_topics, note).
-    Runs in a background thread, so it must not print or read input; any warning
-    is returned as `note`."""
-    try:
-        brain = Brain(BrainConfig(), gc)
-        raw = brain.coordinator(research, _EXTRACT_SYS, num_ctx=4096)
-        data = _parse_json(raw)
-        topic = (data.get("topic") or "").strip()
-        focus = (data.get("focus") or "").strip()
-        anchor = (data.get("domain_anchor") or "").strip()
-        exclude = (data.get("exclude_topics") or "").strip()
-        if topic:
-            return topic, focus, anchor, exclude, ""
-        return (research.strip(), "", "", "",
-                "the LLM didn't return a clear topic; using your text as the topic.")
-    except Exception as e:  # noqa: BLE001
-        return (research.strip(), "", "", "",
-                f"couldn't reach the local LLM ({e}); using your text as the topic.")
-
-
-def _kickoff_extract(research: str):
-    """Start topic/focus extraction in the background; returns (pool, future)."""
-    gc = config.load_global()
-    pool = ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(_extract_topic_focus, research, gc)
-    return pool, fut
-
-
-def _finish_extract(pool, fut) -> tuple[str, str, str, str]:
-    """Block on the background extraction (the one pause) and show the result."""
-    print("\nParsing your request with the local LLM...")
-    topic, focus, anchor, exclude, note = fut.result()
-    pool.shutdown(wait=False)
-    if note:
-        print(f"  [note] {note}")
-    print(f"  Topic: {topic}")
-    print(f"  Focus: {focus or '(none)'}")
-    print(f"  Must be about: {anchor or '(the topic)'}")
-    print(f"  Keep out: {exclude or '(nothing specific)'}")
-    return topic, focus, anchor, exclude
 
 
 def _ask_source_types(default_pre: bool = False, default_news: bool = False) -> tuple[bool, bool]:
@@ -174,21 +104,15 @@ def _first_run(root: Path) -> int:
     while not research:
         print("  Tell me, in a sentence or two, what you want to look into.")
         research = _ask("What do you want to research today?")
-    pool, fut = _kickoff_extract(research)   # runs while you answer the rest
 
     print()
     target = _ask_int("How many articles do you want to target?", 30)
     include_preprints, include_news = _ask_source_types()
     run_gather = _ask_yesno("Run gather now?", True)
 
-    topic, focus, anchor, exclude = _finish_extract(pool, fut)
-
     cfg = ProjectConfig(
         project_name=project_name,
-        topic=topic,
-        focus=focus,
-        domain_anchor=anchor,
-        exclude_topics=exclude,
+        research_prompt=research,
         include_preprints=include_preprints,
         include_news=include_news,
         target_min=target,
@@ -213,9 +137,6 @@ def _rerun(root: Path) -> int:
     print()
 
     research = _ask("What do you want to research today? (Enter = keep the above)")
-    pool = fut = None
-    if research:
-        pool, fut = _kickoff_extract(research)   # runs while you answer the rest
 
     print()
     target = _ask_int("How many articles do you want to target?", prev.target_max)
@@ -223,18 +144,16 @@ def _rerun(root: Path) -> int:
         getattr(prev, "include_preprints", False), getattr(prev, "include_news", False))
     run_gather = _ask_yesno("Run gather now?", True)
 
-    if fut is not None:
-        topic, focus, anchor, exclude = _finish_extract(pool, fut)
+    if research:
+        # New prompt: store it verbatim; clear extracted fields so gather re-derives them.
+        prev.research_prompt = research
+        prev.topic = ""
+        prev.focus = ""
+        prev.domain_anchor = ""
+        prev.exclude_topics = ""
     else:
         print("\n  Keeping the previous topic and focus.")
-        topic, focus = prev.topic, prev.focus
-        anchor, exclude = prev.domain_anchor, prev.exclude_topics
 
-    # Carry everything else over; change only topic/focus/target/source-types.
-    prev.topic = topic
-    prev.focus = focus
-    prev.domain_anchor = anchor
-    prev.exclude_topics = exclude
     prev.include_preprints = include_preprints
     prev.include_news = include_news
     prev.target_min = target
@@ -262,8 +181,8 @@ def _finalize(root: Path, cfg: ProjectConfig, run_gather: bool, research: str = 
         f"rabbitHole: project '{cfg.project_name}' initialized",
         (f"Project '{cfg.project_name}' is set up at {root}.\n\n"
          "Interview summary\n"
-         f"  Request: {research or '(kept previous topic/focus)'}\n"
-         f"  Topic:   {cfg.topic}\n"
+         f"  Request: {cfg.research_prompt or '(kept previous topic/focus)'}\n"
+         f"  Topic:   {cfg.topic or '(to be extracted by gather)'}\n"
          f"  Focus:   {cfg.focus or '(none)'}\n"
          f"  Target:  {cfg.target_max} articles\n\n"
          + closing),

@@ -23,6 +23,39 @@ from .brain import Brain
 from .models import Candidate, norm_doi
 
 
+_EXTRACT_SYS = """\
+You turn a researcher's free-form description into structured fields for an
+academic literature search. Respond with ONLY a JSON object, no other text:
+
+{"topic": "...", "focus": "...", "domain_anchor": "...", "exclude_topics": "..."}
+
+- topic: a concise, search-friendly statement of the core subject (one line).
+- focus: key subtopics, disciplines, or angles to emphasise (one line; "" if none).
+- domain_anchor: one line naming what a paper MUST be about to count as on-topic
+  (the specific field/phenomenon), used to filter out adjacent-but-wrong results.
+- exclude_topics: one line naming adjacent disciplines or topics to keep OUT, e.g.
+  "general health behavior change" for a recycling project ("" if none come to mind).
+Base it strictly on what the user wrote; do not invent scope."""
+
+
+def _extract_topic(brain: Brain, prompt: str) -> tuple[str, str, str, str]:
+    """Derive topic/focus/domain_anchor/exclude_topics from the raw research prompt."""
+    try:
+        raw = brain.coordinator(prompt, _EXTRACT_SYS, num_ctx=4096)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+        topic = (data.get("topic") or "").strip()
+        focus = (data.get("focus") or "").strip()
+        anchor = (data.get("domain_anchor") or "").strip()
+        exclude = (data.get("exclude_topics") or "").strip()
+        if topic:
+            return topic, focus, anchor, exclude
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] topic extraction failed ({e}); using raw prompt as topic.",
+              file=sys.stderr)
+    return prompt.strip(), "", "", ""
+
+
 def _make_gather_brain(cfg, gc) -> Brain:
     """Build the gather Brain, degrading to local Ollama if the requested backend
     is unavailable (e.g. 'claude' with no API key) rather than crashing the run."""
@@ -92,6 +125,15 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         """Progress line stamped with elapsed mm:ss, so a long run is legible."""
         el = int(time.time() - t0)
         print(f"  [{el // 60}:{el % 60:02d}] {msg}", flush=True)
+
+    if not cfg.topic and cfg.research_prompt:
+        log("Extracting topic and focus from your research prompt...")
+        cfg.topic, cfg.focus, cfg.domain_anchor, cfg.exclude_topics = (
+            _extract_topic(brain, cfg.research_prompt))
+        log(f"Topic: {cfg.topic}")
+        if cfg.focus:
+            log(f"Focus: {cfg.focus}")
+        config.save_project(cfg, directory)
 
     print(f"rabbitHole gather — {cfg.project_name}")
     print(f"  topic: {cfg.topic}")

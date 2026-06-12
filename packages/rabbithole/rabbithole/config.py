@@ -77,6 +77,8 @@ class ProjectConfig:
     })
     brain: BrainConfig = field(default_factory=BrainConfig)
     zotero: dict = field(default_factory=lambda: {"collection_key": ""})
+    # Raw research prompt from init — topic/focus are extracted from this by gather.
+    research_prompt: str = ""
     # MDPI is always excluded in code; extra publisher names to drop go here.
     exclude_publishers: list = field(default_factory=list)
 
