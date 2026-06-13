@@ -108,7 +108,6 @@ def _first_run(root: Path) -> int:
     print()
     target = _ask_int("How many articles do you want to target?", 30)
     include_preprints, include_news = _ask_source_types()
-    run_gather = _ask_yesno("Run gather now?", True)
 
     cfg = ProjectConfig(
         project_name=project_name,
@@ -125,7 +124,7 @@ def _first_run(root: Path) -> int:
     print(f"  Wrote {saved.relative_to(root)}")
     print(f"  Created: {config.LITREVIEW_DIR}/ (pdfs, work, output)")
     print(f"  Zotero collection: {project_name}")
-    return _finalize(root, cfg, run_gather, research)
+    return _finalize(root, cfg)
 
 
 def _rerun(root: Path) -> int:
@@ -142,7 +141,6 @@ def _rerun(root: Path) -> int:
     target = _ask_int("How many articles do you want to target?", prev.target_max)
     include_preprints, include_news = _ask_source_types(
         getattr(prev, "include_preprints", False), getattr(prev, "include_news", False))
-    run_gather = _ask_yesno("Run gather now?", True)
 
     if research:
         # New prompt: store it verbatim; clear extracted fields so gather re-derives them.
@@ -166,16 +164,10 @@ def _rerun(root: Path) -> int:
     print(f"New focus saved for '{prev.project_name}'.")
     print(f"  Wrote {saved.relative_to(root)}")
     print(f"  Zotero collection: {prev.project_name}")
-    return _finalize(root, prev, run_gather, research)
+    return _finalize(root, prev)
 
 
-def _finalize(root: Path, cfg: ProjectConfig, run_gather: bool, research: str = "") -> int:
-    """Always send the init interview summary; then chain into gather if asked,
-    otherwise print next steps."""
-    closing = ("Running gather now — you'll get a second email when it completes."
-               if run_gather else
-               "Next: run `rabbitHole gather` to list sources missing from your "
-               "Zotero collection.")
+def _finalize(root: Path, cfg: ProjectConfig) -> int:
     from . import notify
     notify.send_email(
         f"rabbitHole: project '{cfg.project_name}' initialized",
@@ -185,15 +177,10 @@ def _finalize(root: Path, cfg: ProjectConfig, run_gather: bool, research: str = 
          f"  Topic:   {cfg.topic or '(to be extracted by gather)'}\n"
          f"  Focus:   {cfg.focus or '(none)'}\n"
          f"  Target:  {cfg.target_max} articles\n\n"
-         + closing),
+         "Next: run `rabbitHole gather` to list sources missing from your "
+         "Zotero collection."),
         config.load_global(),
     )
-
-    if run_gather:
-        print()
-        from . import discover
-        return discover.run(str(root))   # gather sends its own completion email
-
     _print_next_steps()
     return 0
 
