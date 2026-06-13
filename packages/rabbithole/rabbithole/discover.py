@@ -24,17 +24,26 @@ from .models import Candidate, norm_doi
 
 
 _EXTRACT_SYS = """\
-You turn a researcher's free-form description into structured fields for an
-academic literature search. Respond with ONLY a JSON object, no other text:
+You turn a researcher's free-form description into structured fields for
+FINDING EXISTING ACADEMIC LITERATURE. These fields drive database searches —
+they must describe papers that already exist, not the researcher's novel contribution.
+
+Respond with ONLY a JSON object, no other text:
 
 {"topic": "...", "focus": "...", "domain_anchor": "...", "exclude_topics": "..."}
 
-- topic: a concise, search-friendly statement of the core subject (one line).
-- focus: key subtopics, disciplines, or angles to emphasise (one line; "" if none).
-- domain_anchor: one line naming what a paper MUST be about to count as on-topic
-  (the specific field/phenomenon), used to filter out adjacent-but-wrong results.
-- exclude_topics: one line naming adjacent disciplines or topics to keep OUT, e.g.
-  "general health behavior change" for a recycling project ("" if none come to mind).
+- topic: a search-friendly phrase covering the existing literature this work builds
+  on (one line). If the researcher proposes a novel framing or contribution, describe
+  the underlying research areas to survey — not the novel claim itself.
+- focus: key subtopics, disciplines, methods, or component fields to emphasise
+  (one line; "" if none). For novel interdisciplinary work, list the component
+  literatures (e.g. "cognitive load theory, syllabus analysis, LLM benchmarking").
+- domain_anchor: one line naming what an existing paper MUST be about to serve as
+  useful background. Anchor on established fields and phenomena, not on the
+  researcher's novel framing — if the framing is new, ask: what literatures does
+  it draw from?
+- exclude_topics: one line naming adjacent disciplines or approaches to keep OUT
+  ("" if none come to mind).
 Base it strictly on what the user wrote; do not invent scope."""
 
 
