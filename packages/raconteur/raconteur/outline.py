@@ -554,6 +554,8 @@ def _refresh_content(
         system=_SYSTEM,
         num_ctx=16384,
     )
+    updated = _critique_revise(brain, updated, analysis, n=1)
+    updated = _critique_revise(brain, updated, analysis, n=2)
     _write(project_dir, cfg, paper_dir, updated)
 
 
@@ -574,10 +576,7 @@ def _revise(
     revision_notes = build_revision_context(user_rev)
 
     if not revision_notes and not code and not results:
-        print(
-            "[warn] no annotations, no code, and no results — nothing to revise",
-            file=sys.stderr,
-        )
+        log("[warn] no annotations, no code, and no results — nothing to revise")
         return
 
     log("[raconteur] analysing paper structure…")
@@ -603,6 +602,8 @@ def _revise(
         system=_SYSTEM,
         num_ctx=16384,
     )
+    revised_text = _critique_revise(brain, revised_text, analysis, n=1)
+    revised_text = _critique_revise(brain, revised_text, analysis, n=2)
     _write(project_dir, cfg, paper_dir, revised_text)
 
 
