@@ -1,6 +1,7 @@
 """Venue analysis: brainstorm → web research → multi-pass synthesis → docx."""
 
 from __future__ import annotations
+from .log import log
 
 import json
 import sys
@@ -224,7 +225,7 @@ def _brainstorm_candidates(
         snippet = litrev[:3000] + ("\n\n[truncated]" if len(litrev) > 3000 else "")
         litrev_context = f"Literature review context:\n{snippet}\n"
 
-    print("[raconteur] brainstorming venue candidates…", file=sys.stderr)
+    log("[raconteur] brainstorming venue candidates…")
     raw = brain.coordinator(
         _BRAINSTORM_PROMPT.format(
             description=cfg.description,
@@ -241,10 +242,10 @@ def _brainstorm_candidates(
         if not isinstance(candidates, list):
             candidates = []
     except Exception as e:
-        print(f"[warn] could not parse brainstorm JSON: {e}", file=sys.stderr)
+        log(f"[warn] could not parse brainstorm JSON: {e}")
         candidates = []
 
-    print(f"[raconteur] {len(candidates)} venue candidates identified", file=sys.stderr)
+    log(f"[raconteur] {len(candidates)} venue candidates identified")
     return candidates
 
 
@@ -265,7 +266,7 @@ def _web_research(candidates: list[dict], email: str) -> str:
 
         if vtype == "journal":
             query = c.get("openalex_query") or name
-            print(f"[web] querying OpenAlex: {query!r}", file=sys.stderr)
+            log(f"[web] querying OpenAlex: {query!r}")
             meta = web.openalex_source(query, email)
             if meta:
                 section_lines.append("OpenAlex metadata:")
@@ -290,7 +291,7 @@ def _web_research(candidates: list[dict], email: str) -> str:
                 section_lines.append("OpenAlex: no match found")
 
             if homepage:
-                print(f"[web] fetching homepage: {homepage}", file=sys.stderr)
+                log(f"[web] fetching homepage: {homepage}")
                 page_text = web.fetch_page_text(homepage, email, max_chars=2000)
                 if page_text:
                     section_lines.append(f"Homepage text ({homepage}):")
@@ -298,7 +299,7 @@ def _web_research(candidates: list[dict], email: str) -> str:
 
         elif vtype == "conference":
             query = c.get("wikicfp_query") or name
-            print(f"[web] searching WikiCFP: {query!r}", file=sys.stderr)
+            log(f"[web] searching WikiCFP: {query!r}")
             conf_results = web.wikicfp_conference(query, email)
             if conf_results:
                 section_lines.append(f"WikiCFP results ({len(conf_results)} found in deadline window):")
@@ -322,7 +323,7 @@ def _web_research(candidates: list[dict], email: str) -> str:
 
             homepage = c.get("homepage_url", "")
             if homepage:
-                print(f"[web] fetching conference homepage: {homepage}", file=sys.stderr)
+                log(f"[web] fetching conference homepage: {homepage}")
                 page_text = web.fetch_page_text(homepage, email, max_chars=1500)
                 if page_text:
                     section_lines.append(f"Homepage text ({homepage}):")
@@ -338,7 +339,7 @@ def _draft_analysis(
 ) -> str:
     today_str = date.today().strftime("%Y-%m-%d")
     deadline = _deadline_end()
-    print("[raconteur] drafting venue analysis…", file=sys.stderr)
+    log("[raconteur] drafting venue analysis…")
     return brain.coordinator(
         _DRAFT_PROMPT.format(
             today=today_str,
@@ -355,7 +356,7 @@ def _critique_revise(brain: Brain, analysis: str, paper_profile: str) -> str:
     today_str = date.today().strftime("%Y-%m-%d")
     deadline = _deadline_end()
 
-    print("[raconteur] critiquing venue analysis…", file=sys.stderr)
+    log("[raconteur] critiquing venue analysis…")
     critique = brain.coordinator(
         _CRITIQUE_PROMPT.format(
             paper_profile=paper_profile,
@@ -366,9 +367,9 @@ def _critique_revise(brain: Brain, analysis: str, paper_profile: str) -> str:
         system=_SYSTEM,
         num_ctx=8192,
     )
-    print(f"[raconteur] critique findings:\n{critique}", file=sys.stderr)
+    log(f"[raconteur] critique findings:\n{critique}")
 
-    print("[raconteur] revising venue analysis…", file=sys.stderr)
+    log("[raconteur] revising venue analysis…")
     revised = brain.coordinator(
         _REVISE_PROMPT.format(
             paper_profile=paper_profile,
@@ -401,7 +402,7 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     """Write venue_analysis.md (fixed) and dated docx. Returns the md text."""
     md_path = paper_dir / "venue_analysis.md"
     md_path.write_text(text, encoding="utf-8")
-    print(f"[raconteur] wrote {md_path.relative_to(project_dir)}", file=sys.stderr)
+    log(f"[raconteur] wrote {md_path.relative_to(project_dir)}")
 
     docx_name = f"{today()}_{cfg.short_title}_venue_ra.docx"
     docx_src = paper_dir / f"{today()}_{cfg.short_title}_venue_ra.md"
@@ -409,9 +410,9 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     docx = to_docx(docx_src)
     docx_src.unlink(missing_ok=True)
     if docx:
-        print(f"[raconteur] wrote {docx.relative_to(project_dir)}", file=sys.stderr)
+        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
     else:
-        print(f"[raconteur] docx render failed; md is at {md_path.name}", file=sys.stderr)
+        log(f"[raconteur] docx render failed; md is at {md_path.name}")
 
     return text
 
@@ -434,17 +435,17 @@ Venue analysis:
 
 def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str) -> None:
     """Extract recommended venue from analysis and write it to raconteur.yaml."""
-    print("[raconteur] updating raconteur.yaml with recommendation…", file=sys.stderr)
+    log("[raconteur] updating raconteur.yaml with recommendation…")
     raw = brain.worker(_EXTRACT_REC_PROMPT.format(analysis=analysis), num_ctx=4096)
     try:
         rec = json.loads(_strip_fence(raw))
     except Exception as e:
-        print(f"[warn] could not parse recommendation JSON: {e}", file=sys.stderr)
+        log(f"[warn] could not parse recommendation JSON: {e}")
         return
 
     venue_name = rec.get("venue", "")
     if not venue_name:
-        print("[warn] no venue name extracted — raconteur.yaml not updated", file=sys.stderr)
+        log("[warn] no venue name extracted — raconteur.yaml not updated")
         return
 
     cfg.venue = VenueConfig(
@@ -456,7 +457,7 @@ def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: 
         abstract_limit=rec.get("abstract_limit") or None,
     )
     cfg.save(project_dir)
-    print(f"[raconteur] raconteur.yaml updated: venue = {venue_name}", file=sys.stderr)
+    log(f"[raconteur] raconteur.yaml updated: venue = {venue_name}")
 
 
 # ── fresh run ─────────────────────────────────────────────────────────────────
@@ -472,7 +473,7 @@ def _venue_fresh(
 
     # Step 2: web research
     email = gcfg.notify_to or ""
-    print("[raconteur] researching venues on the web…", file=sys.stderr)
+    log("[raconteur] researching venues on the web…")
     web_content = _web_research(candidates, email)
 
     # Pass 2: draft full analysis (web content + paper profile → markdown)
@@ -502,7 +503,7 @@ def _venue_revise(
         )
         return _venue_fresh(project_dir, cfg, brain, paper_dir, GlobalConfig.load())
 
-    print("[raconteur] revising venue analysis from annotations…", file=sys.stderr)
+    log("[raconteur] revising venue analysis from annotations…")
     revised = brain.coordinator(
         _USER_REVISE_PROMPT.format(
             paper_profile=paper_profile,
@@ -519,7 +520,7 @@ def _venue_revise(
 
 def run(project_dir: Path) -> None:
     if not ProjectConfig.exists(project_dir):
-        print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
+        log("[error] no paper/raconteur.yaml found — run 'raconteur init' first")
         raise SystemExit(1)
 
     cfg = ProjectConfig.load(project_dir)
@@ -528,14 +529,14 @@ def run(project_dir: Path) -> None:
     paper_dir.mkdir(exist_ok=True)
 
     if not cfg.description:
-        print("[error] no research description — run 'raconteur init' first", file=sys.stderr)
+        log("[error] no research description — run 'raconteur init' first")
         raise SystemExit(1)
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
     user_rev = _find_venue_user_revision(paper_dir, cfg.short_title)
     if user_rev:
-        print(f"[raconteur] found venue revision: {user_rev.name}", file=sys.stderr)
+        log(f"[raconteur] found venue revision: {user_rev.name}")
         final_text = _venue_revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         final_text = _venue_fresh(project_dir, cfg, brain, paper_dir, gcfg)

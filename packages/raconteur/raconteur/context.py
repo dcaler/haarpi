@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sys
+from .log import log
 from pathlib import Path
 
 _LIT_GLOB = "{litrev_dir}/output/*.md"
@@ -23,7 +24,7 @@ def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
     text = files[0].read_text(encoding="utf-8", errors="replace")
     if len(text) > _MAX_LITREV_CHARS:
         text = text[:_MAX_LITREV_CHARS] + "\n\n[truncated]"
-    print(f"[raconteur] reading litreview ({subdir}): {files[0].name}", file=sys.stderr)
+    log(f"[raconteur] reading litreview ({subdir}): {files[0].name}")
     return text
 
 
@@ -48,7 +49,7 @@ def load_code(project_dir: Path, subdir: str = "code") -> str:
             continue
     if not parts:
         return ""
-    print(f"[raconteur] reading methods ({subdir}): {len(parts)} file(s)", file=sys.stderr)
+    log(f"[raconteur] reading methods ({subdir}): {len(parts)} file(s)")
     return "\n".join(parts)
 
 
@@ -74,7 +75,7 @@ def load_results(project_dir: Path, subdir: str = "results") -> str:
             continue
     if not parts:
         return ""
-    print(f"[raconteur] reading results ({subdir}): {len(parts)} file(s)", file=sys.stderr)
+    log(f"[raconteur] reading results ({subdir}): {len(parts)} file(s)")
     return "\n".join(parts)
 
 
@@ -84,5 +85,5 @@ def load_venue_analysis(project_dir: Path) -> str:
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")
-    print("[raconteur] reading venue_analysis.md", file=sys.stderr)
+    log("[raconteur] reading venue_analysis.md")
     return text

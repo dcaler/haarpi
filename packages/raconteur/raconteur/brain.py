@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from .log import log
 from concurrent.futures import ThreadPoolExecutor
 import httpx
 from .config import GlobalConfig
@@ -32,7 +33,7 @@ class Brain:
             try:
                 out.append(f.result())
             except Exception as e:
-                print(f"[warn] worker failed: {e}", file=sys.stderr)
+                log(f"[warn] worker failed: {e}")
                 out.append("")
         return out
 
@@ -87,7 +88,7 @@ class Brain:
             except Exception as exc:
                 if attempt == _RETRIES:
                     raise
-                print(f"[warn] ollama attempt {attempt}/{_RETRIES}: {exc}", file=sys.stderr)
+                log(f"[warn] ollama attempt {attempt}/{_RETRIES}: {exc}")
                 time.sleep(_BACKOFF * attempt)
 
         return ""

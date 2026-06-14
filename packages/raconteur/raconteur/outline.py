@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import sys
+from .log import log
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
@@ -284,7 +285,7 @@ def _parse_description(brain: Brain, description: str) -> dict:
     try:
         return json.loads(_strip_fence(raw))
     except Exception as e:
-        print(f"[warn] could not parse description: {e}", file=sys.stderr)
+        log(f"[warn] could not parse description: {e}")
         return {}
 
 
@@ -350,15 +351,15 @@ def _analyze_structure(
     try:
         parsed = json.loads(cleaned)
     except Exception as e:
-        print(f"[warn] could not parse structural analysis: {e}", file=sys.stderr)
+        log(f"[warn] could not parse structural analysis: {e}")
         return f"{status}\n\n{cleaned}"
 
     if code:
-        print("[raconteur] extracting equations from code…", file=sys.stderr)
+        log("[raconteur] extracting equations from code…")
         parsed["key_equations"] = _extract_equations(brain, code)
 
     if results:
-        print("[raconteur] extracting findings from results…", file=sys.stderr)
+        log("[raconteur] extracting findings from results…")
         parsed["key_findings"] = _extract_findings(brain, results)
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
@@ -366,15 +367,15 @@ def _analyze_structure(
 
 def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
     """One critique→revise cycle. Returns the revised outline."""
-    print(f"[raconteur] critique {n}…", file=sys.stderr)
+    log(f"[raconteur] critique {n}…")
     critique = brain.coordinator(
         _CRITIQUE_PROMPT.format(analysis=analysis, outline=outline),
         system=_SYSTEM,
         num_ctx=8192,
     )
-    print(f"[raconteur] critique {n} findings:\n{critique}", file=sys.stderr)
+    log(f"[raconteur] critique {n} findings:\n{critique}")
 
-    print(f"[raconteur] revise {n}…", file=sys.stderr)
+    log(f"[raconteur] revise {n}…")
     revised = brain.coordinator(
         _REVISE_PROMPT.format(analysis=analysis, outline=outline, critique=critique),
         system=_SYSTEM,
@@ -418,7 +419,7 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
 
 def run(project_dir: Path) -> None:
     if not ProjectConfig.exists(project_dir):
-        print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
+        log("[error] no paper/raconteur.yaml found — run 'raconteur init' first")
         raise SystemExit(1)
 
     cfg = ProjectConfig.load(project_dir)
@@ -427,13 +428,13 @@ def run(project_dir: Path) -> None:
     paper_dir.mkdir(exist_ok=True)
 
     if not cfg.description:
-        print("[error] no research description — run 'raconteur init' first", file=sys.stderr)
+        log("[error] no research description — run 'raconteur init' first")
         raise SystemExit(1)
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
     if not cfg.topic or not cfg.focus:
-        print("[raconteur] extracting topic and focus…", file=sys.stderr)
+        log("[raconteur] extracting topic and focus…")
         parsed = _parse_description(brain, cfg.description)
         if parsed.get("topic"):
             cfg.topic = parsed["topic"]
@@ -442,9 +443,9 @@ def run(project_dir: Path) -> None:
         if not cfg.title and parsed.get("title"):
             cfg.title = parsed["title"]
         cfg.save(project_dir)
-        print(f"  title : {cfg.title}", file=sys.stderr)
-        print(f"  topic : {cfg.topic}", file=sys.stderr)
-        print(f"  focus : {cfg.focus}", file=sys.stderr)
+        log(f"  title : {cfg.title}")
+        log(f"  topic : {cfg.topic}")
+        log(f"  focus : {cfg.focus}")
 
     user_rev = find_user_revision(paper_dir, cfg.short_title)
     existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra")
@@ -452,7 +453,7 @@ def run(project_dir: Path) -> None:
     if not existing:
         _outline_fresh(project_dir, cfg, brain, paper_dir)
     elif user_rev:
-        print(f"[raconteur] found revision: {user_rev.name}", file=sys.stderr)
+        log(f"[raconteur] found revision: {user_rev.name}")
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
@@ -484,7 +485,7 @@ def _outline_fresh(
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     # Pass 1: structural analysis
-    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
@@ -493,7 +494,7 @@ def _outline_fresh(
     results_section = f"Analysis Results:\n{results}\n" if results else ""
 
     # Pass 2: draft
-    print("[raconteur] drafting outline…", file=sys.stderr)
+    log("[raconteur] drafting outline…")
     draft = brain.coordinator(
         _DRAFT_PROMPT.format(
             title=cfg.title,
@@ -529,7 +530,7 @@ def _refresh_content(
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
 
-    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     existing_text = existing_md.read_text(encoding="utf-8")
@@ -538,7 +539,7 @@ def _refresh_content(
     results_section = f"Results content:\n{results}\n\n" if results else ""
 
     what = " + ".join(filter(None, ["Methods" if code else "", "Results" if results else ""]))
-    print(f"[raconteur] refreshing {what} section(s)…", file=sys.stderr)
+    log(f"[raconteur] refreshing {what} section(s)…")
     updated = brain.coordinator(
         _REFRESH_CONTENT_PROMPT.format(
             title=cfg.title,
@@ -579,14 +580,14 @@ def _revise(
         )
         return
 
-    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
     code_section = f"Code content:\n{code}\n\n" if code else ""
     results_section = f"Results content:\n{results}\n\n" if results else ""
 
-    print("[raconteur] revising outline…", file=sys.stderr)
+    log("[raconteur] revising outline…")
     revised_text = brain.coordinator(
         _USER_REVISE_PROMPT.format(
             title=cfg.title,
@@ -611,8 +612,8 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     output = f"# {cfg.title}\n\n{text.strip()}\n"
     out_path = paper_dir / major_name(cfg.short_title, "md")
     out_path.write_text(output, encoding="utf-8")
-    print(f"[raconteur] wrote {out_path.relative_to(project_dir)}", file=sys.stderr)
+    log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
     docx = to_docx(out_path)
     if docx:
-        print(f"[raconteur] wrote {docx.relative_to(project_dir)}", file=sys.stderr)
+        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
