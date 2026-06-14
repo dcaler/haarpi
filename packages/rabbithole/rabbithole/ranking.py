@@ -134,13 +134,18 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
                 brain: Brain, top_n: int, domain_anchor: str = "",
                 exclude_topics: str = "", max_cites: int = 0) -> list[Candidate]:
     head = ranked[:top_n]
-    anchor = f"\nA paper is ON-TOPIC only if it is about: {domain_anchor}" if domain_anchor else ""
-    excl = f"\nTreat as OFF-TOPIC (score low) papers that are really about: {exclude_topics}" if exclude_topics else ""
-    sys = ("You are an expert reviewer judging whether a paper genuinely fits a "
-           "specific research topic. Score 0-10 for topical relevance to the topic "
-           "and focus (10 = directly on-topic and central; 0 = unrelated). Judge by "
-           "subject fit, NOT by how famous or highly-cited the paper is — a famous "
-           "paper from an adjacent field is still off-topic." + anchor + excl +
+    anchor = (f"\nComponent fields and key concepts (covering ANY of these counts as "
+              f"relevant background): {domain_anchor}") if domain_anchor else ""
+    excl = (f"\nScore LOW papers that are really about: {exclude_topics}") if exclude_topics else ""
+    sys = ("You are an expert academic reviewer curating a literature review reading "
+           "list. Score 0-10 for how valuable this paper would be as background or "
+           "cited work: 10 = essential, directly addresses the research question; "
+           "8-9 = covers a core component field or central method; 6-7 = relevant "
+           "background covering at least one important aspect of the topic; "
+           "4-5 = tangential; 0-3 = unrelated. For interdisciplinary research, a "
+           "paper that substantially covers ANY ONE of the component fields, methods, "
+           "or concepts is valuable background and should score ≥ 6. Judge by "
+           "intellectual relevance, not prestige or citation count." + anchor + excl +
            "\nRespond with ONLY the number.")
     jobs = []
     for c in head:

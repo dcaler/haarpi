@@ -534,5 +534,12 @@ def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
         "Next: download the listed PDFs, add them to the Zotero collection, "
         "then run `rabbitHole report`.",
     ]
-    notify.send_email(f"rabbitHole: gather complete for '{cfg.project_name}'",
-                      "\n".join(lines), gc)
+    body = "\n".join(lines)
+    notify.send_email(f"rabbitHole: gather complete for '{cfg.project_name}'", body, gc)
+
+    from datetime import datetime
+    log_path = paths.work / "gather.log"
+    with open(log_path, "a", encoding="utf-8") as fh:
+        fh.write(f"\n{'=' * 60}\n{datetime.now().strftime('%Y-%m-%d %H:%M')}\n{'=' * 60}\n")
+        fh.write(body)
+        fh.write("\n")
