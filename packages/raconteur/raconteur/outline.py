@@ -70,6 +70,24 @@ Return ONLY a JSON array. Return [] if no equations are found.
 Code:
 {code}"""
 
+# ── findings extraction (worker) ──────────────────────────────────────────────
+
+_EXTRACT_FINDINGS_PROMPT = """\
+Extract the concrete, reportable findings from this results content.
+Focus on extractable facts: named outcomes, quantitative values, percentages, \
+effect sizes, named patterns or categories, statistical test results. \
+Do not summarise prose — extract facts that would appear as specific claims in a paper.
+
+For each finding return:
+{{"finding": "one-sentence statement of the specific result", \
+"value": "the number, percentage, or named value if present (else null)", \
+"section": "which Results subsection this belongs in"}}
+
+Return ONLY a JSON array. Return [] if no concrete findings are present.
+
+Results content:
+{results}"""
+
 # ── shared system ─────────────────────────────────────────────────────────────
 
 _SYSTEM = (
@@ -110,6 +128,9 @@ a Limitations subsection
 - For each Methods subsection, bullet points must specify which equations or formulas \
 from key_equations are introduced or derived there; if key_equations is empty, omit \
 this requirement
+- For each Results subsection, bullet points must cite specific findings from \
+key_findings (with values where present); if key_findings is empty, describe \
+anticipated findings only
 - Calibrate the specificity of Methods, Results, Discussion, and Conclusion to \
 the available content: if methods content is absent, Methods describes planned \
 approach only; if results content is absent, Results describes anticipated \
@@ -153,6 +174,8 @@ empirical detail not supported by the available content noted in the analysis \
 results content was provided)
 10. Methods subsections that do not specify which equations from key_equations \
 are introduced or derived there (only applies when key_equations is non-empty)
+11. Results subsections that do not cite specific findings from key_findings \
+(only applies when key_findings is non-empty)
 
 Output: a numbered list of specific, actionable problems. One line each. \
 Skip checks with no issues found. No preamble."""
@@ -175,11 +198,12 @@ Fix every listed problem. Preserve what is already correct. Maintain ## major \
 sections and ### subsections. All names must be derived from the paper's actual \
 content. Output only the revised outline. No preamble."""
 
-# ── methods-only refresh (coordinator) ───────────────────────────────────────
+# ── content refresh (coordinator) ────────────────────────────────────────────
 
-_REFRESH_METHODS_PROMPT = """\
-Update only the Methods section of this paper outline. All other sections must \
-be reproduced exactly as they appear — do not paraphrase, reorder, or alter them.
+_REFRESH_CONTENT_PROMPT = """\
+Update the Methods and/or Results sections of this paper outline using newly \
+available content. All other sections must be reproduced exactly as they appear \
+— do not paraphrase, reorder, or alter them.
 
 Title: {title}
 Topic: {topic}
@@ -188,20 +212,19 @@ Focus: {focus}
 Structural analysis:
 {analysis}
 
-Code content:
-{code_section}
-
+{code_section}{results_section}
 Current outline:
 {outline}
 
 Instructions:
-- Identify the Methods section (the ## section whose heading covers methodology, \
-approach, or pipeline)
-- Rewrite that section and all its ### subsections using the method_steps and \
-key_equations from the structural analysis and the code content above
-- Methods subsections must map to method_steps in the analysis, in order
-- Each Methods subsection must include bullet points specifying which equations \
-from key_equations are introduced or derived there
+- If code content is provided above: identify the Methods section and rewrite it \
+and all its ### subsections using method_steps and key_equations from the analysis; \
+Methods subsections must map to method_steps in order; each must specify which \
+equations from key_equations are introduced there
+- If results content is provided above: identify the Results section and rewrite it \
+and all its ### subsections using results_structure and key_findings from the analysis; \
+each Results subsection must cite specific findings from key_findings with values \
+where present
 - Every other ## section and its subsections must be copied verbatim
 - Output only the complete outline — no preamble or closing remarks
 """
@@ -209,8 +232,8 @@ from key_equations are introduced or derived there
 # ── user-annotation revision (coordinator) ────────────────────────────────────
 
 _USER_REVISE_PROMPT = """\
-Revise this paper outline. If code content is provided, replace the Methods section \
-with a newly drafted version. Apply all reviewer annotations to all other sections.
+Revise this paper outline. Replace Methods and/or Results sections if new content \
+is provided. Apply all reviewer annotations to all other sections.
 
 Title: {title}
 Topic: {topic}
@@ -219,7 +242,7 @@ Focus: {focus}
 Structural analysis:
 {analysis}
 
-{code_section}
+{code_section}{results_section}
 Current outline:
 {outline}
 
@@ -230,6 +253,9 @@ Instructions:
 - If code content is provided above: rewrite the Methods section using method_steps \
 and key_equations from the structural analysis; each Methods subsection must specify \
 which equations are introduced there
+- If results content is provided above: rewrite the Results section using \
+results_structure and key_findings from the structural analysis; each Results \
+subsection must cite specific findings from key_findings with values where present
 - For all other sections: incorporate all tracked insertions, remove all tracked \
 deletions, address each reviewer comment with substantive changes
 - Maintain numbered section format (## 1. Introduction, etc.) with ### \
@@ -292,6 +318,19 @@ def _extract_equations(brain: Brain, code: str) -> list[dict]:
         return []
 
 
+def _extract_findings(brain: Brain, results: str) -> list[dict]:
+    """Worker call: extract concrete findings from results content."""
+    raw = brain.worker(
+        _EXTRACT_FINDINGS_PROMPT.format(results=results[:8000]),
+        num_ctx=8192,
+    )
+    try:
+        result = json.loads(_strip_fence(raw))
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str
 ) -> str:
@@ -317,6 +356,10 @@ def _analyze_structure(
     if code:
         print("[raconteur] extracting equations from code…", file=sys.stderr)
         parsed["key_equations"] = _extract_equations(brain, code)
+
+    if results:
+        print("[raconteur] extracting findings from results…", file=sys.stderr)
+        parsed["key_findings"] = _extract_findings(brain, results)
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
@@ -413,8 +456,9 @@ def run(project_dir: Path) -> None:
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
-        if code:
-            _refresh_methods(project_dir, cfg, brain, paper_dir, existing)
+        results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+        if code or results:
+            _refresh_content(project_dir, cfg, brain, paper_dir, existing, code, results)
         else:
             print(
                 "[raconteur] outline already exists — annotate the docx with your initials and re-run to revise",
@@ -472,30 +516,38 @@ def _outline_fresh(
     _write(project_dir, cfg, paper_dir, outline)
 
 
-# ── methods-only refresh ──────────────────────────────────────────────────────
+# ── content refresh ───────────────────────────────────────────────────────────
 
-def _refresh_methods(
-    project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path, existing_md: Path
+def _refresh_content(
+    project_dir: Path,
+    cfg: ProjectConfig,
+    brain: Brain,
+    paper_dir: Path,
+    existing_md: Path,
+    code: str,
+    results: str,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir)
-    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     print("[raconteur] analysing paper structure…", file=sys.stderr)
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir)
+    code_section = f"Code content:\n{code}\n\n" if code else ""
+    results_section = f"Results content:\n{results}\n\n" if results else ""
 
-    print("[raconteur] refreshing Methods section…", file=sys.stderr)
+    what = " + ".join(filter(None, ["Methods" if code else "", "Results" if results else ""]))
+    print(f"[raconteur] refreshing {what} section(s)…", file=sys.stderr)
     updated = brain.coordinator(
-        _REFRESH_METHODS_PROMPT.format(
+        _REFRESH_CONTENT_PROMPT.format(
             title=cfg.title,
             topic=cfg.topic,
             focus=cfg.focus,
             venue_section=venue_section,
             analysis=analysis,
-            code_section=code,
+            code_section=code_section,
+            results_section=results_section,
             outline=existing_text,
         ),
         system=_SYSTEM,
@@ -520,9 +572,9 @@ def _revise(
     outline_text = read_text(user_rev)
     revision_notes = build_revision_context(user_rev)
 
-    if not revision_notes and not code:
+    if not revision_notes and not code and not results:
         print(
-            "[warn] no annotations and no code — nothing to revise",
+            "[warn] no annotations, no code, and no results — nothing to revise",
             file=sys.stderr,
         )
         return
@@ -531,7 +583,8 @@ def _revise(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Code content:\n{code}\n" if code else ""
+    code_section = f"Code content:\n{code}\n\n" if code else ""
+    results_section = f"Results content:\n{results}\n\n" if results else ""
 
     print("[raconteur] revising outline…", file=sys.stderr)
     revised_text = brain.coordinator(
@@ -542,6 +595,7 @@ def _revise(
             venue_section=venue_section,
             analysis=analysis,
             code_section=code_section,
+            results_section=results_section,
             outline=outline_text,
             revisions=revision_notes or "(no annotations provided)",
         ),
