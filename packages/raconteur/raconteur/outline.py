@@ -36,6 +36,7 @@ the paper's intellectual structure.
 Description:
 {description}
 {litrev_context}
+{content_status}
 Extract the following and return as JSON with exactly these keys:
 - "contribution": the core claimed contribution — name the specific method, \
 approach, or finding (one sentence)
@@ -43,13 +44,15 @@ approach, or finding (one sentence)
 coverage; derive the names from the paper's actual content (these become \
 subsections of a Background section, not a generic Related Work)
 - "method_steps": ordered list of the specific methodological steps or pipeline \
-stages described; name each step from what the paper actually does
+stages described; name each step from what the paper actually does. If methods \
+content is not available, list only steps described in the description or \
+literature review.
 - "empirical_elements": list of any named case studies, datasets, or real-world \
 grounding mentioned (use their actual names as given in the description or \
 literature review)
-- "results_structure": ordered list describing how results should be presented — \
-what is shown first, what next, and what the progression demonstrates; derive \
-this from the paper's actual analytical logic, not from a template
+- "results_structure": ordered list describing how results should be presented. \
+If results content is not available, describe anticipated or expected results \
+only — do not imply specific empirical findings that have not been provided.
 - "discussion_angle": specifically what this paper's method or findings reveal or \
 enable that existing approaches do not; be concrete
 - "limitations": 1–3 key limitations or caveats to address
@@ -93,6 +96,11 @@ named subsection, not a generic placeholder
 - Results must follow the sequence in results_structure from the analysis
 - Discussion must address the discussion_angle from the analysis, and include \
 a Limitations subsection
+- Calibrate the specificity of Methods, Results, Discussion, and Conclusion to \
+the available content: if methods content is absent, Methods describes planned \
+approach only; if results content is absent, Results describes anticipated \
+findings only; Discussion and Conclusion must not claim specific empirical \
+outcomes that have not been provided
 - Include 3–5 bullet points per subsection describing what that subsection \
 specifically argues, shows, or demonstrates for this paper
 - Output only the outline — no preamble or closing remarks
@@ -125,6 +133,10 @@ lacks a Limitations subsection
 claims, steps, or findings for this paper
 8. Missing ### subsections where the analysis indicates multiple distinct \
 components exist
+9. Methods, Results, Discussion, or Conclusion sections that claim specific \
+empirical detail not supported by the available content noted in the analysis \
+(e.g. specific findings, measured outcomes, or evaluation results when no \
+results content was provided)
 
 Output: a numbered list of specific, actionable problems. One line each. \
 Skip checks with no issues found. No preamble."""
@@ -197,21 +209,46 @@ def _parse_description(brain: Brain, description: str) -> dict:
         return {}
 
 
-def _analyze_structure(brain: Brain, description: str, litrev: str) -> str:
+def _content_status(litrev: str, code: str, results: str) -> str:
+    lines = [
+        "Content availability:",
+        f"  - Literature review : {'yes' if litrev else 'no'}",
+        f"  - Methods / code    : {'yes' if code else 'no'}",
+        f"  - Results / data    : {'yes' if results else 'no'}",
+    ]
+    if not code or not results:
+        lines.append(
+            "Sections covering unavailable content must describe planned "
+            "approaches or anticipated findings only — do not claim specific "
+            "empirical detail that has not been provided. Discussion and "
+            "Conclusion must be scoped to what the available content supports."
+        )
+    return "\n".join(lines)
+
+
+def _analyze_structure(
+    brain: Brain, description: str, litrev: str, code: str, results: str
+) -> str:
     """Return structural analysis as a JSON string (coordinator call)."""
     litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
+    status = _content_status(litrev, code, results)
     raw = brain.coordinator(
-        _ANALYZE_PROMPT.format(description=description, litrev_context=litrev_context),
+        _ANALYZE_PROMPT.format(
+            description=description,
+            litrev_context=litrev_context,
+            content_status=status,
+        ),
         system=_ANALYZE_SYSTEM,
         num_ctx=8192,
     )
     cleaned = _strip_fence(raw)
     try:
         parsed = json.loads(cleaned)
-        return json.dumps(parsed, indent=2)
+        # embed content status so all downstream prompts see it
+        return f"{status}\n\n{json.dumps(parsed, indent=2)}"
     except Exception as e:
         print(f"[warn] could not parse structural analysis: {e}", file=sys.stderr)
-        return cleaned
+        return f"{status}\n\n{cleaned}"
 
 
 def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
@@ -322,7 +359,7 @@ def _outline_fresh(
 
     # Pass 1: structural analysis
     print("[raconteur] analysing paper structure…", file=sys.stderr)
-    analysis = _analyze_structure(brain, cfg.description, litrev)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
