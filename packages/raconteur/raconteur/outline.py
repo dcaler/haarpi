@@ -56,6 +56,11 @@ only — do not imply specific empirical findings that have not been provided.
 - "discussion_angle": specifically what this paper's method or findings reveal or \
 enable that existing approaches do not; be concrete
 - "limitations": 1–3 key limitations or caveats to address
+- "key_equations": list of named equations or mathematical expressions found in the \
+code or description that must appear in the paper. For each include: "name" (what it \
+is called), "symbol" (the expression as it appears in the code or description, e.g. \
+"mu_i(t+1) = mu_i(t) + ..."), "section" (which Methods subsection it belongs in). \
+If no equations are present, return an empty list.
 
 Return ONLY valid JSON."""
 
@@ -96,6 +101,9 @@ named subsection, not a generic placeholder
 - Results must follow the sequence in results_structure from the analysis
 - Discussion must address the discussion_angle from the analysis, and include \
 a Limitations subsection
+- For each Methods subsection, bullet points must specify which equations or formulas \
+from key_equations are introduced or derived there; if key_equations is empty, omit \
+this requirement
 - Calibrate the specificity of Methods, Results, Discussion, and Conclusion to \
 the available content: if methods content is absent, Methods describes planned \
 approach only; if results content is absent, Results describes anticipated \
@@ -137,6 +145,8 @@ components exist
 empirical detail not supported by the available content noted in the analysis \
 (e.g. specific findings, measured outcomes, or evaluation results when no \
 results content was provided)
+10. Methods subsections that do not specify which equations from key_equations \
+are introduced or derived there (only applies when key_equations is non-empty)
 
 Output: a numbered list of specific, actionable problems. One line each. \
 Skip checks with no issues found. No preamble."""
@@ -239,7 +249,7 @@ def _analyze_structure(
             content_status=status,
         ),
         system=_ANALYZE_SYSTEM,
-        num_ctx=8192,
+        num_ctx=16384,
     )
     cleaned = _strip_fence(raw)
     try:
@@ -380,7 +390,7 @@ def _outline_fresh(
             results_section=results_section,
         ),
         system=_SYSTEM,
-        num_ctx=8192,
+        num_ctx=16384,
     )
 
     # Passes 3–4 and 5–6: two critique→revise cycles

@@ -6,9 +6,8 @@ _LIT_GLOB = "{litrev_dir}/output/*.md"
 _CODE_SUFFIXES = {".py", ".R", ".jl", ".ipynb"}
 _RESULTS_SUFFIXES = {".py", ".R", ".jl", ".ipynb", ".txt", ".md", ".csv", ".tsv", ".json"}
 _MAX_LITREV_CHARS = 12000
-_MAX_CODE_CHARS = 4000
+_MAX_CODE_CHARS = 20000
 _MAX_RESULTS_CHARS = 4000
-_MAX_FILE_LINES = 80
 
 
 def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
@@ -39,8 +38,7 @@ def load_code(project_dir: Path, subdir: str = "code") -> str:
         if p.suffix not in _CODE_SUFFIXES or not p.is_file():
             continue
         try:
-            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
-            snippet = "\n".join(lines[:_MAX_FILE_LINES])
+            snippet = p.read_text(encoding="utf-8", errors="replace")
             chunk = f"### {p.relative_to(code_dir)}\n```\n{snippet}\n```\n"
             if total + len(chunk) > _MAX_CODE_CHARS:
                 break
