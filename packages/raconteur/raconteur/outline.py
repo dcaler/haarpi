@@ -456,8 +456,8 @@ def run(project_dir: Path) -> None:
         log(f"[raconteur] found revision: {user_rev.name}")
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
-        code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir and not cfg.methods_dir_locked else ""
-        results = load_results(project_dir, cfg.results_dir) if cfg.results_dir and not cfg.results_dir_locked else ""
+        code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir and not cfg.methods_dir_drafted else ""
+        results = load_results(project_dir, cfg.results_dir) if cfg.results_dir and not cfg.results_dir_drafted else ""
         if code or results:
             _refresh_content(project_dir, cfg, brain, paper_dir, existing, code, results)
         else:
@@ -513,9 +513,9 @@ def _outline_fresh(
 
     _write(project_dir, cfg, paper_dir, outline)
     if code:
-        cfg.methods_dir_locked = True
+        cfg.methods_dir_drafted = True
     if results:
-        cfg.results_dir_locked = True
+        cfg.results_dir_drafted = True
     cfg.save(project_dir)
 
 
@@ -560,9 +560,9 @@ def _refresh_content(
     updated = _critique_revise(brain, updated, analysis, n=2)
     _write(project_dir, cfg, paper_dir, updated)
     if code:
-        cfg.methods_dir_locked = True
+        cfg.methods_dir_drafted = True
     if results:
-        cfg.results_dir_locked = True
+        cfg.results_dir_drafted = True
     cfg.save(project_dir)
 
 
