@@ -9,6 +9,8 @@ from .naming import major_name, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
 
+# ── description → title/topic/focus (worker) ─────────────────────────────────
+
 _PARSE_SYSTEM = (
     "You turn a researcher's description into structured fields for an academic paper. "
     "Respond with ONLY a JSON object — no markdown, no explanation."
@@ -21,30 +23,133 @@ Given this research description, extract:
 
 Description: {description}"""
 
+# ── structural analysis (coordinator) ────────────────────────────────────────
+
+_ANALYZE_SYSTEM = (
+    "You extract the intellectual structure of academic research for paper planning. "
+    "Respond with ONLY a JSON object — no markdown, no explanation."
+)
+_ANALYZE_PROMPT = """\
+Analyze this academic paper description and literature review context to extract \
+the paper's intellectual structure.
+
+Description:
+{description}
+{litrev_context}
+Extract the following and return as JSON with exactly these keys:
+- "contribution": the core claimed contribution — name the specific method, \
+approach, or finding (one sentence)
+- "background_pillars": 2–5 named intellectual areas that need background \
+coverage; derive the names from the paper's actual content (these become \
+subsections of a Background section, not a generic Related Work)
+- "method_steps": ordered list of the specific methodological steps or pipeline \
+stages described; name each step from what the paper actually does
+- "empirical_elements": list of any named case studies, datasets, or real-world \
+grounding mentioned (use their actual names as given in the description or \
+literature review)
+- "results_structure": ordered list describing how results should be presented — \
+what is shown first, what next, and what the progression demonstrates; derive \
+this from the paper's actual analytical logic, not from a template
+- "discussion_angle": specifically what this paper's method or findings reveal or \
+enable that existing approaches do not; be concrete
+- "limitations": 1–3 key limitations or caveats to address
+
+Return ONLY valid JSON."""
+
+# ── shared system ─────────────────────────────────────────────────────────────
+
 _SYSTEM = (
     "You are an expert academic writing assistant. "
     "You help researchers plan and structure scholarly papers."
 )
 
-_PROMPT = """\
-Create a detailed outline for an academic paper.
+# ── draft outline (coordinator) ───────────────────────────────────────────────
+
+_DRAFT_PROMPT = """\
+Create a detailed outline for an academic paper. Use the structural analysis \
+below to derive all section and subsection structure from this paper's actual \
+intellectual content.
 
 Title: {title}
 Topic: {topic}
 Focus: {focus}
 {venue_section}
+Structural analysis:
+{analysis}
 {litrev_section}
 {code_section}
 {results_section}
-Produce a complete, structured outline in markdown. Use numbered sections \
-(## 1. Introduction, ## 2. Related Work, etc.) and for each section include \
-3–5 bullet points describing what should be covered. Follow standard academic \
-conventions for this type of research. Calibrate the number of sections, depth, \
-and total length to the venue and scope constraints above. Output only the outline — \
-no preamble or closing remarks.
+Rules:
+- All section and subsection names must be derived from the paper's content — \
+do not use generic names such as "Related Work", "Case Study", "Implications", \
+or "Theoretical Framework"
+- Use ## for major sections (numbered: ## 1. Introduction, ## 2. …, etc.)
+- Use ### for subsections wherever the structural analysis identifies multiple \
+distinct pillars, steps, or stages
+- Background subsections should map to the background_pillars in the analysis
+- Methods subsections should map to the method_steps in the analysis, in order
+- If empirical_elements lists named cases or datasets, each must appear as a \
+named subsection, not a generic placeholder
+- Results must follow the sequence in results_structure from the analysis
+- Discussion must address the discussion_angle from the analysis, and include \
+a Limitations subsection
+- Include 3–5 bullet points per subsection describing what that subsection \
+specifically argues, shows, or demonstrates for this paper
+- Output only the outline — no preamble or closing remarks
 """
 
+# ── critique (coordinator) ────────────────────────────────────────────────────
+
+_CRITIQUE_PROMPT = """\
+Critique this paper outline against the structural analysis. Identify every \
+specific problem.
+
+Structural analysis:
+{analysis}
+
+Outline to critique:
+{outline}
+
+Check for:
+1. Section or subsection names that are generic templates rather than derived \
+from the analysis content
+2. Method steps from method_steps that are missing, merged incorrectly, or \
+out of order
+3. Background pillars from background_pillars that are absent or mislabelled
+4. Empirical elements from empirical_elements that appear as generic \
+placeholders rather than named
+5. Results sequence that does not follow results_structure from the analysis
+6. Discussion that does not address discussion_angle from the analysis, or \
+lacks a Limitations subsection
+7. Bullet points that describe generic academic moves rather than specific \
+claims, steps, or findings for this paper
+8. Missing ### subsections where the analysis indicates multiple distinct \
+components exist
+
+Output: a numbered list of specific, actionable problems. One line each. \
+Skip checks with no issues found. No preamble."""
+
+# ── revise (coordinator) ──────────────────────────────────────────────────────
+
 _REVISE_PROMPT = """\
+Revise this paper outline to fix every problem in the critique below.
+
+Structural analysis:
+{analysis}
+
+Current outline:
+{outline}
+
+Problems to fix:
+{critique}
+
+Fix every listed problem. Preserve what is already correct. Maintain ## major \
+sections and ### subsections. All names must be derived from the paper's actual \
+content. Output only the revised outline. No preamble."""
+
+# ── user-annotation revision (coordinator) ────────────────────────────────────
+
+_USER_REVISE_PROMPT = """\
 Revise the following paper outline based on the reviewer's annotations.
 
 Title: {title}
@@ -60,10 +165,23 @@ Revision annotations:
 Instructions:
 - Incorporate all tracked insertions
 - Remove all tracked deletions
-- Address each reviewer comment with substantive changes to the relevant section or structure
-- Maintain numbered section format (## 1. Introduction, etc.) with 3–5 bullet points per section
+- Address each reviewer comment with substantive changes to the relevant \
+section or structure
+- Maintain numbered section format (## 1. Introduction, etc.) with ### \
+subsections and 3–5 bullet points per subsection
 - Output only the revised outline — no preamble or closing remarks.
 """
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _strip_fence(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+    if raw.endswith("```"):
+        raw = "\n".join(raw.split("\n")[:-1])
+    return raw.strip()
 
 
 def _parse_description(brain: Brain, description: str) -> dict:
@@ -72,16 +190,47 @@ def _parse_description(brain: Brain, description: str) -> dict:
         system=_PARSE_SYSTEM,
         num_ctx=2048,
     )
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = "\n".join(raw.split("\n")[1:])
-    if raw.endswith("```"):
-        raw = "\n".join(raw.split("\n")[:-1])
     try:
-        return json.loads(raw.strip())
+        return json.loads(_strip_fence(raw))
     except Exception as e:
         print(f"[warn] could not parse description: {e}", file=sys.stderr)
         return {}
+
+
+def _analyze_structure(brain: Brain, description: str, litrev: str) -> str:
+    """Return structural analysis as a JSON string (coordinator call)."""
+    litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
+    raw = brain.coordinator(
+        _ANALYZE_PROMPT.format(description=description, litrev_context=litrev_context),
+        system=_ANALYZE_SYSTEM,
+        num_ctx=8192,
+    )
+    cleaned = _strip_fence(raw)
+    try:
+        parsed = json.loads(cleaned)
+        return json.dumps(parsed, indent=2)
+    except Exception as e:
+        print(f"[warn] could not parse structural analysis: {e}", file=sys.stderr)
+        return cleaned
+
+
+def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
+    """One critique→revise cycle. Returns the revised outline."""
+    print(f"[raconteur] critique {n}…", file=sys.stderr)
+    critique = brain.coordinator(
+        _CRITIQUE_PROMPT.format(analysis=analysis, outline=outline),
+        system=_SYSTEM,
+        num_ctx=8192,
+    )
+    print(f"[raconteur] critique {n} findings:\n{critique}", file=sys.stderr)
+
+    print(f"[raconteur] revise {n}…", file=sys.stderr)
+    revised = brain.coordinator(
+        _REVISE_PROMPT.format(analysis=analysis, outline=outline, critique=critique),
+        system=_SYSTEM,
+        num_ctx=8192,
+    )
+    return revised
 
 
 def _venue_specs_block(cfg: ProjectConfig) -> str:
@@ -115,6 +264,8 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
     return specs
 
 
+# ── entry point ───────────────────────────────────────────────────────────────
+
 def run(project_dir: Path) -> None:
     if not ProjectConfig.exists(project_dir):
         print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
@@ -131,7 +282,6 @@ def run(project_dir: Path) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
-    # Parse description → title/topic/focus if not yet set
     if not cfg.topic or not cfg.focus:
         print("[raconteur] extracting topic and focus…", file=sys.stderr)
         parsed = _parse_description(brain, cfg.description)
@@ -161,6 +311,8 @@ def run(project_dir: Path) -> None:
     )
 
 
+# ── fresh outline: analyse → draft → critique→revise × 2 ─────────────────────
+
 def _outline_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path
 ) -> None:
@@ -168,25 +320,40 @@ def _outline_fresh(
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
+    # Pass 1: structural analysis
+    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    analysis = _analyze_structure(brain, cfg.description, litrev)
+
     venue_section = _build_venue_section(cfg, project_dir)
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"Analysis Methods:\n{code}\n" if code else ""
     results_section = f"Analysis Results:\n{results}\n" if results else ""
 
-    prompt = _PROMPT.format(
-        title=cfg.title,
-        topic=cfg.topic,
-        focus=cfg.focus,
-        venue_section=venue_section,
-        litrev_section=litrev_section,
-        code_section=code_section,
-        results_section=results_section,
+    # Pass 2: draft
+    print("[raconteur] drafting outline…", file=sys.stderr)
+    draft = brain.coordinator(
+        _DRAFT_PROMPT.format(
+            title=cfg.title,
+            topic=cfg.topic,
+            focus=cfg.focus,
+            venue_section=venue_section,
+            analysis=analysis,
+            litrev_section=litrev_section,
+            code_section=code_section,
+            results_section=results_section,
+        ),
+        system=_SYSTEM,
+        num_ctx=8192,
     )
 
-    print("[raconteur] generating outline…", file=sys.stderr)
-    outline_text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
-    _write(project_dir, cfg, paper_dir, outline_text)
+    # Passes 3–4 and 5–6: two critique→revise cycles
+    outline = _critique_revise(brain, draft, analysis, n=1)
+    outline = _critique_revise(brain, outline, analysis, n=2)
 
+    _write(project_dir, cfg, paper_dir, outline)
+
+
+# ── user-annotation revision ──────────────────────────────────────────────────
 
 def _revise(
     project_dir: Path,
@@ -208,7 +375,7 @@ def _revise(
 
     venue_section = _build_venue_section(cfg, project_dir)
 
-    prompt = _REVISE_PROMPT.format(
+    prompt = _USER_REVISE_PROMPT.format(
         title=cfg.title,
         topic=cfg.topic,
         focus=cfg.focus,
@@ -221,6 +388,8 @@ def _revise(
     revised_text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
     _write(project_dir, cfg, paper_dir, revised_text)
 
+
+# ── write output ──────────────────────────────────────────────────────────────
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> None:
     output = f"# {cfg.title}\n\n{text.strip()}\n"
