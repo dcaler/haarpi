@@ -1,43 +1,9 @@
 from __future__ import annotations
-import json
 import re
 import sys
-import threading
 from pathlib import Path
+import yaml
 from .config import ProjectConfig, BrainConfig, VenueConfig, GlobalConfig, PROJECT_CONFIG_FILE
-
-_PARSE_SYSTEM = (
-    "You turn a researcher's description into structured fields for an academic paper. "
-    "Respond with ONLY a JSON object — no markdown, no explanation."
-)
-_PARSE_PROMPT = """\
-Given this research description, extract:
-- "topic": concise research area (max 20 words)
-- "focus": the specific angle, contribution, or question (max 30 words)
-
-Description: {description}"""
-
-_VENUE_SYSTEM = (
-    "You know the format requirements for academic publication venues. "
-    "Respond with ONLY a JSON object — no markdown, no explanation."
-)
-_VENUE_PROMPT = """\
-Given the venue name below, extract its formatting specifications.
-
-Venue: {venue_name}
-
-Respond with ONLY this JSON object:
-{{
-  "page_limit": <integer or null>,
-  "word_limit": <integer or null>,
-  "citation_style": "<APA|IEEE|ACM|Chicago|Vancouver|Nature|other>",
-  "columns": <1 or 2>,
-  "abstract_limit": <word limit as integer, or null>,
-  "format_notes": "<any other key requirements, briefly — or empty string>"
-}}
-
-If you are not confident about a field, use null. If the venue is not well known, \
-estimate based on similar venues and note this in format_notes."""
 
 
 def _ask(prompt: str, default: str = "", optional: bool = False) -> str:
@@ -58,178 +24,123 @@ def _ask(prompt: str, default: str = "", optional: bool = False) -> str:
         print("  (required)")
 
 
-def _parse_json(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = "\n".join(raw.split("\n")[1:])
-    if raw.endswith("```"):
-        raw = "\n".join(raw.split("\n")[:-1])
-    return json.loads(raw.strip())
+def _yn(prompt: str, default_yes: bool = True) -> bool:
+    hint = "[Y/n]" if default_yes else "[y/N]"
+    val = input(f"{prompt} {hint}: ").strip().lower()
+    return default_yes if not val else val.startswith("y")
 
 
-def _parse_description(description: str, gcfg: GlobalConfig) -> dict:
-    try:
-        from .brain import Brain
-        result = Brain(gcfg).worker(
-            _PARSE_PROMPT.format(description=description),
-            system=_PARSE_SYSTEM,
-        )
-        return _parse_json(result)
-    except Exception as e:
-        print(f"[warn] could not parse description: {e}", file=sys.stderr)
-        return {"topic": description[:80], "focus": ""}
-
-
-def _lookup_venue(venue_name: str, gcfg: GlobalConfig) -> dict:
-    try:
-        from .brain import Brain
-        result = Brain(gcfg).worker(
-            _VENUE_PROMPT.format(venue_name=venue_name),
-            system=_VENUE_SYSTEM,
-        )
-        return _parse_json(result)
-    except Exception as e:
-        print(f"[warn] could not look up venue format: {e}", file=sys.stderr)
+def _read_litrev_yaml(litrev_path: Path) -> dict:
+    yaml_path = litrev_path / "litrev.yaml"
+    if not yaml_path.exists():
         return {}
+    try:
+        with open(yaml_path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"[warn] could not read litrev.yaml: {e}", file=sys.stderr)
+        return {}
+
+
+def _check_litrev(cfg: ProjectConfig, project_dir: Path) -> dict:
+    """Check for litReview/, ask if found, return litrev.yaml data dict if yes."""
+    litrev_path = project_dir / (cfg.litrev_dir or "litReview")
+    if not litrev_path.is_dir():
+        cfg.litrev_dir = ""
+        return {}
+    label = cfg.litrev_dir or "litReview"
+    if not _yn(f"Found {label}/ — include literature review as context?"):
+        cfg.litrev_dir = ""
+        return {}
+    cfg.litrev_dir = label
+    return _read_litrev_yaml(litrev_path)
+
+
+def _ask_context_dirs(cfg: ProjectConfig, project_dir: Path) -> None:
+    """Check for code/ and results/ and ask whether to use each."""
+    print()
+    methods_check = project_dir / (cfg.methods_dir or "code")
+    if methods_check.is_dir():
+        label = cfg.methods_dir or "code"
+        cfg.methods_dir = label if _yn(f"Found {label}/ — use as methods context?") else ""
+    else:
+        cfg.methods_dir = ""
+
+    results_check = project_dir / (cfg.results_dir or "results")
+    if results_check.is_dir():
+        label = cfg.results_dir or "results"
+        cfg.results_dir = label if _yn(f"Found {label}/ — use as results context?") else ""
+    else:
+        cfg.results_dir = ""
 
 
 def run(project_dir: Path) -> None:
     print("\n=== raconteur init ===\n")
 
     gcfg = GlobalConfig.load()
-    existing = ProjectConfig.exists(project_dir)
-
-    if existing:
-        cfg = ProjectConfig.load(project_dir)
-        print(f"  current topic : {cfg.topic}")
-        print(f"  current focus : {cfg.focus}")
-        if cfg.venue.name:
-            print(f"  current venue : {cfg.venue.name}")
-        print()
-    else:
-        cfg = ProjectConfig()
-        cfg.short_title = re.sub(r"^\d{6}_", "", project_dir.name)
-
-    cfg.title = _ask("Paper title", default=cfg.title)
-
-    default_short = cfg.short_title or re.sub(r"\s+", "_", cfg.title[:20]).lower()
-    raw_short = _ask("Short title for filenames (no spaces)", default=default_short)
-    cfg.short_title = re.sub(r"[^\w]", "_", raw_short).strip("_")
-
-    print()
-    if existing:
-        raw = input("Update research description (Enter to keep current): ").strip()
-        if not raw:
-            _update_venue_scope(cfg, gcfg, project_dir)
-            return
-        description = raw
-    else:
-        description = _ask("Describe your research")
-
-    # Venue
-    print()
-    venue_name = _ask("Target venue (e.g. CHI 2026, Nature, ICML)", default=cfg.venue.name, optional=True)
-
-    # Launch background tasks
-    parsed: dict = {}
-    venue_specs: dict = {}
-
-    def _parse():
-        parsed.update(_parse_description(description, gcfg))
-
-    def _venue():
-        if venue_name:
-            venue_specs.update(_lookup_venue(venue_name, gcfg))
-
-    t_parse = threading.Thread(target=_parse, daemon=True)
-    t_venue = threading.Thread(target=_venue, daemon=True)
-    t_parse.start()
-    t_venue.start()
-
     paper_dir = project_dir / "paper"
     paper_dir.mkdir(exist_ok=True)
 
-    print("\n[raconteur] parsing research description…", file=sys.stderr)
-    t_parse.join(timeout=30)
-    t_venue.join(timeout=30)
+    existing = ProjectConfig.exists(project_dir)
+    cfg = ProjectConfig.load(project_dir) if existing else ProjectConfig()
 
-    # Apply parsed description
-    if parsed:
-        cfg.topic = parsed.get("topic", description[:80])
-        cfg.focus = parsed.get("focus", "")
-    else:
-        cfg.topic = description[:80]
-        cfg.focus = ""
-    print(f"  topic : {cfg.topic}")
-    print(f"  focus : {cfg.focus}")
+    if not cfg.short_title:
+        cfg.short_title = re.sub(r"^\d{6}_", "", project_dir.name)
 
-    # Apply venue specs
-    if venue_name:
-        cfg.venue = VenueConfig(
-            name=venue_name,
-            page_limit=venue_specs.get("page_limit"),
-            word_limit=venue_specs.get("word_limit"),
-            citation_style=venue_specs.get("citation_style", ""),
-            columns=venue_specs.get("columns", 1) or 1,
-            abstract_limit=venue_specs.get("abstract_limit"),
-            format_notes=venue_specs.get("format_notes", ""),
-        )
-        print(f"\n  venue         : {cfg.venue.name}")
-        if cfg.venue.page_limit:
-            print(f"  page limit    : {cfg.venue.page_limit}")
-        if cfg.venue.word_limit:
-            print(f"  word limit    : {cfg.venue.word_limit}")
-        if cfg.venue.citation_style:
-            print(f"  citation style: {cfg.venue.citation_style}")
-        if cfg.venue.abstract_limit:
-            print(f"  abstract limit: {cfg.venue.abstract_limit} words")
-        if cfg.venue.format_notes:
-            print(f"  notes         : {cfg.venue.format_notes}")
-        print("  (verify these against the venue's official call for papers)")
+    if existing:
+        print(f"  short title : {cfg.short_title}")
+        if cfg.description:
+            preview = cfg.description.replace("\n", " ")
+            print(f"  description : {preview[:80]}…")
+        if cfg.venue.name:
+            print(f"  venue       : {cfg.venue.name}")
+        print()
+
+    # 1. litReview
+    litrev_data = _check_litrev(cfg, project_dir)
+
+    # 2. Short title
+    print()
+    short_default = cfg.short_title
+    if litrev_data.get("project_name"):
+        print(f"  litrev project name: {litrev_data['project_name']}")
+        if _yn("Use as short title?"):
+            short_default = litrev_data["project_name"]
+    raw_short = _ask("Short title for filenames (no spaces)", default=short_default)
+    cfg.short_title = re.sub(r"[^\w]", "_", raw_short).strip("_")
+
+    # 3. Description
+    print()
+    desc_default = cfg.description
+    if litrev_data.get("research_prompt"):
+        prompt_text = litrev_data["research_prompt"].replace("\n", " ")
+        print(f"  litrev research prompt:\n    {prompt_text[:300]}")
+        if litrev_data.get("topic"):
+            print(f"  litrev topic  : {litrev_data['topic']}")
+        if litrev_data.get("focus"):
+            print(f"  litrev focus  : {litrev_data['focus']}")
+        print()
+        if _yn("Use research prompt as description?"):
+            desc_default = litrev_data["research_prompt"]
+    cfg.description = _ask("Research description", default=desc_default)
+
+    # 4. Venue name only — format details come from venue analysis step
+    print()
+    venue_analysis_path = paper_dir / "venue_analysis.md"
+    if venue_analysis_path.exists() and _yn("Found paper/venue_analysis.md — use for venue context?"):
+        print("  (venue_analysis.md will be used at outline/draft time)")
     else:
-        cfg.venue = VenueConfig()
+        venue_name = _ask("Target venue (e.g. CHI 2026, Nature, ICML)", default=cfg.venue.name, optional=True)
+        if venue_name != cfg.venue.name:
+            cfg.venue = VenueConfig(name=venue_name)
+
+    # 5 & 6. code/ and results/
+    _ask_context_dirs(cfg, project_dir)
 
     cfg.brain = BrainConfig(
         coordinator=gcfg.coordinator_model,
         worker=gcfg.worker_model,
     )
-
-    cfg.save(project_dir)
-    print(f"\n[raconteur] saved {PROJECT_CONFIG_FILE}")
-    _finish(project_dir)
-
-
-def _update_venue_scope(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> None:
-    """Update venue when description is unchanged."""
-    print()
-    venue_name = _ask("Target venue", default=cfg.venue.name, optional=True)
-
-    if venue_name and venue_name != cfg.venue.name:
-        print("\n[raconteur] looking up venue format…", file=sys.stderr)
-        specs = _lookup_venue(venue_name, gcfg)
-        cfg.venue = VenueConfig(
-            name=venue_name,
-            page_limit=specs.get("page_limit"),
-            word_limit=specs.get("word_limit"),
-            citation_style=specs.get("citation_style", ""),
-            columns=specs.get("columns", 1) or 1,
-            abstract_limit=specs.get("abstract_limit"),
-            format_notes=specs.get("format_notes", ""),
-        )
-        if cfg.venue.page_limit or cfg.venue.word_limit or cfg.venue.citation_style:
-            print(f"  venue         : {cfg.venue.name}")
-            if cfg.venue.page_limit:
-                print(f"  page limit    : {cfg.venue.page_limit}")
-            if cfg.venue.word_limit:
-                print(f"  word limit    : {cfg.venue.word_limit}")
-            if cfg.venue.citation_style:
-                print(f"  citation style: {cfg.venue.citation_style}")
-            if cfg.venue.abstract_limit:
-                print(f"  abstract limit: {cfg.venue.abstract_limit} words")
-            if cfg.venue.format_notes:
-                print(f"  notes         : {cfg.venue.format_notes}")
-            print("  (verify these against the venue's official call for papers)")
-
     cfg.save(project_dir)
     print(f"\n[raconteur] saved {PROJECT_CONFIG_FILE}")
     _finish(project_dir)

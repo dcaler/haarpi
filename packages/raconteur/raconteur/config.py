@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 GLOBAL_CONFIG_PATH = Path.home() / ".config" / "raconteur" / "config.toml"
-PROJECT_CONFIG_FILE = "raconteur.yaml"
+PROJECT_CONFIG_FILE = Path("paper") / "raconteur.yaml"
 
 
 @dataclass
@@ -31,14 +31,19 @@ class VenueConfig:
 class ProjectConfig:
     title: str = ""
     short_title: str = ""
+    description: str = ""
     topic: str = ""
     focus: str = ""
+    litrev_dir: str = ""
+    methods_dir: str = ""
+    results_dir: str = ""
     venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 
     def save(self, project_dir: Path) -> None:
         data = asdict(self)
         path = project_dir / PROJECT_CONFIG_FILE
+        path.parent.mkdir(exist_ok=True)
         with open(path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
 

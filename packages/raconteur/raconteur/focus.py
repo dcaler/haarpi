@@ -91,7 +91,7 @@ def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
 
 def run(project_dir: Path, section: str) -> None:
     if not ProjectConfig.exists(project_dir):
-        print("[error] no raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
+        print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
         raise SystemExit(1)
 
     cfg = ProjectConfig.load(project_dir)

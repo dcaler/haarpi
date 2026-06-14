@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_venue_analysis
+from .context import load_litreview, load_code, load_results, load_venue_analysis
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -24,6 +24,7 @@ Outline:
 {outline}
 {litrev_section}
 {code_section}
+{results_section}
 Write the full paper in markdown. Use ## for section headings. Use clear, precise \
 academic prose — well-constructed sentences, no unexplained jargon, claims supported \
 by the literature where available. Use [REF] as a placeholder wherever a citation \
@@ -87,7 +88,7 @@ def _venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
 
 def run(project_dir: Path) -> None:
     if not ProjectConfig.exists(project_dir):
-        print("[error] no raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
+        print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
         raise SystemExit(1)
 
     cfg = ProjectConfig.load(project_dir)
@@ -114,12 +115,14 @@ def _draft_fresh(
         raise SystemExit(1)
 
     outline = outline_path.read_text(encoding="utf-8")
-    litrev = load_litreview(project_dir)
-    code = load_code(project_dir)
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     venue_scope = _venue_section(cfg, project_dir)
     litrev_section = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
-    code_section = f"\nAnalysis Code Reference:\n{code}\n" if code else ""
+    code_section = f"\nAnalysis Methods:\n{code}\n" if code else ""
+    results_section = f"\nAnalysis Results:\n{results}\n" if results else ""
 
     prompt = _DRAFT_PROMPT.format(
         title=cfg.title,
@@ -129,6 +132,7 @@ def _draft_fresh(
         outline=outline,
         litrev_section=litrev_section,
         code_section=code_section,
+        results_section=results_section,
     )
 
     print("[raconteur] drafting paper…", file=sys.stderr)
