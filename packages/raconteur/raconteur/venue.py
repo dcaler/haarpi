@@ -185,21 +185,6 @@ Instructions:
 Paper profile, Venue shortlist [Tier 1/2/3], Conference opportunities, Recommendation)
 - Output only the revised markdown document — no preamble."""
 
-# ── recommendation extraction (worker) ───────────────────────────────────────
-
-_EXTRACT_REC_PROMPT = """\
-Extract the primary recommended venue and its format details from this venue analysis.
-
-Return ONLY valid JSON with exactly these keys (null for any unknown value):
-{{"venue": "full venue name", "type": "journal or conference", \
-"page_limit": null, "word_limit": null, "citation_style": "", \
-"abstract_limit": null, "columns": 1}}
-
-Do not guess format details that are not stated in the text. Use null, not zero.
-
-Venue analysis:
-{analysis}"""
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _strip_fence(raw: str) -> str:
@@ -431,32 +416,35 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     return text
 
 
-def _prompt_yaml_update(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str) -> None:
-    """Extract recommendation and optionally update raconteur.yaml."""
-    import sys as _sys
+# ── yaml update (worker) ─────────────────────────────────────────────────────
 
-    if not _sys.stdin.isatty():
-        return
+_EXTRACT_REC_PROMPT = """\
+Extract the primary recommended venue and its format details from this venue analysis.
 
-    print("[raconteur] extracting recommendation…", file=sys.stderr)
-    raw = brain.worker(
-        _EXTRACT_REC_PROMPT.format(analysis=analysis),
-        num_ctx=4096,
-    )
+Return ONLY valid JSON with exactly these keys (null for any unknown value):
+{{"venue": "full venue name", "type": "journal or conference", \
+"page_limit": null, "word_limit": null, "citation_style": "", \
+"abstract_limit": null, "columns": 1}}
+
+Do not guess format details not stated in the text. Use null, not zero.
+
+Venue analysis:
+{analysis}"""
+
+
+def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str) -> None:
+    """Extract recommended venue from analysis and write it to raconteur.yaml."""
+    print("[raconteur] updating raconteur.yaml with recommendation…", file=sys.stderr)
+    raw = brain.worker(_EXTRACT_REC_PROMPT.format(analysis=analysis), num_ctx=4096)
     try:
         rec = json.loads(_strip_fence(raw))
-    except Exception:
-        rec = {}
+    except Exception as e:
+        print(f"[warn] could not parse recommendation JSON: {e}", file=sys.stderr)
+        return
 
     venue_name = rec.get("venue", "")
     if not venue_name:
-        print("[raconteur] could not extract venue recommendation — check venue_analysis.md manually", file=sys.stderr)
-        return
-
-    print(f"\nRecommendation: {venue_name}")
-    answer = input("Accept this venue and update raconteur.yaml? [y/N] ").strip().lower()
-    if answer not in ("y", "yes"):
-        print("No update made. Annotate the docx and re-run 'raconteur venue' to revise.")
+        print("[warn] no venue name extracted — raconteur.yaml not updated", file=sys.stderr)
         return
 
     cfg.venue = VenueConfig(
@@ -468,7 +456,7 @@ def _prompt_yaml_update(project_dir: Path, cfg: ProjectConfig, brain: Brain, ana
         abstract_limit=rec.get("abstract_limit") or None,
     )
     cfg.save(project_dir)
-    print(f"[raconteur] updated raconteur.yaml with venue: {venue_name}")
+    print(f"[raconteur] raconteur.yaml updated: venue = {venue_name}", file=sys.stderr)
 
 
 # ── fresh run ─────────────────────────────────────────────────────────────────
@@ -552,7 +540,7 @@ def run(project_dir: Path) -> None:
     else:
         final_text = _venue_fresh(project_dir, cfg, brain, paper_dir, gcfg)
 
-    _prompt_yaml_update(project_dir, cfg, brain, final_text)
+    _update_yaml(project_dir, cfg, brain, final_text)
 
     send_email(
         f"raconteur venue done: {cfg.short_title}",
