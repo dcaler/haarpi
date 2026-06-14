@@ -31,10 +31,8 @@ class VenueConfig:
 class ProjectConfig:
     title: str = ""
     short_title: str = ""
-    author_initials: str = ""
     topic: str = ""
     focus: str = ""
-    scope: str = ""
     venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 
@@ -49,6 +47,8 @@ class ProjectConfig:
         path = project_dir / PROJECT_CONFIG_FILE
         with open(path) as f:
             data = yaml.safe_load(f)
+        data.pop("scope", None)
+        data.pop("author_initials", None)
         brain_data = data.pop("brain", {})
         venue_data = data.pop("venue", {})
         return cls(

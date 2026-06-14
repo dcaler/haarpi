@@ -49,3 +49,13 @@ def load_code(project_dir: Path) -> str:
         return ""
     print(f"[raconteur] reading code: {len(parts)} file(s)", file=sys.stderr)
     return "\n".join(parts)
+
+
+def load_venue_analysis(project_dir: Path) -> str:
+    """Read paper/venue_analysis.md if present."""
+    path = project_dir / "paper" / "venue_analysis.md"
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    print("[raconteur] reading venue_analysis.md", file=sys.stderr)
+    return text

@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code
+from .context import load_litreview, load_code, load_venue_analysis
 from .naming import major_name
 from .render import to_docx
 
@@ -18,19 +18,19 @@ Create a detailed outline for an academic paper.
 Title: {title}
 Topic: {topic}
 Focus: {focus}
-{venue_scope}
+{venue_section}
 {litrev_section}
 {code_section}
 Produce a complete, structured outline in markdown. Use numbered sections \
 (## 1. Introduction, ## 2. Related Work, etc.) and for each section include \
 3–5 bullet points describing what should be covered. Follow standard academic \
-conventions for this type of research. Calibrate the number of sections and depth \
-of coverage to the scope and venue constraints above. Output only the outline — \
+conventions for this type of research. Calibrate the number of sections, depth, \
+and total length to the venue and scope constraints above. Output only the outline — \
 no preamble or closing remarks.
 """
 
 
-def _venue_scope_block(cfg: ProjectConfig) -> str:
+def _venue_specs_block(cfg: ProjectConfig) -> str:
     lines = []
     v = cfg.venue
     if v.name:
@@ -47,8 +47,6 @@ def _venue_scope_block(cfg: ProjectConfig) -> str:
             lines.append(f"Abstract word limit: {v.abstract_limit}")
         if v.format_notes:
             lines.append(f"Format notes: {v.format_notes}")
-    if cfg.scope:
-        lines.append(f"Scope: {cfg.scope}")
     return "\n".join(lines)
 
 
@@ -64,8 +62,16 @@ def run(project_dir: Path) -> None:
 
     litrev = load_litreview(project_dir)
     code = load_code(project_dir)
+    venue_analysis = load_venue_analysis(project_dir)
 
-    venue_scope = _venue_scope_block(cfg)
+    venue_specs = _venue_specs_block(cfg)
+    if venue_analysis:
+        venue_section = f"Venue Analysis:\n{venue_analysis}\n"
+        if venue_specs:
+            venue_section += f"\nVenue Format Specs:\n{venue_specs}\n"
+    else:
+        venue_section = venue_specs
+
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"Analysis Code (for methods/results reference):\n{code}\n" if code else ""
 
@@ -73,7 +79,7 @@ def run(project_dir: Path) -> None:
         title=cfg.title,
         topic=cfg.topic,
         focus=cfg.focus,
-        venue_scope=venue_scope,
+        venue_section=venue_section,
         litrev_section=litrev_section,
         code_section=code_section,
     )

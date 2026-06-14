@@ -105,8 +105,6 @@ def run(project_dir: Path) -> None:
         print(f"  current focus : {cfg.focus}")
         if cfg.venue.name:
             print(f"  current venue : {cfg.venue.name}")
-        if cfg.scope:
-            print(f"  current scope : {cfg.scope}")
         print()
     else:
         cfg = ProjectConfig()
@@ -118,13 +116,10 @@ def run(project_dir: Path) -> None:
     raw_short = _ask("Short title for filenames (no spaces)", default=default_short)
     cfg.short_title = re.sub(r"[^\w]", "_", raw_short).strip("_")
 
-    cfg.author_initials = _ask("Your initials (e.g. DCR)", default=cfg.author_initials)
-
     print()
     if existing:
         raw = input("Update research description (Enter to keep current): ").strip()
         if not raw:
-            # Still ask venue and scope in case they want to update those
             _update_venue_scope(cfg, gcfg, project_dir)
             return
         description = raw
@@ -134,14 +129,6 @@ def run(project_dir: Path) -> None:
     # Venue
     print()
     venue_name = _ask("Target venue (e.g. CHI 2026, Nature, ICML)", default=cfg.venue.name, optional=True)
-
-    # Scope
-    scope_default = cfg.scope or ""
-    cfg.scope = _ask(
-        "Scope and length target (e.g. '4-page conference short paper', '8000-word journal article')",
-        default=scope_default,
-        optional=True,
-    )
 
     # Launch background tasks
     parsed: dict = {}
@@ -202,9 +189,6 @@ def run(project_dir: Path) -> None:
     else:
         cfg.venue = VenueConfig()
 
-    if cfg.scope:
-        print(f"\n  scope : {cfg.scope}")
-
     cfg.brain = BrainConfig(
         coordinator=gcfg.coordinator_model,
         worker=gcfg.worker_model,
@@ -216,14 +200,9 @@ def run(project_dir: Path) -> None:
 
 
 def _update_venue_scope(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> None:
-    """Update only venue and scope when description is unchanged."""
+    """Update venue when description is unchanged."""
     print()
     venue_name = _ask("Target venue", default=cfg.venue.name, optional=True)
-    cfg.scope = _ask(
-        "Scope and length target",
-        default=cfg.scope,
-        optional=True,
-    )
 
     if venue_name and venue_name != cfg.venue.name:
         print("\n[raconteur] looking up venue format…", file=sys.stderr)

@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code
+from .context import load_litreview, load_code, load_venue_analysis
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -54,7 +54,7 @@ Output only the revised draft in markdown.
 """
 
 
-def _venue_scope_block(cfg: ProjectConfig) -> str:
+def _venue_specs_block(cfg: ProjectConfig) -> str:
     lines = []
     v = cfg.venue
     if v.name:
@@ -71,9 +71,18 @@ def _venue_scope_block(cfg: ProjectConfig) -> str:
             lines.append(f"Abstract word limit: {v.abstract_limit}")
         if v.format_notes:
             lines.append(f"Format notes: {v.format_notes}")
-    if cfg.scope:
-        lines.append(f"Scope: {cfg.scope}")
     return ("\n".join(lines) + "\n") if lines else ""
+
+
+def _venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
+    venue_analysis = load_venue_analysis(project_dir)
+    specs = _venue_specs_block(cfg)
+    if venue_analysis:
+        block = f"Venue Analysis:\n{venue_analysis}\n"
+        if specs:
+            block += f"\nVenue Format Specs:\n{specs}"
+        return block
+    return specs
 
 
 def run(project_dir: Path) -> None:
@@ -108,7 +117,7 @@ def _draft_fresh(
     litrev = load_litreview(project_dir)
     code = load_code(project_dir)
 
-    venue_scope = _venue_scope_block(cfg)
+    venue_scope = _venue_section(cfg, project_dir)
     litrev_section = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"\nAnalysis Code Reference:\n{code}\n" if code else ""
 
@@ -145,7 +154,7 @@ def _revise(
         _draft_fresh(project_dir, cfg, brain, paper_dir)
         return
 
-    venue_scope = _venue_scope_block(cfg)
+    venue_scope = _venue_section(cfg, project_dir)
 
     prompt = _REVISE_PROMPT.format(
         title=cfg.title,

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
+from .context import load_venue_analysis
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
 
@@ -34,7 +35,7 @@ Output only the improved section (including its heading). No preamble or explana
 """
 
 
-def _venue_scope_block(cfg: ProjectConfig) -> str:
+def _venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
     lines = []
     if cfg.venue.name:
         lines.append(f"Target venue: {cfg.venue.name}")
@@ -42,9 +43,14 @@ def _venue_scope_block(cfg: ProjectConfig) -> str:
             lines.append(f"Page limit: {cfg.venue.page_limit}")
         if cfg.venue.word_limit:
             lines.append(f"Word limit: {cfg.venue.word_limit}")
-    if cfg.scope:
-        lines.append(f"Scope: {cfg.scope}")
-    return ("\n".join(lines) + "\n") if lines else ""
+    specs = ("\n".join(lines) + "\n") if lines else ""
+    venue_analysis = load_venue_analysis(project_dir)
+    if venue_analysis:
+        block = f"Venue Analysis:\n{venue_analysis}\n"
+        if specs:
+            block += f"\nVenue Format Specs:\n{specs}"
+        return block
+    return specs
 
 
 def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
@@ -110,7 +116,7 @@ def run(project_dir: Path, section: str) -> None:
     prompt = _PROMPT.format(
         title=cfg.title,
         heading=heading,
-        venue_scope=_venue_scope_block(cfg),
+        venue_scope=_venue_section(cfg, project_dir),
         section_text=section_text,
     )
 
