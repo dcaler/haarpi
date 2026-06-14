@@ -5,7 +5,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_code, load_results, load_venue_analysis
-from .naming import major_name, find_user_revision
+from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
 
@@ -56,13 +56,19 @@ only — do not imply specific empirical findings that have not been provided.
 - "discussion_angle": specifically what this paper's method or findings reveal or \
 enable that existing approaches do not; be concrete
 - "limitations": 1–3 key limitations or caveats to address
-- "key_equations": list of named equations or mathematical expressions found in the \
-code or description that must appear in the paper. For each include: "name" (what it \
-is called), "symbol" (the expression as it appears in the code or description, e.g. \
-"mu_i(t+1) = mu_i(t) + ..."), "section" (which Methods subsection it belongs in). \
-If no equations are present, return an empty list.
 
 Return ONLY valid JSON."""
+
+# ── equation extraction (worker) ──────────────────────────────────────────────
+
+_EXTRACT_EQUATIONS_PROMPT = """\
+List every named mathematical equation, formula, or update rule defined in this code.
+For each return: {{"name": "short name", "symbol": "the expression as written in the code", \
+"purpose": "what it computes or represents"}}
+Return ONLY a JSON array. Return [] if no equations are found.
+
+Code:
+{code}"""
 
 # ── shared system ─────────────────────────────────────────────────────────────
 
@@ -169,15 +175,51 @@ Fix every listed problem. Preserve what is already correct. Maintain ## major \
 sections and ### subsections. All names must be derived from the paper's actual \
 content. Output only the revised outline. No preamble."""
 
-# ── user-annotation revision (coordinator) ────────────────────────────────────
+# ── methods-only refresh (coordinator) ───────────────────────────────────────
 
-_USER_REVISE_PROMPT = """\
-Revise the following paper outline based on the reviewer's annotations.
+_REFRESH_METHODS_PROMPT = """\
+Update only the Methods section of this paper outline. All other sections must \
+be reproduced exactly as they appear — do not paraphrase, reorder, or alter them.
 
 Title: {title}
 Topic: {topic}
 Focus: {focus}
 {venue_section}
+Structural analysis:
+{analysis}
+
+Code content:
+{code_section}
+
+Current outline:
+{outline}
+
+Instructions:
+- Identify the Methods section (the ## section whose heading covers methodology, \
+approach, or pipeline)
+- Rewrite that section and all its ### subsections using the method_steps and \
+key_equations from the structural analysis and the code content above
+- Methods subsections must map to method_steps in the analysis, in order
+- Each Methods subsection must include bullet points specifying which equations \
+from key_equations are introduced or derived there
+- Every other ## section and its subsections must be copied verbatim
+- Output only the complete outline — no preamble or closing remarks
+"""
+
+# ── user-annotation revision (coordinator) ────────────────────────────────────
+
+_USER_REVISE_PROMPT = """\
+Revise this paper outline. If code content is provided, replace the Methods section \
+with a newly drafted version. Apply all reviewer annotations to all other sections.
+
+Title: {title}
+Topic: {topic}
+Focus: {focus}
+{venue_section}
+Structural analysis:
+{analysis}
+
+{code_section}
 Current outline:
 {outline}
 
@@ -185,10 +227,11 @@ Revision annotations:
 {revisions}
 
 Instructions:
-- Incorporate all tracked insertions
-- Remove all tracked deletions
-- Address each reviewer comment with substantive changes to the relevant \
-section or structure
+- If code content is provided above: rewrite the Methods section using method_steps \
+and key_equations from the structural analysis; each Methods subsection must specify \
+which equations are introduced there
+- For all other sections: incorporate all tracked insertions, remove all tracked \
+deletions, address each reviewer comment with substantive changes
 - Maintain numbered section format (## 1. Introduction, etc.) with ### \
 subsections and 3–5 bullet points per subsection
 - Output only the revised outline — no preamble or closing remarks.
@@ -236,6 +279,19 @@ def _content_status(litrev: str, code: str, results: str) -> str:
     return "\n".join(lines)
 
 
+def _extract_equations(brain: Brain, code: str) -> list[dict]:
+    """Worker call: extract named equations from code."""
+    raw = brain.worker(
+        _EXTRACT_EQUATIONS_PROMPT.format(code=code[:8000]),
+        num_ctx=8192,
+    )
+    try:
+        result = json.loads(_strip_fence(raw))
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str
 ) -> str:
@@ -254,11 +310,15 @@ def _analyze_structure(
     cleaned = _strip_fence(raw)
     try:
         parsed = json.loads(cleaned)
-        # embed content status so all downstream prompts see it
-        return f"{status}\n\n{json.dumps(parsed, indent=2)}"
     except Exception as e:
         print(f"[warn] could not parse structural analysis: {e}", file=sys.stderr)
         return f"{status}\n\n{cleaned}"
+
+    if code:
+        print("[raconteur] extracting equations from code…", file=sys.stderr)
+        parsed["key_equations"] = _extract_equations(brain, code)
+
+    return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
 
 def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
@@ -344,11 +404,23 @@ def run(project_dir: Path) -> None:
         print(f"  focus : {cfg.focus}", file=sys.stderr)
 
     user_rev = find_user_revision(paper_dir, cfg.short_title)
-    if user_rev:
+    existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra")
+
+    if not existing:
+        _outline_fresh(project_dir, cfg, brain, paper_dir)
+    elif user_rev:
         print(f"[raconteur] found revision: {user_rev.name}", file=sys.stderr)
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
-        _outline_fresh(project_dir, cfg, brain, paper_dir)
+        code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+        if code:
+            _refresh_methods(project_dir, cfg, brain, paper_dir, existing)
+        else:
+            print(
+                "[raconteur] outline already exists — annotate the docx with your initials and re-run to revise",
+                file=sys.stderr,
+            )
+            return
 
     from .notify import send_email
     send_email(
@@ -400,6 +472,38 @@ def _outline_fresh(
     _write(project_dir, cfg, paper_dir, outline)
 
 
+# ── methods-only refresh ──────────────────────────────────────────────────────
+
+def _refresh_methods(
+    project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path, existing_md: Path
+) -> None:
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_code(project_dir, cfg.methods_dir)
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+
+    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+
+    existing_text = existing_md.read_text(encoding="utf-8")
+    venue_section = _build_venue_section(cfg, project_dir)
+
+    print("[raconteur] refreshing Methods section…", file=sys.stderr)
+    updated = brain.coordinator(
+        _REFRESH_METHODS_PROMPT.format(
+            title=cfg.title,
+            topic=cfg.topic,
+            focus=cfg.focus,
+            venue_section=venue_section,
+            analysis=analysis,
+            code_section=code,
+            outline=existing_text,
+        ),
+        system=_SYSTEM,
+        num_ctx=16384,
+    )
+    _write(project_dir, cfg, paper_dir, updated)
+
+
 # ── user-annotation revision ──────────────────────────────────────────────────
 
 def _revise(
@@ -409,30 +513,41 @@ def _revise(
     paper_dir: Path,
     user_rev: Path,
 ) -> None:
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+
     outline_text = read_text(user_rev)
     revision_notes = build_revision_context(user_rev)
 
-    if not revision_notes:
+    if not revision_notes and not code:
         print(
-            "[warn] no comments or track changes found in revision — generating fresh outline instead",
+            "[warn] no annotations and no code — nothing to revise",
             file=sys.stderr,
         )
-        _outline_fresh(project_dir, cfg, brain, paper_dir)
         return
 
-    venue_section = _build_venue_section(cfg, project_dir)
+    print("[raconteur] analysing paper structure…", file=sys.stderr)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
-    prompt = _USER_REVISE_PROMPT.format(
-        title=cfg.title,
-        topic=cfg.topic,
-        focus=cfg.focus,
-        venue_section=venue_section,
-        outline=outline_text,
-        revisions=revision_notes,
-    )
+    venue_section = _build_venue_section(cfg, project_dir)
+    code_section = f"Code content:\n{code}\n" if code else ""
 
     print("[raconteur] revising outline…", file=sys.stderr)
-    revised_text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
+    revised_text = brain.coordinator(
+        _USER_REVISE_PROMPT.format(
+            title=cfg.title,
+            topic=cfg.topic,
+            focus=cfg.focus,
+            venue_section=venue_section,
+            analysis=analysis,
+            code_section=code_section,
+            outline=outline_text,
+            revisions=revision_notes or "(no annotations provided)",
+        ),
+        system=_SYSTEM,
+        num_ctx=16384,
+    )
     _write(project_dir, cfg, paper_dir, revised_text)
 
 
