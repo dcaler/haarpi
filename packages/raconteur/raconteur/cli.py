@@ -38,9 +38,9 @@ def main() -> None:
 
     sub.add_parser("init", help="initialise a new paper project")
     sub.add_parser("outline", help="generate a paper outline from your topic and focus")
-    sub.add_parser("draft", help="write a fresh draft or incorporate a revision")
+    sub.add_parser("paper", help="write a fresh draft or incorporate a revision")
 
-    focus_p = sub.add_parser("focus", help="refine a specific section of the draft")
+    focus_p = sub.add_parser("focus", help="refine a specific section of the paper")
     focus_p.add_argument(
         "section",
         help="section number or heading (e.g. '2' or 'Methods')",
@@ -49,7 +49,7 @@ def main() -> None:
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
-    if args.command in ("outline", "draft", "focus"):
+    if args.command in ("outline", "paper", "focus"):
         from .config import GlobalConfig
         gcfg = GlobalConfig.load()
         if not _check_ollama(gcfg.ollama_url):
@@ -66,7 +66,7 @@ def main() -> None:
         case "outline":
             from .outline import run
             run(project_dir)
-        case "draft":
+        case "paper":
             from .draft import run
             run(project_dir)
         case "focus":

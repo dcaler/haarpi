@@ -3,7 +3,7 @@ import re
 import sys
 from pathlib import Path
 import yaml
-from .config import ProjectConfig, BrainConfig, VenueConfig, GlobalConfig, PROJECT_CONFIG_FILE
+from .config import ProjectConfig, BrainConfig, GlobalConfig, PROJECT_CONFIG_FILE
 
 
 def _ask(prompt: str, default: str = "", optional: bool = False) -> str:
@@ -79,7 +79,6 @@ def run(project_dir: Path) -> None:
 
     gcfg = GlobalConfig.load()
     paper_dir = project_dir / "paper"
-    paper_dir.mkdir(exist_ok=True)
 
     existing = ProjectConfig.exists(project_dir)
     cfg = ProjectConfig.load(project_dir) if existing else ProjectConfig()
@@ -101,45 +100,41 @@ def run(project_dir: Path) -> None:
 
     # 2. Short title
     print()
-    short_default = cfg.short_title
-    if litrev_data.get("project_name"):
-        print(f"  litrev project name: {litrev_data['project_name']}")
-        if _yn("Use as short title?"):
-            short_default = litrev_data["project_name"]
-    raw_short = _ask("Short title for filenames (no spaces)", default=short_default)
+    if litrev_data.get("project_name") and _yn(f"Use '{litrev_data['project_name']}' as short title?"):
+        raw_short = litrev_data["project_name"]
+    else:
+        raw_short = _ask("Short title for filenames (no spaces)", default=cfg.short_title)
     cfg.short_title = re.sub(r"[^\w]", "_", raw_short).strip("_")
 
     # 3. Description
     print()
-    desc_default = cfg.description
     if litrev_data.get("research_prompt"):
-        prompt_text = litrev_data["research_prompt"].replace("\n", " ")
-        print(f"  litrev research prompt:\n    {prompt_text[:300]}")
+        print("  litrev description preview:")
+        for line in litrev_data["research_prompt"].strip().splitlines():
+            print(f"    {line}")
         if litrev_data.get("topic"):
-            print(f"  litrev topic  : {litrev_data['topic']}")
+            print(f"    Topic: {litrev_data['topic']}")
         if litrev_data.get("focus"):
-            print(f"  litrev focus  : {litrev_data['focus']}")
+            print(f"    Focus: {litrev_data['focus']}")
         print()
-        if _yn("Use research prompt as description?"):
-            desc_default = litrev_data["research_prompt"]
-    cfg.description = _ask("Research description", default=desc_default)
-
-    # 4. Venue name only — format details come from venue analysis step
-    print()
-    venue_analysis_path = paper_dir / "venue_analysis.md"
-    if venue_analysis_path.exists() and _yn("Found paper/venue_analysis.md — use for venue context?"):
-        print("  (venue_analysis.md will be used at outline/draft time)")
+        if _yn("Use this as the research description?"):
+            parts = [litrev_data["research_prompt"].strip()]
+            if litrev_data.get("topic"):
+                parts.append(f"Topic: {litrev_data['topic']}")
+            if litrev_data.get("focus"):
+                parts.append(f"Focus: {litrev_data['focus']}")
+            cfg.description = "\n".join(parts)
+        else:
+            cfg.description = _ask("Research description", default=cfg.description)
     else:
-        venue_name = _ask("Target venue (e.g. CHI 2026, Nature, ICML)", default=cfg.venue.name, optional=True)
-        if venue_name != cfg.venue.name:
-            cfg.venue = VenueConfig(name=venue_name)
+        cfg.description = _ask("Research description", default=cfg.description)
 
-    # 5 & 6. code/ and results/
+    # 4 & 5. code/ and results/
     _ask_context_dirs(cfg, project_dir)
 
     cfg.brain = BrainConfig(
-        coordinator=gcfg.coordinator_model,
-        worker=gcfg.worker_model,
+        coordinator_model=gcfg.coordinator_model,
+        worker_model=gcfg.worker_model,
     )
     cfg.save(project_dir)
     print(f"\n[raconteur] saved {PROJECT_CONFIG_FILE}")

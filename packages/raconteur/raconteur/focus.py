@@ -120,7 +120,7 @@ def run(project_dir: Path, section: str) -> None:
         section_text=section_text,
     )
 
-    brain = Brain(gcfg, coordinator=cfg.brain.coordinator)
+    brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
     print(f"[raconteur] refining: {heading}…", file=sys.stderr)
     refined = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
 
@@ -137,3 +137,10 @@ def run(project_dir: Path, section: str) -> None:
     docx = to_docx(out_path)
     if docx:
         print(f"[raconteur] wrote {docx.relative_to(project_dir)}", file=sys.stderr)
+
+    from .notify import send_email
+    send_email(
+        f"raconteur focus done: {cfg.short_title} — {heading}",
+        f"Section refined: {heading}\nProject: {project_dir}",
+        gcfg,
+    )

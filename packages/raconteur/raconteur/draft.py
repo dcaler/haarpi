@@ -96,7 +96,7 @@ def run(project_dir: Path) -> None:
     paper_dir = project_dir / "paper"
     paper_dir.mkdir(exist_ok=True)
 
-    brain = Brain(gcfg, coordinator=cfg.brain.coordinator)
+    brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
     user_rev = find_user_revision(paper_dir, cfg.short_title)
     if user_rev:
@@ -104,6 +104,13 @@ def run(project_dir: Path) -> None:
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         _draft_fresh(project_dir, cfg, brain, paper_dir)
+
+    from .notify import send_email
+    send_email(
+        f"raconteur paper done: {cfg.short_title}",
+        f"Paper draft complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
+        gcfg,
+    )
 
 
 def _draft_fresh(
