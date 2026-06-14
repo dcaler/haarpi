@@ -37,6 +37,8 @@ class ProjectConfig:
     litrev_dir: str = ""
     methods_dir: str = ""
     results_dir: str = ""
+    methods_dir_locked: bool = False
+    results_dir_locked: bool = False
     venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 
