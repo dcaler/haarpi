@@ -1,67 +1,121 @@
 from __future__ import annotations
 import re
-import sys
 from pathlib import Path
+
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_venue_analysis
+from .context import load_litreview, load_code, load_results
+from .log import log
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
+
+# ── system ────────────────────────────────────────────────────────────────────
 
 _SYSTEM = (
     "You are an expert academic writing assistant. "
     "You refine and strengthen specific sections of scholarly papers."
 )
 
-_PROMPT = """\
-Refine and strengthen the following section of an academic paper.
+# ── section refine (coordinator) ──────────────────────────────────────────────
 
-Paper title: {title}
-Section: {heading}
-{venue_scope}
+_REFINE_SECTION_PROMPT = """\
+Refine and strengthen the {heading} section of this academic paper.
+
+Title: {title}
+Topic: {topic}
+Focus: {focus}
+{venue_section}\
+Structural analysis:
+{analysis}
+
+Section outline:
+{section_outline}
+
+{context_section}\
 Current section text:
-{section_text}
+{current_text}
 
-Improve this section for:
-- Clarity and precision of argument
-- Depth and completeness of explanation
-- Flow and transitions
-- Appropriate academic register
+Instructions:
+- Improve clarity, precision, and depth of argument
+- Ensure all subsections are fully developed prose (150–300 words each)
+- For Methods sections: strengthen specificity — reference specific algorithms, \
+functions, parameters, and equations from the source code above
+- For Results sections: cite specific values, outcomes, and patterns from the \
+results content above
+- For Background sections: improve synthesis — integrate ideas into argument \
+rather than listing or summarising
+- For Discussion sections: sharpen the connection to background and address \
+the discussion_angle and limitations from the structural analysis
+- Do not include the ## section heading in your output
+- Output only the refined section text — no preamble, no closing remarks
+"""
 
-Respect the scope and length constraints above — do not expand the section \
-beyond what is appropriate for the target venue and paper type.
+# ── section critique (coordinator) ────────────────────────────────────────────
 
-Output only the improved section (including its heading). No preamble or explanation.
+_CRITIQUE_SECTION_PROMPT = """\
+Critique the {heading} section of this academic paper draft.
+
+Structural analysis:
+{analysis}
+
+Section outline (what this section must cover):
+{section_outline}
+
+Section text:
+{text}
+
+Check for:
+1. Subsections missing, out of order, or misnamed relative to the outline
+2. Bullet-list or outline thinking not converted to connected prose
+3. Generic academic statements not grounded in this paper's specific content
+4. Methods text that does not reference specific code details when source code \
+was available
+5. Results text that does not cite specific values or findings when results \
+were available
+6. Background that lists or summarises individual papers rather than synthesising \
+ideas into argument
+7. Discussion that does not address the discussion_angle or limitations from the analysis
+8. Subsections under 100 words or over 500 words
+
+Output: numbered list of specific, actionable problems. One line each. \
+Write "No issues found." if all checks pass. No preamble.
+"""
+
+# ── section revise (coordinator) ──────────────────────────────────────────────
+
+_REVISE_SECTION_PROMPT = """\
+Revise the {heading} section to fix every problem listed below.
+
+Structural analysis:
+{analysis}
+
+Section outline (maintain this structure):
+{section_outline}
+
+Current text:
+{text}
+
+Problems to fix:
+{critique}
+
+Fix every listed problem. Preserve what is already correct. \
+Output only the revised section text — no heading, no preamble.
 """
 
 
-def _venue_section(cfg: ProjectConfig, project_dir: Path) -> str:
-    lines = []
-    if cfg.venue.name:
-        lines.append(f"Target venue: {cfg.venue.name}")
-        if cfg.venue.page_limit:
-            lines.append(f"Page limit: {cfg.venue.page_limit}")
-        if cfg.venue.word_limit:
-            lines.append(f"Word limit: {cfg.venue.word_limit}")
-    specs = ("\n".join(lines) + "\n") if lines else ""
-    venue_analysis = load_venue_analysis(project_dir)
-    if venue_analysis:
-        block = f"Venue Analysis:\n{venue_analysis}\n"
-        if specs:
-            block += f"\nVenue Format Specs:\n{specs}"
-        return block
-    return specs
+# ── helpers ───────────────────────────────────────────────────────────────────
 
+def _extract_section(text: str, query: str) -> tuple[str, str, str] | None:
+    """Split text into (before, section_text, after) by section number or heading name.
 
-def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
-    """Split text into (before, section, after) by section number or heading name."""
+    query can be a section number ("3"), a heading word ("Methods"), or both ("3. Methods").
+    Returns None if no match found.
+    """
     lines = text.split("\n")
 
-    num_re = re.compile(
-        rf"^(#{1,4})\s+{re.escape(identifier)}[\s\.]", re.IGNORECASE
-    )
+    num_re = re.compile(rf"^(#{1,4})\s+{re.escape(query)}[\s\.]", re.IGNORECASE)
     head_re = re.compile(
-        rf"^(#{1,4})\s+(?:\d+[\.\s]+)?{re.escape(identifier)}\b", re.IGNORECASE
+        rf"^(#{1,4})\s+(?:\d+[\.\s]+)?{re.escape(query)}\b", re.IGNORECASE
     )
 
     start_idx = None
@@ -78,8 +132,7 @@ def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
     end_idx = len(lines)
     for i in range(start_idx + 1, len(lines)):
         if lines[i].startswith("#"):
-            level = len(lines[i]) - len(lines[i].lstrip("#"))
-            if level <= heading_level:
+            if len(lines[i]) - len(lines[i].lstrip("#")) <= heading_level:
                 end_idx = i
                 break
 
@@ -89,54 +142,189 @@ def _extract_section(text: str, identifier: str) -> tuple[str, str, str] | None:
     return before, section, after
 
 
+def _heading_from_section_text(section_text: str) -> str:
+    """Return the heading text (without ## prefix) from a section block."""
+    first_line = section_text.split("\n", 1)[0].strip()
+    return re.sub(r"^#+\s*", "", first_line)
+
+
+def _section_outline_for(heading: str, outline_path: Path | None, short_title: str) -> str:
+    """Find the matching section in the outline file and return its body."""
+    if outline_path is None:
+        return ""
+    outline_text = outline_path.read_text(encoding="utf-8")
+    result = _extract_section(outline_text, heading)
+    if result is None:
+        # try stripping section number from heading for matching
+        bare = re.sub(r"^\d+[\.\s]+", "", heading).strip()
+        result = _extract_section(outline_text, bare)
+    if result:
+        _, section, _ = result
+        # return just the body (strip the heading line)
+        body_lines = section.split("\n")[1:]
+        return "\n".join(body_lines).strip()
+    return ""
+
+
+_LITREV_KW = {"background", "related", "literature", "prior", "review", "introduction"}
+_CODE_KW = {"method", "approach", "implement", "model", "framework",
+            "algorithm", "system", "pipeline", "design"}
+_RESULTS_KW = {"result", "evaluation", "experiment", "finding",
+               "outcome", "performance", "validation", "empirical"}
+
+
+def _context_for_section(heading: str, litrev: str, code: str, results: str) -> str:
+    h = heading.lower()
+    parts = []
+    if any(kw in h for kw in _LITREV_KW) and litrev:
+        parts.append(f"Literature review:\n{litrev}")
+    if any(kw in h for kw in _CODE_KW) and code:
+        parts.append(f"Methods Source Code:\n{code}")
+    if any(kw in h for kw in _RESULTS_KW) and results:
+        parts.append(f"Results Content:\n{results}")
+    return ("\n\n".join(parts) + "\n\n") if parts else ""
+
+
+def _venue_block(cfg: ProjectConfig) -> str:
+    lines = []
+    v = cfg.venue
+    if v.name:
+        lines.append(f"Target venue: {v.name}")
+        if v.page_limit:
+            lines.append(f"Page limit: {v.page_limit}")
+        if v.word_limit:
+            lines.append(f"Word limit: {v.word_limit}")
+        if v.citation_style:
+            lines.append(f"Citation style: {v.citation_style}")
+    return ("Venue specifications:\n" + "\n".join(lines) + "\n") if lines else ""
+
+
+def _critique_revise(
+    brain: Brain,
+    heading: str,
+    text: str,
+    section_outline: str,
+    analysis: str,
+    n: int,
+) -> str:
+    log(f"[raconteur] critique '{heading}' ({n})…")
+    critique = brain.coordinator(
+        _CRITIQUE_SECTION_PROMPT.format(
+            heading=heading,
+            analysis=analysis,
+            section_outline=section_outline,
+            text=text,
+        ),
+        system=_SYSTEM,
+        num_ctx=8192,
+    )
+    log(f"[raconteur] critique {n} findings:\n{critique}")
+    if "no issues found" in critique.lower():
+        return text
+    log(f"[raconteur] revise '{heading}' ({n})…")
+    return brain.coordinator(
+        _REVISE_SECTION_PROMPT.format(
+            heading=heading,
+            analysis=analysis,
+            section_outline=section_outline,
+            text=text,
+            critique=critique,
+        ),
+        system=_SYSTEM,
+        num_ctx=8192,
+    )
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
 def run(project_dir: Path, section: str) -> None:
     if not ProjectConfig.exists(project_dir):
-        print("[error] no paper/raconteur.yaml found — run 'raconteur init' first", file=sys.stderr)
+        log("[error] no paper/raconteur.yaml — run 'raconteur init' first")
         raise SystemExit(1)
 
     cfg = ProjectConfig.load(project_dir)
     gcfg = GlobalConfig.load()
     paper_dir = project_dir / "paper"
 
-    draft_path = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra")
-    if not draft_path:
-        print("[error] no draft found — run 'raconteur draft' first", file=sys.stderr)
+    paper_path = find_latest(
+        paper_dir, cfg.short_title, "md",
+        last_initials="ra", chain_excludes=["outline", "venue"],
+    )
+    if paper_path is None:
+        log("[error] no paper found — run 'raconteur paper' first")
         raise SystemExit(1)
 
-    text = draft_path.read_text(encoding="utf-8")
-    result = _extract_section(text, section)
+    outline_path = find_latest(
+        paper_dir, cfg.short_title, "md",
+        last_initials="ra", chain_includes="outline",
+    )
 
+    paper_text = paper_path.read_text(encoding="utf-8")
+    result = _extract_section(paper_text, section)
     if result is None:
-        print(f"[error] section '{section}' not found in draft", file=sys.stderr)
+        log(f"[error] section '{section}' not found in {paper_path.name}")
+        # list available sections
+        headings = [
+            line[3:].strip()
+            for line in paper_text.splitlines()
+            if line.startswith("## ")
+        ]
+        log("  available sections: " + ", ".join(headings))
         raise SystemExit(1)
 
     before, section_text, after = result
-    heading = section_text.split("\n", 1)[0].strip()
+    heading = _heading_from_section_text(section_text)
+    log(f"[raconteur] focusing on: {heading}")
 
-    prompt = _PROMPT.format(
-        title=cfg.title,
-        heading=heading,
-        venue_scope=_venue_section(cfg, project_dir),
-        section_text=section_text,
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+
+    from .outline import _analyze_structure
+    log("[raconteur] analysing paper structure…")
+    analysis = _analyze_structure(
+        Brain(gcfg, coordinator=cfg.brain.coordinator_model),
+        cfg.description, litrev, code, results,
     )
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
-    print(f"[raconteur] refining: {heading}…", file=sys.stderr)
-    refined = brain.coordinator(prompt, system=_SYSTEM, num_ctx=8192)
+    section_outline = _section_outline_for(heading, outline_path, cfg.short_title)
+    ctx = _context_for_section(heading, litrev, code, results)
+    venue_section = _venue_block(cfg)
 
-    parts = [p for p in [before, refined.strip(), after] if p.strip()]
+    log(f"[raconteur] refining '{heading}'…")
+    refined = brain.coordinator(
+        _REFINE_SECTION_PROMPT.format(
+            heading=heading,
+            title=cfg.title,
+            topic=cfg.topic,
+            focus=cfg.focus,
+            venue_section=venue_section,
+            analysis=analysis,
+            section_outline=section_outline,
+            context_section=ctx,
+            current_text=section_text,
+        ),
+        system=_SYSTEM,
+        num_ctx=16384,
+    )
+    refined = _critique_revise(brain, heading, refined, section_outline, analysis, 1)
+    refined = _critique_revise(brain, heading, refined, section_outline, analysis, 2)
+
+    # reassemble: before + ## heading + refined body + after
+    refined_section = f"## {heading}\n\n{refined.strip()}"
+    parts = [p for p in [before.rstrip(), refined_section, after.lstrip()] if p.strip()]
     new_text = "\n\n".join(parts) + "\n"
 
-    parsed = parse(draft_path, cfg.short_title)
+    parsed = parse(paper_path, cfg.short_title)
     current_chain = parsed[1] if parsed else ["ra"]
-
     out_path = paper_dir / minor_name(cfg.short_title, current_chain, "md")
     out_path.write_text(new_text, encoding="utf-8")
-    print(f"[raconteur] wrote {out_path.relative_to(project_dir)}", file=sys.stderr)
+    log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
     docx = to_docx(out_path)
     if docx:
-        print(f"[raconteur] wrote {docx.relative_to(project_dir)}", file=sys.stderr)
+        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
     from .notify import send_email
     send_email(
