@@ -46,6 +46,80 @@ Respond with ONLY a JSON object, no other text:
   ("" if none come to mind).
 Base it strictly on what the user wrote; do not invent scope."""
 
+_TOPIC_CRITIQUE_SYS = """\
+You audit a topic extraction for quality. Respond with ONLY a numbered list of
+specific problems found, one per line. If no problems, respond with the single word "OK"."""
+
+_TOPIC_CRITIQUE_PROMPT = """\
+Research prompt:
+{prompt}
+
+Extracted fields:
+{extracted}
+
+Check:
+1. topic — does it describe EXISTING academic literature (papers that already exist
+   and can be found in databases)? Flag if it states the researcher's own novel
+   claim, method, or contribution rather than the established field they are surveying.
+2. topic — is it short and search-friendly (ideally ≤8 words, concrete terminology)?
+   Flag if it is too long, too abstract, or contains vague phrases like "the role of"
+   or "in the context of".
+3. domain_anchor — is it specific enough to serve as a domain filter? Flag if it is
+   empty, overly generic ("interdisciplinary research", "the academic literature"), or
+   merely repeats the topic.
+4. exclude_topics — are there obvious adjacent disciplines that would pollute search
+   results but are not listed? Flag if left empty when the topic has clear neighbours
+   (e.g. a policy topic that would attract health-behaviour papers, an economics topic
+   that would attract management consulting pieces).
+
+Output: numbered list of problems with quoted text. Skip checks with no issues.
+If all fields are correct, respond "OK"."""
+
+_TOPIC_REVISE_SYS = """\
+You correct a topic extraction. Respond with ONLY the corrected JSON object, no other text:
+{"topic": "...", "focus": "...", "domain_anchor": "...", "exclude_topics": "..."}"""
+
+_TOPIC_REVISE_PROMPT = """\
+Research prompt:
+{prompt}
+
+Current extraction:
+{extracted}
+
+Problems to fix:
+{critique}
+
+Fix every listed problem. Leave fields that are already correct unchanged.
+Return the corrected JSON."""
+
+
+def _critique_revise_topic(brain: Brain, prompt: str, data: dict) -> dict:
+    """One critique→revise cycle on the extracted topic fields."""
+    extracted_str = json.dumps(data, indent=2)
+    print("  Critiquing topic extraction...", flush=True)
+    try:
+        critique = brain.coordinator(
+            _TOPIC_CRITIQUE_PROMPT.format(prompt=prompt, extracted=extracted_str),
+            _TOPIC_CRITIQUE_SYS, num_ctx=4096)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] topic critique failed ({e}); keeping original.", file=sys.stderr)
+        return data
+    if critique.strip().upper().startswith("OK"):
+        return data
+    print("  Revising topic extraction...", flush=True)
+    try:
+        raw = brain.coordinator(
+            _TOPIC_REVISE_PROMPT.format(
+                prompt=prompt, extracted=extracted_str, critique=critique),
+            _TOPIC_REVISE_SYS, num_ctx=4096)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        revised = json.loads(m.group(0)) if m else {}
+        if revised.get("topic"):
+            return revised
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] topic revision failed ({e}); keeping original.", file=sys.stderr)
+    return data
+
 
 def _extract_topic(brain: Brain, prompt: str) -> tuple[str, str, str, str]:
     """Derive topic/focus/domain_anchor/exclude_topics from the raw research prompt."""
@@ -58,7 +132,11 @@ def _extract_topic(brain: Brain, prompt: str) -> tuple[str, str, str, str]:
         anchor = (data.get("domain_anchor") or "").strip()
         exclude = (data.get("exclude_topics") or "").strip()
         if topic:
-            return topic, focus, anchor, exclude
+            data = _critique_revise_topic(brain, prompt, data)
+            return ((data.get("topic") or topic).strip(),
+                    (data.get("focus") or focus).strip(),
+                    (data.get("domain_anchor") or anchor).strip(),
+                    (data.get("exclude_topics") or exclude).strip())
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] topic extraction failed ({e}); using raw prompt as topic.",
               file=sys.stderr)
@@ -94,6 +172,109 @@ Scholar). Given a research topic and focus, produce 8-10 SHORT keyword queries
 Stay strictly within the stated domain; do not drift into adjacent fields.
 Respond with ONLY a JSON array of query strings, no other text."""
 
+_QUERY_CRITIQUE_SYS = """\
+You audit a list of academic database search queries for quality. Respond with ONLY
+a numbered list of specific problems, one per line. If no problems, respond "OK"."""
+
+_QUERY_CRITIQUE_PROMPT = """\
+Topic: {topic}
+Focus: {focus}
+Must cover: {domain_anchor}
+Keep out: {exclude_topics}
+
+Search queries to audit:
+{queries}
+
+Check:
+1. Distinctness — are any two queries near-paraphrases of each other (same idea,
+   different words)? Flag the duplicates.
+2. Seminal coverage — is there at least one query targeting a specific named author,
+   named work, program, or dataset that experts in this field would recognise as
+   foundational? Flag if absent.
+3. Domain drift — does any query use language that would attract results from the
+   excluded domains above? Flag the offending queries.
+4. Underrepresented venue query — is there at least one query that names a specific
+   journal, venue, or publication context where underrepresented scholars in THIS
+   field publish? Flag if the query uses only generic diversity terms ("Global South",
+   "feminist scholarship") instead of naming an actual outlet or community.
+5. Query format — are any queries too long (>8 words) or phrased as full sentences
+   rather than short keyword phrases? Flag them.
+
+Output: numbered list of problems. Quote the offending query where helpful. Skip
+checks with no issues. If all queries are correct, respond "OK"."""
+
+_QUERY_REVISE_SYS = """\
+You improve a list of academic database search queries. Return ONLY a JSON array of
+query strings, no other text."""
+
+_QUERY_REVISE_PROMPT = """\
+Topic: {topic}
+Focus: {focus}
+Must cover: {domain_anchor}
+Keep out: {exclude_topics}
+
+Current queries:
+{queries}
+
+Problems to fix:
+{critique}
+
+Fix every listed problem:
+- Replace near-duplicate queries with genuinely different angles
+- Add a seminal-author or named-work query if missing
+- Rewrite any query that drifts into excluded domains
+- Replace generic diversity terms with the name of a specific journal or venue
+- Shorten queries that are too long; convert sentences to keyword phrases
+- Preserve queries that are already correct
+- Return 8-10 queries total as a JSON array"""
+
+
+def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]:
+    """One critique→revise cycle on the generated query list."""
+    q_str = "\n".join(f"  {i + 1}. {q}" for i, q in enumerate(queries))
+    print("  Critiquing search queries...", flush=True)
+    try:
+        critique = brain.coordinator(
+            _QUERY_CRITIQUE_PROMPT.format(
+                topic=cfg.topic,
+                focus=cfg.focus or "(none)",
+                domain_anchor=cfg.domain_anchor or "(the topic above)",
+                exclude_topics=cfg.exclude_topics or "(nothing specific)",
+                queries=q_str),
+            _QUERY_CRITIQUE_SYS, num_ctx=4096)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] query critique failed ({e}); keeping original queries.",
+              file=sys.stderr)
+        return queries
+    if critique.strip().upper().startswith("OK"):
+        return queries
+    print("  Revising search queries...", flush=True)
+    try:
+        raw = brain.coordinator(
+            _QUERY_REVISE_PROMPT.format(
+                topic=cfg.topic,
+                focus=cfg.focus or "(none)",
+                domain_anchor=cfg.domain_anchor or "(the topic above)",
+                exclude_topics=cfg.exclude_topics or "(nothing specific)",
+                queries=q_str,
+                critique=critique),
+            _QUERY_REVISE_SYS, num_ctx=4096)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        revised = json.loads(m.group(0)) if m else []
+        revised = [str(q).strip() for q in revised if str(q).strip()]
+        if revised:
+            seen, out = set(), []
+            for q in [cfg.topic.strip(), *revised]:
+                k = q.lower()
+                if q and k not in seen:
+                    seen.add(k)
+                    out.append(q)
+            return out[:10]
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] query revision failed ({e}); keeping original queries.",
+              file=sys.stderr)
+    return queries
+
 
 def _generate_queries(brain: Brain, cfg) -> list[str]:
     """Decompose topic+focus into several targeted search queries (plus the raw
@@ -119,7 +300,10 @@ def _generate_queries(brain: Brain, cfg) -> list[str]:
         if q and k not in seen:
             seen.add(k)
             out.append(q)
-    return out[:10]
+    queries = out[:10]
+    if queries:
+        queries = _critique_revise_queries(brain, cfg, queries)
+    return queries
 
 
 def run(directory: str = ".", use_zotero: bool = True) -> int:

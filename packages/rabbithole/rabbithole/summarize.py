@@ -204,6 +204,90 @@ STYLE
 
 Write only the narrative review."""
 
+_SYNTH_CRITIQUE_SYS = """\
+You audit a literature review narrative for quality problems. Respond with ONLY a
+numbered list of specific, actionable problems, one per line. If no problems, respond "OK"."""
+
+_SYNTH_CRITIQUE_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+Evidence digest (ground truth — what the narrative should cover):
+{digest}
+
+Narrative to audit:
+{narrative}
+
+Check:
+1. Citation format — any sentence where the author is the grammatical subject or
+   agent: "Smith (2021) found...", "According to Jones (2020)...", or a parenthetical
+   opening the sentence. Every citation must follow a claim, not precede it.
+   Quote each offending sentence.
+2. Filler phrases — flag any of: "it is worth noting", "this highlights",
+   "further work is needed", "a growing body of research", "underscores",
+   "plays a crucial role", "rests on the demonstration that", "has been shown to",
+   or similar content-free phrases.
+3. Section headings — flag any heading that joins multiple concepts with commas,
+   "and", or "/". Each heading must name exactly one idea.
+4. Coverage — list any source from the digest that has a non-empty argument or
+   findings line but is never cited in the narrative by author-year. Only flag
+   sources whose content is substantively relevant to the topic.
+5. Vague gap statements — flag any mention of gaps, limitations, or future
+   directions that is not a specific, named gap or tension. "More research is
+   needed" and "this area warrants further study" are always too vague.
+6. Section order — flag any thematic section that opens with a recent (post-2020)
+   or preprint source before citing the foundational or well-cited work on that theme.
+
+Output: numbered list of problems with quoted text. Skip checks with no issues.
+If all checks pass, respond "OK"."""
+
+_SYNTH_REVISE_PROMPT = """\
+Revise the narrative to fix every problem in the critique below.
+Preserve all correct content; only change what the critique flags.
+
+Review topic: {topic}
+Focus: {focus}
+
+Evidence digest:
+{digest}
+
+Current narrative:
+{narrative}
+
+Problems to fix:
+{critique}
+
+Output only the revised narrative — no preamble or explanation."""
+
+
+def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
+                                topic: str, focus: str) -> str:
+    """One critique→revise cycle on the synthesis narrative."""
+    print("  Critiquing synthesis...", flush=True)
+    try:
+        critique = brain.coordinator(
+            _SYNTH_CRITIQUE_PROMPT.format(
+                topic=topic, focus=focus, digest=digest, narrative=narrative),
+            _SYNTH_CRITIQUE_SYS, num_ctx=16384)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] synthesis critique failed ({e}); keeping original.",
+              file=sys.stderr)
+        return narrative
+    if critique.strip().upper().startswith("OK"):
+        return narrative
+    print("  Revising synthesis...", flush=True)
+    try:
+        revised = brain.coordinator(
+            _SYNTH_REVISE_PROMPT.format(
+                topic=topic, focus=focus, digest=digest,
+                narrative=narrative, critique=critique),
+            SYNTH_SYS, num_ctx=16384)
+        return revised
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] synthesis revision failed ({e}); keeping original.",
+              file=sys.stderr)
+        return narrative
+
 
 def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
     lines = []
@@ -227,7 +311,8 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg) ->
               f"Evidence digest (one line per source):\n{digest}\n\n"
               f"Write the thematic narrative review now.")
     print("  Synthesising narrative (coordinator)...", flush=True)
-    return brain.coordinator(prompt, SYNTH_SYS, num_ctx=16384)
+    narrative = brain.coordinator(prompt, SYNTH_SYS, num_ctx=16384)
+    return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
 
 
 # ──────────────────────────────────────────────────────────────────────────
