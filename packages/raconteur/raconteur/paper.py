@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results
+from .context import load_litreview, load_code, load_results, load_bib_summary
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
@@ -33,6 +33,7 @@ Section outline (follow this structure exactly):
 {section_outline}
 
 {context_section}\
+{bib_section}\
 Instructions:
 - Write fully developed academic prose; do not reproduce the outline bullets verbatim
 - Use ### for subsection headings, matching names from the outline
@@ -41,11 +42,13 @@ Instructions:
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
-- For Background/Introduction sections: synthesise ideas from the literature; use \
-[CITE: concept] placeholders where citations belong; integrate ideas into argument — \
-do not list or summarise individual papers
+- For Background/Introduction sections: synthesise ideas from the literature into \
+argument — do not list or summarise individual papers; cite using [@citekey] format \
+from the bibliography above
 - For Discussion sections: connect results to background, address the discussion_angle \
-and limitations from the structural analysis concretely
+and limitations from the structural analysis concretely; cite relevant background \
+using [@citekey] format
+- Use [@citekey] for all citations — only citekeys from the bibliography above are valid
 - Do not include the ## section heading in your output — start with the first \
 subsection or opening paragraph
 - Output only this section's prose — no preamble, no closing remarks
@@ -134,6 +137,7 @@ Section outline:
 {section_outline}
 
 {context_section}\
+{bib_section}\
 Current text:
 {text}
 
@@ -275,12 +279,7 @@ def _assemble(title: str, abstract: str, sections: list[tuple[str, str]]) -> str
     parts = [f"# {title}", "", "**Abstract**", "", abstract.strip(), ""]
     for heading, text in sections:
         parts += [f"## {heading}", "", text.strip(), ""]
-    parts += [
-        "## References",
-        "",
-        "[References to be added. Use [CITE: concept] markers in the text as a guide.]",
-        "",
-    ]
+    parts += ["## References", ""]
     return "\n".join(parts)
 
 
@@ -288,12 +287,19 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     out_path = paper_dir / major_name(cfg.short_title, "md")
     out_path.write_text(text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
-    docx = to_docx(out_path)
+    bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
+    docx = to_docx(out_path, bib_path=bib_path)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
 
 # ── fresh paper draft ─────────────────────────────────────────────────────────
+
+def _bib_block(bib_summary: str) -> str:
+    if not bib_summary:
+        return ""
+    return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
+
 
 def _draft_paper(
     project_dir: Path,
@@ -305,12 +311,14 @@ def _draft_paper(
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _venue_block(cfg)
+    bib_section = _bib_block(bib_summary)
     drafted: list[tuple[str, str]] = []
 
     for heading, section_outline in _parse_sections(outline_text):
@@ -328,6 +336,7 @@ def _draft_paper(
                 analysis=analysis,
                 section_outline=section_outline,
                 context_section=ctx,
+                bib_section=bib_section,
             ),
             system=_SYSTEM,
             num_ctx=16384,
@@ -355,6 +364,7 @@ def _revise_paper(
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
@@ -367,6 +377,7 @@ def _revise_paper(
         return
 
     venue_section = _venue_block(cfg)
+    bib_section = _bib_block(bib_summary)
     existing_map = dict(_parse_sections(existing_text))
     revised: list[tuple[str, str]] = []
 
@@ -382,6 +393,7 @@ def _revise_paper(
                 analysis=analysis,
                 section_outline=section_outline,
                 context_section=ctx,
+                bib_section=bib_section,
                 text=existing,
                 annotations=annotations,
             ),

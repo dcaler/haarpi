@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import sys
 from .log import log
 from pathlib import Path
@@ -9,6 +10,8 @@ _RESULTS_SUFFIXES = {".py", ".R", ".jl", ".ipynb", ".txt", ".md", ".csv", ".tsv"
 _MAX_LITREV_CHARS = 12000
 _MAX_CODE_CHARS = 20000
 _MAX_RESULTS_CHARS = 4000
+_MAX_FILE_LINES = 200
+_MAX_BIB_CHARS = 4000
 
 
 def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
@@ -77,6 +80,57 @@ def load_results(project_dir: Path, subdir: str = "results") -> str:
         return ""
     log(f"[raconteur] reading results ({subdir}): {len(parts)} file(s)")
     return "\n".join(parts)
+
+
+def _parse_bib(text: str) -> list[tuple[str, str, str, str]]:
+    """Parse BibTeX → [(citekey, first_author, year, short_title), ...]."""
+    entries = []
+    citekey = author = year = title = ""
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.match(r'@\w+\{([^,\s]+)\s*,', line)
+        if m:
+            if citekey:
+                entries.append((citekey, author, year, title))
+            citekey = m.group(1).strip()
+            author = year = title = ""
+            continue
+        if not citekey:
+            continue
+        am = re.match(r'author\s*=\s*\{(.+)\},?\s*$', line, re.IGNORECASE)
+        if am and not author:
+            raw = am.group(1).strip()
+            first = raw.split(" and ")[0].strip()
+            author = first.split(",")[0].strip() if "," in first else (first.split()[-1] if first else "")
+            if " and " in raw:
+                author += " et al."
+        ym = re.match(r'year\s*=\s*\{?(\d{4})\}?,?\s*$', line, re.IGNORECASE)
+        if ym and not year:
+            year = ym.group(1)
+        tm = re.match(r'title\s*=\s*\{(.+)\},?\s*$', line, re.IGNORECASE)
+        if tm and not title:
+            raw_t = re.sub(r'[{}]', '', tm.group(1)).strip()
+            title = raw_t[:60] + ("…" if len(raw_t) > 60 else "")
+    if citekey:
+        entries.append((citekey, author, year, title))
+    return entries
+
+
+def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
+    """Return compact citekey list from refs.bib for citation guidance in prompts."""
+    bib_path = project_dir / subdir / "output" / "refs.bib"
+    if not bib_path.exists():
+        return ""
+    text = bib_path.read_text(encoding="utf-8", errors="replace")
+    entries = _parse_bib(text)
+    if not entries:
+        return ""
+    log(f"[raconteur] reading refs.bib: {len(entries)} entries")
+    lines = [f"[@{e[0]}] {e[1]} ({e[2]}). {e[3]}" for e in entries]
+    summary = "\n".join(lines)
+    if len(summary) > _MAX_BIB_CHARS:
+        summary = summary[:_MAX_BIB_CHARS] + "\n[…truncated]"
+    return summary
 
 
 def load_venue_analysis(project_dir: Path) -> str:

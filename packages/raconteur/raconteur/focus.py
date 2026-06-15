@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results
+from .context import load_litreview, load_code, load_results, load_bib_summary
 from .log import log
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
@@ -32,6 +32,7 @@ Section outline:
 {section_outline}
 
 {context_section}\
+{bib_section}\
 Current section text:
 {current_text}
 
@@ -166,6 +167,12 @@ def _section_outline_for(heading: str, outline_path: Path | None, short_title: s
     return ""
 
 
+def _bib_block(bib_summary: str) -> str:
+    if not bib_summary:
+        return ""
+    return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
+
+
 _LITREV_KW = {"background", "related", "literature", "prior", "review", "introduction"}
 _CODE_KW = {"method", "approach", "implement", "model", "framework",
             "algorithm", "system", "pipeline", "design"}
@@ -279,6 +286,7 @@ def run(project_dir: Path, section: str) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
@@ -291,6 +299,7 @@ def run(project_dir: Path, section: str) -> None:
     section_outline = _section_outline_for(heading, outline_path, cfg.short_title)
     ctx = _context_for_section(heading, litrev, code, results)
     venue_section = _venue_block(cfg)
+    bib_section = _bib_block(bib_summary)
 
     log(f"[raconteur] refining '{heading}'…")
     refined = brain.coordinator(
@@ -303,6 +312,7 @@ def run(project_dir: Path, section: str) -> None:
             analysis=analysis,
             section_outline=section_outline,
             context_section=ctx,
+            bib_section=bib_section,
             current_text=section_text,
         ),
         system=_SYSTEM,
@@ -322,7 +332,8 @@ def run(project_dir: Path, section: str) -> None:
     out_path.write_text(new_text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
-    docx = to_docx(out_path)
+    bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
+    docx = to_docx(out_path, bib_path=bib_path)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
