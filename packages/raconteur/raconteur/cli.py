@@ -71,7 +71,7 @@ def main() -> None:
             from .outline import run
             run(project_dir)
         case "paper":
-            from .draft import run
+            from .paper import run
             run(project_dir)
         case "focus":
             from .focus import run

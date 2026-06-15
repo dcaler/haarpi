@@ -6,7 +6,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_code, load_results, load_venue_analysis
-from .naming import major_name, find_latest, find_user_revision
+from .naming import major_name, major_outline_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
 
@@ -63,10 +63,13 @@ Return ONLY valid JSON."""
 # ── equation extraction (worker) ──────────────────────────────────────────────
 
 _EXTRACT_EQUATIONS_PROMPT = """\
-List every named mathematical equation, formula, or update rule defined in this code.
+List every named mathematical equation, formula, update rule, or computational \
+expression defined in this code — including those written as inline assignments \
+or inside functions (e.g. opinion update rules, confidence bounds, weight decay, \
+trust decay, distance metrics, threshold conditions).
 For each return: {{"name": "short name", "symbol": "the expression as written in the code", \
 "purpose": "what it computes or represents"}}
-Return ONLY a JSON array. Return [] if no equations are found.
+Return ONLY a JSON array. Return [] only if the code contains no mathematical expressions.
 
 Code:
 {code}"""
@@ -126,17 +129,22 @@ named subsection, not a generic placeholder
 - Results must follow the sequence in results_structure from the analysis
 - Discussion must address the discussion_angle from the analysis, and include \
 a Limitations subsection
-- For each Methods subsection, bullet points must specify which equations or formulas \
-from key_equations are introduced or derived there; if key_equations is empty, omit \
-this requirement
-- For each Results subsection, bullet points must cite specific findings from \
-key_findings (with values where present); if key_findings is empty, describe \
-anticipated findings only
-- Calibrate the specificity of Methods, Results, Discussion, and Conclusion to \
-the available content: if methods content is absent, Methods describes planned \
-approach only; if results content is absent, Results describes anticipated \
-findings only; Discussion and Conclusion must not claim specific empirical \
-outcomes that have not been provided
+- If methods source code is provided above: Methods subsections must be grounded \
+in the actual code — reference specific algorithms, functions, parameters, and \
+implementation choices present in the code; method_steps gives structural order \
+but the code gives the specific content; bullet points must specify which equations \
+from key_equations are introduced or derived there (if key_equations is empty, \
+extract equations directly from the code_section above)
+- If results content is provided above: Results subsections must be grounded in \
+the actual results — cite specific values, outcomes, patterns, or model outputs \
+present in the results content; results_structure gives structural order but the \
+results give the specific content; bullet points must cite specific findings from \
+key_findings with values where present (if key_findings is empty, extract concrete \
+facts directly from the results_section above)
+- If methods source code is absent, Methods describes the planned approach only; \
+if results content is absent, Results describes anticipated findings only; \
+Discussion and Conclusion must not claim specific empirical outcomes not supported \
+by the available content
 - Include 3–5 bullet points per subsection describing what that subsection \
 specifically argues, shows, or demonstrates for this paper
 - Output only the outline — no preamble or closing remarks
@@ -218,14 +226,18 @@ Current outline:
 {outline}
 
 Instructions:
-- If code content is provided above: identify the Methods section and rewrite it \
-and all its ### subsections using method_steps and key_equations from the analysis; \
-Methods subsections must map to method_steps in order; each must specify which \
-equations from key_equations are introduced there
+- If methods source code is provided above: identify the Methods section and rewrite \
+it and all its ### subsections grounded in the actual code — reference specific \
+algorithms, functions, parameters, and implementation choices; method_steps gives \
+structural order; each subsection must specify which equations from key_equations \
+are introduced there (if key_equations is empty, extract equations directly from \
+the source code above)
 - If results content is provided above: identify the Results section and rewrite it \
-and all its ### subsections using results_structure and key_findings from the analysis; \
-each Results subsection must cite specific findings from key_findings with values \
-where present
+and all its ### subsections grounded in the actual results — cite specific values, \
+outcomes, and patterns present in the results content; results_structure gives \
+structural order; each Results subsection must cite specific findings from \
+key_findings with values where present (if key_findings is empty, extract concrete \
+facts directly from the results content above)
 - Every other ## section and its subsections must be copied verbatim
 - Output only the complete outline — no preamble or closing remarks
 """
@@ -251,12 +263,16 @@ Revision annotations:
 {revisions}
 
 Instructions:
-- If code content is provided above: rewrite the Methods section using method_steps \
-and key_equations from the structural analysis; each Methods subsection must specify \
-which equations are introduced there
-- If results content is provided above: rewrite the Results section using \
-results_structure and key_findings from the structural analysis; each Results \
-subsection must cite specific findings from key_findings with values where present
+- If methods source code is provided above: rewrite the Methods section grounded \
+in the actual code — reference specific algorithms, functions, parameters, and \
+implementation choices; method_steps gives structural order; each subsection must \
+specify which equations from key_equations are introduced there (if key_equations \
+is empty, extract equations directly from the source code above)
+- If results content is provided above: rewrite the Results section grounded in \
+the actual results — cite specific values, outcomes, and patterns; results_structure \
+gives structural order; each Results subsection must cite specific findings from \
+key_findings with values where present (if key_findings is empty, extract concrete \
+facts directly from the results content above)
 - For all other sections: incorporate all tracked insertions, remove all tracked \
 deletions, address each reviewer comment with substantive changes
 - Maintain numbered section format (## 1. Introduction, etc.) with ### \
@@ -309,8 +325,8 @@ def _content_status(litrev: str, code: str, results: str) -> str:
 def _extract_equations(brain: Brain, code: str) -> list[dict]:
     """Worker call: extract named equations from code."""
     raw = brain.worker(
-        _EXTRACT_EQUATIONS_PROMPT.format(code=code[:8000]),
-        num_ctx=8192,
+        _EXTRACT_EQUATIONS_PROMPT.format(code=code[:16000]),
+        num_ctx=16384,
     )
     try:
         result = json.loads(_strip_fence(raw))
@@ -447,8 +463,8 @@ def run(project_dir: Path) -> None:
         log(f"  topic : {cfg.topic}")
         log(f"  focus : {cfg.focus}")
 
-    user_rev = find_user_revision(paper_dir, cfg.short_title)
-    existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra")
+    user_rev = find_user_revision(paper_dir, cfg.short_title, chain_includes="outline")
+    existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra", chain_includes="outline")
 
     if not existing:
         _outline_fresh(project_dir, cfg, brain, paper_dir)
@@ -487,8 +503,8 @@ def _outline_fresh(
 
     venue_section = _build_venue_section(cfg, project_dir)
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
-    code_section = f"Analysis Methods:\n{code}\n" if code else ""
-    results_section = f"Analysis Results:\n{results}\n" if results else ""
+    code_section = f"Methods Source Code:\n{code}\n" if code else ""
+    results_section = f"Results Content:\n{results}\n" if results else ""
 
     # Pass 2: draft
     log("[raconteur] drafting outline…")
@@ -537,8 +553,8 @@ def _refresh_content(
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Code content:\n{code}\n\n" if code else ""
-    results_section = f"Results content:\n{results}\n\n" if results else ""
+    code_section = f"Methods Source Code:\n{code}\n\n" if code else ""
+    results_section = f"Results Content:\n{results}\n\n" if results else ""
 
     what = " + ".join(filter(None, ["Methods" if code else "", "Results" if results else ""]))
     log(f"[raconteur] refreshing {what} section(s)…")
@@ -590,8 +606,8 @@ def _revise(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Code content:\n{code}\n\n" if code else ""
-    results_section = f"Results content:\n{results}\n\n" if results else ""
+    code_section = f"Methods Source Code:\n{code}\n\n" if code else ""
+    results_section = f"Results Content:\n{results}\n\n" if results else ""
 
     log("[raconteur] revising outline…")
     revised_text = brain.coordinator(
@@ -618,7 +634,7 @@ def _revise(
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> None:
     output = f"# {cfg.title}\n\n{text.strip()}\n"
-    out_path = paper_dir / major_name(cfg.short_title, "md")
+    out_path = paper_dir / major_outline_name(cfg.short_title, "md")
     out_path.write_text(output, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 

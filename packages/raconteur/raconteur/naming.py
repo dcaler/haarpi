@@ -30,6 +30,11 @@ def major_name(short_title: str, ext: str) -> str:
     return f"{today()}_{short_title}_ra.{ext}"
 
 
+def major_outline_name(short_title: str, ext: str) -> str:
+    """Fresh outline file — chain is outline_ra."""
+    return f"{today()}_{short_title}_outline_ra.{ext}"
+
+
 def minor_name(short_title: str, current_chain: list[str], ext: str) -> str:
     """Minor update (focus) — appends ra to the existing chain."""
     chain = "_".join(current_chain + ["ra"])
@@ -41,33 +46,63 @@ def find_latest(
     short_title: str,
     ext: str,
     last_initials: str | None = None,
+    chain_includes: str | None = None,
+    chain_excludes: str | list[str] | None = None,
 ) -> Path | None:
-    """Newest file matching the naming convention, optionally filtering by last initials."""
+    """Newest file matching the naming convention.
+
+    chain_includes: only files whose chain contains this element.
+    chain_excludes: skip files whose chain contains any of these elements.
+    """
+    excludes = (
+        [chain_excludes] if isinstance(chain_excludes, str) else (chain_excludes or [])
+    )
     candidates = []
     for p in paper_dir.glob(f"*.{ext}"):
         result = parse(p, short_title)
         if result is None:
             continue
         _, chain, _ = result
+        chain_lower = [c.lower() for c in chain]
         if last_initials is not None:
             if not chain or chain[-1].lower() != last_initials.lower():
                 continue
+        if chain_includes is not None:
+            if chain_includes.lower() not in chain_lower:
+                continue
+        if any(exc.lower() in chain_lower for exc in excludes):
+            continue
         candidates.append(p)
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def find_user_revision(paper_dir: Path, short_title: str) -> Path | None:
+def find_user_revision(
+    paper_dir: Path,
+    short_title: str,
+    chain_includes: str | None = None,
+    chain_excludes: str | list[str] | None = None,
+) -> Path | None:
     """Newest .docx whose last initials are not 'ra' (i.e. the researcher's revision)."""
+    excludes = (
+        [chain_excludes] if isinstance(chain_excludes, str) else (chain_excludes or [])
+    )
     candidates = []
     for p in paper_dir.glob("*.docx"):
         result = parse(p, short_title)
         if result is None:
             continue
         _, chain, _ = result
-        if chain and chain[-1].lower() != "ra":
-            candidates.append(p)
+        if not chain or chain[-1].lower() == "ra":
+            continue
+        chain_lower = [c.lower() for c in chain]
+        if chain_includes is not None:
+            if chain_includes.lower() not in chain_lower:
+                continue
+        if any(exc.lower() in chain_lower for exc in excludes):
+            continue
+        candidates.append(p)
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
