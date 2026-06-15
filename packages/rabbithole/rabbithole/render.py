@@ -35,9 +35,9 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
         parts += [
             "---",
             "",
-            "> **Citation check:** the following in-text citations could not be "
-            "matched to a source in the corpus and should be verified or removed: "
-            + "; ".join(unmatched),
+            "> **Citation check:** the following citekeys could not be matched to "
+            "a source in the corpus and should be verified or removed: "
+            + "; ".join(f"[@{u}]" for u in unmatched),
             "",
         ]
     return "\n".join(parts)

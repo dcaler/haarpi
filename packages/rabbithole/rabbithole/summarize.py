@@ -4,8 +4,8 @@ Pipeline (annotation is a POST-synthesis product, not an independent per-paper s
   1. read (MAP)    : per-paper notes for synthesis. Sequential, written to disk one
                      paper at a time -> a slow run is resumable and shows progress
                      (work/annotations/NNN.json).
-  2. synthesize    : the coordinator (27B) writes the thematic narrative with plain
-                     author-year in-text citations, from a digest of the notes.
+  2. synthesize    : the coordinator (27B) writes the thematic narrative with
+                     [@citekey] pandoc citations, from a digest of the notes.
   3. locate (POST) : for each source the narrative actually CITES, find where in
                      that paper the review's claims live (section/page + quote). That
                      set of located claims IS the annotated bibliography. Written
@@ -18,12 +18,33 @@ import json
 import re
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from . import config, corpus as corpus_mod, render
 from .brain import Brain
-from .models import Candidate
+from .models import Candidate, norm_doi
 from .pdfs import page_marked_text
+
+
+def _make_citekeys(corpus: list[Candidate]) -> dict[int, str]:
+    """Map corpus index → {last}{year} BibTeX citekey, with a/b/c disambiguation."""
+    def _base(c: Candidate) -> str:
+        last = re.sub(r"[^a-z0-9]", "", c.first_author_last.lower())
+        return f"{last}{c.year}" if c.year else f"{last}nd"
+
+    groups: dict[str, list[int]] = defaultdict(list)
+    for i, c in enumerate(corpus):
+        groups[_base(c)].append(i)
+
+    keys: dict[int, str] = {}
+    for base, indices in groups.items():
+        if len(indices) == 1:
+            keys[indices[0]] = base
+        else:
+            for j, i in enumerate(indices):
+                keys[i] = base + "abcdefghijklmnopqrstuvwxyz"[j]
+    return keys
 
 try:
     from . import chroma as _chroma
@@ -187,8 +208,9 @@ EXPLAIN WHY IT MATTERS (the priority)
 - Name gaps, tensions, and directions specifically; never "further work is needed".
 
 CITATIONS
-- State each finding as a claim in its own right, then attach the source in parentheses: "Modest tolerance thresholds produce exaggerated segregation (Schelling, 1971)."
-- Never make a citation the grammatical subject or agent of a sentence. Do NOT write "(Schelling, 1971) established that...". Rewrite so the claim leads and the citation follows. Use the author-year string exactly as given in the digest; keep it well-formed.
+- State each finding as a claim in its own right, then attach the source in square brackets immediately after: "Modest tolerance thresholds produce exaggerated segregation [@schelling1971]."
+- Never make a citation the grammatical subject or agent of a sentence. Do NOT write "[@schelling1971] showed that...". Rewrite so the claim leads and the citation follows.
+- Use the citekey EXACTLY as given in the digest (the [@key] tag beside each source). Do not invent or alter citekeys.
 
 LANGUAGE
 - Paraphrase; do not lift technical phrases verbatim from the sources. A reader should not need the original papers' vocabulary to follow your argument.
@@ -219,10 +241,10 @@ Narrative to audit:
 {narrative}
 
 Check:
-1. Citation format — any sentence where the author is the grammatical subject or
-   agent: "Smith (2021) found...", "According to Jones (2020)...", or a parenthetical
-   opening the sentence. Every citation must follow a claim, not precede it.
-   Quote each offending sentence.
+1. Citation format — flag: (a) any citation that does not use [@citekey] format
+   (e.g., "(Smith, 2021)" or "Smith (2021)" are wrong); (b) any sentence where
+   a citation bracket opens or precedes the claim rather than following it. All
+   citations must be [@citekey] and follow their claim. Quote each offending sentence.
 2. Filler phrases — flag any of: "it is worth noting", "this highlights",
    "further work is needed", "a growing body of research", "underscores",
    "plays a crucial role", "rests on the demonstration that", "has been shown to",
@@ -230,7 +252,7 @@ Check:
 3. Section headings — flag any heading that joins multiple concepts with commas,
    "and", or "/". Each heading must name exactly one idea.
 4. Coverage — list any source from the digest that has a non-empty argument or
-   findings line but is never cited in the narrative by author-year. Only flag
+   findings line but is never cited in the narrative by [@citekey]. Only flag
    sources whose content is substantively relevant to the topic.
 5. Vague gap statements — flag any mention of gaps, limitations, or future
    directions that is not a specific, named gap or tension. "More research is
@@ -289,9 +311,11 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
         return narrative
 
 
-def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
+def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]) -> str:
     lines = []
-    for c, a in zip(corpus, notes):
+    for i, (c, a) in enumerate(zip(corpus, notes)):
+        ck = citekeys.get(i, "")
+        label = f"[@{ck}]" if ck else f"({c.author_year()})"
         themes = ", ".join(a.get("themes", []))
         cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
         gaps = a.get("gaps", "").strip()
@@ -299,13 +323,14 @@ def _digest(corpus: list[Candidate], notes: list[dict]) -> str:
         rel = a.get("relevance", "").strip()
         rel_str = f" Relevance: {rel}" if rel else ""
         lines.append(
-            f"- ({c.author_year()}){cites} {a.get('argument','')} "
+            f"- {label}{cites} {a.get('argument','')} "
             f"Findings: {a.get('findings','')}{rel_str} Themes: {themes}{gap_str}".strip())
     return "\n".join(lines)
 
 
-def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg) -> str:
-    digest = _digest(corpus, notes)
+def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
+               citekeys: dict[int, str]) -> str:
+    digest = _digest(corpus, notes, citekeys)
     prompt = (f"Review topic: {cfg.topic}\nFocus: {cfg.focus}\n"
               f"Number of sources: {len(corpus)}\n\n"
               f"Evidence digest (one line per source):\n{digest}\n\n"
@@ -334,38 +359,18 @@ Use ONLY the provided paper text for locations and quotes — do not invent. Omi
 any statement you cannot locate in the text. Return [] if none can be located."""
 
 
-def _narrative_cite_keys(narrative: str) -> set[tuple[str, str]]:
-    keys = set()
-    for m in re.finditer(r"\(([^()]*?\d{4}[a-z]?)\)", narrative):
-        cite = m.group(1)
-        ym = re.search(r"(\d{4})", cite)
-        if not ym:
-            continue
-        name = re.split(r"\bet al\b|&|,|;", cite)[0].strip().lower()
-        last = name.split()[-1] if name.split() else name
-        if last and not last.isdigit():  # skip bare (2025) — not an author-year cite
-            keys.add((last, ym.group(1)))
-    return keys
+def _cited_indices(narrative: str, citekeys: dict[int, str]) -> list[int]:
+    """Return corpus indices whose [@citekey] tags appear in the narrative."""
+    found = set(re.findall(r"\[@([^\]]+)\]", narrative))
+    key_to_idx = {v: k for k, v in citekeys.items()}
+    return [key_to_idx[k] for k in found if k in key_to_idx]
 
 
-def _cited_indices(narrative: str, corpus: list[Candidate]) -> list[int]:
-    keys = _narrative_cite_keys(narrative)
-    lasts = {k[0] for k in keys}
-    out = []
-    for i, c in enumerate(corpus):
-        last = c.first_author_last.lower()
-        yr = str(c.year) if c.year else ""
-        if (last, yr) in keys or (not yr and last in lasts):
-            out.append(i)
-    return out
-
-
-def _claim_sentences(narrative: str, c: Candidate) -> str:
-    last = c.first_author_last
-    yr = str(c.year) if c.year else ""
-    sents = re.split(r"(?<=[.!?])\s+", narrative)
-    hits = [s.strip() for s in sents if last in s and (not yr or yr in s)]
-    return " ".join(hits)
+def _claim_sentences(narrative: str, citekey: str) -> str:
+    """Sentences in the narrative that cite this citekey."""
+    tag = f"[@{citekey}]"
+    return " ".join(
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", narrative) if tag in s)
 
 
 def _locate_prompt(c: Candidate, statements: str, body: str) -> str:
@@ -375,10 +380,12 @@ def _locate_prompt(c: Candidate, statements: str, body: str) -> str:
 
 
 def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
-                  notes: list[dict], cfg, paths, collection=None) -> dict[int, list]:
+                  notes: list[dict], cfg, paths, collection=None,
+                  citekeys: dict[int, str] | None = None) -> dict[int, list]:
+    citekeys = citekeys or {}
     located_dir = paths.work / "located"
     located_dir.mkdir(parents=True, exist_ok=True)
-    cited = _cited_indices(narrative, corpus)
+    cited = _cited_indices(narrative, citekeys)
     print(f"  {len(cited)} of {len(corpus)} sources are cited — locating their claims...",
           flush=True)
     located: dict[int, list] = {}
@@ -389,7 +396,7 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
         if fp.exists():
             located[i] = json.loads(fp.read_text(encoding="utf-8"))
             continue
-        statements = _claim_sentences(narrative, c)
+        statements = _claim_sentences(narrative, citekeys.get(i, ""))
         if not statements:
             n = notes[i] if i < len(notes) and notes[i] else {}
             statements = "; ".join(x for x in (n.get("relevance", ""),
@@ -448,25 +455,78 @@ def bibliography(corpus: list[Candidate], located: dict[int, list]) -> str:
     return "\n".join(out)
 
 
-def citation_check(narrative: str, corpus: list[Candidate]) -> list[str]:
-    """In-text cites that don't map to a corpus item (hallucination guard)."""
-    known_years = {(c.first_author_last.lower(), str(c.year)) for c in corpus}
-    known_last = {c.first_author_last.lower() for c in corpus}
-    unmatched = []
-    for m in re.finditer(r"\(([^()]*?\d{4}[a-z]?)\)", narrative):
-        cite = m.group(1)
-        ym = re.search(r"(\d{4})", cite)
-        if not ym:
+def citation_check(narrative: str, citekeys: dict[int, str]) -> list[str]:
+    """[@citekey] tags in the narrative that don't map to a corpus item."""
+    known = set(citekeys.values())
+    found = set(re.findall(r"\[@([^\]]+)\]", narrative))
+    return sorted(found - known)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# BibTeX export
+# ──────────────────────────────────────────────────────────────────────────
+def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
+                        key_by_title: dict[str, str]) -> str:
+    """Replace Zotero-generated citekeys with our {last}{year} keys."""
+    starts = [m.start() for m in re.finditer(r"^@", bib_text, re.MULTILINE)]
+    if not starts:
+        return bib_text
+    blocks = [bib_text[starts[i]: starts[i + 1] if i + 1 < len(starts) else len(bib_text)]
+              for i in range(len(starts))]
+    result = []
+    for block in blocks:
+        m = re.match(r"@(\w+)\{([^,\s]+)", block)
+        if not m:
+            result.append(block)
             continue
-        year = ym.group(1)
-        name = re.split(r"\bet al\b|&|,|;", cite)[0].strip().lower()
-        last = name.split()[-1] if name.split() else name
-        if last.isdigit():  # bare (2025) — not an author-year cite
+        entry_type, zotero_key = m.group(1), m.group(2)
+        new_key = None
+        doi_m = re.search(r"\bdoi\s*=\s*\{([^}]+)\}", block, re.IGNORECASE)
+        if doi_m:
+            new_key = key_by_doi.get(norm_doi(doi_m.group(1).strip()))
+        if not new_key:
+            title_m = re.search(r"\btitle\s*=\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+                                block, re.IGNORECASE)
+            if title_m:
+                raw = re.sub(r"[{}]", "", title_m.group(1))
+                norm = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
+                new_key = key_by_title.get(norm)
+        if new_key and new_key != zotero_key:
+            block = block.replace(f"@{entry_type}{{{zotero_key}",
+                                  f"@{entry_type}{{{new_key}", 1)
+        result.append(block)
+    return "".join(result)
+
+
+def _export_bibtex(cfg, gc, paths, citekeys: dict[int, str],
+                   corpus: list[Candidate]) -> "Path | None":
+    """Fetch BibTeX from Zotero, patch citekeys to match ours, write output/refs.bib."""
+    if not gc.have_zotero:
+        return None
+    collection_key = cfg.zotero.get("collection_key", "")
+    if not collection_key:
+        return None
+    from . import zotero as _zotero
+    try:
+        zc = _zotero.ZoteroClient(gc)
+        bib_text = zc.collection_bibtex(collection_key)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] BibTeX export failed ({e}); refs.bib not written.", file=sys.stderr)
+        return None
+    key_by_doi: dict[str, str] = {}
+    key_by_title: dict[str, str] = {}
+    for i, c in enumerate(corpus):
+        ck = citekeys.get(i)
+        if not ck:
             continue
-        if (last, year) in known_years or last in known_last:
-            continue
-        unmatched.append(cite.strip())
-    return sorted(set(unmatched))
+        if c.doi_key:
+            key_by_doi[c.doi_key] = ck
+        if c.title_key:
+            key_by_title[c.title_key] = ck
+    bib_text = _patch_bibtex_keys(bib_text, key_by_doi, key_by_title)
+    out = paths.output / "refs.bib"
+    out.write_text(bib_text, encoding="utf-8")
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -494,6 +554,7 @@ def run(directory: str = ".", brain_override: str | None = None,
               "and re-run.")
         return 1
     print(f"\nCorpus: {len(corpus)} sources with full text.")
+    citekeys = _make_citekeys(corpus)
     t0 = time.time()
 
     collection = None
@@ -511,22 +572,24 @@ def run(directory: str = ".", brain_override: str | None = None,
     notes = read_notes(brain, corpus, cfg, paths, collection=collection)
 
     print("\n[2/3] Synthesising the review...")
-    narrative = synthesize(brain, corpus, notes, cfg)
+    narrative = synthesize(brain, corpus, notes, cfg, citekeys)
 
     print("\n[3/3] Locating cited claims for the annotated bibliography...")
     located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
-                            collection=collection)
+                            collection=collection, citekeys=citekeys)
 
     biblio = bibliography(corpus, located)
-    unmatched = citation_check(narrative, corpus)
+    unmatched = citation_check(narrative, citekeys)
     if unmatched:
-        print(f"\n[citation check] {len(unmatched)} in-text cite(s) not matched "
-              f"to a source: {', '.join(unmatched[:8])}"
+        print(f"\n[citation check] {len(unmatched)} citekey(s) not matched to a source: "
+              f"{', '.join(f'[@{k}]' for k in unmatched[:8])}"
               + (" ..." if len(unmatched) > 8 else ""))
 
     out_md, out_docx = render.write_review(
         cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
         cfg_version=cfg_version)
+
+    bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
 
     elapsed = time.time() - t0
     print("\n" + "=" * 60)
@@ -535,6 +598,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  Review (md)  : {out_md}")
     if out_docx:
         print(f"  Review (docx): {out_docx}")
+    if bib_path:
+        print(f"  BibTeX       : {bib_path}")
     print(f"  Sources read: {len(corpus)} | cited & annotated: {len(located)} "
           f"| brain: {brain.backend}")
 
@@ -560,7 +625,7 @@ def _notify_report_done(cfg, gc, paths, corpus, located, out_md, out_docx,
         f"  Brain: {backend}",
     ]
     if unmatched:
-        lines.append(f"  Unmatched citations: {', '.join(unmatched[:8])}"
+        lines.append(f"  Unmatched citekeys: {', '.join(f'[@{k}]' for k in unmatched[:8])}"
                      + (" ..." if len(unmatched) > 8 else ""))
     lines += [
         "",

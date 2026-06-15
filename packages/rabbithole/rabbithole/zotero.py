@@ -142,3 +142,19 @@ class ZoteroClient:
         except Exception:  # noqa: BLE001
             pass
         return ""
+
+    def collection_bibtex(self, collection_key: str) -> str:
+        """Export a collection as a BibTeX string (paginates automatically)."""
+        parts: list[str] = []
+        start = 0
+        while True:
+            r = self._client.get(
+                f"{self.prefix}/collections/{collection_key}/items",
+                params={"format": "bibtex", "limit": 100, "start": start})
+            r.raise_for_status()
+            parts.append(r.text)
+            total = int(r.headers.get("Total-Results", "0"))
+            start += 100
+            if start >= total:
+                break
+        return "\n".join(parts)
