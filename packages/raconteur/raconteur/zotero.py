@@ -20,7 +20,7 @@ class ZoteroClient:
         while True:
             r = self._http.get(
                 f"{self._base}/items/top",
-                params={"q": name, "qmode": "author", "format": "json",
+                params={"q": name, "format": "json",
                         "limit": 100, "start": start},
             )
             r.raise_for_status()
