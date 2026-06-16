@@ -183,51 +183,73 @@ def run(project_dir: Path) -> None:
     existing_keys: set[str] = set(existing.get("paper_keys", []))
     last_updated = existing.get("last_updated", "")
 
-    log(f"[raconteur] searching Zotero for author: {author_name}…")
     zotero = ZoteroClient(zcfg)
-    try:
-        items = zotero.search_by_author(author_name)
-    finally:
+
+    # Use keys confirmed during init if available — no prompts needed.
+    if cfg.style_paper_keys:
+        confirmed_keys = cfg.style_paper_keys
+        new_keys = set(confirmed_keys) - existing_keys
+        if existing_keys and not new_keys:
+            log(
+                f"[raconteur] style profile is up to date "
+                f"({len(existing_keys)} paper(s), last trained {last_updated})"
+            )
+            zotero.close()
+            return
+        log(f"[raconteur] fetching {len(confirmed_keys)} confirmed paper(s) from Zotero…")
+        confirmed = zotero.items_by_keys(confirmed_keys)
         zotero.close()
-
-    if not items:
-        log(f"[raconteur] no papers found for '{author_name}' in Zotero library")
-        raise SystemExit(1)
-
-    new_keys = {i.get("data", {}).get("key", "") for i in items} - existing_keys
-    if existing_keys and not new_keys:
-        log(
-            f"[raconteur] style profile is up to date "
-            f"({len(existing_keys)} papers, last trained {last_updated})"
-        )
-        return
-
-    print(f"\nFound {len(items)} paper(s) by '{author_name}':")
-    for i, item in enumerate(items, 1):
-        marker = " [new]" if item.get("data", {}).get("key", "") in new_keys else ""
-        print(f"  {i:2}. {_item_label(item)}{marker}")
-
-    print()
-    sel = input(
-        "Confirm papers to train on (Enter = all, or comma-separated numbers to exclude): "
-    ).strip()
-
-    if sel:
-        exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
-        confirmed = [item for i, item in enumerate(items) if i not in exclude]
+        if not confirmed:
+            log("[error] none of the confirmed paper keys could be retrieved from Zotero")
+            raise SystemExit(1)
     else:
-        confirmed = items
+        # No keys saved — do interactive search.
+        log(f"[raconteur] searching Zotero for author: {author_name}…")
+        try:
+            items = zotero.search_by_author(author_name)
+        finally:
+            zotero.close()
 
-    if not confirmed:
-        log("[raconteur] no papers selected")
-        raise SystemExit(0)
+        if not items:
+            log(f"[raconteur] no papers found for '{author_name}' in Zotero library")
+            raise SystemExit(1)
 
-    print(f"\nTraining on {len(confirmed)} paper(s)…")
+        new_keys = {i.get("data", {}).get("key", "") for i in items} - existing_keys
+        if existing_keys and not new_keys:
+            log(
+                f"[raconteur] style profile is up to date "
+                f"({len(existing_keys)} paper(s), last trained {last_updated})"
+            )
+            return
 
+        print(f"\nFound {len(items)} paper(s) by '{author_name}':")
+        for i, item in enumerate(items, 1):
+            marker = " [new]" if item.get("data", {}).get("key", "") in new_keys else ""
+            print(f"  {i:2}. {_item_label(item)}{marker}")
+
+        print()
+        sel = input(
+            "Confirm papers to train on (Enter = all, or comma-separated numbers to exclude): "
+        ).strip()
+        if sel:
+            exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
+            confirmed = [item for i, item in enumerate(items) if i not in exclude]
+        else:
+            confirmed = items
+
+        if not confirmed:
+            log("[raconteur] no papers selected")
+            raise SystemExit(0)
+
+        cfg.style_paper_keys = [
+            it.get("data", {}).get("key", "") for it in confirmed
+            if it.get("data", {}).get("key")
+        ]
+
+    log(f"[raconteur] training style on {len(confirmed)} paper(s)…")
     fetch_and_train(project_dir, cfg, gcfg, author_name, confirmed)
 
     if author_name != cfg.style_author or not cfg.use_style:
         cfg.style_author = author_name
         cfg.use_style = True
-        cfg.save(project_dir)
-        log("[raconteur] updated raconteur.yaml: style_author + use_style")
+    cfg.save(project_dir)

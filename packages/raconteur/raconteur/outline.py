@@ -447,6 +447,14 @@ def run(project_dir: Path) -> None:
         log("[error] no research description — run 'raconteur init' first")
         raise SystemExit(1)
 
+    # Train style profile before outlining if opted in but profile is missing.
+    if cfg.use_style:
+        from .style import STYLE_PROFILE_PATH
+        if not STYLE_PROFILE_PATH.exists():
+            log("[raconteur] style profile missing — training now…")
+            from .style import run as style_run
+            style_run(project_dir)
+
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
     if not cfg.topic or not cfg.focus:

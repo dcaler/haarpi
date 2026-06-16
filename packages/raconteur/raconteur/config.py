@@ -45,6 +45,10 @@ class ZoteroConfig:
     def available(self) -> bool:
         return bool(self.api_key and self.library_id)
 
+    @property
+    def have_zotero(self) -> bool:
+        return self.available
+
 
 @dataclass
 class ProjectConfig:
@@ -60,6 +64,7 @@ class ProjectConfig:
     results_dir_drafted: bool = False
     style_author: str = ""
     use_style: bool = False
+    style_paper_keys: list = field(default_factory=list)
     venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 

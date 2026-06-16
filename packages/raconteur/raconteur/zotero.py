@@ -43,6 +43,19 @@ class ZoteroClient:
                 return d.get("key")
         return None
 
+    def items_by_keys(self, keys: list[str]) -> list[dict]:
+        """Fetch specific library items by their Zotero item keys."""
+        out = []
+        for i in range(0, len(keys), 50):
+            chunk = keys[i:i + 50]
+            r = self._http.get(
+                f"{self._base}/items",
+                params={"itemKey": ",".join(chunk), "format": "json"},
+            )
+            r.raise_for_status()
+            out += r.json()
+        return out
+
     def fulltext(self, attachment_key: str) -> str:
         """Return Zotero-indexed full text for an attachment."""
         try:

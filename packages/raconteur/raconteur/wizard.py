@@ -133,7 +133,7 @@ def run(project_dir: Path) -> None:
     _ask_context_dirs(cfg, project_dir)
 
     # 6. Author style
-    _check_style(cfg, gcfg, project_dir)
+    _check_style(cfg, None, project_dir)
 
     cfg.brain = BrainConfig(
         coordinator_model=gcfg.coordinator_model,
@@ -145,39 +145,45 @@ def run(project_dir: Path) -> None:
 
 
 def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> None:
-    """Check for style profile or offer to learn style from Zotero."""
-    from .style import STYLE_PROFILE_PATH, _load_existing_profile, fetch_and_train
+    """Collect style preferences and confirm the Zotero publication list.
+
+    Interactive-only: saves author name and confirmed paper keys to config.
+    Actual LLM training happens headlessly in 'raconteur style', which runs
+    automatically before 'raconteur outline' if the profile is missing.
+    """
+    from .style import STYLE_PROFILE_PATH, _load_existing_profile
     from .zotero import ZoteroClient
 
-    style_path = STYLE_PROFILE_PATH
     print()
 
-    if style_path.exists():
+    if STYLE_PROFILE_PATH.exists():
         existing = _load_existing_profile()
         author = existing.get("author", cfg.style_author or "unknown")
         n = len(existing.get("paper_keys", []))
         last = existing.get("last_updated", "?")
         print(f"  Style profile found: {author}, {n} paper(s), last trained {last}")
         cfg.use_style = _yn("Apply this author style when drafting?", default_yes=True)
-        if not cfg.use_style:
-            cfg.style_author = author
+        if cfg.use_style:
+            cfg.style_author = cfg.style_author or author
+        return
+
+    if not _yn("Apply an author style profile when drafting?", default_yes=False):
+        cfg.use_style = False
         return
 
     zcfg = ZoteroConfig.from_env()
     if not zcfg.available:
-        print("  (skipping style: ZOTERO_API_KEY / ZOTERO_LIBRARY_ID not set)")
-        cfg.use_style = False
-        return
-
-    if not _yn("No style profile found. Learn your writing style from Zotero publications?",
-               default_yes=False):
-        cfg.use_style = False
+        author_name = _ask("Author name", default=cfg.style_author)
+        cfg.style_author = author_name
+        cfg.use_style = True
+        print("  (Zotero not configured — run 'raconteur style' after setting it up.)")
         return
 
     author_name = _ask("Author name to search in Zotero", default=cfg.style_author)
-    cfg.style_author = author_name
+    if not author_name:
+        return
 
-    print(f"\n  Searching Zotero for '{author_name}'…")
+    print(f"\n  Searching Zotero for '{author_name}'…", flush=True)
     zotero = ZoteroClient(zcfg)
     try:
         items = zotero.search_by_author(author_name)
@@ -185,18 +191,20 @@ def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> N
         zotero.close()
 
     if not items:
-        print(f"  No papers found for '{author_name}' — skipping style training")
-        cfg.use_style = False
+        print(f"  No papers found for '{author_name}' in Zotero.")
+        cfg.style_author = author_name
+        cfg.use_style = True
+        print("  Run 'raconteur style' after adding publications to Zotero.")
         return
 
     from .style import _item_label
-    print(f"\n  Found {len(items)} paper(s):")
+    print(f"\n  Found {len(items)} paper(s) by '{author_name}':")
     for i, item in enumerate(items, 1):
         print(f"    {i:2}. {_item_label(item)}")
 
     print()
     sel = input(
-        "  Confirm papers (Enter = all, or comma-separated numbers to exclude): "
+        "  Select papers (Enter = all, or comma-separated numbers to exclude): "
     ).strip()
     if sel:
         exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
@@ -205,13 +213,17 @@ def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> N
         confirmed = items
 
     if not confirmed:
-        print("  No papers selected — skipping style training")
-        cfg.use_style = False
+        print("  No papers selected — skipping style.")
         return
 
-    print(f"\n  Training style on {len(confirmed)} paper(s)…")
-    fetch_and_train(project_dir, cfg, gcfg, author_name, confirmed)
+    cfg.style_author = author_name
     cfg.use_style = True
+    cfg.style_paper_keys = [
+        it.get("data", {}).get("key", "") for it in confirmed
+        if it.get("data", {}).get("key")
+    ]
+    print(f"  {len(cfg.style_paper_keys)} paper(s) confirmed.")
+    print("  Style profile will be trained before 'raconteur outline'.")
 
 
 def _finish(project_dir: Path) -> None:
