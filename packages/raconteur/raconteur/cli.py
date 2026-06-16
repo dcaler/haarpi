@@ -37,6 +37,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="initialise a new paper project")
+    sub.add_parser("style", help="train on author's publications from Zotero")
     sub.add_parser("venue", help="analyse and recommend publication venues")
     sub.add_parser("outline", help="generate a paper outline from your topic and focus")
     sub.add_parser("paper", help="write a fresh draft or incorporate a revision")
@@ -50,7 +51,7 @@ def main() -> None:
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
-    if args.command in ("venue", "outline", "paper", "focus"):
+    if args.command in ("style", "venue", "outline", "paper", "focus"):
         from .config import GlobalConfig
         gcfg = GlobalConfig.load()
         if not _check_ollama(gcfg.ollama_url):
@@ -63,6 +64,9 @@ def main() -> None:
     match args.command:
         case "init":
             from .wizard import run
+            run(project_dir)
+        case "style":
+            from .style import run
             run(project_dir)
         case "venue":
             from .venue import run

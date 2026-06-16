@@ -28,6 +28,25 @@ class VenueConfig:
 
 
 @dataclass
+class ZoteroConfig:
+    api_key: str = ""
+    library_id: str = ""
+    library_type: str = "user"
+
+    @classmethod
+    def from_env(cls) -> "ZoteroConfig":
+        return cls(
+            api_key=os.environ.get("ZOTERO_API_KEY", ""),
+            library_id=os.environ.get("ZOTERO_LIBRARY_ID", ""),
+            library_type=os.environ.get("ZOTERO_LIBRARY_TYPE", "user"),
+        )
+
+    @property
+    def available(self) -> bool:
+        return bool(self.api_key and self.library_id)
+
+
+@dataclass
 class ProjectConfig:
     short_title: str = ""
     title: str = ""
@@ -39,6 +58,8 @@ class ProjectConfig:
     results_dir: str = ""
     methods_dir_drafted: bool = False
     results_dir_drafted: bool = False
+    style_author: str = ""
+    use_style: bool = False
     venue: VenueConfig = field(default_factory=VenueConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
 

@@ -3,7 +3,7 @@ import re
 import sys
 from pathlib import Path
 import yaml
-from .config import ProjectConfig, BrainConfig, GlobalConfig, PROJECT_CONFIG_FILE
+from .config import ProjectConfig, BrainConfig, GlobalConfig, ZoteroConfig, PROJECT_CONFIG_FILE
 
 
 def _ask(prompt: str, default: str = "", optional: bool = False) -> str:
@@ -132,6 +132,9 @@ def run(project_dir: Path) -> None:
     # 4 & 5. code/ and results/
     _ask_context_dirs(cfg, project_dir)
 
+    # 6. Author style
+    _check_style(cfg, gcfg, project_dir)
+
     cfg.brain = BrainConfig(
         coordinator_model=gcfg.coordinator_model,
         worker_model=gcfg.worker_model,
@@ -139,6 +142,76 @@ def run(project_dir: Path) -> None:
     cfg.save(project_dir)
     print(f"\n[raconteur] saved {PROJECT_CONFIG_FILE}")
     _finish(project_dir)
+
+
+def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> None:
+    """Check for style profile or offer to learn style from Zotero."""
+    from .style import STYLE_PROFILE_PATH, _load_existing_profile, fetch_and_train
+    from .zotero import ZoteroClient
+
+    style_path = project_dir / STYLE_PROFILE_PATH
+    print()
+
+    if style_path.exists():
+        existing = _load_existing_profile(project_dir)
+        author = existing.get("author", cfg.style_author or "unknown")
+        n = len(existing.get("paper_keys", []))
+        last = existing.get("last_updated", "?")
+        print(f"  Style profile found: {author}, {n} paper(s), last trained {last}")
+        cfg.use_style = _yn("Apply this author style when drafting?", default_yes=True)
+        if not cfg.use_style:
+            cfg.style_author = author
+        return
+
+    zcfg = ZoteroConfig.from_env()
+    if not zcfg.available:
+        print("  (skipping style: ZOTERO_API_KEY / ZOTERO_LIBRARY_ID not set)")
+        cfg.use_style = False
+        return
+
+    if not _yn("No style profile found. Learn your writing style from Zotero publications?",
+               default_yes=False):
+        cfg.use_style = False
+        return
+
+    author_name = _ask("Author name to search in Zotero", default=cfg.style_author)
+    cfg.style_author = author_name
+
+    print(f"\n  Searching Zotero for '{author_name}'…")
+    zotero = ZoteroClient(zcfg)
+    try:
+        items = zotero.search_by_author(author_name)
+    finally:
+        zotero.close()
+
+    if not items:
+        print(f"  No papers found for '{author_name}' — skipping style training")
+        cfg.use_style = False
+        return
+
+    from .style import _item_label
+    print(f"\n  Found {len(items)} paper(s):")
+    for i, item in enumerate(items, 1):
+        print(f"    {i:2}. {_item_label(item)}")
+
+    print()
+    sel = input(
+        "  Confirm papers (Enter = all, or comma-separated numbers to exclude): "
+    ).strip()
+    if sel:
+        exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
+        confirmed = [item for i, item in enumerate(items) if i not in exclude]
+    else:
+        confirmed = items
+
+    if not confirmed:
+        print("  No papers selected — skipping style training")
+        cfg.use_style = False
+        return
+
+    print(f"\n  Training style on {len(confirmed)} paper(s)…")
+    fetch_and_train(project_dir, cfg, gcfg, author_name, confirmed)
+    cfg.use_style = True
 
 
 def _finish(project_dir: Path) -> None:

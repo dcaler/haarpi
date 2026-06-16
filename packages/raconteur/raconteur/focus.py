@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_bib_summary
+from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile
 from .log import log
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
@@ -25,6 +25,7 @@ Title: {title}
 Topic: {topic}
 Focus: {focus}
 {venue_section}\
+{style_section}\
 Structural analysis:
 {analysis}
 
@@ -167,6 +168,12 @@ def _section_outline_for(heading: str, outline_path: Path | None, short_title: s
     return ""
 
 
+def _style_block(style_profile: str) -> str:
+    if not style_profile:
+        return ""
+    return f"Writing style guidance (match this author's voice):\n{style_profile}\n\n"
+
+
 def _bib_block(bib_summary: str) -> str:
     if not bib_summary:
         return ""
@@ -287,6 +294,7 @@ def run(project_dir: Path, section: str) -> None:
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    style_profile = load_style_profile(project_dir) if cfg.use_style else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
@@ -300,6 +308,7 @@ def run(project_dir: Path, section: str) -> None:
     ctx = _context_for_section(heading, litrev, code, results)
     venue_section = _venue_block(cfg)
     bib_section = _bib_block(bib_summary)
+    style_section = _style_block(style_profile)
 
     log(f"[raconteur] refining '{heading}'…")
     refined = brain.coordinator(
@@ -309,6 +318,7 @@ def run(project_dir: Path, section: str) -> None:
             topic=cfg.topic,
             focus=cfg.focus,
             venue_section=venue_section,
+            style_section=style_section,
             analysis=analysis,
             section_outline=section_outline,
             context_section=ctx,

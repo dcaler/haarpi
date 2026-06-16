@@ -133,6 +133,24 @@ def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
     return summary
 
 
+def load_style_profile(project_dir: Path) -> str:
+    """Return the style profile body (stripped of YAML frontmatter), capped at 2000 chars."""
+    path = project_dir / "paper" / "style_profile.md"
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    # strip YAML frontmatter
+    if text.startswith("---"):
+        end = text.find("\n---\n", 3)
+        if end != -1:
+            text = text[end + 5:]
+    text = text.strip()
+    if len(text) > 2000:
+        text = text[:2000] + "\n[…truncated]"
+    log("[raconteur] reading style_profile.md")
+    return text
+
+
 def load_venue_analysis(project_dir: Path) -> str:
     """Read paper/venue_analysis.md if present."""
     path = project_dir / "paper" / "venue_analysis.md"

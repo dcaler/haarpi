@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_bib_summary
+from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
@@ -26,6 +26,7 @@ Title: {title}
 Topic: {topic}
 Focus: {focus}
 {venue_section}\
+{style_section}\
 Structural analysis:
 {analysis}
 
@@ -114,6 +115,7 @@ Title: {title}
 Topic: {topic}
 Focus: {focus}
 {venue_section}\
+{style_section}\
 Structural analysis:
 {analysis}
 
@@ -257,6 +259,7 @@ def _draft_abstract(
     brain: Brain,
     cfg: ProjectConfig,
     venue_section: str,
+    style_section: str,
     analysis: str,
 ) -> str:
     limit = str(cfg.venue.abstract_limit) if cfg.venue.abstract_limit else "150–250"
@@ -267,6 +270,7 @@ def _draft_abstract(
             topic=cfg.topic,
             focus=cfg.focus,
             venue_section=venue_section,
+            style_section=style_section,
             analysis=analysis,
             word_limit=limit,
         ),
@@ -295,6 +299,12 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
 
 # ── fresh paper draft ─────────────────────────────────────────────────────────
 
+def _style_block(style_profile: str) -> str:
+    if not style_profile:
+        return ""
+    return f"Writing style guidance (match this author's voice):\n{style_profile}\n\n"
+
+
 def _bib_block(bib_summary: str) -> str:
     if not bib_summary:
         return ""
@@ -312,6 +322,7 @@ def _draft_paper(
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    style_profile = load_style_profile(project_dir) if cfg.use_style else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
@@ -319,6 +330,7 @@ def _draft_paper(
 
     venue_section = _venue_block(cfg)
     bib_section = _bib_block(bib_summary)
+    style_section = _style_block(style_profile)
     drafted: list[tuple[str, str]] = []
 
     for heading, section_outline in _parse_sections(outline_text):
@@ -333,6 +345,7 @@ def _draft_paper(
                 topic=cfg.topic,
                 focus=cfg.focus,
                 venue_section=venue_section,
+                style_section=style_section,
                 analysis=analysis,
                 section_outline=section_outline,
                 context_section=ctx,
@@ -346,7 +359,7 @@ def _draft_paper(
         drafted.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
-    abstract = _draft_abstract(brain, cfg, venue_section, analysis)
+    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
     _write(project_dir, cfg, paper_dir,
            _assemble(cfg.title, abstract, drafted))
 
@@ -365,6 +378,7 @@ def _revise_paper(
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    style_profile = load_style_profile(project_dir) if cfg.use_style else ""
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
@@ -378,6 +392,7 @@ def _revise_paper(
 
     venue_section = _venue_block(cfg)
     bib_section = _bib_block(bib_summary)
+    style_section = _style_block(style_profile)
     existing_map = dict(_parse_sections(existing_text))
     revised: list[tuple[str, str]] = []
 
@@ -405,7 +420,7 @@ def _revise_paper(
         revised.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
-    abstract = _draft_abstract(brain, cfg, venue_section, analysis)
+    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
     _write(project_dir, cfg, paper_dir,
            _assemble(cfg.title, abstract, revised))
 
