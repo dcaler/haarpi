@@ -149,11 +149,11 @@ def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> N
     from .style import STYLE_PROFILE_PATH, _load_existing_profile, fetch_and_train
     from .zotero import ZoteroClient
 
-    style_path = project_dir / STYLE_PROFILE_PATH
+    style_path = STYLE_PROFILE_PATH
     print()
 
     if style_path.exists():
-        existing = _load_existing_profile(project_dir)
+        existing = _load_existing_profile()
         author = existing.get("author", cfg.style_author or "unknown")
         n = len(existing.get("paper_keys", []))
         last = existing.get("last_updated", "?")

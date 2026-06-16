@@ -134,8 +134,9 @@ def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
 
 
 def load_style_profile(project_dir: Path) -> str:
-    """Return the style profile body (stripped of YAML frontmatter), capped at 2000 chars."""
-    path = project_dir / "paper" / "style_profile.md"
+    """Return the global style profile body (stripped of YAML frontmatter), capped at 2000 chars."""
+    from .config import GLOBAL_CONFIG_PATH
+    path = GLOBAL_CONFIG_PATH.parent / "style_profile.md"
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")

@@ -7,11 +7,11 @@ from pathlib import Path
 import yaml
 
 from .brain import Brain
-from .config import ProjectConfig, GlobalConfig, ZoteroConfig
+from .config import ProjectConfig, GlobalConfig, ZoteroConfig, GLOBAL_CONFIG_PATH
 from .log import log
 from .zotero import ZoteroClient
 
-STYLE_PROFILE_PATH = Path("paper") / "style_profile.md"
+STYLE_PROFILE_PATH = GLOBAL_CONFIG_PATH.parent / "style_profile.md"
 
 _SYSTEM = (
     "You are an expert academic writing analyst. "
@@ -78,9 +78,9 @@ def _extract_prose(fulltext: str, max_chars: int = 3000) -> str:
     return "\n\n".join(prose)
 
 
-def _load_existing_profile(project_dir: Path) -> dict:
+def _load_existing_profile(project_dir: Path = None) -> dict:
     """Read YAML frontmatter from existing style_profile.md."""
-    path = project_dir / STYLE_PROFILE_PATH
+    path = STYLE_PROFILE_PATH
     if not path.exists():
         return {}
     text = path.read_text(encoding="utf-8")
@@ -103,8 +103,8 @@ def _write_profile(project_dir: Path, author: str, paper_keys: list[str],
         "papers_used": papers_used,
     }, default_flow_style=False, allow_unicode=True).strip()
     content = f"---\n{frontmatter}\n---\n\n{analysis.strip()}\n"
-    path = project_dir / STYLE_PROFILE_PATH
-    path.parent.mkdir(exist_ok=True)
+    path = STYLE_PROFILE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -179,7 +179,7 @@ def run(project_dir: Path) -> None:
         if not author_name:
             raise SystemExit(0)
 
-    existing = _load_existing_profile(project_dir)
+    existing = _load_existing_profile()
     existing_keys: set[str] = set(existing.get("paper_keys", []))
     last_updated = existing.get("last_updated", "")
 
