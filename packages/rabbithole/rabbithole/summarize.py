@@ -553,6 +553,23 @@ def run(directory: str = ".", brain_override: str | None = None,
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
     print()
 
+    # Train style profile if needed before anything else.
+    if cfg.use_style:
+        from .style import STYLE_PROFILE_PATH, _load_existing_meta
+        existing_meta = _load_existing_meta()
+        existing_keys = set(existing_meta.get("paper_keys", []))
+        confirmed_keys = set(cfg.style_paper_keys or [])
+        needs_training = (not STYLE_PROFILE_PATH.exists()
+                          or (confirmed_keys and not confirmed_keys.issubset(existing_keys)))
+        if needs_training:
+            print("[style] Training style profile before synthesis…")
+            from . import style as _style
+            result = _style.run(directory)
+            if result != 0:
+                print("[style] Training failed — continuing without style profile.",
+                      file=sys.stderr)
+            print()
+
     corpus = corpus_mod.build(cfg, gc, paths, from_folder=from_folder)
     if not corpus:
         print("\nNo usable sources with full text. Add PDFs to Zotero / ./pdfs/ "

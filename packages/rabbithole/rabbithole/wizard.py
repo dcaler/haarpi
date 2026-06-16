@@ -172,12 +172,18 @@ def _rerun(root: Path) -> int:
 
 
 def _check_style(cfg: ProjectConfig) -> None:
-    """Collect style preferences — interview only, no network calls.
-    Run 'rabbitHole style' afterwards to do the actual training.
+    """Collect style preferences and confirm the Zotero publication list.
+
+    The actual LLM training happens headlessly in 'rabbitHole style'; this step
+    handles everything interactive: profile check, author name, Zotero search,
+    and paper selection. Confirmed Zotero keys are saved to litrev.yaml so
+    'rabbitHole style' can run without prompts.
     """
     from .style import STYLE_PROFILE_PATH, _load_existing_meta
 
     print()
+
+    # If a profile already exists, just ask whether to use it.
     if STYLE_PROFILE_PATH.exists():
         existing = _load_existing_meta()
         author = existing.get("author", "unknown")
@@ -190,11 +196,59 @@ def _check_style(cfg: ProjectConfig) -> None:
             cfg.style_author = cfg.style_author or author
         return
 
-    if _ask_yesno("Apply an author style profile when writing the review?", default=False):
-        cfg.style_author = _ask("Author name (for 'rabbitHole style' to search in Zotero)",
-                                cfg.style_author)
+    if not _ask_yesno("Apply an author style profile when writing the review?", default=False):
+        return
+
+    # Need Zotero to find publications.
+    from .config import load_global
+    gc = load_global()
+    if not gc.have_zotero:
+        cfg.style_author = _ask("Author name", cfg.style_author)
         cfg.use_style = True
-        print("  Run 'rabbitHole style' to train the profile before running report.")
+        print("  (Zotero not configured — run 'rabbitHole style' after setting it up.)")
+        return
+
+    author_name = _ask("Author name to search in Zotero", cfg.style_author)
+    if not author_name:
+        return
+
+    print(f"\n  Searching Zotero for '{author_name}'…", flush=True)
+    from . import zotero as _zotero
+    zc = _zotero.ZoteroClient(gc)
+    items = zc.search_by_author(author_name)
+
+    if not items:
+        print(f"  No papers found for '{author_name}' in Zotero.")
+        cfg.style_author = author_name
+        cfg.use_style = True
+        print("  Run 'rabbitHole style' after adding publications to Zotero.")
+        return
+
+    from .style import _item_label
+    print(f"\n  Found {len(items)} paper(s) by '{author_name}':")
+    for i, item in enumerate(items, 1):
+        print(f"    {i:2}. {_item_label(item)}")
+
+    print()
+    sel = input(
+        "  Select papers to train on (Enter = all, or comma-separated numbers to exclude): "
+    ).strip()
+    if sel:
+        exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
+        confirmed = [item for i, item in enumerate(items) if i not in exclude]
+    else:
+        confirmed = items
+
+    if not confirmed:
+        print("  No papers selected — skipping style.")
+        return
+
+    cfg.style_author = author_name
+    cfg.use_style = True
+    cfg.style_paper_keys = [it.get("data", {}).get("key", "") for it in confirmed
+                             if it.get("data", {}).get("key")]
+    print(f"  {len(cfg.style_paper_keys)} paper(s) confirmed. "
+          "Run 'rabbitHole style' to train the profile.")
 
 
 def _finalize(root: Path, cfg: ProjectConfig) -> int:

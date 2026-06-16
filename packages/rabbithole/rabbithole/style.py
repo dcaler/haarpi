@@ -190,57 +190,47 @@ def run(directory: str = ".") -> int:
 
     author_name = cfg.style_author
     if not author_name:
-        author_name = input("Author name to search in Zotero: ").strip()
-        if not author_name:
-            return 0
+        print("[error] no style_author in litrev.yaml — run 'rabbitHole init' first",
+              file=sys.stderr)
+        return 1
 
     existing = _load_existing_meta()
     existing_keys: set[str] = set(existing.get("paper_keys", []))
     last_updated = existing.get("last_updated", "")
 
-    print(f"Searching Zotero for author: {author_name}…", flush=True)
     zc = _zotero.ZoteroClient(gc)
-    items = zc.search_by_author(author_name)
 
-    if not items:
-        print(f"[warn] no papers found for '{author_name}' in Zotero library")
-        return 1
-
-    new_keys = {i.get("data", {}).get("key", "") for i in items} - existing_keys
-    if existing_keys and not new_keys:
-        print(
-            f"Style profile is up to date "
-            f"({len(existing_keys)} papers, last trained {last_updated})"
-        )
-        return 0
-
-    print(f"\nFound {len(items)} paper(s) by '{author_name}':")
-    for i, item in enumerate(items, 1):
-        marker = " [new]" if item.get("data", {}).get("key", "") in new_keys else ""
-        print(f"  {i:2}. {_item_label(item)}{marker}")
-
-    print()
-    sel = input(
-        "Confirm papers to train on (Enter = all, or comma-separated numbers to exclude): "
-    ).strip()
-
-    if sel:
-        exclude = {int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()}
-        confirmed = [item for i, item in enumerate(items) if i not in exclude]
+    # Use the paper keys confirmed during init if available; otherwise search.
+    if cfg.style_paper_keys:
+        confirmed_keys = cfg.style_paper_keys
+        new_keys = set(confirmed_keys) - existing_keys
+        if existing_keys and not new_keys:
+            print(f"Style profile is up to date "
+                  f"({len(existing_keys)} paper(s), last trained {last_updated})")
+            return 0
+        print(f"Fetching {len(confirmed_keys)} confirmed paper(s) from Zotero…", flush=True)
+        confirmed = zc.items_by_keys(confirmed_keys)
+        if not confirmed:
+            print("[error] none of the confirmed paper keys could be retrieved from Zotero",
+                  file=sys.stderr)
+            return 1
     else:
+        # No keys saved (e.g. Zotero wasn't available during init) — search now.
+        print(f"Searching Zotero for author: {author_name}…", flush=True)
+        items = zc.search_by_author(author_name)
+        if not items:
+            print(f"[warn] no papers found for '{author_name}' in Zotero library")
+            return 1
+        new_keys = {i.get("data", {}).get("key", "") for i in items} - existing_keys
+        if existing_keys and not new_keys:
+            print(f"Style profile is up to date "
+                  f"({len(existing_keys)} paper(s), last trained {last_updated})")
+            return 0
         confirmed = items
 
-    if not confirmed:
-        print("No papers selected.")
-        return 0
+    print(f"Training style profile for '{author_name}' on {len(confirmed)} paper(s)…")
+    for item in confirmed:
+        print(f"  {_item_label(item)}")
 
-    print(f"\nTraining on {len(confirmed)} paper(s)…")
     fetch_and_train(gc, cfg, author_name, confirmed)
-
-    if author_name != cfg.style_author or not cfg.use_style:
-        cfg.style_author = author_name
-        cfg.use_style = True
-        save_project(cfg, directory)
-        print("Updated litrev.yaml: style_author + use_style")
-
     return 0

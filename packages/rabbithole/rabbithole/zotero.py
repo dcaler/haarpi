@@ -57,6 +57,17 @@ class ZoteroClient:
         return ""
 
     # ── items ────────────────────────────────────────────────────────────
+    def items_by_keys(self, keys: list[str]) -> list[dict]:
+        """Fetch specific library items by their Zotero item keys."""
+        out = []
+        for i in range(0, len(keys), 50):
+            chunk = keys[i:i + 50]
+            r = self._client.get(f"{self.prefix}/items",
+                                 params={"itemKey": ",".join(chunk), "format": "json"})
+            r.raise_for_status()
+            out += r.json()
+        return out
+
     def search_by_author(self, name: str) -> list[dict]:
         """Top-level library items where name matches a creator."""
         out, start = [], 0

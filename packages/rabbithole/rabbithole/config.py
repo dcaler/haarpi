@@ -84,6 +84,7 @@ class ProjectConfig:
     # Style emulation — uses the shared ~/.config/raconteur/style_profile.md.
     use_style: bool = False
     style_author: str = ""
+    style_paper_keys: list = field(default_factory=list)  # Zotero item keys confirmed in init
 
     def to_yaml(self) -> str:
         d = asdict(self)

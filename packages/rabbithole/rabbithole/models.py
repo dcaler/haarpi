@@ -111,6 +111,8 @@ class Candidate:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Candidate":
-        d = dict(d)
+        import dataclasses
+        known = {f.name for f in dataclasses.fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         d["authors"] = [Author(**a) for a in d.get("authors", [])]
         return cls(**d)
