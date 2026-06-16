@@ -57,6 +57,23 @@ class ZoteroClient:
         return ""
 
     # ── items ────────────────────────────────────────────────────────────
+    def search_by_author(self, name: str) -> list[dict]:
+        """Top-level library items where name matches a creator."""
+        out, start = [], 0
+        while True:
+            r = self._client.get(f"{self.prefix}/items/top",
+                                 params={"q": name, "qmode": "author",
+                                         "format": "json", "limit": 100, "start": start})
+            r.raise_for_status()
+            batch = r.json()
+            if not batch:
+                break
+            out += batch
+            if len(batch) < 100:
+                break
+            start += 100
+        return out
+
     def collection_items(self, collection_key: str) -> list[dict]:
         """Top-level items in the collection (excludes attachments/notes)."""
         out, start = [], 0

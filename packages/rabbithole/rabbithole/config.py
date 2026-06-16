@@ -81,6 +81,9 @@ class ProjectConfig:
     research_prompt: str = ""
     # MDPI is always excluded in code; extra publisher names to drop go here.
     exclude_publishers: list = field(default_factory=list)
+    # Style emulation — uses the shared ~/.config/raconteur/style_profile.md.
+    use_style: bool = False
+    style_author: str = ""
 
     def to_yaml(self) -> str:
         d = asdict(self)

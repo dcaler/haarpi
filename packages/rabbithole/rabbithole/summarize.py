@@ -329,14 +329,19 @@ def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]
 
 
 def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
-               citekeys: dict[int, str]) -> str:
+               citekeys: dict[int, str], style_profile: str = "") -> str:
     digest = _digest(corpus, notes, citekeys)
     prompt = (f"Review topic: {cfg.topic}\nFocus: {cfg.focus}\n"
               f"Number of sources: {len(corpus)}\n\n"
               f"Evidence digest (one line per source):\n{digest}\n\n"
               f"Write the thematic narrative review now.")
+    sys_prompt = SYNTH_SYS
+    if style_profile:
+        sys_prompt = (sys_prompt.rstrip()
+                      + f"\n\nWRITING STYLE\nMatch the following author's voice and "
+                        f"prose style throughout:\n{style_profile}")
     print("  Synthesising narrative (coordinator)...", flush=True)
-    narrative = brain.coordinator(prompt, SYNTH_SYS, num_ctx=16384)
+    narrative = brain.coordinator(prompt, sys_prompt, num_ctx=16384)
     return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
 
 
@@ -572,7 +577,16 @@ def run(directory: str = ".", brain_override: str | None = None,
     notes = read_notes(brain, corpus, cfg, paths, collection=collection)
 
     print("\n[2/3] Synthesising the review...")
-    narrative = synthesize(brain, corpus, notes, cfg, citekeys)
+    style_profile = ""
+    if cfg.use_style:
+        from .style import load_style_profile
+        style_profile = load_style_profile()
+        if style_profile:
+            print(f"  Style profile loaded ({len(style_profile)} chars).")
+        else:
+            print("  [note] use_style=true but no style_profile.md found; "
+                  "run 'rabbitHole style' to train one.")
+    narrative = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
 
     print("\n[3/3] Locating cited claims for the annotated bibliography...")
     located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
