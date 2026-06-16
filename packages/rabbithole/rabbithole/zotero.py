@@ -62,8 +62,8 @@ class ZoteroClient:
         out, start = [], 0
         while True:
             r = self._client.get(f"{self.prefix}/items/top",
-                                 params={"q": name, "qmode": "author",
-                                         "format": "json", "limit": 100, "start": start})
+                                 params={"q": name, "format": "json",
+                                         "limit": 100, "start": start})
             r.raise_for_status()
             batch = r.json()
             if not batch:
