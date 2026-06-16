@@ -124,6 +124,8 @@ def _first_run(root: Path) -> int:
     print(f"  Wrote {saved.relative_to(root)}")
     print(f"  Created: {config.LITREVIEW_DIR}/ (pdfs, work, output)")
     print(f"  Zotero collection: {project_name}")
+    _check_style(cfg)
+    config.save_project(cfg, root)
     return _finalize(root, cfg)
 
 
@@ -164,7 +166,35 @@ def _rerun(root: Path) -> int:
     print(f"New focus saved for '{prev.project_name}'.")
     print(f"  Wrote {saved.relative_to(root)}")
     print(f"  Zotero collection: {prev.project_name}")
+    _check_style(prev)
+    config.save_project_to(prev, target_fp)
     return _finalize(root, prev)
+
+
+def _check_style(cfg: ProjectConfig) -> None:
+    """Collect style preferences — interview only, no network calls.
+    Run 'rabbitHole style' afterwards to do the actual training.
+    """
+    from .style import STYLE_PROFILE_PATH, _load_existing_meta
+
+    print()
+    if STYLE_PROFILE_PATH.exists():
+        existing = _load_existing_meta()
+        author = existing.get("author", "unknown")
+        n = len(existing.get("paper_keys", []))
+        last = existing.get("last_updated", "?")
+        print(f"  Style profile found: {author}, {n} paper(s), last trained {last}")
+        cfg.use_style = _ask_yesno("Apply this author style when writing the review?",
+                                   default=True)
+        if cfg.use_style:
+            cfg.style_author = cfg.style_author or author
+        return
+
+    if _ask_yesno("Apply an author style profile when writing the review?", default=False):
+        cfg.style_author = _ask("Author name (for 'rabbitHole style' to search in Zotero)",
+                                cfg.style_author)
+        cfg.use_style = True
+        print("  Run 'rabbitHole style' to train the profile before running report.")
 
 
 def _finalize(root: Path, cfg: ProjectConfig) -> int:
