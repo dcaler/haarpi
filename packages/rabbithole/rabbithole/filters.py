@@ -102,6 +102,11 @@ def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool)
     return True
 
 
+def is_english(c: Candidate) -> bool:
+    """True if language is unknown or explicitly English (ISO 639-1 'en')."""
+    return not c.language or c.language == "en"
+
+
 def has_min_metadata(c: Candidate) -> bool:
     """Drop records too thin to cite: no authors, or no venue/publisher.
     Catches the '(unknown authors)' metadata failures seen in real runs."""

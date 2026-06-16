@@ -404,12 +404,15 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         if not filters.item_type_allowed(c, cfg.include_preprints, cfg.include_news):
             dropped_type += 1
             continue
+        if not filters.is_english(c):
+            dropped_type += 1
+            continue
         if not filters.has_min_metadata(c):
             dropped_meta += 1
             continue
         kept.append(c)
     log(f"Dropped: {dropped_excluded} MDPI/predatory/excluded, "
-        f"{dropped_date} out-of-date-range, {dropped_type} disallowed type, "
+        f"{dropped_date} out-of-date-range, {dropped_type} disallowed type/language, "
         f"{dropped_meta} thin metadata")
     log(f"Candidates: {len(kept)}")
 
@@ -593,6 +596,8 @@ def _merge_new(extra: list[Candidate], existing: list[Candidate], cfg) -> list[C
         if not filters.within_dates(c, cfg.date_from, cfg.date_to):
             continue
         if not filters.item_type_allowed(c, cfg.include_preprints, cfg.include_news):
+            continue
+        if not filters.is_english(c):
             continue
         if not filters.has_min_metadata(c):
             continue

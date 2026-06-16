@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config
+from . import config, filters
 from .models import Author, Candidate, norm_doi
 from .pdfs import extract_text, looks_like_fulltext
 
@@ -92,6 +92,9 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
         if data.get("itemType") in ("attachment", "note"):
             continue
         c = _enrich(_zotero_item_to_candidate(data), idx)
+        if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
+            print(f"    [skip] excluded item type ({c.item_type}): {c.title[:60]}")
+            continue
         att = zc.pdf_attachment_key(it["key"])
         text, n_pages = "", 0
         if att:
@@ -122,6 +125,9 @@ def ingest_from_folder(paths) -> list[Candidate]:
         c = idx.get(fp.name)
         if c is None:
             c = _candidate_from_pdf(fp, text)
+        if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
+            print(f"    [skip] excluded item type ({c.item_type}): {fp.name}")
+            continue
         c.pdf_path = str(fp)
         c.fulltext = text
         corpus.append(c)

@@ -43,6 +43,7 @@ class Candidate:
     oa_pdf_url: str = ""
     cited_by_count: int = 0
     item_type: str = "journal-article"
+    language: str = ""           # ISO 639-1 code if known (e.g. "en", "fr"); "" = unknown
     source: str = ""             # which API surfaced it
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:

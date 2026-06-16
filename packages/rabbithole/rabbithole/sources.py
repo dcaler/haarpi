@@ -62,7 +62,7 @@ def search_openalex(query: str, limit: int, email: str,
     }
     if email:
         params["mailto"] = email
-    filters = []
+    filters = ["language:en"]
     if year_from:
         filters.append(f"from_publication_date:{year_from}-01-01")
     if year_to:
@@ -103,6 +103,7 @@ def _openalex_work_to_candidate(w: dict) -> Candidate:
         oa_pdf_url=best.get("pdf_url", "") or "",
         cited_by_count=w.get("cited_by_count", 0) or 0,
         item_type=w.get("type", "journal-article") or "journal-article",
+        language=w.get("language", "") or "",
         source="openalex",
     )
 
