@@ -3,6 +3,7 @@
     rabbitHole init      interactive project setup -> litrev.yaml
     rabbitHole gather    discover & curate sources missing from your Zotero collection
     rabbitHole report    read the Zotero corpus -> literature review (.md + .docx)
+    rabbitHole revise    apply reviewer annotations from a _ra.docx to re-draft the narrative
     rabbitHole style     train a style profile on the author's Zotero publications
 
 Global options:
@@ -66,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--from-folder", action="store_true",
                      help="ingest PDFs from the local pdfs/ folder instead of Zotero")
 
+    rev = sub.add_parser("revise",
+                         help="apply reviewer annotations from a _ra.docx to re-draft")
+    rev.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    rev.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
+
     sub.add_parser("style",
                    help="train a style profile on the author's Zotero publications")
 
@@ -85,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import summarize
         return summarize.run(args.dir, brain_override=args.brain,
                              from_folder=args.from_folder)
+
+    if args.command == "revise":
+        _check_env(need_pandoc=True)
+        from . import revise
+        return revise.run(args.dir, brain_override=args.brain, docx_path=args.file)
 
     if args.command == "style":
         from . import style
