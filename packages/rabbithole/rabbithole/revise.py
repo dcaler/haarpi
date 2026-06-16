@@ -249,7 +249,8 @@ def run(directory: str = ".", brain_override: str | None = None,
                                      current_narrative, revision_context, style_profile)
 
     # 7. Bibliography from existing located intermediates
-    located = _load_located(paths, len(corpus))
+    located_list = _load_located(paths, len(corpus))
+    located = {i: items for i, items in enumerate(located_list) if items}
     biblio = bibliography(corpus, located)
     unmatched = citation_check(narrative, citekeys)
     if unmatched:
