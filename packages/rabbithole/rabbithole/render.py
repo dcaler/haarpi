@@ -1,7 +1,7 @@
 """Assemble the review Markdown and convert to .docx via pandoc.
 
-Output filenames carry the brain backend, so A/B runs land side by side:
-  output/<project>_litreview_ollama.md   /  ..._claude.md
+Output filenames: {YYMMDD}_{project}_litreview_ra.md / .docx
+A new datestamp marks a new major revision cycle (new research direction).
 """
 
 from __future__ import annotations
@@ -44,11 +44,10 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
 
 
 def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
-                 corpus, unmatched: list[str],
-                 cfg_version: int = 1) -> tuple[Path, Path | None]:
+                 corpus, unmatched: list[str]) -> tuple[Path, Path | None]:
     md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched)
-    v = f"_v{cfg_version}" if cfg_version > 1 else ""
-    stem = f"{cfg.project_name}_litreview{v}_ra"
+    today = date.today().strftime("%y%m%d")
+    stem = f"{today}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
 

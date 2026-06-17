@@ -544,10 +544,6 @@ def run(directory: str = ".", brain_override: str | None = None,
     paths = config.project_paths(directory).ensure()
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
 
-    # Version stamp so re-init (new focus) never overwrites the previous review.
-    cfg_file = config.latest_project_file(directory)
-    cfg_version = config._project_number(cfg_file.name) if cfg_file else 1
-
     print(f"rabbitHole report — {cfg.project_name}")
     print(f"  brain: {brain.backend} "
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
@@ -617,8 +613,7 @@ def run(directory: str = ".", brain_override: str | None = None,
               + (" ..." if len(unmatched) > 8 else ""))
 
     out_md, out_docx = render.write_review(
-        cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
-        cfg_version=cfg_version)
+        cfg, paths, brain.backend, narrative, biblio, corpus, unmatched)
 
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
 
