@@ -196,7 +196,8 @@ def _next_index(titles: list[str], step: str) -> int:
 
 
 def _estimate_hours(tasks: list[dict], step: str) -> float:
-    """Median actual duration (hours) of past completed tasks of this step.
+    """Median actual duration (hours) of past completed tasks of this step,
+    pooled across all projects.
 
     trundlr records the realised hours in the `duration` field once a task is
     done, so the schedule estimate self-tunes from history. Falls back to the
@@ -230,10 +231,10 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
             latest.trundlr_project_id = project_id
             config.save_project(latest, directory)
 
-        # Existing tasks drive both the `lit review <step> <N>` numbering and the
-        # data-driven duration estimate.
-        existing = tc.tasks_for_project(project_id)
-        titles = [t.get("title", "") for t in existing]
+        # Project tasks drive the per-step `lit review <step> <N>` numbering;
+        # duration estimates pool completed tasks across all projects.
+        titles = [t.get("title", "") for t in tc.tasks_for_project(project_id)]
+        history = tc.all_tasks()
 
         prev_id = None
         for step in steps:
@@ -249,7 +250,7 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
                         "[trundlr] runner_resource_id in config.toml")
             idx = _next_index(titles, step)
             title = f"lit review {step} {idx}"
-            hours = _estimate_hours(existing, step)
+            hours = _estimate_hours(history, step)
             task = tc.create_task(
                 title=title,
                 project_id=project_id,
