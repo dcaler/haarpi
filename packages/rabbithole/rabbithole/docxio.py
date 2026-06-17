@@ -35,7 +35,12 @@ def read_comments(path: Path) -> list[dict]:
     comments = []
     try:
         for rel in doc.part.rels.values():
-            if "comments" not in rel.reltype.lower():
+            # Match only the main comments part. Word also writes
+            # commentsExtended / commentsIds / commentsExtensible parts whose
+            # reltype contains "comments" but hold no <w:comment> elements — a
+            # plain "comments in reltype" test matched one of those first and,
+            # with the break below, missed the real comments.xml entirely.
+            if not rel.reltype.lower().endswith("/comments"):
                 continue
             for c in rel.target_part._element.findall(".//" + qn("w:comment")):
                 author = c.get(qn("w:author"), "reviewer")
