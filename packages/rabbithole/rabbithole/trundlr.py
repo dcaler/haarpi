@@ -55,7 +55,7 @@ class TrundlrClient:
 
     def create_task(self, title: str, project_id: int, *, command: str | None = None,
                     depends_on_id: int | None = None, description: str = "",
-                    resource_id: int | None = None) -> dict:
+                    resource_id: int | None = None, duration: float | None = None) -> dict:
         body: dict = {"title": title, "project_id": project_id}
         if command:
             body["command"] = command
@@ -65,6 +65,8 @@ class TrundlrClient:
             body["depends_on_id"] = depends_on_id
         if resource_id is not None:
             body["resource_ids"] = [resource_id]
+        if duration is not None:
+            body["duration"] = duration
         return self._post("/api/tasks/", body)
 
     # ── transport ────────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -35,16 +36,18 @@ _PIPELINE = {
 
 # Per-step metadata. `human` steps carry no command (you do them); the rest are
 # run by the trundlr runner. `verb` is the rabbitHole subcommand for runner steps.
+# `hours` is a scheduling estimate (trundlr durations are in hours) so reflow can
+# lay the chain out on the timeline.
 _STEP = {
-    "init":    {"human": True,  "verb": None,
+    "init":    {"human": True,  "verb": None,    "hours": 1.0,
                 "desc": "Re-run `rabbitHole init` to set the new research direction (new datestamp)."},
-    "gather":  {"human": False, "verb": "gather",
+    "gather":  {"human": False, "verb": "gather", "hours": 1.0,
                 "desc": "Discover & curate new sources into the Zotero collection."},
-    "collect": {"human": True,  "verb": None,
+    "collect": {"human": True,  "verb": None,    "hours": 0.5,
                 "desc": "Download the new PDFs and add them to the Zotero collection."},
-    "revise":  {"human": False, "verb": "revise",
+    "revise":  {"human": False, "verb": "revise", "hours": 1.5,
                 "desc": "Re-draft the review from the expanded corpus + your annotations."},
-    "comment": {"human": True,  "verb": None,
+    "comment": {"human": True,  "verb": None,    "hours": 0.5,
                 "desc": "Review the new draft and annotate it."},
 }
 
@@ -192,6 +195,20 @@ def _next_index(titles: list[str], step: str) -> int:
     return max(nums, default=0) + 1
 
 
+def _estimate_hours(tasks: list[dict], step: str) -> float:
+    """Median actual duration (hours) of past completed tasks of this step.
+
+    trundlr records the realised hours in the `duration` field once a task is
+    done, so the schedule estimate self-tunes from history. Falls back to the
+    static per-step default when there is no completed task to learn from."""
+    pat = re.compile(rf"^lit review {re.escape(step)} (\d+)$", re.I)
+    durs = [float(t["duration"]) for t in tasks
+            if t.get("status") == "done"
+            and pat.match((t.get("title") or "").strip())
+            and isinstance(t.get("duration"), (int, float)) and t["duration"] > 0]
+    return round(statistics.median(durs), 3) if durs else _STEP[step]["hours"]
+
+
 # ── trundlr submission ─────────────────────────────────────────────────────────
 
 def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
@@ -213,8 +230,10 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
             latest.trundlr_project_id = project_id
             config.save_project(latest, directory)
 
-        # Existing titles drive the per-step `lit review <step> <N>` numbering.
-        titles = [t.get("title", "") for t in tc.tasks_for_project(project_id)]
+        # Existing tasks drive both the `lit review <step> <N>` numbering and the
+        # data-driven duration estimate.
+        existing = tc.tasks_for_project(project_id)
+        titles = [t.get("title", "") for t in existing]
 
         prev_id = None
         for step in steps:
@@ -230,6 +249,7 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
                         "[trundlr] runner_resource_id in config.toml")
             idx = _next_index(titles, step)
             title = f"lit review {step} {idx}"
+            hours = _estimate_hours(existing, step)
             task = tc.create_task(
                 title=title,
                 project_id=project_id,
@@ -237,11 +257,12 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
                 depends_on_id=prev_id,
                 description=meta["desc"],
                 resource_id=resource_id,
+                duration=hours,
             )
             titles.append(title)  # keep numbering correct if a step repeats in-chain
             prev_id = task["id"]
             tag = "Cale" if meta["human"] else "runner"
-            print(f"  [trundlr] queued #{task['id']} '{title}' [{tag}]"
+            print(f"  [trundlr] queued #{task['id']} '{title}' [{tag}] ~{hours}h"
                   + (f" depends-on #{task['depends_on_id']}" if task.get("depends_on_id") else ""))
         return 0
     except TrundlrError as e:
