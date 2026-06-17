@@ -235,16 +235,22 @@ def search_semantic_scholar(query: str, limit: int, email: str,
               "fieldsOfStudy,s2FieldsOfStudy,url,paperId")
     params = {"query": query, "limit": min(limit, 100), "fields": fields}
     headers = {"x-api-key": api_key} if api_key else {}
+    import time as _t
     out: list[Candidate] = []
     items = None
+    attempts = 6
     try:
         with _client(email) as c:
-            for attempt in range(3):
+            for attempt in range(attempts):
                 r = c.get("https://api.semanticscholar.org/graph/v1/paper/search",
                           params=params, headers=headers)
                 if r.status_code == 429:           # shared pool rate limit
-                    import time as _t
-                    _t.sleep(3 * (attempt + 1))
+                    if attempt == attempts - 1:
+                        break
+                    # Honor Retry-After if given, else exponential backoff (cap 30s).
+                    ra = (r.headers.get("Retry-After") or "").strip()
+                    delay = float(ra) if ra.isdigit() else min(5 * 2 ** attempt, 30)
+                    _t.sleep(delay)
                     continue
                 r.raise_for_status()
                 items = r.json().get("data", []) or []
@@ -253,7 +259,8 @@ def search_semantic_scholar(query: str, limit: int, email: str,
         _warn(f"Semantic Scholar failed: {e}")
         return out
     if items is None:
-        _warn("Semantic Scholar rate-limited (429) after retries — skipping.")
+        hint = "" if api_key else " — set [semantic_scholar] api_key for a higher quota"
+        _warn(f"Semantic Scholar rate-limited (429) after retries — skipping{hint}.")
         return out
 
     for it in items:
