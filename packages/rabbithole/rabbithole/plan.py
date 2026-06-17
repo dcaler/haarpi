@@ -61,31 +61,45 @@ _PLAN_PROMPT = """\
 Review topic: {topic}
 Focus: {focus}
 
-The current corpus already covers these sources:
+Sources already in the corpus — use this to TARGET gathering, NOT to conclude a topic
+needs no more work. Presence is not sufficiency: a topic can have many sources and
+still be too shallow for what the reviewer wants.
 {coverage}
 
 A reviewer annotated the latest draft. Their annotations:
 {revision_context}
 
-Decide which ONE tier of work the annotations require:
+Pick the ONE tier matching the MOST substantive work that ANY annotation asks for. A
+single request for more research outranks a pile of wording notes — choose the heavier
+tier, because a lighter pipeline cannot perform the heavier work.
 
-- "cosmetic": only rewording, restructuring, or clarification. No new sources needed.
-- "gap_fill": the reviewer wants more on one or more topics NOT already well
-  covered by the corpus above. New sources must be gathered.
-- "redirection": the reviewer signals the review is aimed wrong or needs a
-  fundamentally new direction or scope. This needs a fresh research brief.
+- "cosmetic": EVERY annotation can be satisfied by editing what is already written —
+  rewording, restructuring, clarifying, defining a term, adding an example the corpus
+  already supports, or cutting irrelevant material. No new sources needed.
+- "gap_fill": at least one annotation asks for MORE substance on some topic — "more on
+  X", "a lot more on X", "go deeper", "expand", "what about Y", or a new connection that
+  needs evidence to support it. This holds EVEN IF the topic is already in the corpus:
+  "a lot more on Schelling" when Schelling is already cited still means gather more and
+  develop it further. Gather new sources.
+- "redirection": at least one annotation signals the review is aimed wrong or needs a
+  fundamentally different scope or research question. Needs a fresh research brief.
 
 Rules:
-- Choose "gap_fill" ONLY if the requested topic is genuinely absent from the
-  corpus above. If it is already covered, prefer "cosmetic".
-- Choose "redirection" only for a genuine change of direction, not just "add more".
+- Do NOT downgrade to "cosmetic" just because the requested topic already has sources.
+  "More on X" is gap_fill whether or not X is present — the reviewer wants greater depth
+  or breadth than the current draft delivers.
+- Choose "redirection" only for a genuine change of direction, not for "add more".
+
+For gap_fill or redirection, set gather_topics to specific, searchable topics that would
+deepen exactly what the reviewer asked for — lean on the corpus list above to avoid
+re-finding what is already there and to aim at the thin spots.
 
 Respond with a single JSON object:
 {{
   "tier": "cosmetic" | "gap_fill" | "redirection",
-  "assessment": "1-3 sentences explaining the decision",
-  "gather_topics": ["specific search topics to fill the gaps"],
-  "focus_addition": "one line to steer the next search toward the gaps, or empty"
+  "assessment": "1-3 sentences explaining the decision; name the annotation that drove it",
+  "gather_topics": ["specific search topics to deepen the requested areas"],
+  "focus_addition": "one line to steer the next search toward those areas, or empty"
 }}
 gather_topics and focus_addition are only needed for gap_fill or redirection."""
 
