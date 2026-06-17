@@ -17,6 +17,7 @@ carry no command and wait in the queue until you mark them done. The `init` step
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -184,6 +185,13 @@ def _build_command(step: str) -> str | None:
     return f"rabbitHole {verb}" if verb else None
 
 
+def _next_index(titles: list[str], step: str) -> int:
+    """Next per-step number for a `lit review <step> <N>` title in this project."""
+    pat = re.compile(rf"^lit review {re.escape(step)} (\d+)$", re.I)
+    nums = [int(m.group(1)) for t in titles for m in [pat.match(t.strip())] if m]
+    return max(nums, default=0) + 1
+
+
 # ── trundlr submission ─────────────────────────────────────────────────────────
 
 def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
@@ -205,21 +213,35 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
             latest.trundlr_project_id = project_id
             config.save_project(latest, directory)
 
+        # Existing titles drive the per-step `lit review <step> <N>` numbering.
+        titles = [t.get("title", "") for t in tc.tasks_for_project(project_id)]
+
         prev_id = None
         for step in steps:
             meta = _STEP[step]
             command = _build_command(step)
+            if meta["human"]:
+                resource_id = gc.trundlr_human_resource_id  # Cale; runner ignores it
+            else:
+                resource_id = gc.trundlr_runner_resource_id
+                if resource_id is None:
+                    raise TrundlrError(
+                        "commanded task needs a runner resource — set "
+                        "[trundlr] runner_resource_id in config.toml")
+            idx = _next_index(titles, step)
+            title = f"lit review {step} {idx}"
             task = tc.create_task(
-                title=f"{step}: {cfg.project_name}",
+                title=title,
                 project_id=project_id,
                 command=command,
                 depends_on_id=prev_id,
                 description=meta["desc"],
-                assign_runner=not meta["human"],
+                resource_id=resource_id,
             )
+            titles.append(title)  # keep numbering correct if a step repeats in-chain
             prev_id = task["id"]
-            tag = "runner" if not meta["human"] else "you"
-            print(f"  [trundlr] queued #{task['id']} {step} [{tag}]"
+            tag = "Cale" if meta["human"] else "runner"
+            print(f"  [trundlr] queued #{task['id']} '{title}' [{tag}]"
                   + (f" depends-on #{task['depends_on_id']}" if task.get("depends_on_id") else ""))
         return 0
     except TrundlrError as e:

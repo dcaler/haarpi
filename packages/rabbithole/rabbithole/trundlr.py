@@ -50,9 +50,12 @@ class TrundlrClient:
         return self._post("/api/projects/", body)
 
     # ── tasks ────────────────────────────────────────────────────────────────
+    def tasks_for_project(self, project_id: int) -> list[dict]:
+        return self._get(f"/api/tasks/?project_id={project_id}")
+
     def create_task(self, title: str, project_id: int, *, command: str | None = None,
                     depends_on_id: int | None = None, description: str = "",
-                    assign_runner: bool = False) -> dict:
+                    resource_id: int | None = None) -> dict:
         body: dict = {"title": title, "project_id": project_id}
         if command:
             body["command"] = command
@@ -60,12 +63,8 @@ class TrundlrClient:
             body["description"] = description
         if depends_on_id is not None:
             body["depends_on_id"] = depends_on_id
-        if assign_runner:
-            if not self.runner_resource_id:
-                raise TrundlrError(
-                    "commanded task needs a runner resource, but "
-                    "trundlr_runner_resource_id is not set ([trundlr] runner_resource_id)")
-            body["resource_ids"] = [self.runner_resource_id]
+        if resource_id is not None:
+            body["resource_ids"] = [resource_id]
         return self._post("/api/tasks/", body)
 
     # ── transport ────────────────────────────────────────────────────────────

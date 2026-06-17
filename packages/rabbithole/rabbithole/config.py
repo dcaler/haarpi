@@ -227,6 +227,7 @@ class GlobalConfig:
     # trundlr task queue (parseNplan submits gather/collect/revise/comment chains here).
     trundlr_url: str = ""             # e.g. http://100.87.86.57:8251
     trundlr_runner_resource_id: int | None = None  # cpu/gpu resource the runner polls
+    trundlr_human_resource_id: int | None = None   # human resource for collect/comment/init
 
     @property
     def have_zotero(self) -> bool:
@@ -269,6 +270,7 @@ def load_global() -> GlobalConfig:
         mail_prog=nt.get("mail_prog", ""),
         trundlr_url=tr.get("url", ""),
         trundlr_runner_resource_id=tr.get("runner_resource_id"),
+        trundlr_human_resource_id=tr.get("human_resource_id"),
     )
 
     # Env overrides.
@@ -285,4 +287,7 @@ def load_global() -> GlobalConfig:
     _rid = os.environ.get("TRUNDLR_RUNNER_RESOURCE_ID")
     if _rid:
         gc.trundlr_runner_resource_id = int(_rid)
+    _hid = os.environ.get("TRUNDLR_HUMAN_RESOURCE_ID")
+    if _hid:
+        gc.trundlr_human_resource_id = int(_hid)
     return gc
