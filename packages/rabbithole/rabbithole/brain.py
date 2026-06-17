@@ -36,16 +36,23 @@ class Brain:
             self._init_claude()
 
     # ── coordinator (heavy) ──────────────────────────────────────────────
-    def coordinator(self, prompt: str, system: str = "", num_ctx: int = 16384) -> str:
+    def coordinator(self, prompt: str, system: str = "", num_ctx: int = 16384,
+                    think: bool = True) -> str:
+        # think defaults ON: the coordinator does judgement-heavy work (synthesis,
+        # planning, substantive critique) where a reasoning model's scratchpad
+        # changes the answer. Mechanical coordinator calls (the lint pass) opt out
+        # with think=False. No-op on non-reasoning models and the Claude backend.
         if self.backend == "claude":
             return self._claude(prompt, system)
         return self._ollama(self.cfg.coordinator_model, prompt, system,
-                            num_ctx=num_ctx, temperature=0.2)
+                            num_ctx=num_ctx, temperature=0.2, think=think)
 
     # ── worker (small, local, parallel) ──────────────────────────────────
     def worker(self, prompt: str, system: str = "", num_ctx: int = 8192) -> str:
+        # Never think: workers do high-volume, near-deterministic scoring where a
+        # scratchpad is pure waste (and turned a 0.5s score into ~120s on the M60s).
         return self._ollama(self.cfg.worker_model, prompt, system,
-                            num_ctx=num_ctx, temperature=0.1)
+                            num_ctx=num_ctx, temperature=0.1, think=False)
 
     def worker_map(self, jobs: list[tuple[str, str]], num_ctx: int = 8192,
                    desc: str = "") -> list[str]:
@@ -133,16 +140,18 @@ class Brain:
 
     # ── backends ─────────────────────────────────────────────────────────
     def _ollama(self, model: str, prompt: str, system: str,
-                num_ctx: int, temperature: float, retries: int = 3) -> str:
+                num_ctx: int, temperature: float, retries: int = 3,
+                think: bool = False) -> str:
         import json as _json
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        # think=False: reasoning models (e.g. qwen3.x) otherwise emit hundreds of
-        # chain-of-thought tokens before a one-token answer — on Tesla M60s that turned
-        # a 0.5s relevance score into ~120s. Ignored by non-reasoning models (llama3.x).
-        payload = {"model": model, "messages": messages, "stream": True, "think": False,
+        # think: reasoning models (e.g. qwen3.x) emit a hidden chain-of-thought before
+        # the answer. Worth it for coordinator judgement work, ruinous for the worker
+        # swarm (a one-token score became ~120s on Tesla M60s). Set per call by the
+        # role; ignored by non-reasoning models (llama3.x).
+        payload = {"model": model, "messages": messages, "stream": True, "think": think,
                    "options": {"temperature": temperature, "num_ctx": num_ctx}}
         last = None
         for attempt in range(1, retries + 1):

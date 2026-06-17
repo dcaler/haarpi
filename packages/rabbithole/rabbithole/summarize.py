@@ -197,10 +197,11 @@ SYNTH_SYS = """\
 You are writing the narrative section of a scholarly literature review.
 
 STRUCTURE
-- Organise into thematic sections that tell a coherent story. Fit sections to the material; do not use a fixed template.
-- SYNTHESISE across sources — compare, contrast, and connect them. Do NOT summarise one paper at a time.
+- Organise around IDEAS, not sources. The unit of the review is an idea about the project's topic and focus, traceable to the source(s) that support it. Sources are evidence for ideas, never a catalogue to march through. You are NOT required to use every source you gathered — drop any that does not serve an idea worth making here. A tight argument on fewer sources beats a roll-call of all of them.
+- Build a SMALL number of thematic sections. Each develops a few related ideas and WEAVES them — comparing, qualifying, connecting — into a claim that says something about THIS project. Fit sections to the material; do not use a fixed template. A 20-source review has perhaps 4-6 sections, never one per source.
+- Develop each section across AT LEAST three paragraphs that build an argument: state an idea and ground it in its source(s); bring in a connecting, qualifying, or conflicting idea from other work; then say plainly what the ideas TOGETHER mean for the project's topic and focus. A heading over a single paragraph that just reports one source's findings is an annotated-bibliography entry — that is the failure to avoid.
 - Each "## " heading names ONE idea in <=6 words. Never join concepts with commas or "and" (avoid "Dimensionality, Complexity, and Temporal Evolution"). If a section spans several ideas, split it or pick the single organising idea.
-- Open each section with established, well-cited work (high citation counts in the digest) before recent work or preprints; prefer the peer-reviewed article over a preprint when both support a claim.
+- When an idea has an established, well-cited origin, ground it there first (high citation counts in the digest) before layering on recent work or preprints; prefer the peer-reviewed article over a preprint when both support a claim.
 
 EXPLAIN WHY IT MATTERS (the priority)
 - For every claim, make plain why it matters to THIS review's topic and focus. Use the Relevance note in the digest to connect each source to the project's goal.
@@ -220,52 +221,90 @@ LANGUAGE
 
 STYLE
 - Be tight. One main idea per sentence; at most one subordinate clause. Prefer plain verbs over nominalisations.
-- Keep paragraphs to 3-5 sentences. Target 700-1000 words total.
+- Keep paragraphs to 3-5 sentences, and give every section at least three of them. Let length follow the material: a well-synthesised section runs several hundred words. Do not pad with filler, but never stop a section at a single paragraph.
 - Cut filler: "it is worth noting", "this highlights", "rests on the demonstration that", "underscores that", "a growing body of research". Every sentence adds a new fact or connection.
 - Use "## " headings for themes. Do not write a bibliography (that is added separately).
 
 Write only the narrative review."""
 
-_SYNTH_CRITIQUE_SYS = """\
-You audit a literature review narrative for quality problems. Respond with ONLY a
-numbered list of specific, actionable problems, one per line. If no problems, respond "OK"."""
+# Two-pass critique. The LINT pass is mechanical — format, filler, headings, order —
+# and runs without reasoning (think=False) because there is nothing to deliberate.
+# The SUBSTANCE pass is a demanding peer reviewer reading for the quality of the
+# argument; it runs with reasoning on (the coordinator default). Keeping them apart
+# stops the cheap mechanical wins from starving the judgement that needs attention.
 
-_SYNTH_CRITIQUE_PROMPT = """\
-Review topic: {topic}
-Focus: {focus}
+_LINT_SYS = """\
+You are a copy-editor auditing a literature-review narrative for MECHANICAL defects
+only. Respond with ONLY a numbered list of specific, actionable problems, one per
+line, each quoting the offending text. If there are none, respond "OK"."""
 
-Evidence digest (ground truth — what the narrative should cover):
-{digest}
+_LINT_PROMPT = """\
+Audit this narrative for mechanical defects only. Do NOT comment on argument,
+coverage, or substance — a separate reviewer handles those.
 
-Narrative to audit:
+Narrative:
 {narrative}
 
 Check:
-1. Citation format — flag: (a) any citation that does not use [@citekey] format
-   (e.g., "(Smith, 2021)" or "Smith (2021)" are wrong); (b) any sentence where
-   a citation bracket opens or precedes the claim rather than following it. All
-   citations must be [@citekey] and follow their claim. Quote each offending sentence.
+1. Citation format — flag (a) any citation not in [@citekey] form (e.g. "(Smith, 2021)"
+   or "Smith (2021)"); (b) any sentence where the citation opens or precedes the claim
+   instead of following it. Quote each offending sentence.
 2. Filler phrases — flag any of: "it is worth noting", "this highlights",
    "further work is needed", "a growing body of research", "underscores",
    "plays a crucial role", "rests on the demonstration that", "has been shown to",
    or similar content-free phrases.
-3. Section headings — flag any heading that joins multiple concepts with commas,
-   "and", or "/". Each heading must name exactly one idea.
-4. Coverage — list any source from the digest that has a non-empty argument or
-   findings line but is never cited in the narrative by [@citekey]. Only flag
-   sources whose content is substantively relevant to the topic.
-5. Vague gap statements — flag any mention of gaps, limitations, or future
-   directions that is not a specific, named gap or tension. "More research is
-   needed" and "this area warrants further study" are always too vague.
-6. Section order — flag any thematic section that opens with a recent (post-2020)
-   or preprint source before citing the foundational or well-cited work on that theme.
+3. Section headings — flag any "## " heading that joins multiple concepts with a
+   comma, "and", or "/". Each heading must name exactly one idea.
+4. Section order — flag any section that opens with a recent (post-2020) or preprint
+   source before citing the foundational or well-cited work on that theme.
 
-Output: numbered list of problems with quoted text. Skip checks with no issues.
-If all checks pass, respond "OK"."""
+Output: numbered list with quoted text; skip checks with no issues. If all pass, "OK"."""
 
-_SYNTH_REVISE_PROMPT = """\
-Revise the narrative to fix every problem in the critique below.
-Preserve all correct content; only change what the critique flags.
+_SUBSTANCE_SYS = """\
+You are a demanding peer reviewer reading a literature-review narrative for the
+QUALITY OF ITS ARGUMENT. Ignore formatting, citation style, and typography — a
+copy-editor handles those. Respond with ONLY a numbered list of specific, actionable
+problems, one per line, quoting the text you mean. If the narrative is genuinely
+strong, respond "OK"."""
+
+_SUBSTANCE_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+Evidence digest (ground truth — what the narrative draws on):
+{digest}
+
+Narrative under review:
+{narrative}
+
+Judge:
+1. Annotated bibliography — flag any section that merely reports a source's findings
+   instead of developing an idea about the project, or that runs a single paragraph per
+   source. The test is whether ideas are woven into a claim about the topic/focus — NOT
+   how many sources are cited. Name the theme a thin section should merge into. One
+   short report-per-source section is the primary failure to catch.
+2. Synthesis vs summary — flag any paragraph that walks through sources one at a time
+   instead of connecting their ideas around a shared point.
+3. Claim support — flag any claim not backed by the digest, or that overstates what
+   its cited source actually shows. Quote the claim and name the mismatch.
+4. Significance — flag any source the narrative DOES cite whose relevance to THIS
+   topic/focus is asserted hollowly or left implicit. Every source you include should
+   earn its place by advancing an idea; say where one does not.
+5. Missed ideas — name any idea in the digest that genuinely bears on the project's
+   topic/focus but the narrative never develops. Do NOT flag a source merely for being
+   uncited: using every source is not required, and dropping one that serves no
+   project-relevant idea is correct.
+6. Specific gaps — flag any gap, tension, or future direction stated vaguely
+   ("more research is needed", "warrants further study") rather than as a named,
+   load-bearing gap.
+7. Coherence — flag breaks in the through-line: sections that do not build on each
+   other, or a theme raised and then dropped.
+
+Output: numbered list with quoted text; skip checks with no issues. If strong, "OK"."""
+
+_REVISE_FROM_CRITIQUE_PROMPT = """\
+Revise the narrative to fix every problem in the critique below. Preserve all correct
+content; change only what the critique flags. Keep [@citekey] citation format throughout.
 
 Review topic: {topic}
 Focus: {focus}
@@ -282,33 +321,68 @@ Problems to fix:
 Output only the revised narrative — no preamble or explanation."""
 
 
+def _is_ok(text: str) -> bool:
+    return text.strip().upper().startswith("OK")
+
+
 def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
-                                topic: str, focus: str) -> str:
-    """One critique→revise cycle on the synthesis narrative."""
-    print("  Critiquing synthesis...", flush=True)
-    try:
-        critique = brain.coordinator(
-            _SYNTH_CRITIQUE_PROMPT.format(
-                topic=topic, focus=focus, digest=digest, narrative=narrative),
-            _SYNTH_CRITIQUE_SYS, num_ctx=16384)
-    except Exception as e:  # noqa: BLE001
-        print(f"  [warn] synthesis critique failed ({e}); keeping original.",
-              file=sys.stderr)
-        return narrative
-    if critique.strip().upper().startswith("OK"):
-        return narrative
-    print("  Revising synthesis...", flush=True)
-    try:
-        revised = brain.coordinator(
-            _SYNTH_REVISE_PROMPT.format(
-                topic=topic, focus=focus, digest=digest,
-                narrative=narrative, critique=critique),
-            SYNTH_SYS, num_ctx=16384)
-        return revised
-    except Exception as e:  # noqa: BLE001
-        print(f"  [warn] synthesis revision failed ({e}); keeping original.",
-              file=sys.stderr)
-        return narrative
+                                topic: str, focus: str,
+                                rounds: int | None = None) -> str:
+    """Iterate a two-pass critique→revise loop on the synthesis narrative.
+
+    Each round runs a mechanical LINT pass (no reasoning) and a substantive
+    PEER-REVIEW pass (reasoning on), then a single revise applying the union of
+    both critiques. Stops early when both passes return "OK", or after `rounds`
+    rounds (default: brain.cfg.critique_rounds)."""
+    if rounds is None:
+        rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
+
+    for r in range(1, rounds + 1):
+        tag = f" (round {r}/{rounds})" if rounds > 1 else ""
+
+        print(f"  Critiquing synthesis — lint{tag}...", flush=True)
+        try:
+            lint = brain.coordinator(
+                _LINT_PROMPT.format(narrative=narrative),
+                _LINT_SYS, num_ctx=16384, think=False)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] lint critique failed ({e}); skipping.", file=sys.stderr)
+            lint = "OK"
+
+        print(f"  Critiquing synthesis — peer review{tag}...", flush=True)
+        try:
+            substance = brain.coordinator(
+                _SUBSTANCE_PROMPT.format(
+                    topic=topic, focus=focus, digest=digest, narrative=narrative),
+                _SUBSTANCE_SYS, num_ctx=16384)  # think on (coordinator default)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] peer-review critique failed ({e}); skipping.", file=sys.stderr)
+            substance = "OK"
+
+        if _is_ok(lint) and _is_ok(substance):
+            print("  Critique clean — no further revision needed.", flush=True)
+            break
+
+        parts = []
+        if not _is_ok(lint):
+            parts.append("MECHANICAL:\n" + lint.strip())
+        if not _is_ok(substance):
+            parts.append("SUBSTANTIVE:\n" + substance.strip())
+        critique = "\n\n".join(parts)
+
+        print(f"  Revising synthesis{tag}...", flush=True)
+        try:
+            narrative = brain.coordinator(
+                _REVISE_FROM_CRITIQUE_PROMPT.format(
+                    topic=topic, focus=focus, digest=digest,
+                    narrative=narrative, critique=critique),
+                SYNTH_SYS, num_ctx=16384)  # think on
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] synthesis revision failed ({e}); keeping current.",
+                  file=sys.stderr)
+            break
+
+    return narrative
 
 
 def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]) -> str:
@@ -331,10 +405,17 @@ def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]
 def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
                citekeys: dict[int, str], style_profile: str = "") -> str:
     digest = _digest(corpus, notes, citekeys)
+    n = len(corpus)
+    target_sections = max(3, min(8, round(n / 4)))
     prompt = (f"Review topic: {cfg.topic}\nFocus: {cfg.focus}\n"
-              f"Number of sources: {len(corpus)}\n\n"
+              f"Number of sources: {n}\n\n"
               f"Evidence digest (one line per source):\n{digest}\n\n"
-              f"Write the thematic narrative review now.")
+              f"Write the thematic narrative review now. Organise it around ideas about "
+              f"the project, not around the {n} sources — you need not use every source; "
+              f"drop any that serves no project-relevant idea. Aim for about "
+              f"{target_sections} thematic sections; each develops a few related ideas "
+              f"(each traceable to its source) across at least three paragraphs and "
+              f"closes by saying what those ideas mean for the project's focus.")
     sys_prompt = SYNTH_SYS
     if style_profile:
         sys_prompt = (sys_prompt.rstrip()

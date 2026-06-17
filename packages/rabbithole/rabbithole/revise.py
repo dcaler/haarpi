@@ -21,7 +21,7 @@ from .brain import Brain
 from .models import Candidate
 from .summarize import (
     _make_citekeys, _digest, bibliography, citation_check,
-    SYNTH_SYS, _critique_revise_synthesis,
+    SYNTH_SYS, _critique_revise_synthesis, _cited_indices,
 )
 
 
@@ -164,9 +164,12 @@ def run(directory: str = ".", brain_override: str | None = None,
     narrative = _synthesize_revision(brain, cfg, corpus, notes, citekeys,
                                      current_narrative, revision_context, style_profile)
 
-    # 7. Bibliography from existing located intermediates
+    # 7. Bibliography — only sources the REVISED narrative actually cites (the
+    #    revision may drop sources, so key off the new citations, not the stale
+    #    located set from the original report). Cited sources with no located file
+    #    fall back to a "passages not located" note inside bibliography().
     located_list = _load_located(paths, len(corpus))
-    located = {i: items for i, items in enumerate(located_list) if items}
+    located = {i: located_list[i] for i in _cited_indices(narrative, citekeys)}
     biblio = bibliography(corpus, located)
     unmatched = citation_check(narrative, citekeys)
     if unmatched:

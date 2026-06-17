@@ -48,6 +48,8 @@ class BrainConfig:
     worker_parallel: int = 1           # serial: concurrency is sub-1x on Maxwell (Tesla M60)
                                        # — a model split across cards or batched gives no
                                        # speedup, so run worker calls back-to-back instead.
+    critique_rounds: int = 2           # synthesis critique→revise rounds (lint + peer
+                                       # review per round, early-exit when both pass).
 
 
 @dataclass
