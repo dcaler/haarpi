@@ -85,6 +85,8 @@ class ProjectConfig:
     use_style: bool = False
     style_author: str = ""
     style_paper_keys: list = field(default_factory=list)  # Zotero item keys confirmed in init
+    # trundlr task-queue binding (resolved by parseNplan; matched by project_name).
+    trundlr_project_id: int | None = None
 
     def to_yaml(self) -> str:
         d = asdict(self)
@@ -222,10 +224,17 @@ class GlobalConfig:
     # SLURM uses on HPC systems), so no SMTP credentials are needed.
     notify_to: str = ""               # recipient; defaults to contact_email
     mail_prog: str = ""               # override; else SLURM MailProg / `mail` is auto-detected
+    # trundlr task queue (parseNplan submits gather/collect/revise/comment chains here).
+    trundlr_url: str = ""             # e.g. http://100.87.86.57:8251
+    trundlr_runner_resource_id: int | None = None  # cpu/gpu resource the runner polls
 
     @property
     def have_zotero(self) -> bool:
         return bool(self.zotero_api_key and self.zotero_library_id)
+
+    @property
+    def have_trundlr(self) -> bool:
+        return bool(self.trundlr_url)
 
     @property
     def have_anthropic(self) -> bool:
@@ -246,6 +255,7 @@ def load_global() -> GlobalConfig:
     a = data.get("anthropic", {})
     s2 = data.get("semantic_scholar", {})
     nt = data.get("notify", {})
+    tr = data.get("trundlr", {})
 
     gc = GlobalConfig(
         ollama_url=data.get("ollama_url", DEFAULT_OLLAMA_URL),
@@ -257,6 +267,8 @@ def load_global() -> GlobalConfig:
         s2_api_key=s2.get("api_key", ""),
         notify_to=nt.get("to", "") or data.get("notify_to", ""),
         mail_prog=nt.get("mail_prog", ""),
+        trundlr_url=tr.get("url", ""),
+        trundlr_runner_resource_id=tr.get("runner_resource_id"),
     )
 
     # Env overrides.
@@ -269,4 +281,8 @@ def load_global() -> GlobalConfig:
     gc.s2_api_key = os.environ.get("S2_API_KEY", gc.s2_api_key)
     gc.notify_to = os.environ.get("RABBITHOLE_NOTIFY_TO", gc.notify_to)
     gc.mail_prog = os.environ.get("RABBITHOLE_MAIL_PROG", gc.mail_prog)
+    gc.trundlr_url = os.environ.get("TRUNDLR_URL", gc.trundlr_url)
+    _rid = os.environ.get("TRUNDLR_RUNNER_RESOURCE_ID")
+    if _rid:
+        gc.trundlr_runner_resource_id = int(_rid)
     return gc

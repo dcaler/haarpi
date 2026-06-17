@@ -16,14 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-try:
-    from docx import Document
-    from docx.oxml.ns import qn
-    _DOCX_OK = True
-except ImportError:
-    _DOCX_OK = False
-
-from . import config, render
+from . import config, docxio, render
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
@@ -32,84 +25,7 @@ from .summarize import (
 )
 
 
-def _require_docx() -> None:
-    if not _DOCX_OK:
-        print("[error] python-docx is required: pip install python-docx", file=sys.stderr)
-        raise SystemExit(1)
-
-
-# ── docx annotation extraction (mirrors raconteur/revise.py) ─────────────────
-
-def _read_comments(path: Path) -> list[dict]:
-    doc = Document(str(path))
-    comments = []
-    try:
-        for rel in doc.part.rels.values():
-            if "comments" not in rel.reltype.lower():
-                continue
-            for c in rel.target_part._element.findall(".//" + qn("w:comment")):
-                author = c.get(qn("w:author"), "reviewer")
-                texts = [t.text for t in c.findall(".//" + qn("w:t")) if t.text]
-                if texts:
-                    comments.append({"author": author, "text": " ".join(texts)})
-            break
-    except Exception:  # noqa: BLE001
-        pass
-    return comments
-
-
-def _read_track_changes(path: Path) -> dict:
-    doc = Document(str(path))
-    body = doc.element.body
-    insertions, deletions = [], []
-    for ins in body.iter(qn("w:ins")):
-        text = "".join(t.text or "" for t in ins.iter(qn("w:t")))
-        if text.strip():
-            insertions.append(text)
-    for dele in body.iter(qn("w:del")):
-        text = "".join(t.text or "" for t in dele.iter(qn("w:delText")))
-        if text.strip():
-            deletions.append(text)
-    return {"insertions": insertions, "deletions": deletions}
-
-
-def _read_body_text(path: Path) -> str:
-    """Body text with tracked insertions visible, deletions gone (python-docx default)."""
-    doc = Document(str(path))
-    return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-
-
-def _build_revision_context(path: Path) -> str:
-    comments = _read_comments(path)
-    changes = _read_track_changes(path)
-    parts = []
-    if changes["deletions"]:
-        lines = "\n".join(f"  - {d}" for d in changes["deletions"])
-        parts.append(f"DELETED TEXT (the reviewer removed these):\n{lines}")
-    if changes["insertions"]:
-        lines = "\n".join(f"  + {i}" for i in changes["insertions"])
-        parts.append(f"INSERTED TEXT (the reviewer added these):\n{lines}")
-    if comments:
-        lines = "\n".join(f"  [{c['author']}]: {c['text']}" for c in comments)
-        parts.append(f"REVIEWER COMMENTS:\n{lines}")
-    return "\n\n".join(parts)
-
-
-# ── file discovery ────────────────────────────────────────────────────────────
-
-def _find_docx(paths) -> Path | None:
-    """Find the most recently modified docx in output/ that was annotated by the user.
-
-    Annotated files end in user initials (e.g. _DCR.docx); rabbitHole's own
-    outputs end in _ra.docx. We exclude the latter so we never accidentally
-    re-process our own output.
-    """
-    candidates = [p for p in paths.output.glob("*.docx")
-                  if not p.stem.endswith("_ra")]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
-
+# ── output paths ───────────────────────────────────────────────────────────────
 
 def _revision_paths(paths, annotated_docx: Path) -> tuple[Path, Path]:
     """Output paths: append _ra to the annotated file's stem."""
@@ -188,7 +104,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 
 def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None) -> int:
-    _require_docx()
+    docxio.require_docx()
 
     cfg = config.load_project(directory)
     gc = config.load_global()
@@ -201,7 +117,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     if docx_path:
         docx = Path(docx_path)
     else:
-        docx = _find_docx(paths)
+        docx = docxio.find_annotated_docx(paths)
     if not docx or not docx.exists():
         print("[error] No *_ra.docx found in output/. "
               "Specify one with --file or run 'rabbitHole report' first.", file=sys.stderr)
@@ -209,12 +125,12 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  Annotated file: {docx.name}")
 
     # 2. Extract annotations
-    revision_context = _build_revision_context(docx)
+    revision_context = docxio.build_revision_context(docx)
     if not revision_context:
         print("[warn] No tracked changes or comments found in the docx. Nothing to revise.")
         return 0
-    n_comments = len(_read_comments(docx))
-    tc = _read_track_changes(docx)
+    n_comments = len(docxio.read_comments(docx))
+    tc = docxio.read_track_changes(docx)
     print(f"  Found: {n_comments} comment(s), "
           f"{len(tc['deletions'])} deletion(s), {len(tc['insertions'])} insertion(s).")
 
@@ -224,7 +140,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     md_path = paths.output / f"{ra_stem}.md"
     if not md_path.exists():
         # Fall back to body text extracted from the docx itself
-        current_narrative = _read_body_text(docx)
+        current_narrative = docxio.read_body_text(docx)
     else:
         current_narrative = md_path.read_text(encoding="utf-8")
 
