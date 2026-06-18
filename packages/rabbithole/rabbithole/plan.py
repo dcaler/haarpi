@@ -5,13 +5,19 @@ The coordinator classifies the annotations into one of three tiers:
 
   cosmetic     reword/restructure only          -> revise -> comment
   gap_fill     "more on X", X absent from corpus -> gather -> collect -> revise -> comment
-  redirection  new direction / wrong scope       -> init -> gather -> collect -> revise -> comment
+  redirection  new direction / wrong scope       -> gather -> collect -> revise -> comment
 
 parseNplan never runs gather/revise itself. Commanded steps (gather, revise) are
 queued with a shell command and assigned to the trundlr runner resource, which
-executes them once their dependency is done. Human steps (init, collect, comment)
-carry no command and wait in the queue until you mark them done. The `init` step
-(redirection only) is what mints a new datestamp — a new major revision cycle.
+executes them once their dependency is done. Human steps (collect, comment) carry
+no command and wait in the queue until you mark them done.
+
+On a redirection, parseNplan does the reframe itself rather than bouncing it back:
+the coordinator that recognised the new direction also rewrites the project brief
+(topic, focus, research_prompt) and writes it to a new iterated litrev_<N>.yaml, so
+the fresh gather is aimed at the reviewer's new research question automatically. No
+manual re-init step — redirection runs the same hands-off chain as gap_fill; the new
+litrev_<N>.yaml is there to inspect or edit whenever you like.
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ from .revise import _load_corpus
 _PIPELINE = {
     "cosmetic":    ["revise", "comment"],
     "gap_fill":    ["gather", "collect", "revise", "comment"],
-    "redirection": ["init", "gather", "collect", "revise", "comment"],
+    "redirection": ["gather", "collect", "revise", "comment"],
 }
 
 # Per-step metadata. `human` steps carry no command (you do them); the rest are
@@ -39,8 +45,6 @@ _PIPELINE = {
 # `hours` is a scheduling estimate (trundlr durations are in hours) so reflow can
 # lay the chain out on the timeline.
 _STEP = {
-    "init":    {"human": True,  "verb": None,    "hours": 1.0,
-                "desc": "Re-run `rabbitHole init` to set the new research direction (new datestamp)."},
     "gather":  {"human": False, "verb": "gather", "hours": 1.0,
                 "desc": "Discover & curate new sources into the Zotero collection."},
     "collect": {"human": True,  "verb": None,    "hours": 0.5,
@@ -94,14 +98,26 @@ For gap_fill or redirection, set gather_topics to specific, searchable topics th
 deepen exactly what the reviewer asked for — lean on the corpus list above to avoid
 re-finding what is already there and to aim at the thin spots.
 
+For redirection ONLY, also rewrite the project brief so the next cycle is aimed at the
+reviewer's NEW research question, not the old one. Set new_topic (the reframed question in
+one line), new_focus (the new emphasis/scope in one line), and new_research_prompt (a
+self-contained 3-6 sentence brief written in the reviewer's new direction, as if briefing
+the search from scratch — state the new unit of analysis, the question, and what counts as
+relevant). The reviewer's annotation already gives you the new direction; carry it through
+faithfully. These fields become a new iterated project config that re-aims gather.
+
 Respond with a single JSON object:
 {{
   "tier": "cosmetic" | "gap_fill" | "redirection",
   "assessment": "1-3 sentences explaining the decision; name the annotation that drove it",
   "gather_topics": ["specific search topics to deepen the requested areas"],
-  "focus_addition": "one line to steer the next search toward those areas, or empty"
+  "focus_addition": "one line to steer the next search toward those areas, or empty",
+  "new_topic": "redirection only: the reframed research question in one line, else empty",
+  "new_focus": "redirection only: the new emphasis/scope in one line, else empty",
+  "new_research_prompt": "redirection only: a self-contained 3-6 sentence research brief in the new direction, else empty"
 }}
-gather_topics and focus_addition are only needed for gap_fill or redirection."""
+gather_topics and focus_addition are needed for gap_fill or redirection; the new_* fields
+are needed only for redirection."""
 
 
 # ── coverage + plan ────────────────────────────────────────────────────────────
@@ -157,6 +173,9 @@ def _make_plan(brain: Brain, cfg, coverage: str, revision_context: str) -> dict:
     plan.setdefault("assessment", "")
     plan.setdefault("gather_topics", [])
     plan.setdefault("focus_addition", "")
+    plan.setdefault("new_topic", "")
+    plan.setdefault("new_focus", "")
+    plan.setdefault("new_research_prompt", "")
     return plan
 
 
@@ -173,6 +192,30 @@ def _write_gap_config(directory: str, plan: dict) -> Path:
     return config.save_project_to(prev, fp)
 
 
+def _write_redirect_config(directory: str, plan: dict) -> Path:
+    """Write a new iterated litrev config that re-aims the project at the reviewer's
+    redirected research question.
+
+    Unlike gap_fill (which only appends a focus line to the same brief), a redirection
+    REWRITES the brief. research_prompt is the source of truth gather extracts topic/
+    focus from, so we overwrite all three — topic, focus, and research_prompt — with the
+    coordinator's reframe. The new file is a fresh iteration (litrev_<N+1>.yaml) that gather
+    uses on the next run; inspect or edit it whenever. Project binding (name, trundlr id,
+    models, source policy) is inherited from the previous config untouched."""
+    prev = config.load_project(directory)
+    new_topic = (plan.get("new_topic") or "").strip()
+    new_focus = (plan.get("new_focus") or "").strip()
+    new_prompt = (plan.get("new_research_prompt") or "").strip()
+    if new_topic:
+        prev.topic = new_topic
+    if new_focus:
+        prev.focus = new_focus
+    if new_prompt:
+        prev.research_prompt = new_prompt
+    fp = config.next_project_file(directory)
+    return config.save_project_to(prev, fp)
+
+
 # ── rendering ──────────────────────────────────────────────────────────────────
 
 def _print_plan(cfg, docx: Path, plan: dict, steps: list[str]) -> None:
@@ -182,6 +225,10 @@ def _print_plan(cfg, docx: Path, plan: dict, steps: list[str]) -> None:
     print(f"  Tier: {plan['tier']}")
     if plan.get("assessment"):
         print(f"  Assessment: {plan['assessment']}")
+    if plan["tier"] == "redirection" and plan.get("new_topic"):
+        print(f"  Redirected topic: {plan['new_topic']}")
+        if plan.get("new_research_prompt"):
+            print(f"  New brief: {plan['new_research_prompt']}")
     if plan["tier"] != "cosmetic" and plan.get("gather_topics"):
         print("  Gather topics:")
         for t in plan["gather_topics"]:
@@ -202,9 +249,14 @@ def _build_command(step: str) -> str | None:
     return f"rabbitHole {verb}" if verb else None
 
 
-def _next_index(titles: list[str], step: str) -> int:
-    """Next per-step number for a `lit review <step> <N>` title in this project."""
-    pat = re.compile(rf"^lit review {re.escape(step)} (\d+)$", re.I)
+def _next_cycle(titles: list[str]) -> int:
+    """Next revision-cycle number for this project, shared by every step in the chain.
+
+    All steps queued by one parseNplan run carry the SAME number — `lit review gather 2`,
+    `collect 2`, `revise 2`, `comment 2` — so a cycle reads as one unit instead of each
+    step keeping an independent counter. The number is one past the highest seen on any
+    `lit review <step> <N>` title already in the project."""
+    pat = re.compile(r"^lit review \w+ (\d+)$", re.I)
     nums = [int(m.group(1)) for t in titles for m in [pat.match(t.strip())] if m]
     return max(nums, default=0) + 1
 
@@ -245,10 +297,11 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
             latest.trundlr_project_id = project_id
             config.save_project(latest, directory)
 
-        # Project tasks drive the per-step `lit review <step> <N>` numbering;
-        # duration estimates pool completed tasks across all projects.
+        # One shared cycle number for the whole chain (gather/collect/revise/comment
+        # all carry it); duration estimates pool completed tasks across all projects.
         titles = [t.get("title", "") for t in tc.tasks_for_project(project_id)]
         history = tc.all_tasks()
+        cycle = _next_cycle(titles)
 
         prev_id = None
         for step in steps:
@@ -262,8 +315,7 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
                     raise TrundlrError(
                         "commanded task needs a runner resource — set "
                         "[trundlr] runner_resource_id in config.toml")
-            idx = _next_index(titles, step)
-            title = f"lit review {step} {idx}"
+            title = f"lit review {step} {cycle}"
             hours = _estimate_hours(history, step)
             task = tc.create_task(
                 title=title,
@@ -274,7 +326,6 @@ def _submit_chain(gc, cfg, directory: str, steps: list[str], plan: dict) -> int:
                 resource_id=resource_id,
                 duration=hours,
             )
-            titles.append(title)  # keep numbering correct if a step repeats in-chain
             prev_id = task["id"]
             tag = "Cale" if meta["human"] else "runner"
             print(f"  [trundlr] queued #{task['id']} '{title}' [{tag}] ~{hours}h"
@@ -337,10 +388,15 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("\n  [dry-run] No config written and no tasks queued.")
         return 0
 
-    # 5. gap_fill steers the next gather via a new numbered config
+    # 5. gap_fill steers the next gather via a new numbered config; redirection
+    #    rewrites the whole brief into a new iterated config for you to approve.
     if tier == "gap_fill":
         fp = _write_gap_config(directory, plan)
         print(f"\n  Wrote gather-steering config: {fp.name}")
+    elif tier == "redirection":
+        fp = _write_redirect_config(directory, plan)
+        print(f"\n  Drafted redirected research brief: {fp.name} "
+              f"(gather will use it; inspect or edit it whenever)")
 
     # 6. Queue the chain in trundlr (or print manual steps)
     print()
