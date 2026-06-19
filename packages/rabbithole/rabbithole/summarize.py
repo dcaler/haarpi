@@ -199,7 +199,7 @@ You are writing the narrative section of a scholarly literature review.
 STRUCTURE
 - Organise around IDEAS, not sources. The unit of the review is an idea about the project's topic and focus, traceable to the source(s) that support it. Sources are evidence for ideas, never a catalogue to march through. You are NOT required to use every source you gathered — drop any that does not serve an idea worth making here. A tight argument on fewer sources beats a roll-call of all of them.
 - Build a SMALL number of thematic sections. Each develops a few related ideas and WEAVES them — comparing, qualifying, connecting — into a claim that says something about THIS project. Fit sections to the material; do not use a fixed template. A 20-source review has perhaps 4-6 sections, never one per source.
-- Develop each section across AT LEAST three paragraphs that build an argument: state an idea and ground it in its source(s); bring in a connecting, qualifying, or conflicting idea from other work; then say plainly what the ideas TOGETHER mean for the project's topic and focus. A heading over a single paragraph that just reports one source's findings is an annotated-bibliography entry — that is the failure to avoid.
+- Develop each section by ACCRETION across at least three paragraphs: the first puts a few citable ideas on the table, each grounded in its source(s); every later paragraph brings in NEW sources and connects them to the ideas already raised, so the evidence base grows paragraph by paragraph. "Three paragraphs" means three paragraphs' worth of cited ideas building on one another — NOT two citations padded across three paragraphs. Carry the "what this means for the project" point INSIDE these evidence-bearing paragraphs; never park it in a separate, citation-free conclusion. A heading over a single paragraph that just reports one source's findings is an annotated-bibliography entry — the failure to avoid.
 - Each "## " heading names ONE idea in <=6 words. Never join concepts with commas or "and" (avoid "Dimensionality, Complexity, and Temporal Evolution"). If a section spans several ideas, split it or pick the single organising idea.
 - When an idea has an established, well-cited origin, ground it there first (high citation counts in the digest) before layering on recent work or preprints; prefer the peer-reviewed article over a preprint when both support a claim.
 
@@ -209,6 +209,7 @@ EXPLAIN WHY IT MATTERS (the priority)
 - Name gaps, tensions, and directions specifically; never "further work is needed".
 
 CITATIONS
+- EVERY paragraph cites at least one source. There are no transition-only, scene-setting, or conclusion-only paragraphs: if a paragraph states ideas worth a paragraph, those ideas have sources — name them. A paragraph containing no [@citekey] is a defect, not a stylistic choice.
 - State each finding as a claim in its own right, then attach the source in square brackets immediately after: "Modest tolerance thresholds produce exaggerated segregation [@schelling1971]."
 - Never make a citation the grammatical subject or agent of a sentence. Do NOT write "[@schelling1971] showed that...". Rewrite so the claim leads and the citation follows.
 - Use the citekey EXACTLY as given in the digest (the [@key] tag beside each source). Do not invent or alter citekeys.
@@ -257,6 +258,9 @@ Check:
    comma, "and", or "/". Each heading must name exactly one idea.
 4. Section order — flag any section that opens with a recent (post-2020) or preprint
    source before citing the foundational or well-cited work on that theme.
+5. Uncited paragraphs — flag any body paragraph (prose under a "## " heading, not the
+   heading itself) that contains no [@citekey] citation anywhere in it. Quote its first
+   sentence. Every paragraph must cite at least one source.
 
 Output: numbered list with quoted text; skip checks with no issues. If all pass, "OK"."""
 
@@ -320,9 +324,72 @@ Problems to fix:
 
 Output only the revised narrative — no preamble or explanation."""
 
+_GROUND_PROMPT = """\
+Every paragraph in a literature review must cite at least one source. The paragraphs listed
+below contain NO citation. Revise the narrative so each one either (a) states the source(s)
+for its ideas in [@citekey] form drawn from the digest, or (b) is merged into an adjacent
+paragraph that already carries the evidence. Do NOT invent citekeys, and do NOT keep any
+transition- or conclusion-only paragraph that stands without a citation. Change nothing else.
+
+Evidence digest:
+{digest}
+
+Current narrative:
+{narrative}
+
+Paragraphs lacking a citation:
+{offenders}
+
+Output only the revised narrative."""
+
+# Matches a pandoc citation tag, e.g. [@schelling1971]. Used to verify every body
+# paragraph carries at least one source — the "weave the argument" rule turned, without
+# this guard, into citation-free transition/conclusion paragraphs.
+_CITE_TAG_RE = re.compile(r"\[@[^\]\s]+\]")
+
 
 def _is_ok(text: str) -> bool:
     return text.strip().upper().startswith("OK")
+
+
+def _uncited_paragraphs(narrative: str, max_snippet: int = 160) -> list[str]:
+    """Body paragraphs (heading lines stripped) that contain no [@citekey] citation.
+
+    Returns a short snippet of each offender, for use as a critique item or in the
+    grounding backstop. Headings, blank lines, and pure-heading blocks are ignored."""
+    out: list[str] = []
+    for block in re.split(r"\n\s*\n", narrative):
+        prose = "\n".join(ln for ln in block.splitlines()
+                          if not ln.lstrip().startswith("#")).strip()
+        if not prose or _CITE_TAG_RE.search(prose):
+            continue
+        snippet = " ".join(prose.split())
+        out.append(snippet[:max_snippet] + ("…" if len(snippet) > max_snippet else ""))
+    return out
+
+
+def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
+                                 max_passes: int = 2) -> str:
+    """Hard backstop after the critique loop: guarantee no paragraph is citation-free.
+
+    The loop usually clears these, but if any survive we run up to `max_passes` focused
+    revisions that only ground or merge the offending paragraphs. No-op (no LLM call) when
+    every paragraph is already cited."""
+    for _ in range(max_passes):
+        uncited = _uncited_paragraphs(narrative)
+        if not uncited:
+            break
+        offenders = "\n".join(f'- "{p}"' for p in uncited)
+        print(f"  [guard] grounding {len(uncited)} uncited paragraph(s)...", flush=True)
+        try:
+            narrative = brain.coordinator(
+                _GROUND_PROMPT.format(digest=digest, narrative=narrative, offenders=offenders),
+                SYNTH_SYS, num_ctx=16384)  # think on
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] citation enforcement failed ({e}); keeping current.",
+                  file=sys.stderr)
+            break
+    return narrative
 
 
 def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
@@ -359,13 +426,28 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
             print(f"  [warn] peer-review critique failed ({e}); skipping.", file=sys.stderr)
             substance = "OK"
 
-        if _is_ok(lint) and _is_ok(substance):
+        # Deterministic guard: no body paragraph may be citation-free. Folded in here
+        # so the reviser fixes it alongside everything else, and so a clean lint can't
+        # let an uncited paragraph slip through to early-exit.
+        uncited = _uncited_paragraphs(narrative)
+        if uncited:
+            print(f"  [guard] {len(uncited)} paragraph(s) lack a citation — forcing revision.",
+                  flush=True)
+
+        if _is_ok(lint) and _is_ok(substance) and not uncited:
             print("  Critique clean — no further revision needed.", flush=True)
             break
 
         parts = []
         if not _is_ok(lint):
             parts.append("MECHANICAL:\n" + lint.strip())
+        if uncited:
+            listing = "\n".join(f'- "{p}"' for p in uncited)
+            parts.append(
+                "UNCITED PARAGRAPHS — every paragraph must cite at least one source. "
+                "Ground each of these in the source(s) for its ideas (in [@citekey] form "
+                "from the digest) or merge it into an adjacent cited paragraph; do not "
+                "leave a transition- or conclusion-only paragraph:\n" + listing)
         if not _is_ok(substance):
             parts.append("SUBSTANTIVE:\n" + substance.strip())
         critique = "\n\n".join(parts)
@@ -382,7 +464,9 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
                   file=sys.stderr)
             break
 
-    return narrative
+    # Hard backstop: if the loop ran out of rounds with any paragraph still
+    # citation-free, force-ground them before returning.
+    return _enforce_paragraph_citations(brain, narrative, digest)
 
 
 def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]) -> str:
@@ -414,8 +498,10 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
               f"the project, not around the {n} sources — you need not use every source; "
               f"drop any that serves no project-relevant idea. Aim for about "
               f"{target_sections} thematic sections; each develops a few related ideas "
-              f"(each traceable to its source) across at least three paragraphs and "
-              f"closes by saying what those ideas mean for the project's focus.")
+              f"across at least three paragraphs that ACCRETE — every paragraph brings in "
+              f"new sources and ties them to the ideas already raised, so every paragraph "
+              f"cites at least one source — weaving toward what those ideas mean for the "
+              f"project's focus.")
     sys_prompt = SYNTH_SYS
     if style_profile:
         sys_prompt = (sys_prompt.rstrip()
