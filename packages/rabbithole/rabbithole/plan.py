@@ -7,6 +7,11 @@ The coordinator classifies the annotations into one of three tiers:
   gap_fill     "more on X", X absent from corpus -> gather -> collect -> revise -> comment
   redirection  new direction / wrong scope       -> gather -> collect -> revise -> comment
 
+Orthogonally, if the reviewer pasted references into the draft ("add these citations" /
+work from a related project), an `ingest` step is prepended to the chain (and a `collect`
+step guaranteed before `revise`): ingest pulls the Zotero-matched references into the
+corpus so revise can cite them, and lists the rest for you to add at the collect step.
+
 parseNplan never runs gather/revise itself. Commanded steps (gather, revise) are
 queued with a shell command and assigned to the trundlr runner resource, which
 executes them once their dependency is done. Human steps (collect, comment) carry
@@ -45,6 +50,9 @@ _PIPELINE = {
 # `hours` is a scheduling estimate (trundlr durations are in hours) so reflow can
 # lay the chain out on the timeline.
 _STEP = {
+    "ingest":  {"human": False, "verb": "ingest", "hours": 0.5,
+                "desc": "Pull the reviewer-supplied references into the corpus (Zotero "
+                        "matches) and list the rest for the collect step."},
     "gather":  {"human": False, "verb": "gather", "hours": 1.0,
                 "desc": "Discover & curate new sources into the Zotero collection."},
     "collect": {"human": True,  "verb": None,    "hours": 0.5,
@@ -109,6 +117,7 @@ faithfully. These fields become a new iterated project config that re-aims gathe
 Respond with a single JSON object:
 {{
   "tier": "cosmetic" | "gap_fill" | "redirection",
+  "added_references": true | false,
   "assessment": "1-3 sentences explaining the decision; name the annotation that drove it",
   "gather_topics": ["specific search topics to deepen the requested areas"],
   "focus_addition": "one line to steer the next search toward those areas, or empty",
@@ -116,8 +125,26 @@ Respond with a single JSON object:
   "new_focus": "redirection only: the new emphasis/scope in one line, else empty",
   "new_research_prompt": "redirection only: a self-contained 3-6 sentence research brief in the new direction, else empty"
 }}
+Independently of the tier, set added_references to true if the reviewer pasted
+bibliographic references or new citations into the draft — inserted reference text, a
+reference list, or a comment such as "add these citations" / "incorporate this work from
+a related project". This routes an `ingest` step ahead of the chain to bring those
+specific sources into the corpus (it is orthogonal to cosmetic/gap_fill/redirection).
+
 gather_topics and focus_addition are needed for gap_fill or redirection; the new_* fields
-are needed only for redirection."""
+are needed only for redirection; added_references may be set for any tier."""
+
+
+def _chain_for(tier: str, plan: dict) -> list[str]:
+    """Pipeline steps for this plan. When the reviewer pasted references, prepend an
+    `ingest` step and guarantee a `collect` step precedes `revise` (so the human can
+    add any not-in-Zotero references before the re-draft)."""
+    steps = list(_PIPELINE[tier])
+    if plan.get("added_references"):
+        steps = ["ingest"] + steps
+        if "collect" not in steps and "revise" in steps:
+            steps.insert(steps.index("revise"), "collect")
+    return steps
 
 
 # ── coverage + plan ────────────────────────────────────────────────────────────
@@ -176,6 +203,7 @@ def _make_plan(brain: Brain, cfg, coverage: str, revision_context: str) -> dict:
     plan.setdefault("new_topic", "")
     plan.setdefault("new_focus", "")
     plan.setdefault("new_research_prompt", "")
+    plan.setdefault("added_references", False)
     return plan
 
 
@@ -379,7 +407,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     plan = _make_plan(brain, cfg, coverage, revision_context)
     tier = plan["tier"]
-    steps = _PIPELINE[tier]
+    steps = _chain_for(tier, plan)
 
     print()
     _print_plan(cfg, docx, plan, steps)

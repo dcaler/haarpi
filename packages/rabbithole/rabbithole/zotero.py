@@ -85,6 +85,17 @@ class ZoteroClient:
             start += 100
         return out
 
+    def search(self, query: str, limit: int = 50) -> list[dict]:
+        """Quick top-level library search across title/creator/year (Zotero `q=`)."""
+        try:
+            r = self._client.get(f"{self.prefix}/items/top",
+                                 params={"q": query, "qmode": "titleCreatorYear",
+                                         "format": "json", "limit": limit})
+            r.raise_for_status()
+            return r.json()
+        except Exception:  # noqa: BLE001
+            return []
+
     def collection_items(self, collection_key: str) -> list[dict]:
         """Top-level items in the collection (excludes attachments/notes)."""
         out, start = [], 0

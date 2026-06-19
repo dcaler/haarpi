@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from .models import Author, Candidate
+from .models import Author, Candidate, norm_doi, _norm_title
 
 TIMEOUT = httpx.Timeout(30.0)
 
@@ -156,6 +156,65 @@ def openalex_snowball(seed_dois: list[str], email: str,
     except Exception as e:  # noqa: BLE001
         _warn(f"OpenAlex snowball failed: {e}")
     return out
+
+
+# ── single-reference resolution (for `ingest`) ───────────────────────────────
+def title_overlap(a: str, b: str) -> float:
+    """Jaccard overlap of normalised title words — cheap fuzzy title match."""
+    wa, wb = set(_norm_title(a).split()), set(_norm_title(b).split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
+def resolve_by_doi(doi: str, email: str) -> Candidate | None:
+    """Full metadata for a known DOI, via OpenAlex (Crossref fallback)."""
+    doi = norm_doi(doi)
+    if not doi:
+        return None
+    try:
+        with _client(email) as c:
+            r = c.get(f"https://api.openalex.org/works/doi:{doi}",
+                      params={"mailto": email} if email else {})
+            if r.status_code == 200:
+                return _openalex_work_to_candidate(r.json())
+    except Exception as e:  # noqa: BLE001
+        _warn(f"openalex DOI resolve failed for {doi}: {e}")
+    try:
+        hits = search_crossref(doi, 1, email)
+        if hits:
+            return hits[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def resolve_by_title(title: str, email: str, year: int | None = None,
+                     min_overlap: float = 0.6) -> Candidate | None:
+    """Best metadata match for a free-text reference with no DOI.
+
+    Searches Crossref then OpenAlex and keeps the closest title match (Jaccard >=
+    min_overlap), nudged by year agreement. Returns None when nothing matches well
+    enough — a wrong match is worse than reporting the reference as unresolved."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    cands: list[Candidate] = []
+    for fn in (search_crossref, search_openalex):
+        try:
+            cands += fn(title, 3, email)
+        except Exception:  # noqa: BLE001
+            continue
+        if cands:
+            break
+    best, best_score = None, 0.0
+    for c in cands:
+        s = title_overlap(title, c.title)
+        if year and c.year and abs(c.year - year) > 1:
+            s -= 0.2
+        if s > best_score:
+            best, best_score = c, s
+    return best if best_score >= min_overlap else None
 
 
 def _split_name(name: str) -> Author:

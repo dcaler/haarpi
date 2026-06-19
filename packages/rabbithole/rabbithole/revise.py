@@ -16,11 +16,11 @@ import re
 import sys
 from pathlib import Path
 
-from . import config, docxio, render
+from . import config, corpus as corpus_mod, docxio, render
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
-    _make_citekeys, _digest, bibliography, citation_check,
+    _make_citekeys, _digest, bibliography, citation_check, read_notes,
     SYNTH_SYS, _critique_revise_synthesis, _cited_indices,
 )
 
@@ -144,12 +144,22 @@ def run(directory: str = ".", brain_override: str | None = None,
     else:
         current_narrative = md_path.read_text(encoding="utf-8")
 
-    # 4. Load corpus + notes
+    # 4. Load corpus + notes. Pull in anything added to the Zotero collection since the
+    #    last build (e.g. via `ingest` and your `collect` step). Append-only, so existing
+    #    per-paper notes stay index-aligned; only the new tail gets annotated.
     corpus = _load_corpus(paths)
     if not corpus:
         print("[error] work/corpus.json not found — run 'rabbitHole report' first.",
               file=sys.stderr)
         return 1
+    if gc.have_zotero and cfg.zotero.get("collection_key"):
+        new = corpus_mod.refresh_append(cfg, gc, paths, corpus)
+        if new:
+            corpus = corpus + new
+            corpus_mod.persist(paths, corpus)
+            print(f"  Corpus refresh: +{len(new)} new source(s) from Zotero; annotating…",
+                  flush=True)
+            read_notes(brain, corpus, cfg, paths)
     notes = _load_notes(paths, len(corpus))
     citekeys = _make_citekeys(corpus)
 

@@ -74,6 +74,35 @@ def _enrich(c: Candidate, idx: dict[str, Candidate]) -> Candidate:
     return c
 
 
+def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
+                             quiet: bool = False) -> Candidate | None:
+    """Turn one Zotero collection item into a full-text Candidate, or None if it is
+    an attachment/note, an excluded type, or has no usable full text."""
+    data = it.get("data", {})
+    if data.get("itemType") in ("attachment", "note"):
+        return None
+    c = _enrich(_zotero_item_to_candidate(data), idx)
+    if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
+        if not quiet:
+            print(f"    [skip] excluded item type ({c.item_type}): {c.title[:60]}")
+        return None
+    att = zc.pdf_attachment_key(it["key"])
+    text, n_pages = "", 0
+    if att:
+        dest = paths.pdfs / f"{it['key']}.pdf"
+        if zc.download_attachment(att, dest):
+            c.pdf_path = str(dest)
+            text, n_pages = extract_text(dest)
+        if not text:
+            text = zc.fulltext(att)
+    if not text or not looks_like_fulltext(text, n_pages):
+        if not quiet:
+            print(f"    [skip] no usable full text: {c.title[:60]}")
+        return None
+    c.fulltext = text
+    return c
+
+
 def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
     from . import zotero
     zc = zotero.ZoteroClient(gc)
@@ -88,28 +117,51 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
     print(f"  Zotero collection has {len(items)} top-level items.")
     corpus: list[Candidate] = []
     for it in items:
+        c = _corpus_item_from_zotero(zc, it, idx, paths)
+        if c is not None:
+            corpus.append(c)
+    return corpus
+
+
+def persist(paths, corpus: list[Candidate]) -> None:
+    """Write slim corpus metadata (no full text) to work/corpus.json."""
+    slim = []
+    for c in corpus:
+        d = c.to_dict()
+        d["fulltext"] = ""
+        d["fulltext_chars"] = len(c.fulltext)
+        slim.append(d)
+    paths.corpus_json.write_text(json.dumps(slim, indent=2, ensure_ascii=False),
+                                 encoding="utf-8")
+
+
+def refresh_append(cfg, gc, paths, existing: list[Candidate]) -> list[Candidate]:
+    """Append Zotero-collection items not already in `existing` (matched by dedup_key),
+    preserving the order and indices of existing entries so per-paper notes stay aligned.
+
+    Returns ONLY the newly appended candidates (with full text in memory). Does not
+    persist — the caller decides when to write, usually after annotating the new items."""
+    from . import zotero
+    zc = zotero.ZoteroClient(gc)
+    coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
+    if not coll:
+        return []
+    have = {c.dedup_key for c in existing if c.dedup_key}
+    idx = _load_candidate_index(paths)
+    added: list[Candidate] = []
+    for it in zc.collection_items(coll):
         data = it.get("data", {})
         if data.get("itemType") in ("attachment", "note"):
             continue
-        c = _enrich(_zotero_item_to_candidate(data), idx)
-        if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
-            print(f"    [skip] excluded item type ({c.item_type}): {c.title[:60]}")
+        probe = _zotero_item_to_candidate(data)
+        if probe.dedup_key and probe.dedup_key in have:
             continue
-        att = zc.pdf_attachment_key(it["key"])
-        text, n_pages = "", 0
-        if att:
-            dest = paths.pdfs / f"{it['key']}.pdf"
-            if zc.download_attachment(att, dest):
-                c.pdf_path = str(dest)
-                text, n_pages = extract_text(dest)
-            if not text:
-                text = zc.fulltext(att)
-        if not text or not looks_like_fulltext(text, n_pages):
-            print(f"    [skip] no usable full text: {c.title[:60]}")
-            continue
-        c.fulltext = text
-        corpus.append(c)
-    return corpus
+        c = _corpus_item_from_zotero(zc, it, idx, paths, quiet=True)
+        if c is not None and c.dedup_key not in have:
+            added.append(c)
+            if c.dedup_key:
+                have.add(c.dedup_key)
+    return added
 
 
 def ingest_from_folder(paths) -> list[Candidate]:
@@ -162,13 +214,5 @@ def build(cfg, gc, paths, from_folder: bool) -> list[Candidate]:
             print("[note] No Zotero configured — ingesting from ./pdfs/ instead.")
         print("Ingesting from ./pdfs/ folder...")
         corpus = ingest_from_folder(paths)
-    # persist corpus metadata (not full text) for inspection / resume
-    slim = []
-    for c in corpus:
-        d = c.to_dict()
-        d["fulltext"] = ""
-        d["fulltext_chars"] = len(c.fulltext)
-        slim.append(d)
-    paths.corpus_json.write_text(json.dumps(slim, indent=2, ensure_ascii=False),
-                                 encoding="utf-8")
+    persist(paths, corpus)  # slim metadata (no full text) for inspection / resume
     return corpus

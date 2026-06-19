@@ -4,6 +4,7 @@
     rabbitHole gather     discover & curate sources missing from your Zotero collection
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
+    rabbitHole ingest     pull reviewer-supplied references (pasted into a _ra.docx) into the corpus
     rabbitHole parseNplan read annotations, decide next steps, queue them in trundlr
     rabbitHole style      train a style profile on the author's Zotero publications
 
@@ -75,6 +76,13 @@ def main(argv: list[str] | None = None) -> int:
     rev.add_argument("--file", default=None,
                      help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
 
+    ing = sub.add_parser("ingest",
+                         help="pull reviewer-supplied references from a _ra.docx into the corpus")
+    ing.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    ing.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest non-_ra docx in output/)")
+
     pnp = sub.add_parser("parseNplan",
                          help="read annotations, decide next steps, queue them in trundlr")
     pnp.add_argument("--brain", choices=["ollama", "claude"], default=None,
@@ -110,6 +118,11 @@ def main(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=True)
         from . import revise
         return revise.run(args.dir, brain_override=args.brain, docx_path=args.file)
+
+    if args.command == "ingest":
+        _check_env()
+        from . import ingest
+        return ingest.run(args.dir, brain_override=args.brain, docx_path=args.file)
 
     if args.command == "parseNplan":
         _check_env()
