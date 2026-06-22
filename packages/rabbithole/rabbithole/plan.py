@@ -50,16 +50,20 @@ _PIPELINE = {
 # `hours` is a scheduling estimate (trundlr durations are in hours) so reflow can
 # lay the chain out on the timeline.
 _STEP = {
+    # `hours` defaults are cold-start fallbacks only — once a step has completed
+    # tasks in trundlr, _estimate_hours learns from history instead. These values
+    # track the realised medians as of 2026-06 (gather/revise grew heavier with the
+    # multi-query + two-pass-synthesis upgrades; the human steps run quick).
     "ingest":  {"human": False, "verb": "ingest", "hours": 0.5,
                 "desc": "Pull the reviewer-supplied references into the corpus (Zotero "
                         "matches) and list the rest for the collect step."},
-    "gather":  {"human": False, "verb": "gather", "hours": 1.0,
+    "gather":  {"human": False, "verb": "gather", "hours": 1.3,
                 "desc": "Discover & curate new sources into the Zotero collection."},
-    "collect": {"human": True,  "verb": None,    "hours": 0.5,
+    "collect": {"human": True,  "verb": None,    "hours": 0.25,
                 "desc": "Download the new PDFs and add them to the Zotero collection."},
-    "revise":  {"human": False, "verb": "revise", "hours": 1.5,
+    "revise":  {"human": False, "verb": "revise", "hours": 4.0,
                 "desc": "Re-draft the review from the expanded corpus + your annotations."},
-    "comment": {"human": True,  "verb": None,    "hours": 0.5,
+    "comment": {"human": True,  "verb": None,    "hours": 0.15,
                 "desc": "Review the new draft and annotate it."},
 }
 
@@ -289,19 +293,42 @@ def _next_cycle(titles: list[str]) -> int:
     return max(nums, default=0) + 1
 
 
+# How many of the most-recent completed runs to average over. A window (rather
+# than all history) keeps the estimate tracking the current regime: gather and
+# revise grew several-fold heavier with recent upgrades, so an all-history median
+# lags reality (e.g. gather: all-history 0.43h vs recent ~1.3h).
+_ESTIMATE_WINDOW = 5
+
+
+def _task_recency(t: dict):
+    """Sort key putting the most-recently-finished task last (end_date, then id)."""
+    end = t.get("end_date") or ""
+    try:
+        from datetime import datetime
+        ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() if end else 0.0
+    except ValueError:
+        ts = 0.0
+    return (ts, t.get("id") or 0)
+
+
 def _estimate_hours(tasks: list[dict], step: str) -> float:
-    """Median actual duration (hours) of past completed tasks of this step,
-    pooled across all projects.
+    """Median actual duration (hours) of the most recent completed tasks of this
+    step, pooled across all projects.
 
     trundlr records the realised hours in the `duration` field once a task is
-    done, so the schedule estimate self-tunes from history. Falls back to the
-    static per-step default when there is no completed task to learn from."""
+    done, so the schedule estimate self-tunes from history. Only the last
+    _ESTIMATE_WINDOW runs count, so the estimate tracks shifts in runtime rather
+    than being anchored to old, lighter runs. Falls back to the static per-step
+    default when there is no completed task to learn from."""
     pat = re.compile(rf"^lit review {re.escape(step)} (\d+)$", re.I)
-    durs = [float(t["duration"]) for t in tasks
+    done = [t for t in tasks
             if t.get("status") == "done"
             and pat.match((t.get("title") or "").strip())
             and isinstance(t.get("duration"), (int, float)) and t["duration"] > 0]
-    return round(statistics.median(durs), 3) if durs else _STEP[step]["hours"]
+    if not done:
+        return _STEP[step]["hours"]
+    recent = sorted(done, key=_task_recency)[-_ESTIMATE_WINDOW:]
+    return round(statistics.median(float(t["duration"]) for t in recent), 3)
 
 
 # ── trundlr submission ─────────────────────────────────────────────────────────

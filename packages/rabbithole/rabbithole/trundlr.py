@@ -72,7 +72,22 @@ class TrundlrClient:
             body["duration"] = duration
         return self._post("/api/tasks/", body)
 
+    def update_task(self, task_id: int, **fields) -> dict:
+        """PATCH a task (e.g. duration=1.3 to correct a queued estimate)."""
+        return self._patch(f"/api/tasks/{task_id}", fields)
+
     # ── transport ────────────────────────────────────────────────────────────
+    def _patch(self, path: str, body: dict):
+        try:
+            r = self._http.patch(self.base + path, json=body)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError as e:
+            detail = ""
+            if isinstance(e, httpx.HTTPStatusError):
+                detail = f" — {e.response.text[:200]}"
+            raise TrundlrError(f"PATCH {path} failed: {e}{detail}") from e
+
     def _get(self, path: str):
         try:
             r = self._http.get(self.base + path)
