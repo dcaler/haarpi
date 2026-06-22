@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from . import runlog
 from .brain import Brain
 from .config import GLOBAL_CONFIG_PATH, load_global, load_project, save_project
 
@@ -139,7 +140,7 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
     for item in confirmed_items:
         key = item.get("data", {}).get("key", "")
         label = _item_label(item)
-        print(f"  fetching fulltext: {label[:60]}…", flush=True)
+        print(f"  {runlog.stamp()}fetching fulltext: {label[:60]}…", flush=True)
         att_key = zc.pdf_attachment_key(key)
         text = ""
         if att_key:
@@ -159,7 +160,8 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
         print("[error] no fulltext retrieved — cannot train style", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"  analysing style from {len(excerpts_parts)} paper(s)…", flush=True)
+    print(f"  {runlog.stamp()}analysing style from {len(excerpts_parts)} paper(s)…",
+          flush=True)
     brain = Brain(cfg.brain, gc)
     analysis = brain.coordinator(
         _ANALYZE_STYLE_PROMPT.format(
@@ -177,6 +179,7 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
 
 def run(directory: str = ".") -> int:
     from . import zotero as _zotero
+    runlog.start()
     gc = load_global()
     if not gc.have_zotero:
         print("[error] ZOTERO_API_KEY and ZOTERO_LIBRARY_ID must be set", file=sys.stderr)

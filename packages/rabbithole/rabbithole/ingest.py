@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, docxio, sources
+from . import config, corpus as corpus_mod, docxio, runlog, sources
 from .brain import Brain
 from .models import Candidate, norm_doi, _norm_title
 from .revise import _load_corpus
@@ -122,6 +122,7 @@ def _collect_path(paths, docx: Path) -> Path:
 def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None) -> int:
     docxio.require_docx()
+    runlog.start()
     cfg = config.load_project(directory)
     gc = config.load_global()
     paths = config.project_paths(directory)
@@ -140,7 +141,7 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("[warn] No tracked changes or comments found. Nothing to ingest.")
         return 0
 
-    print("  Extracting supplied references (coordinator)…", flush=True)
+    print(f"  {runlog.stamp()}Extracting supplied references (coordinator)…", flush=True)
     refs = _extract_references(brain, context)
     if not refs:
         print("  No reviewer-supplied references found.")
@@ -196,7 +197,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     if added:
         full = corpus + added
         corpus_mod.persist(paths, full)
-        print(f"\n  Annotating {len(added)} new source(s)…", flush=True)
+        print(f"\n  {runlog.stamp()}Annotating {len(added)} new source(s)…", flush=True)
         from .summarize import read_notes
         read_notes(brain, full, cfg, paths)  # writes notes for the new tail indices only
 

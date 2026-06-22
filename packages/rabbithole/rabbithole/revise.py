@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, docxio, render
+from . import config, corpus as corpus_mod, docxio, render, runlog
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
@@ -95,7 +96,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
         sys_prompt = (sys_prompt.rstrip()
                       + f"\n\nWRITING STYLE\nMatch the following author's voice and "
                         f"prose style throughout:\n{style_profile}")
-    print("  Re-synthesising narrative (coordinator)...", flush=True)
+    print(f"  {runlog.stamp()}Re-synthesising narrative (coordinator)...", flush=True)
     narrative = brain.coordinator(prompt, sys_prompt, num_ctx=16384)
     return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
 
@@ -105,6 +106,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None) -> int:
     docxio.require_docx()
+    t0 = runlog.start()
 
     cfg = config.load_project(directory)
     gc = config.load_global()
@@ -157,8 +159,8 @@ def run(directory: str = ".", brain_override: str | None = None,
         if new:
             corpus = corpus + new
             corpus_mod.persist(paths, corpus)
-            print(f"  Corpus refresh: +{len(new)} new source(s) from Zotero; annotating…",
-                  flush=True)
+            print(f"  {runlog.stamp()}Corpus refresh: +{len(new)} new source(s) "
+                  f"from Zotero; annotating…", flush=True)
             read_notes(brain, corpus, cfg, paths)
     notes = _load_notes(paths, len(corpus))
     citekeys = _make_citekeys(corpus)
@@ -196,7 +198,7 @@ def run(directory: str = ".", brain_override: str | None = None,
 
     print()
     print("=" * 60)
-    print(" revise complete")
+    print(f" revise complete  [{runlog.fmt_dt(time.time() - t0)}]")
     print("=" * 60)
     print(f"  Review (md)  : {out_md}")
     if out_docx.exists():

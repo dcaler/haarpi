@@ -18,32 +18,54 @@ import json
 import re
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, render
+from . import config, corpus as corpus_mod, render, runlog
 from .brain import Brain
 from .models import Candidate, norm_doi
 from .pdfs import page_marked_text
 
 
 def _make_citekeys(corpus: list[Candidate]) -> dict[int, str]:
-    """Map corpus index → {last}{year} BibTeX citekey, with a/b/c disambiguation."""
+    """Map corpus index → citation key.
+
+    Prefer the source's own Better BibTeX key (parsed from Zotero's Extra field),
+    so the review cites with the user's curated keys and the exported refs.bib
+    matches. Items with no Zotero key — manually-added folder PDFs, or the rare
+    unpinned item — fall back to a generated {last}{year} key, disambiguated
+    against every key already in use so it never collides with a real one.
+    """
     def _base(c: Candidate) -> str:
         last = re.sub(r"[^a-z0-9]", "", c.first_author_last.lower())
         return f"{last}{c.year}" if c.year else f"{last}nd"
 
-    groups: dict[str, list[int]] = defaultdict(list)
-    for i, c in enumerate(corpus):
-        groups[_base(c)].append(i)
-
     keys: dict[int, str] = {}
-    for base, indices in groups.items():
-        if len(indices) == 1:
-            keys[indices[0]] = base
+    used: set[str] = {c.citekey for c in corpus if c.citekey}
+
+    # 1) Honour Zotero/Better BibTeX keys verbatim.
+    needs_gen: list[int] = []
+    for i, c in enumerate(corpus):
+        if c.citekey:
+            keys[i] = c.citekey
         else:
-            for j, i in enumerate(indices):
-                keys[i] = base + "abcdefghijklmnopqrstuvwxyz"[j]
+            needs_gen.append(i)
+
+    # 2) Generate for the rest, suffixing a/b/c… past any collision.
+    if needs_gen:
+        labels = [f"{c.first_author_last} {c.year or ''}".strip()
+                  for c in (corpus[i] for i in needs_gen)]
+        print(f"  [note] {len(needs_gen)} source(s) have no Zotero citation key; "
+              f"generating one: {', '.join(labels[:5])}"
+              + (" …" if len(labels) > 5 else ""), file=sys.stderr)
+        for i in needs_gen:
+            base = _base(corpus[i])
+            key = base
+            j = 0
+            while key in used:
+                key = base + "abcdefghijklmnopqrstuvwxyz"[j % 26]
+                j += 1
+            used.add(key)
+            keys[i] = key
     return keys
 
 try:
@@ -58,11 +80,11 @@ _LOCATE_FALLBACK_CHARS = 24000  # used only when ChromaDB is unavailable
 _LOCATE_TOP_K = 4               # chunks to retrieve per claim via ChromaDB
 
 
-def _fmt_dt(secs: float) -> str:
-    s = int(secs)
-    h, r = divmod(s, 3600)
-    m, s = divmod(r, 60)
-    return f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+# Shared run clock (rabbithole.runlog): run() calls runlog.start(); the deep
+# synthesis/locate helpers — some reused by `revise` — stamp progress lines via
+# _stamp() without threading a start time through every signature.
+_stamp = runlog.stamp
+_fmt_dt = runlog.fmt_dt
 
 
 def _chunk(text: str, size: int) -> list[str]:
@@ -152,7 +174,7 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             done += 1
             continue
         label = f"{c.first_author_last} {c.year or ''}".strip()
-        print(f"  [{i + 1}/{len(corpus)}] {label}", end="", flush=True)
+        print(f"  {_stamp()}[{i + 1}/{len(corpus)}] {label}", end="", flush=True)
         text = _paper_text(c)
         # Index full page-marked text in ChromaDB before condensing for notes
         if collection is not None and not _chroma.is_paper_indexed(collection, i):
@@ -380,7 +402,8 @@ def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
         if not uncited:
             break
         offenders = "\n".join(f'- "{p}"' for p in uncited)
-        print(f"  [guard] grounding {len(uncited)} uncited paragraph(s)...", flush=True)
+        print(f"  {_stamp()}[guard] grounding {len(uncited)} uncited paragraph(s)...",
+              flush=True)
         try:
             narrative = brain.coordinator(
                 _GROUND_PROMPT.format(digest=digest, narrative=narrative, offenders=offenders),
@@ -407,7 +430,7 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
     for r in range(1, rounds + 1):
         tag = f" (round {r}/{rounds})" if rounds > 1 else ""
 
-        print(f"  Critiquing synthesis — lint{tag}...", flush=True)
+        print(f"  {_stamp()}Critiquing synthesis — lint{tag}...", flush=True)
         try:
             lint = brain.coordinator(
                 _LINT_PROMPT.format(narrative=narrative),
@@ -416,7 +439,7 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
             print(f"  [warn] lint critique failed ({e}); skipping.", file=sys.stderr)
             lint = "OK"
 
-        print(f"  Critiquing synthesis — peer review{tag}...", flush=True)
+        print(f"  {_stamp()}Critiquing synthesis — peer review{tag}...", flush=True)
         try:
             substance = brain.coordinator(
                 _SUBSTANCE_PROMPT.format(
@@ -431,11 +454,11 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
         # let an uncited paragraph slip through to early-exit.
         uncited = _uncited_paragraphs(narrative)
         if uncited:
-            print(f"  [guard] {len(uncited)} paragraph(s) lack a citation — forcing revision.",
-                  flush=True)
+            print(f"  {_stamp()}[guard] {len(uncited)} paragraph(s) lack a citation "
+                  f"— forcing revision.", flush=True)
 
         if _is_ok(lint) and _is_ok(substance) and not uncited:
-            print("  Critique clean — no further revision needed.", flush=True)
+            print(f"  {_stamp()}Critique clean — no further revision needed.", flush=True)
             break
 
         parts = []
@@ -452,7 +475,7 @@ def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
             parts.append("SUBSTANTIVE:\n" + substance.strip())
         critique = "\n\n".join(parts)
 
-        print(f"  Revising synthesis{tag}...", flush=True)
+        print(f"  {_stamp()}Revising synthesis{tag}...", flush=True)
         try:
             narrative = brain.coordinator(
                 _REVISE_FROM_CRITIQUE_PROMPT.format(
@@ -507,7 +530,7 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
         sys_prompt = (sys_prompt.rstrip()
                       + f"\n\nWRITING STYLE\nMatch the following author's voice and "
                         f"prose style throughout:\n{style_profile}")
-    print("  Synthesising narrative (coordinator)...", flush=True)
+    print(f"  {_stamp()}Synthesising narrative (coordinator)...", flush=True)
     narrative = brain.coordinator(prompt, sys_prompt, num_ctx=16384)
     return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
 
@@ -558,8 +581,8 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
     located_dir = paths.work / "located"
     located_dir.mkdir(parents=True, exist_ok=True)
     cited = _cited_indices(narrative, citekeys)
-    print(f"  {len(cited)} of {len(corpus)} sources are cited — locating their claims...",
-          flush=True)
+    print(f"  {_stamp()}{len(cited)} of {len(corpus)} sources are cited "
+          f"— locating their claims...", flush=True)
     located: dict[int, list] = {}
     t_step = time.time()
     for i in cited:
@@ -577,13 +600,13 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
         label = f"{c.first_author_last} {c.year or ''}".strip()
         if collection is not None:
             if not _chroma.is_paper_indexed(collection, i):
-                print(f"  indexing {label} for retrieval...", flush=True)
+                print(f"  {_stamp()}indexing {label} for retrieval...", flush=True)
                 _chroma.index_paper(collection, brain, i, _paper_text(c))
-            print(f"  locating {label}  (embedding retrieval)", flush=True)
+            print(f"  {_stamp()}locating {label}  (embedding retrieval)", flush=True)
             items = _chroma.locate_direct(collection, brain, i, statements)
         else:
             # Fallback: LLM-based locate when ChromaDB unavailable
-            print(f"  locating {label}  (LLM fallback)", flush=True)
+            print(f"  {_stamp()}locating {label}  (LLM fallback)", flush=True)
             body = _paper_text(c)[:_LOCATE_FALLBACK_CHARS]
             try:
                 raw = brain.coordinator(_locate_prompt(c, statements, body), LOCATE_SYS)
@@ -639,7 +662,11 @@ def citation_check(narrative: str, citekeys: dict[int, str]) -> list[str]:
 # ──────────────────────────────────────────────────────────────────────────
 def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
                         key_by_title: dict[str, str]) -> str:
-    """Replace Zotero-generated citekeys with our {last}{year} keys."""
+    """Align the export's citekeys with the ones used in the narrative.
+
+    For Zotero items these already match (both come from the Better BibTeX key),
+    so this is a no-op; it still rewrites the key for any source that fell back to
+    a generated {last}{year} key, keeping refs.bib consistent with the .docx."""
     starts = [m.start() for m in re.finditer(r"^@", bib_text, re.MULTILINE)]
     if not starts:
         return bib_text
@@ -672,7 +699,7 @@ def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
 
 def _export_bibtex(cfg, gc, paths, citekeys: dict[int, str],
                    corpus: list[Candidate]) -> "Path | None":
-    """Fetch BibTeX from Zotero, patch citekeys to match ours, write output/refs.bib."""
+    """Fetch BibTeX from Zotero, align citekeys with the narrative, write output/refs.bib."""
     if not gc.have_zotero:
         return None
     collection_key = cfg.zotero.get("collection_key", "")
@@ -740,7 +767,7 @@ def run(directory: str = ".", brain_override: str | None = None,
         return 1
     print(f"\nCorpus: {len(corpus)} sources with full text.")
     citekeys = _make_citekeys(corpus)
-    t0 = time.time()
+    t0 = runlog.start()
 
     collection = None
     if _HAVE_CHROMA:
@@ -753,10 +780,10 @@ def run(directory: str = ".", brain_override: str | None = None,
     else:
         print("  [info] chromadb not installed — run: pip install 'rabbithole[rag]'")
 
-    print("\n[1/3] Reading papers (notes for synthesis)...")
+    print(f"\n{_stamp()}[1/3] Reading papers (notes for synthesis)...")
     notes = read_notes(brain, corpus, cfg, paths, collection=collection)
 
-    print("\n[2/3] Synthesising the review...")
+    print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""
     if cfg.use_style:
         from .style import load_style_profile
@@ -768,7 +795,7 @@ def run(directory: str = ".", brain_override: str | None = None,
                   "run 'rabbitHole style' to train one.")
     narrative = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
 
-    print("\n[3/3] Locating cited claims for the annotated bibliography...")
+    print(f"\n{_stamp()}[3/3] Locating cited claims for the annotated bibliography...")
     located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
                             collection=collection, citekeys=citekeys)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 
+from . import runlog
 from .brain import Brain
 from .filters import is_arxiv
 from .models import Candidate
@@ -97,7 +98,8 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
 
     # 1) embedding pre-sort: title + abstract + keywords vs the topic/focus
     query = f"{topic}. {focus}".strip()
-    print(f"  Embedding {len(candidates)} candidates for relevance pre-sort...", flush=True)
+    print(f"  {runlog.stamp()}Embedding {len(candidates)} candidates "
+          f"for relevance pre-sort...", flush=True)
     try:
         q_emb = brain.embed(query)
         doc_embs = brain.embed_batch([_doc_text(c) for c in candidates])
@@ -124,7 +126,7 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
     if method == "llm":
         n = min(rerank_top_n or max(target * 2, 25), len(ranked))
         if n > 0:
-            print(f"  Expert LLM re-rank of top {n}...")
+            print(f"  {runlog.stamp()}Expert LLM re-rank of top {n}...")
             ranked = _llm_rerank(ranked, topic, focus, brain, n,
                                  domain_anchor, exclude_topics, max_cites)
     return ranked

@@ -33,7 +33,7 @@ import statistics
 import sys
 from pathlib import Path
 
-from . import config, docxio, notify
+from . import config, docxio, notify, runlog
 from .brain import Brain
 from .models import Candidate
 from .revise import _load_corpus
@@ -380,6 +380,7 @@ def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None, dry_run: bool = False,
         use_trundlr: bool = True) -> int:
     docxio.require_docx()
+    runlog.start()
 
     cfg = config.load_project(directory)
     gc = config.load_global()
@@ -403,7 +404,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     coverage = _coverage_summary(corpus)
 
     # 4. Coordinator plan
-    print("  Reading annotations and planning (coordinator)…", flush=True)
+    print(f"  {runlog.stamp()}Reading annotations and planning (coordinator)…", flush=True)
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     plan = _make_plan(brain, cfg, coverage, revision_context)
     tier = plan["tier"]

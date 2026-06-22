@@ -18,7 +18,7 @@ import re
 import sys
 import time
 
-from . import config, filters, ranking, render, sources
+from . import config, filters, ranking, render, runlog, sources
 from .brain import Brain
 from .models import Candidate, norm_doi
 
@@ -96,7 +96,7 @@ Return the corrected JSON."""
 def _critique_revise_topic(brain: Brain, prompt: str, data: dict) -> dict:
     """One critique→revise cycle on the extracted topic fields."""
     extracted_str = json.dumps(data, indent=2)
-    print("  Critiquing topic extraction...", flush=True)
+    print(f"  {runlog.stamp()}Critiquing topic extraction...", flush=True)
     try:
         critique = brain.coordinator(
             _TOPIC_CRITIQUE_PROMPT.format(prompt=prompt, extracted=extracted_str),
@@ -106,7 +106,7 @@ def _critique_revise_topic(brain: Brain, prompt: str, data: dict) -> dict:
         return data
     if critique.strip().upper().startswith("OK"):
         return data
-    print("  Revising topic extraction...", flush=True)
+    print(f"  {runlog.stamp()}Revising topic extraction...", flush=True)
     try:
         raw = brain.coordinator(
             _TOPIC_REVISE_PROMPT.format(
@@ -232,7 +232,7 @@ Fix every listed problem:
 def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]:
     """One critique→revise cycle on the generated query list."""
     q_str = "\n".join(f"  {i + 1}. {q}" for i, q in enumerate(queries))
-    print("  Critiquing search queries...", flush=True)
+    print(f"  {runlog.stamp()}Critiquing search queries...", flush=True)
     try:
         critique = brain.coordinator(
             _QUERY_CRITIQUE_PROMPT.format(
@@ -248,7 +248,7 @@ def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]
         return queries
     if critique.strip().upper().startswith("OK"):
         return queries
-    print("  Revising search queries...", flush=True)
+    print(f"  {runlog.stamp()}Revising search queries...", flush=True)
     try:
         raw = brain.coordinator(
             _QUERY_REVISE_PROMPT.format(
@@ -312,12 +312,11 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     paths = config.project_paths(directory).ensure()
     brain = _make_gather_brain(cfg, gc)
 
-    t0 = time.time()
+    t0 = runlog.start()
 
     def log(msg: str) -> None:
         """Progress line stamped with elapsed mm:ss, so a long run is legible."""
-        el = int(time.time() - t0)
-        print(f"  [{el // 60}:{el % 60:02d}] {msg}", flush=True)
+        print(f"  {runlog.stamp()}{msg}", flush=True)
 
     if not cfg.topic and cfg.research_prompt:
         log("Extracting topic and focus from your research prompt...")

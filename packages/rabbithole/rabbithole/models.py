@@ -45,6 +45,7 @@ class Candidate:
     item_type: str = "journal-article"
     language: str = ""           # ISO 639-1 code if known (e.g. "en", "fr"); "" = unknown
     source: str = ""             # which API surfaced it
+    citekey: str = ""            # Better BibTeX citation key from Zotero (Extra field), if any
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:
     pdf_path: str = ""

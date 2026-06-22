@@ -32,6 +32,17 @@ def _load_candidate_index(paths) -> dict[str, Candidate]:
     return idx
 
 
+# Better BibTeX writes the curated citation key into the item's Extra field as
+# a "Citation Key: xxx" line; Zotero's BibTeX export uses the same key. Parsing it
+# here lets the review cite with the user's own Zotero keys (not generated ones).
+_CITEKEY_RE = re.compile(r"(?im)^[ \t]*Citation Key[ \t]*[:=][ \t]*(\S+)")
+
+
+def _extract_citekey(data: dict) -> str:
+    m = _CITEKEY_RE.search(data.get("extra", "") or "")
+    return m.group(1) if m else ""
+
+
 def _zotero_item_to_candidate(data: dict) -> Candidate:
     authors = []
     for cr in data.get("creators", []):
@@ -58,6 +69,7 @@ def _zotero_item_to_candidate(data: dict) -> Candidate:
         publisher=data.get("publisher", "") or "",
         item_type=data.get("itemType", "journal-article") or "journal-article",
         source="zotero",
+        citekey=_extract_citekey(data),
     )
 
 
