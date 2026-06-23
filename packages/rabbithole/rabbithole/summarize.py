@@ -766,6 +766,11 @@ def run(directory: str = ".", brain_override: str | None = None,
               "and re-run.")
         return 1
     print(f"\nCorpus: {len(corpus)} sources with full text.")
+    # Honour Zotero's Better BibTeX keys even when they aren't pinned to the Extra field
+    # (the common case): source them from the collection's BibTeX export. No-op when the
+    # keys were already captured at ingest, or Zotero is unavailable.
+    if corpus_mod.backfill_citekeys(cfg, gc, paths, corpus):
+        corpus_mod.persist(paths, corpus)
     citekeys = _make_citekeys(corpus)
     t0 = runlog.start()
 

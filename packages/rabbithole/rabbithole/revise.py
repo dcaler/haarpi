@@ -283,6 +283,7 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("[error] work/corpus.json not found — run 'rabbitHole report' first.",
               file=sys.stderr)
         return 1
+    persist_needed = False
     if gc.have_zotero and cfg.zotero.get("collection_key"):
         new = corpus_mod.refresh_append(cfg, gc, paths, corpus)
         if new:
@@ -291,6 +292,16 @@ def run(directory: str = ".", brain_override: str | None = None,
             print(f"  {runlog.stamp()}Corpus refresh: +{len(new)} new source(s) "
                   f"from Zotero; annotating…", flush=True)
             read_notes(brain, corpus, cfg, paths)
+        # Heal a corpus first built before citekeys were captured: fill any empty
+        # citekey from Zotero's Extra so the review cites the user's curated keys
+        # instead of generated ones. Cheap metadata call; no re-ingest.
+        filled = corpus_mod.backfill_citekeys(cfg, gc, paths, corpus)
+        if filled:
+            persist_needed = True
+            print(f"  {runlog.stamp()}Backfilled {filled} Zotero citation key(s) "
+                  f"into the cached corpus.", flush=True)
+    if persist_needed:
+        corpus_mod.persist(paths, corpus)
     notes = _load_notes(paths, len(corpus))
     citekeys = _make_citekeys(corpus)
 

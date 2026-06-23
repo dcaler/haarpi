@@ -176,6 +176,65 @@ def refresh_append(cfg, gc, paths, existing: list[Candidate]) -> list[Candidate]
     return added
 
 
+def _bibtex_key_maps(bib_text: str) -> tuple[dict[str, str], dict[str, str]]:
+    """From a Better BibTeX export, map normalised DOI → key and normalised title → key.
+
+    Uses the same block split and title/DOI normalisation as _patch_bibtex_keys, so the
+    keys recovered here are exactly those the export (and a pinned Extra) would carry."""
+    from .models import _norm_title
+    starts = [m.start() for m in re.finditer(r"^@", bib_text, re.MULTILINE)]
+    by_doi: dict[str, str] = {}
+    by_title: dict[str, str] = {}
+    for i, s in enumerate(starts):
+        block = bib_text[s: starts[i + 1] if i + 1 < len(starts) else len(bib_text)]
+        m = re.match(r"@\w+\{([^,\s]+)", block)
+        if not m:
+            continue
+        key = m.group(1)
+        doi_m = re.search(r"\bdoi\s*=\s*\{([^}]+)\}", block, re.IGNORECASE)
+        if doi_m:
+            by_doi.setdefault(norm_doi(doi_m.group(1).strip()), key)
+        title_m = re.search(r"\btitle\s*=\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+                            block, re.IGNORECASE)
+        if title_m:
+            by_title.setdefault(_norm_title(re.sub(r"[{}]", "", title_m.group(1))), key)
+    return by_doi, by_title
+
+
+def backfill_citekeys(cfg, gc, paths, corpus: list[Candidate]) -> int:
+    """Fill empty `citekey` fields on an already-loaded corpus from Zotero's BibTeX.
+
+    The ingest-time citekey is parsed from an item's Extra field, which only carries a
+    key when Better BibTeX has *pinned* it. Libraries that leave keys unpinned (the
+    common case) ingest with citekey="" even though BBT still has a key for every item —
+    that key appears in the collection's BibTeX export. So we source from the export, not
+    Extra: one HTTP call (no PDF downloads, no LLM), matched to the corpus by DOI then
+    normalised title. Returns the number filled; the caller persists when > 0. No-op when
+    every entry already has a key, Zotero is unavailable, or no collection is configured."""
+    missing = [c for c in corpus if not c.citekey]
+    if not missing or not gc.have_zotero:
+        return 0
+    coll = cfg.zotero.get("collection_key")
+    if not coll:
+        return 0
+    from . import zotero
+    try:
+        zc = zotero.ZoteroClient(gc)
+        bib_text = zc.collection_bibtex(coll)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] citekey backfill skipped — Zotero BibTeX fetch failed ({e}).")
+        return 0
+
+    by_doi, by_title = _bibtex_key_maps(bib_text)
+    filled = 0
+    for c in missing:
+        ck = (c.doi_key and by_doi.get(c.doi_key)) or by_title.get(c.title_key)
+        if ck:
+            c.citekey = ck
+            filled += 1
+    return filled
+
+
 def ingest_from_folder(paths) -> list[Candidate]:
     idx = _load_candidate_index(paths)
     pdfs = sorted(paths.pdfs.glob("*.pdf"))
