@@ -22,11 +22,13 @@ def start() -> float:
 
 
 def stamp() -> str:
-    """Elapsed `[m:ss] ` prefix since start() ('' if the clock isn't running)."""
+    """Elapsed-plus-wall-clock `[m:ss @ HH:MM:SS] ` prefix since start()
+    ('' if the clock isn't running)."""
     if _T0 is None:
         return ""
     el = int(time.time() - _T0)
-    return f"[{el // 60}:{el % 60:02d}] "
+    now = time.strftime("%H:%M:%S", time.localtime())
+    return f"[{el // 60}:{el % 60:02d} @ {now}] "
 
 
 def fmt_dt(secs: float) -> str:
