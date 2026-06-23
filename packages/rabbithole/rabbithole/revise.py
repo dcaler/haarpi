@@ -22,7 +22,7 @@ from .brain import Brain
 from .models import Candidate
 from .summarize import (
     _make_citekeys, _digest, bibliography, citation_check, read_notes,
-    SYNTH_SYS, _critique_revise_synthesis, _cited_indices,
+    SYNTH_SYS, _enforce_paragraph_citations, _is_ok, _cited_indices,
 )
 
 
@@ -72,12 +72,140 @@ CURRENT NARRATIVE (the draft you are revising):
 EVIDENCE DIGEST (ground truth — stay grounded in these sources):
 {digest}
 
-REVISION ANNOTATIONS (apply all of these):
+REVIEWER ANNOTATIONS (the ONLY changes to make):
 {revision_context}
 
-Produce the revised narrative. Apply every annotation faithfully. \
-Maintain [@citekey] citation format throughout. \
-Do not add a bibliography — that is generated separately."""
+Produce the revised narrative by making the SMALLEST set of edits that fully \
+addresses every annotation. This is an iterative revision, not a rewrite: the \
+reviewer must be able to read your output against the current draft and see their \
+comments — and nothing else — addressed.
+
+Rules:
+- Change ONLY what an annotation requires. Leave every other sentence, paragraph, \
+section, heading, ordering, and citation exactly as it stands in the current \
+narrative — word for word.
+- Do NOT restructure, reorder, merge, split, or re-theme sections the reviewer did \
+not flag. Do NOT swap in new sources, drop existing ones, or rewrite prose for style \
+where no annotation calls for it.
+- Where an annotation does require a change, make it precisely and locally, keeping \
+the surrounding text intact.
+- Maintain [@citekey] citation format throughout. Do not add a bibliography — that is \
+generated separately.
+
+Output only the revised narrative."""
+
+
+# ── revision audit (replaces the fresh-synthesis peer-review critique) ─────────
+# A revise must respond ONLY to the reviewer's annotations and leave everything else
+# verbatim, so the reviewer can iterate against a stable draft. The fresh-synthesis
+# critique loop is wrong here: its peer-review pass judges the draft against generic
+# quality ideals and re-themes/merges/drops unflagged content. Instead we run an audit
+# that holds the revision to the annotations themselves — every comment addressed, and
+# nothing changed that no comment asked for — with the previous draft as the baseline.
+
+_AUDIT_SYS = """\
+You are a revision auditor. A literature-review draft has been revised in response to a
+set of reviewer annotations. Your ONLY job is to check that the revision (a) fully and
+genuinely addresses every annotation, and (b) changed nothing the annotations did not
+call for. Judge against the annotations, not your own taste. Respond with ONLY a
+numbered list of specific, actionable problems, one per line, quoting the text you mean.
+If every annotation is adequately addressed and nothing else was altered, respond "OK"."""
+
+_AUDIT_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+REVIEWER ANNOTATIONS (what this revision was supposed to do):
+{revision_context}
+
+PREVIOUS DRAFT (the baseline — everything not flagged should survive unchanged):
+{previous}
+
+REVISED DRAFT (under audit):
+{narrative}
+
+Check, against the annotations only:
+1. Unaddressed comments — flag any annotation the revised draft does not yet adequately
+   satisfy. Quote the annotation and say what is still missing or wrong.
+2. Superficial fixes — flag any annotation answered in name only (e.g. a single word
+   changed where the comment asked for a reworked claim or added evidence). Quote both
+   the annotation and the weak fix.
+3. Overreach — flag any substantive change from the previous draft that NO annotation
+   called for: a section reordered, merged, split, re-themed or dropped; a source added
+   or removed; a passage rewritten for style. Quote the changed text. The reviewer must
+   be able to iterate against a stable draft, so unrequested changes are defects here.
+
+Output: numbered list with quoted text; skip checks with no issues. If the revision
+fully and only addresses the annotations, respond "OK"."""
+
+_REVISE_FROM_AUDIT_PROMPT = """\
+You revised a literature-review draft to address reviewer annotations, and an auditor
+found the problems below. Fix every one: address any annotation still outstanding or
+only superficially handled, and REVERT any change the auditor flags as unrequested back
+to the previous draft's wording. Change nothing else. Maintain [@citekey] citation
+format throughout. Do not add a bibliography — that is generated separately.
+
+REVIEWER ANNOTATIONS:
+{revision_context}
+
+PREVIOUS DRAFT (the baseline to preserve where no annotation applies):
+{previous}
+
+CURRENT REVISED DRAFT:
+{narrative}
+
+Auditor's problems to fix:
+{critique}
+
+Output only the corrected narrative."""
+
+
+def _audit_revise_loop(brain: Brain, cfg, previous: str, narrative: str,
+                       revision_context: str, digest: str,
+                       rounds: int | None = None) -> str:
+    """Iterate audit→fix until the revision addresses every comment and only those.
+
+    Each round audits the current draft against the reviewer annotations (with the
+    previous draft as baseline) and, if anything is outstanding or overreaching, applies
+    a focused fix. Stops early when the audit returns "OK", or after `rounds` rounds
+    (default: brain.cfg.critique_rounds). Ends on the citation-coverage backstop."""
+    if rounds is None:
+        rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
+
+    for r in range(1, rounds + 1):
+        tag = f" (round {r}/{rounds})" if rounds > 1 else ""
+        print(f"  {runlog.stamp()}Auditing revision — comments addressed?{tag}...",
+              flush=True)
+        try:
+            audit = brain.coordinator(
+                _AUDIT_PROMPT.format(
+                    topic=cfg.topic, focus=cfg.focus or "",
+                    revision_context=revision_context,
+                    previous=previous.strip(), narrative=narrative),
+                _AUDIT_SYS, num_ctx=16384)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] revision audit failed ({e}); skipping.", file=sys.stderr)
+            break
+
+        if _is_ok(audit):
+            print(f"  {runlog.stamp()}Audit clean — every comment addressed, no overreach.",
+                  flush=True)
+            break
+
+        print(f"  {runlog.stamp()}Revising to address audit{tag}...", flush=True)
+        try:
+            narrative = brain.coordinator(
+                _REVISE_FROM_AUDIT_PROMPT.format(
+                    revision_context=revision_context, previous=previous.strip(),
+                    narrative=narrative, critique=audit.strip()),
+                SYNTH_SYS, num_ctx=16384)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] revision fix failed ({e}); keeping current.", file=sys.stderr)
+            break
+
+    # Hard backstop: no body paragraph may be citation-free (locate/bibliography
+    # depend on it). No-op when every paragraph already cites a source.
+    return _enforce_paragraph_citations(brain, narrative, digest)
 
 
 def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
@@ -98,7 +226,8 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
                         f"prose style throughout:\n{style_profile}")
     print(f"  {runlog.stamp()}Re-synthesising narrative (coordinator)...", flush=True)
     narrative = brain.coordinator(prompt, sys_prompt, num_ctx=16384)
-    return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
+    return _audit_revise_loop(brain, cfg, current_narrative, narrative,
+                              revision_context, digest)
 
 
 # ── orchestration ─────────────────────────────────────────────────────────────
