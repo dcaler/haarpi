@@ -208,6 +208,81 @@ def _audit_revise_loop(brain: Brain, cfg, previous: str, narrative: str,
     return _enforce_paragraph_citations(brain, narrative, digest)
 
 
+# ── in-place redline revision (comment-preserving, tracked changes) ────────────
+# An alternative to re-synthesising the whole narrative: edit a COPY of the annotated
+# docx in place, answering each comment by rewriting only the paragraph it anchors to,
+# recording every rewrite as a `rabbitHole`-authored tracked change with the comment
+# left in place. The reviewer reads a true redline beside their comments. The deterministic
+# docx surgery lives in `redline`; this is just the per-paragraph brain call.
+
+_PARA_REVISE_SYS = """\
+You are revising ONE paragraph of a scholarly literature review to satisfy a reviewer's
+comment(s) on it. Rewrite the paragraph so it fully and genuinely addresses every
+comment, grounded in the supplied evidence, while keeping its role in the surrounding
+argument. House style: organise around ideas not sources; state a claim, then attach its
+citation immediately after; never make a citation the grammatical subject; tight, active
+prose. Keep the citation style EXACTLY as it already appears in the paragraph (do not
+convert between styles). Only cite a source that appears in the EVIDENCE list. Output
+ONLY the revised paragraph text — no heading, no list, no commentary, no bibliography."""
+
+_PARA_REVISE_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+PARAGRAPH (revise only this):
+{paragraph}
+
+REVIEWER COMMENT(S) on this paragraph (address every one):
+{comments}
+
+EVIDENCE you may cite (author/year and what each offers):
+{digest}
+
+Output only the revised paragraph."""
+
+
+def _redline_revise(brain: Brain, cfg, paths, docx: Path,
+                    corpus: list[Candidate], notes: list[dict],
+                    citekeys: dict[int, str]) -> tuple[Path, dict]:
+    """Answer each anchored comment with an in-place, tracked-change paragraph rewrite.
+
+    Returns (output_docx_path, summary). The brain is called once per commented
+    paragraph; everything else (comment preservation, redline XML) is deterministic.
+    """
+    from . import redline
+    anchors = redline.comment_anchors(docx)
+    cmap = redline.comments_by_id(docx)
+    digest = _digest(corpus, notes, citekeys)
+
+    edits: list[dict] = []
+    skipped: list[str] = []
+    for a in anchors:
+        comments = [cmap[i]["text"] for i in a["ids"] if i in cmap and cmap[i]["text"]]
+        if not comments or not a["text"].strip():
+            skipped.append(f"para {a['para']} (no text or no comment body)")
+            continue
+        print(f"  {runlog.stamp()}Revising para {a['para']} for "
+              f"{len(comments)} comment(s)...", flush=True)
+        prompt = _PARA_REVISE_PROMPT.format(
+            topic=cfg.topic, focus=cfg.focus or "",
+            paragraph=a["text"].strip(),
+            comments="\n".join(f"- {c}" for c in comments),
+            digest=digest)
+        try:
+            new_text = brain.coordinator(prompt, _PARA_REVISE_SYS, num_ctx=16384).strip()
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] para {a['para']} revise failed ({e}); leaving as-is.",
+                  file=sys.stderr)
+            continue
+        if new_text:
+            edits.append({"para": a["para"], "op": "replace", "text": new_text})
+
+    _, out_docx = _revision_paths(paths, docx)
+    summary = redline.apply_edits(docx, out_docx, edits, author="rabbitHole")
+    summary["skipped_paras"] = skipped
+    return out_docx, summary
+
+
 def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
                          notes: list[dict], citekeys: dict[int, str],
                          current_narrative: str, revision_context: str,
@@ -233,7 +308,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 # ── orchestration ─────────────────────────────────────────────────────────────
 
 def run(directory: str = ".", brain_override: str | None = None,
-        docx_path: str | None = None) -> int:
+        docx_path: str | None = None, redline: bool = False) -> int:
     docxio.require_docx()
     t0 = runlog.start()
 
@@ -304,6 +379,25 @@ def run(directory: str = ".", brain_override: str | None = None,
         corpus_mod.persist(paths, corpus)
     notes = _load_notes(paths, len(corpus))
     citekeys = _make_citekeys(corpus)
+
+    # 4b. Redline mode: edit the annotated docx in place with tracked changes, leaving
+    #     comments anchored and un-flagged paragraphs untouched. Skips the full
+    #     re-synthesis (steps 5-8) entirely.
+    if redline:
+        print()
+        out_docx, summary = _redline_revise(brain, cfg, paths, docx,
+                                            corpus, notes, citekeys)
+        print()
+        print("=" * 60)
+        print(f" revise (redline) complete  [{runlog.fmt_dt(time.time() - t0)}]")
+        print("=" * 60)
+        print(f"  {summary['replace']} paragraph(s) revised as tracked changes, "
+              f"{summary['comments_preserved']} comment(s) preserved.")
+        if summary.get("skipped_paras"):
+            print(f"  Skipped: {len(summary['skipped_paras'])} paragraph(s).")
+        if out_docx.exists():
+            print(f"  Review (docx): {out_docx}")
+        return 0
 
     # 5. Style profile
     style_profile = ""

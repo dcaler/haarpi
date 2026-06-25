@@ -75,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="override the brain backend for this run")
     rev.add_argument("--file", default=None,
                      help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
+    rev.add_argument("--redline", action="store_true",
+                     help="edit the annotated docx in place as rabbitHole-authored "
+                          "tracked changes, preserving comments (instead of re-synthesising)")
 
     ing = sub.add_parser("ingest",
                          help="pull reviewer-supplied references from a _ra.docx into the corpus")
@@ -117,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "revise":
         _check_env(need_pandoc=True)
         from . import revise
-        return revise.run(args.dir, brain_override=args.brain, docx_path=args.file)
+        return revise.run(args.dir, brain_override=args.brain, docx_path=args.file,
+                          redline=args.redline)
 
     if args.command == "ingest":
         _check_env()
