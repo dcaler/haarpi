@@ -4,6 +4,8 @@ and de-duplication across sources.
 
 from __future__ import annotations
 
+import re
+
 from .models import Candidate, norm_doi
 
 # MDPI's Crossref DOI prefix — the most reliable signal.
@@ -83,6 +85,31 @@ JUNK_ITEM_TYPES = {
 BOOK_ITEM_TYPES = {"book", "monograph", "edited-book", "reference-book"}
 PREPRINT_ITEM_TYPES = {"preprint", "posted-content"}
 NEWS_ITEM_TYPES = {"news", "magazine-article", "newspaper-article", "blog"}
+REVIEW_ITEM_TYPES = {"review", "review-article"}
+
+# Review detection. A review synthesises a field; a *systematic* review or
+# meta-analysis is a curated, screened bibliography of it — the single highest-value
+# entry point and snowball seed, especially early in a project. We treat these as
+# first-class (boosted in ranking, prioritised as snowball seeds), so the patterns
+# stay conservative: catch the genuine article, not papers that merely mention review.
+_SYSTEMATIC_RE = re.compile(
+    r"\b(systematic review|systematic literature review|meta-?analysis|"
+    r"scoping review|umbrella review|prisma)\b", re.IGNORECASE)
+_REVIEW_TITLE_RE = re.compile(
+    r"\b(literature review|narrative review|state of the art|"
+    r"a review of|review of the literature|: a review)\b", re.IGNORECASE)
+
+
+def is_systematic_review(c: Candidate) -> bool:
+    """A systematic review / meta-analysis (the most valuable kind of review)."""
+    return bool(_SYSTEMATIC_RE.search(f"{c.title} {(c.abstract or '')[:400]}"))
+
+
+def is_review(c: Candidate) -> bool:
+    """Any review article — by item type or by title/abstract signal."""
+    if (c.item_type or "").lower() in REVIEW_ITEM_TYPES:
+        return True
+    return bool(is_systematic_review(c) or _REVIEW_TITLE_RE.search(c.title or ""))
 
 
 def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool) -> bool:

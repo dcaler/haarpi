@@ -9,12 +9,13 @@ Methods:
 
 from __future__ import annotations
 
+import datetime
 import math
 import re
 
 from . import runlog
 from .brain import Brain
-from .filters import is_arxiv
+from .filters import is_arxiv, is_review, is_systematic_review
 from .models import Candidate
 
 
@@ -71,18 +72,44 @@ def _quality_weight(c: Candidate) -> float:
     """Source-type quality multiplier: peer-reviewed journals rank highest."""
     if is_arxiv(c):
         return 0.65
-    if c.item_type == "journal-article" and c.venue:
+    # Review articles are journal-published; OpenAlex types them "review", which must
+    # not drop them below an ordinary article (they used to fall through to 0.85).
+    if c.item_type in ("journal-article", "review", "review-article") and c.venue:
         return 1.0
     if c.doi:   # conference paper, book chapter, etc. — has DOI but not a journal
         return 0.85
     return 0.80
 
 
-def _cite_score(c: Candidate, max_cites: int) -> float:
-    """Log-normalised citation count, 0-1. Gives a small boost to seminal works."""
-    if max_cites <= 0:
+def _review_bonus(c: Candidate) -> float:
+    """Float review articles toward the top of the cut — a synthesis of the field is
+    a high-value entry point, and a systematic review / meta-analysis most of all
+    (it is also the best snowball seed). Strongest early, harmless later: relevance
+    still dominates, this only breaks ties among comparably-relevant papers."""
+    if is_systematic_review(c):
+        return 1.0
+    if is_review(c):
+        return 0.6
+    return 0.0
+
+
+def _cites_per_year(c: Candidate) -> float:
+    """Citation velocity: citations per year since publication. Levels the field
+    between a recent high-impact paper and an old one that simply had more years to
+    accrue cites (48 cites in 2 yrs ≈ 24/yr beats 155 cites over 11 yrs ≈ 14/yr)."""
+    if not c.cited_by_count:
         return 0.0
-    return math.log1p(c.cited_by_count) / math.log1p(max_cites)
+    this_year = datetime.date.today().year
+    age = max(1, this_year - (c.year or this_year) + 1)
+    return c.cited_by_count / age
+
+
+def _cite_score(c: Candidate, max_cpy: float) -> float:
+    """Log-normalised citation *velocity*, 0-1. Rewards recent high-impact work that
+    a raw citation total would bury under older papers."""
+    if max_cpy <= 0:
+        return 0.0
+    return math.log1p(_cites_per_year(c)) / math.log1p(max_cpy)
 
 
 def rank(candidates: list[Candidate], topic: str, focus: str,
@@ -110,15 +137,17 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
             c.relevance = float(c.cited_by_count)
         return sorted(candidates, key=lambda c: c.relevance, reverse=True)
 
-    max_cites = max((c.cited_by_count for c in candidates), default=0)
+    max_cpy = max((_cites_per_year(c) for c in candidates), default=0.0)
     for c, cos in zip(candidates, cosines):
         # semantic relevance × source quality, plus signals that surface high-value
-        # work: a stronger citation term and a top-tier-venue bonus. Quality weight
-        # keeps arXiv from crowding out peer-reviewed work; the prestige/citation
-        # terms float seminal and elite-venue papers toward the top of the pre-sort.
+        # work: a citation-velocity term (cites/year, so recent impact isn't buried
+        # under older totals), a top-tier-venue bonus, and a review bonus. Quality
+        # weight keeps arXiv from crowding out peer-reviewed work; these float the
+        # high-impact, elite-venue, and synthesis papers toward the top of the pre-sort.
         c.relevance = (cos * _quality_weight(c)
-                       + 0.15 * _cite_score(c, max_cites)
-                       + 0.10 * _venue_prestige(c))
+                       + 0.15 * _cite_score(c, max_cpy)
+                       + 0.10 * _venue_prestige(c)
+                       + 0.12 * _review_bonus(c))
 
     ranked = sorted(candidates, key=lambda c: c.relevance, reverse=True)
 
@@ -128,13 +157,13 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
         if n > 0:
             print(f"  {runlog.stamp()}Expert LLM re-rank of top {n}...")
             ranked = _llm_rerank(ranked, topic, focus, brain, n,
-                                 domain_anchor, exclude_topics, max_cites)
+                                 domain_anchor, exclude_topics, max_cpy)
     return ranked
 
 
 def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
                 brain: Brain, top_n: int, domain_anchor: str = "",
-                exclude_topics: str = "", max_cites: int = 0) -> list[Candidate]:
+                exclude_topics: str = "", max_cpy: float = 0.0) -> list[Candidate]:
     head = ranked[:top_n]
     anchor = (f"\nComponent fields and key concepts (covering ANY of these counts as "
               f"relevant background): {domain_anchor}") if domain_anchor else ""
@@ -146,8 +175,11 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
            "background covering at least one important aspect of the topic; "
            "4-5 = tangential; 0-3 = unrelated. For interdisciplinary research, a "
            "paper that substantially covers ANY ONE of the component fields, methods, "
-           "or concepts is valuable background and should score ≥ 6. Judge by "
-           "intellectual relevance, not prestige or citation count." + anchor + excl +
+           "or concepts is valuable background and should score ≥ 6. A systematic "
+           "review, meta-analysis, or literature review OF the topic is an especially "
+           "valuable entry point — score it at the high end of whatever its relevance "
+           "warrants. Judge by intellectual relevance, not prestige or citation count."
+           + anchor + excl +
            "\nRespond with ONLY the number.")
     jobs = []
     for c in head:
@@ -170,7 +202,8 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
         # applied to THIS, so prestige can never rescue off-topic work.
         c.relevance = topical
     # But order the survivors by a quality-augmented key, so that AMONG on-topic
-    # papers the seminal and top-tier-venue ones surface to the top of the list.
-    head.sort(key=lambda c: c.relevance + 1.0 * _cite_score(c, max_cites)
-              + 1.5 * _venue_prestige(c), reverse=True)
+    # papers the high-velocity, top-tier-venue, and review/synthesis ones surface to
+    # the top of the list.
+    head.sort(key=lambda c: c.relevance + 1.0 * _cite_score(c, max_cpy)
+              + 1.5 * _venue_prestige(c) + 1.0 * _review_bonus(c), reverse=True)
     return head + ranked[top_n:]

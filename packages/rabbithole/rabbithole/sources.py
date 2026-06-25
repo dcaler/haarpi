@@ -54,7 +54,8 @@ def _openalex_keywords(w: dict) -> list[str]:
 
 def search_openalex(query: str, limit: int, email: str,
                     year_from: int | None = None, year_to: int | None = None,
-                    sort: str = "relevance_score:desc") -> list[Candidate]:
+                    sort: str = "relevance_score:desc",
+                    extra_filter: str = "") -> list[Candidate]:
     params = {
         "search": query,
         "per-page": min(limit, 200),
@@ -63,6 +64,8 @@ def search_openalex(query: str, limit: int, email: str,
     if email:
         params["mailto"] = email
     filters = ["language:en"]
+    if extra_filter:
+        filters.append(extra_filter)
     if year_from:
         filters.append(f"from_publication_date:{year_from}-01-01")
     if year_to:
@@ -142,17 +145,21 @@ def openalex_snowball(seed_dois: list[str], email: str,
                 refs = [u.rsplit("/", 1)[-1] for u in (w.get("referenced_works") or [])][:per_seed]
                 if refs:
                     out += _openalex_fetch_by_ids(c, refs, email)
+                # Forward citers in two passes: most-cited (established follow-on
+                # work) AND most-recent. A citations-only sort buries recent
+                # high-value work — e.g. a 2024 review — below the per-seed cap,
+                # exactly when it is the freshest synthesis of the field.
                 if wid:
-                    try:
-                        rc = c.get("https://api.openalex.org/works",
-                                   params={"filter": f"cites:{wid}",
-                                           "sort": "cited_by_count:desc",
-                                           "per-page": per_seed, "mailto": email})
-                        if rc.status_code == 200:
-                            out += [_openalex_work_to_candidate(x)
-                                    for x in rc.json().get("results", [])]
-                    except Exception:  # noqa: BLE001
-                        pass
+                    for srt in ("cited_by_count:desc", "publication_date:desc"):
+                        try:
+                            rc = c.get("https://api.openalex.org/works",
+                                       params={"filter": f"cites:{wid}", "sort": srt,
+                                               "per-page": per_seed, "mailto": email})
+                            if rc.status_code == 200:
+                                out += [_openalex_work_to_candidate(x)
+                                        for x in rc.json().get("results", [])]
+                        except Exception:  # noqa: BLE001
+                            pass
     except Exception as e:  # noqa: BLE001
         _warn(f"OpenAlex snowball failed: {e}")
     return out

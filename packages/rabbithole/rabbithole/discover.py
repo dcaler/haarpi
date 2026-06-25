@@ -306,6 +306,81 @@ def _generate_queries(brain: Brain, cfg) -> list[str]:
     return queries
 
 
+_VOCAB_SYS = """\
+You expand an academic literature search to terminology it missed. You are given the
+research topic, the search queries already run, and the titles of papers known to be
+central to this literature — reached through citation trails and the researcher's own
+curated library. Some of those papers name the same concepts, populations, methods, or
+outcomes with DIFFERENT words than the queries used (for example "source separation" or
+"waste segregation" where the queries said "recycling" or "sorting"). Produce 4-6 SHORT
+keyword queries (3-6 words each) built from terminology that appears in these titles but
+is ABSENT from the queries already run, so the search reaches papers the original
+vocabulary could not. Stay strictly within the stated domain; do not drift into excluded
+fields. Respond with ONLY a JSON array of query strings, no other text."""
+
+
+def _vocabulary_queries(brain: Brain, cfg, neighborhood_titles: list[str],
+                        existing_queries: list[str]) -> list[str]:
+    """Learn the field's own vocabulary from the citation-trail / library
+    neighbourhood and emit expansion queries built from terms the original queries
+    missed. Returns [] on failure or if nothing genuinely new is found."""
+    seen_t, uniq = set(), []
+    for t in neighborhood_titles:
+        k = (t or "").strip().lower()
+        if k and k not in seen_t:
+            seen_t.add(k)
+            uniq.append(t.strip())
+    if not uniq:
+        return []
+    prompt = (f"Topic: {cfg.topic}\nFocus: {cfg.focus or '(none)'}\n"
+              f"Must be about: {cfg.domain_anchor or '(the topic above)'}\n"
+              f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+              "Queries already run:\n"
+              + "\n".join(f"  - {q}" for q in existing_queries) + "\n\n"
+              "Titles of papers central to this literature "
+              "(citation trails + your library):\n"
+              + "\n".join(f"  - {t}" for t in uniq[:40]) + "\n\n"
+              "Expansion queries (JSON array):")
+    try:
+        raw = brain.coordinator(prompt, _VOCAB_SYS, num_ctx=4096)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        qs = json.loads(m.group(0)) if m else []
+        qs = [str(q).strip() for q in qs if str(q).strip()]
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] vocabulary expansion failed ({e}); skipping.", file=sys.stderr)
+        return []
+    existing_l = {q.lower() for q in existing_queries}
+    out, seen = [], set()
+    for q in qs:
+        k = q.lower()
+        if k in existing_l or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:6]
+
+
+def _zotero_collection_papers(cfg, gc) -> list[dict]:
+    """Best-effort {doi, title} for items already in the project's Zotero
+    collection — the highest-precision, on-target seeds for snowballing and for
+    vocabulary learning. Empty on any failure or before a collection exists."""
+    key = (cfg.zotero or {}).get("collection_key", "")
+    if not (gc.have_zotero and key):
+        return []
+    try:
+        from . import zotero
+        zc = zotero.ZoteroClient(gc)
+        out = []
+        for it in zc.collection_items(key):
+            d = it.get("data", {})
+            out.append({"doi": norm_doi(d.get("DOI", "")), "title": d.get("title", "")})
+        return out
+    except Exception as e:  # noqa: BLE001
+        print(f"  [note] could not read Zotero collection for seeding ({e}).",
+              file=sys.stderr)
+        return []
+
+
 def run(directory: str = ".", use_zotero: bool = True) -> int:
     cfg = config.load_project(directory)
     gc = config.load_global()
@@ -388,6 +463,19 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         log(f"  +{len(mc)} most-cited")
         raw += mc
 
+        # Reviews pass: pull the field's review articles directly (OpenAlex type:review).
+        # A review — especially a systematic review — is the highest-value entry point and
+        # the best snowball seed, and keyword search often buries it; this surfaces it as a
+        # candidate so the ranker and the snowball can use it. Relevance-sorted (not
+        # citations): a citation sort on a broad topic drifts to mega-cited off-domain
+        # reviews; the velocity-aware ranker handles impact ordering downstream.
+        log("Reviews pass (OpenAlex type:review)...")
+        rv = sources.search_openalex(cfg.topic, per_source, gc.contact_email,
+                                     cfg.date_from, cfg.date_to, extra_filter="type:review")
+        source_counts["OpenAlex (reviews)"] = len(rv)
+        log(f"  +{len(rv)} reviews")
+        raw += rv
+
     log(f"Raw results: {len(raw)}")
     deduped = filters.dedupe(raw)
     log(f"After de-dup: {len(deduped)}")
@@ -415,18 +503,79 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         f"{dropped_meta} thin metadata")
     log(f"Candidates: {len(kept)}")
 
-    # Snowball: widen via OpenAlex citation trails from the MOST-CITED seeds — the
-    # field's established anchors, whose references and citers are the canonical work.
+    # Snowball: widen via OpenAlex citation trails. Seed from BOTH the researcher's
+    # curated Zotero collection (highest-precision, on-target anchors) and the
+    # most-cited candidates (the field's established anchors). Library seeds reach
+    # citation neighbourhoods the keyword search never touched — the lever that pulls
+    # in a field-defining paper whose title uses different vocabulary.
     snowballed = 0
+    snowball_extra: list[Candidate] = []
+    coll_papers = _zotero_collection_papers(cfg, gc)
+    coll_seed_dois = [p["doi"] for p in coll_papers if p["doi"]]
     by_cites = sorted(kept, key=lambda c: c.cited_by_count, reverse=True)
-    seed_dois = [c.doi_key for c in by_cites if c.doi_key][:8]
-    if seed_dois:
-        log(f"Snowball: expanding from {len(seed_dois)} most-cited seeds via citation trails...")
-        extra = _merge_new(sources.openalex_snowball(seed_dois, gc.contact_email), kept, cfg)
-        if extra:
-            snowballed = len(extra)
+    cite_seed_dois = [c.doi_key for c in by_cites if c.doi_key][:8]
+
+    # Review seeds first. A systematic review's reference list is a screened,
+    # curated bibliography of the field, so snowballing FROM reviews is the highest-
+    # yield trail — most of all early on, when the collection is still thin. Pull
+    # deeper from them (more references per seed) than from ordinary anchors.
+    reviews = sorted(
+        (c for c in kept if filters.is_review(c) and c.doi_key),
+        key=lambda c: (filters.is_systematic_review(c), c.cited_by_count), reverse=True)
+    review_seed_dois = list(dict.fromkeys(c.doi_key for c in reviews))[:6]
+    other_seed_dois = [d for d in dict.fromkeys(coll_seed_dois + cite_seed_dois)
+                       if d not in set(review_seed_dois)][:10]
+
+    if review_seed_dois or other_seed_dois:
+        log(f"Snowball: expanding from {len(review_seed_dois)} review seed(s) (deep) + "
+            f"{len(other_seed_dois)} library/most-cited seed(s) via citation trails...")
+        raw_snow: list[Candidate] = []
+        if review_seed_dois:
+            raw_snow += sources.openalex_snowball(
+                review_seed_dois, gc.contact_email, max_seeds=6, per_seed=25)
+        if other_seed_dois:
+            raw_snow += sources.openalex_snowball(
+                other_seed_dois, gc.contact_email, max_seeds=10, per_seed=15)
+        snowball_extra = _merge_new(raw_snow, kept, cfg)
+        if snowball_extra:
+            snowballed = len(snowball_extra)
             log(f"Snowball: +{snowballed} via OpenAlex citation trails")
-            kept += extra
+            kept += snowball_extra
+
+    # Vocabulary feedback: learn the field's own terminology from the citation-trail
+    # neighbourhood + your library, then run ONE more OpenAlex round on the terms the
+    # original queries missed. OpenAlex-only by design — no key needed, and it avoids
+    # the Semantic Scholar rate-limit backoff, so the extra recall costs ~seconds. The
+    # relevance gate downstream is target-bounded, so the wider pool is effectively free.
+    vocab_added = 0
+    if cfg.sources.get("openalex"):
+        neighborhood = ([c.title for c in snowball_extra]
+                        + [p["title"] for p in coll_papers]
+                        + [c.title for c in by_cites[:20]])
+        vqueries = _vocabulary_queries(brain, cfg, neighborhood, queries)
+        if vqueries:
+            log(f"Vocabulary expansion: {len(vqueries)} new term angle(s) "
+                f"learned from the neighbourhood:")
+            for q in vqueries:
+                print(f"        • {q}")
+            vraw: list[Candidate] = []
+            for q in vqueries:
+                vraw += sources.search_openalex(q, per_query, gc.contact_email,
+                                                cfg.date_from, cfg.date_to)
+                # Harvest the reviews written IN the newly-learned vocabulary — this is
+                # how a field-defining review whose title uses different words (e.g. a
+                # "segregation" systematic review under a "recycling" topic) finally
+                # becomes reachable. Relevance sort (not citations) so a recent, on-target
+                # review isn't buried under older, more-cited but looser-matching ones.
+                vraw += sources.search_openalex(
+                    q, max(6, per_query // 2), gc.contact_email,
+                    cfg.date_from, cfg.date_to, extra_filter="type:review")
+            vextra = _merge_new(vraw, kept, cfg)
+            if vextra:
+                vocab_added = len(vextra)
+                kept += vextra
+                log(f"Vocabulary expansion: +{vocab_added} candidate(s) the "
+                    f"original vocabulary missed")
 
     log("Ranking by relevance...")
     ranked = ranking.rank(kept, cfg.topic, cfg.focus, brain,
@@ -488,6 +637,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         "dropped_meta": dropped_meta,
         "candidates": len(kept),
         "snowballed": snowballed,
+        "vocab_added": vocab_added,
         "already": already,
         "auto_added": auto_added,
         "oa_links": sum(1 for c in shortlist if c.oa_pdf_url),
@@ -706,6 +856,8 @@ def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
     ]
     if stats.get("snowballed"):
         lines.append(f"  Snowballed (citation trails): +{stats['snowballed']}")
+    if stats.get("vocab_added"):
+        lines.append(f"  Vocabulary expansion (learned terms): +{stats['vocab_added']}")
     if collection_key:
         lines.append(f"  Already in Zotero collection: {stats['already']}")
         lines.append(f"  Auto-added from your library: {stats['auto_added']}")
