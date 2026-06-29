@@ -161,7 +161,8 @@ def _condense(brain: Brain, text: str) -> str:
 
 
 def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
-               collection=None) -> list[dict]:
+               collection=None, citekeys: dict[int, str] | None = None) -> list[dict]:
+    citekeys = citekeys or {}
     d = paths.annotations_dir
     d.mkdir(parents=True, exist_ok=True)
     notes: list[dict] = [None] * len(corpus)  # type: ignore
@@ -173,12 +174,13 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             notes[i] = json.loads(fp.read_text(encoding="utf-8"))
             done += 1
             continue
+        ck = citekeys.get(i) or f"{i:03d}"
         label = f"{c.first_author_last} {c.year or ''}".strip()
         print(f"  {_stamp()}[{i + 1}/{len(corpus)}] {label}", end="", flush=True)
         text = _paper_text(c)
         # Index full page-marked text in ChromaDB before condensing for notes
-        if collection is not None and not _chroma.is_paper_indexed(collection, i):
-            n_chunks = _chroma.index_paper(collection, brain, i, text)
+        if collection is not None and not _chroma.is_paper_indexed(collection, ck):
+            n_chunks = _chroma.index_paper(collection, brain, ck, text)
             print(f"  ({n_chunks} chunks indexed)", end="", flush=True)
         print(flush=True)
         if len(text) > _DIRECT_CHARS:
@@ -188,7 +190,7 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
                     "methodology research design data collection analysis",
                     "results findings outcomes evidence limitations",
                 ]
-                text = _chroma.query_paper_multi(collection, brain, i, queries,
+                text = _chroma.query_paper_multi(collection, brain, ck, queries,
                                                  n_per_query=3)
                 if not text:
                     text = _condense(brain, _paper_text(c))  # fallback
@@ -561,6 +563,11 @@ def _cited_indices(narrative: str, citekeys: dict[int, str]) -> list[int]:
     return [key_to_idx[k] for k in found if k in key_to_idx]
 
 
+def _located_filename(citekey: str) -> str:
+    """Filesystem-safe name for a per-paper located-claims cache file."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", citekey) or "paper"
+
+
 def _claim_sentences(narrative: str, citekey: str) -> str:
     """Sentences in the narrative that cite this citekey."""
     tag = f"[@{citekey}]"
@@ -587,7 +594,12 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
     t_step = time.time()
     for i in cited:
         c = corpus[i]
-        fp = located_dir / f"{i:03d}.json"
+        ck = citekeys.get(i) or f"{i:03d}"
+        # Cache keyed by citekey, not corpus index: the corpus is re-gathered and
+        # re-keyed between runs, so an index-keyed cache silently attaches the
+        # wrong paper's passages to a reference. The citekey is the stable identity
+        # the narrative actually cites with.
+        fp = located_dir / f"{_located_filename(ck)}.json"
         if fp.exists():
             located[i] = json.loads(fp.read_text(encoding="utf-8"))
             continue
@@ -599,11 +611,11 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
                                                n.get("argument", "")) if x)
         label = f"{c.first_author_last} {c.year or ''}".strip()
         if collection is not None:
-            if not _chroma.is_paper_indexed(collection, i):
+            if not _chroma.is_paper_indexed(collection, ck):
                 print(f"  {_stamp()}indexing {label} for retrieval...", flush=True)
-                _chroma.index_paper(collection, brain, i, _paper_text(c))
+                _chroma.index_paper(collection, brain, ck, _paper_text(c))
             print(f"  {_stamp()}locating {label}  (embedding retrieval)", flush=True)
-            items = _chroma.locate_direct(collection, brain, i, statements)
+            items = _chroma.locate_direct(collection, brain, ck, statements)
         else:
             # Fallback: LLM-based locate when ChromaDB unavailable
             print(f"  {_stamp()}locating {label}  (LLM fallback)", flush=True)
@@ -645,7 +657,8 @@ def bibliography(corpus: list[Candidate], located: dict[int, list]) -> str:
                     line += f': "{quote}"'
                 out.append(line)
         else:
-            out.append("- *(cited in the review; specific passages not located)*")
+            out.append("- *(no supporting passage found in this source's full text "
+                       "— verify the citation against the original)*")
         out.append("")
     return "\n".join(out)
 
@@ -786,7 +799,8 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("  [info] chromadb not installed — run: pip install 'rabbithole[rag]'")
 
     print(f"\n{_stamp()}[1/3] Reading papers (notes for synthesis)...")
-    notes = read_notes(brain, corpus, cfg, paths, collection=collection)
+    notes = read_notes(brain, corpus, cfg, paths, collection=collection,
+                       citekeys=citekeys)
 
     print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""

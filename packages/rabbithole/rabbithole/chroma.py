@@ -1,8 +1,12 @@
 """ChromaDB helpers: index paper chunks and retrieve by semantic similarity.
 
 Each project gets one persistent collection ("papers") stored at work/chroma/.
-Every chunk carries {paper_idx, page, chunk_idx} metadata so queries can be
+Every chunk carries {citekey, page, chunk_idx} metadata so queries can be
 scoped to a single paper and results reassembled in reading order.
+
+Papers are identified by their citekey (not corpus list-index): the corpus is
+re-gathered and re-keyed between runs, so position is not a stable identity —
+keying by citekey keeps the index aligned with the source it actually holds.
 """
 
 from __future__ import annotations
@@ -21,8 +25,13 @@ def get_collection(chroma_dir):
     return client.get_or_create_collection(_COLLECTION_NAME)
 
 
-def is_paper_indexed(collection, paper_idx: int) -> bool:
-    r = collection.get(where={"paper_idx": paper_idx}, limit=1, include=[])
+def _safe_id(citekey: str) -> str:
+    """A chunk-id-safe rendering of a citekey (ChromaDB ids must be strings)."""
+    return re.sub(r'[^A-Za-z0-9._-]', '_', citekey) or 'paper'
+
+
+def is_paper_indexed(collection, citekey: str) -> bool:
+    r = collection.get(where={"citekey": citekey}, limit=1, include=[])
     return len(r["ids"]) > 0
 
 
@@ -54,7 +63,7 @@ def _page_chunks(text: str) -> list[tuple[int, str]]:
     return result
 
 
-def index_paper(collection, brain, paper_idx: int, text: str) -> int:
+def index_paper(collection, brain, citekey: str, text: str) -> int:
     """Chunk, embed, and store a paper. Returns number of chunks indexed."""
     chunks = _page_chunks(text)
     if not chunks:
@@ -62,24 +71,25 @@ def index_paper(collection, brain, paper_idx: int, text: str) -> int:
     texts = [ch for _, ch in chunks]
     embeddings = brain.embed_batch(texts)
     ids, docs, metas, embeds = [], [], [], []
+    safe = _safe_id(citekey)
     for j, ((page_num, chunk_text), emb) in enumerate(zip(chunks, embeddings)):
         if not emb:
             continue
-        ids.append(f"{paper_idx:03d}_{j:04d}")
+        ids.append(f"{safe}_{j:04d}")
         docs.append(chunk_text)
-        metas.append({"paper_idx": paper_idx, "page": page_num, "chunk_idx": j})
+        metas.append({"citekey": citekey, "page": page_num, "chunk_idx": j})
         embeds.append(emb)
     if ids:
         collection.add(ids=ids, documents=docs, metadatas=metas, embeddings=embeds)
     return len(ids)
 
 
-def _paper_chunk_count(collection, paper_idx: int) -> int:
-    r = collection.get(where={"paper_idx": paper_idx}, include=[], limit=9999)
+def _paper_chunk_count(collection, citekey: str) -> int:
+    r = collection.get(where={"citekey": citekey}, include=[], limit=9999)
     return len(r["ids"])
 
 
-def query_paper(collection, brain, paper_idx: int, query: str,
+def query_paper(collection, brain, citekey: str, query: str,
                 n_results: int = 4) -> str:
     """Return top-N most relevant chunks for query, reassembled in page order."""
     try:
@@ -88,13 +98,13 @@ def query_paper(collection, brain, paper_idx: int, query: str,
         print(f"  [warn] chroma query embed failed: {e}", file=sys.stderr)
         return ""
 
-    n = min(n_results, _paper_chunk_count(collection, paper_idx))
+    n = min(n_results, _paper_chunk_count(collection, citekey))
     if n == 0:
         return ""
 
     r = collection.query(
         query_embeddings=[q_emb],
-        where={"paper_idx": paper_idx},
+        where={"citekey": citekey},
         n_results=n,
         include=["documents", "metadatas"],
     )
@@ -124,7 +134,7 @@ def _best_sentence(chunk_text: str, claim: str, max_words: int = 30) -> str:
     return ' '.join(words[:max_words]) + ('...' if len(words) > max_words else '')
 
 
-def locate_direct(collection, brain, paper_idx: int, statements: str) -> list[dict]:
+def locate_direct(collection, brain, citekey: str, statements: str) -> list[dict]:
     """Locate claims using pure embedding retrieval — no LLM call.
 
     For each claim sentence: embed → top-1 chunk → best matching sentence as quote.
@@ -133,7 +143,7 @@ def locate_direct(collection, brain, paper_idx: int, statements: str) -> list[di
     claim_sents = [s.strip() for s in re.split(r'(?<=[.!?])\s+', statements) if s.strip()]
     if not claim_sents:
         return []
-    total = _paper_chunk_count(collection, paper_idx)
+    total = _paper_chunk_count(collection, citekey)
     if total == 0:
         return []
     results = []
@@ -145,7 +155,7 @@ def locate_direct(collection, brain, paper_idx: int, statements: str) -> list[di
             continue
         r = collection.query(
             query_embeddings=[q_emb],
-            where={"paper_idx": paper_idx},
+            where={"citekey": citekey},
             n_results=1,
             include=["documents", "metadatas"],
         )
@@ -168,7 +178,7 @@ def locate_direct(collection, brain, paper_idx: int, statements: str) -> list[di
     return results
 
 
-def query_paper_multi(collection, brain, paper_idx: int, queries: list[str],
+def query_paper_multi(collection, brain, citekey: str, queries: list[str],
                       n_per_query: int = 3) -> str:
     """Retrieve chunks across multiple queries, deduplicated and page-ordered.
 
@@ -176,7 +186,7 @@ def query_paper_multi(collection, brain, paper_idx: int, queries: list[str],
     (no duplicate chunks), and returns them sorted by page order. This replaces
     multi-step LLM condensing: N embed calls (fast) instead of N LLM calls.
     """
-    total = _paper_chunk_count(collection, paper_idx)
+    total = _paper_chunk_count(collection, citekey)
     if total == 0:
         return ""
     n = min(n_per_query, total)
@@ -190,7 +200,7 @@ def query_paper_multi(collection, brain, paper_idx: int, queries: list[str],
             continue
         r = collection.query(
             query_embeddings=[q_emb],
-            where={"paper_idx": paper_idx},
+            where={"citekey": citekey},
             n_results=n,
             include=["documents", "metadatas"],
         )

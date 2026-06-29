@@ -1,11 +1,12 @@
 """rabbitHole revise — apply reviewer annotations from a _ra.docx to re-draft the narrative.
 
-Pipeline (fast — no re-annotation, no re-location):
+Pipeline (fast — no re-annotation):
   1. Find *_ra.docx in output/ (or accept --file path)
   2. Extract tracked changes + comments from the docx
   3. Load existing notes from work/annotations/ and slim corpus from work/corpus.json
   4. Re-synthesise the narrative using the revision brief
-  5. Rebuild bibliography from existing work/located/ files
+  5. Re-locate the cited claims against the current full text (embedding retrieval,
+     keyed by citekey) so the annotated bibliography stays verifiable
   6. Write output/*_ra_r{N}.md and .docx
 """
 
@@ -22,7 +23,8 @@ from .brain import Brain
 from .models import Candidate
 from .summarize import (
     _make_citekeys, _digest, bibliography, citation_check, read_notes,
-    SYNTH_SYS, _enforce_paragraph_citations, _is_ok, _cited_indices,
+    locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
+    _HAVE_CHROMA,
 )
 
 
@@ -49,15 +51,6 @@ def _load_notes(paths, n: int) -> list[dict]:
         fp = paths.annotations_dir / f"{i:03d}.json"
         notes.append(json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else {})
     return notes
-
-
-def _load_located(paths, n: int) -> list[list[dict]]:
-    located_dir = paths.work / "located"
-    located = []
-    for i in range(n):
-        fp = located_dir / f"{i:03d}.json"
-        located.append(json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else [])
-    return located
 
 
 # ── revision synthesis ────────────────────────────────────────────────────────
@@ -410,12 +403,23 @@ def run(directory: str = ".", brain_override: str | None = None,
     narrative = _synthesize_revision(brain, cfg, corpus, notes, citekeys,
                                      current_narrative, revision_context, style_profile)
 
-    # 7. Bibliography — only sources the REVISED narrative actually cites (the
-    #    revision may drop sources, so key off the new citations, not the stale
-    #    located set from the original report). Cited sources with no located file
-    #    fall back to a "passages not located" note inside bibliography().
-    located_list = _load_located(paths, len(corpus))
-    located = {i: located_list[i] for i in _cited_indices(narrative, citekeys)}
+    # 7. Bibliography — re-locate each cited claim against the CURRENT full text so
+    #    the annotated bibliography stays verifiable: a reviewer must be able to
+    #    confirm every citation maps to non-hallucinated source text. The revision
+    #    may drop or add sources, so this keys off the new citations. locate_claims
+    #    caches per-citekey and only computes what's missing (embedding retrieval).
+    print()
+    print(f"  {runlog.stamp()}Locating cited claims for the annotated bibliography...")
+    collection = None
+    if _HAVE_CHROMA:
+        try:
+            from . import chroma as _chroma
+            collection = _chroma.get_collection(paths.work / "chroma")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] ChromaDB unavailable ({e}) — locate will use "
+                  f"head-truncation", file=sys.stderr)
+    located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
+                            collection=collection, citekeys=citekeys)
     biblio = bibliography(corpus, located)
     unmatched = citation_check(narrative, citekeys)
     if unmatched:
