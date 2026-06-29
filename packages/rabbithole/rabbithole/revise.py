@@ -259,6 +259,14 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         if not comments or not a["text"].strip():
             skipped.append(f"para {a['para']} (no text or no comment body)")
             continue
+        # A comment on a heading is not a prose edit — rewriting the heading would mangle
+        # it. These are usually "add a source" / "find more" asks (a corpus action). Leave
+        # the heading and its comment intact for routing; do not fabricate a rewrite.
+        if redline.is_heading_style(a.get("style", "")):
+            skipped.append(f"para {a['para']} (comment on heading "
+                           f"'{a['text'][:48]}' — needs ingest/gather routing, "
+                           f"not a prose rewrite)")
+            continue
         print(f"  {runlog.stamp()}Revising para {a['para']} for "
               f"{len(comments)} comment(s)...", flush=True)
         prompt = _PARA_REVISE_PROMPT.format(
@@ -278,6 +286,32 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
     _, out_docx = _revision_paths(paths, docx)
     summary = redline.apply_edits(docx, out_docx, edits, author="rabbitHole")
     summary["skipped_paras"] = skipped
+
+    # Regenerate the annotated bibliography against the POST-edit narrative so a
+    # newly-cited source still gets a verifiable entry. Read the accepted body text
+    # (tracked changes applied) to learn the current cited set, re-locate by citekey,
+    # and replace the bibliography section in place.
+    try:
+        narrative = redline.accepted_body_text(out_docx)
+        collection = None
+        if _HAVE_CHROMA:
+            try:
+                from . import chroma as _chroma
+                collection = _chroma.get_collection(paths.work / "chroma")
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] ChromaDB unavailable ({e}) — locate will use "
+                      f"head-truncation", file=sys.stderr)
+        print(f"  {runlog.stamp()}Regenerating annotated bibliography "
+              f"(re-locating cited claims)...", flush=True)
+        located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
+                                collection=collection, citekeys=citekeys)
+        biblio_md = bibliography(corpus, located)
+        bib_summary = redline.replace_bibliography(out_docx, biblio_md)
+        summary.update(bib_summary)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] bibliography regeneration failed ({e}); "
+              f"keeping the carried-over bibliography.", file=sys.stderr)
+
     return out_docx, summary
 
 
@@ -391,8 +425,14 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("=" * 60)
         print(f"  {summary['replace']} paragraph(s) revised as tracked changes, "
               f"{summary['comments_preserved']} comment(s) preserved.")
+        if "bib_entries" in summary:
+            print(f"  Annotated bibliography regenerated: "
+                  f"{summary['bib_entries']} entr(y/ies) re-located.")
         if summary.get("skipped_paras"):
-            print(f"  Skipped: {len(summary['skipped_paras'])} paragraph(s).")
+            print(f"  Skipped {len(summary['skipped_paras'])} paragraph(s) "
+                  f"(not a prose rewrite):")
+            for s in summary["skipped_paras"]:
+                print(f"    - {s}")
         if out_docx.exists():
             print(f"  Review (docx): {out_docx}")
         return 0

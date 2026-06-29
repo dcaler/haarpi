@@ -24,12 +24,16 @@ OOXML notes:
     ``<w:delText>``; a tracked insertion wraps new run(s) in ``<w:ins>``. Both carry an
     author and date, and Word renders them as an accept/rejectable redline.
 
-Known v1 limitations (documented, not bugs):
+The annotated bibliography is regenerated against the post-edit narrative (see
+`accepted_body_text` / `replace_bibliography`), so a newly-cited source still gets a
+verifiable entry. Comments anchored to a heading are NOT rewritten as prose — the caller
+routes those elsewhere (a heading comment usually means "add a source" / "find more",
+which is a corpus action, not a paragraph edit).
+
+Known limitations (documented, not bugs):
   * Multiple comments on one paragraph are coarsened to bracket the whole revised
     paragraph — every comment stays valid and anchored, but loses sub-paragraph
     precision.
-  * The bibliography section is not regenerated; a revision that cites a brand-new
-    source will not yet add its bibliography entry (follow-up).
   * Assumes the annotated draft has no still-open tracked changes from a prior cycle
     (true for a freshly rendered _ra draft the reviewer annotated).
 """
@@ -213,16 +217,114 @@ def comments_by_id(path: Path) -> dict[str, dict]:
 def comment_anchors(path: Path) -> list[dict]:
     """Paragraphs carrying a comment anchor, with the comment ids and current text.
 
-    Returns a list of {para: int, ids: [str], text: str} in document order. Paragraphs
-    with no comment are omitted.
+    Returns a list of {para, ids, text, style} in document order. ``style`` is the
+    paragraph's style name, so callers can tell a comment on a heading from one on a
+    body paragraph (a heading comment must not be answered by rewriting the heading).
+    Paragraphs with no comment are omitted.
     """
     doc = Document(str(path))
     out = []
     for i, p in enumerate(doc.paragraphs):
         ids = [s.get(qn("w:id")) for s in p._p.findall(qn("w:commentRangeStart"))]
         if ids:
-            out.append({"para": i, "ids": ids, "text": p.text})
+            style = p.style.name if p.style is not None else ""
+            out.append({"para": i, "ids": ids, "text": p.text, "style": style})
     return out
+
+
+def is_heading_style(style_name: str) -> bool:
+    """True for Word heading/title styles (so we never rewrite a heading as prose)."""
+    s = (style_name or "").lower()
+    return s.startswith("heading") or s == "title"
+
+
+# ── post-edit narrative + bibliography regeneration ──────────────────────────────
+# After the body is redlined the cited set may have changed, so the annotated
+# bibliography must be regenerated against the CURRENT text to stay verifiable. We
+# read the "accepted" narrative (inserted + unchanged text, deletions dropped — w:t
+# lives in normal and <w:ins> runs; deleted text is in <w:delText>), re-locate, and
+# replace the bibliography section wholesale. The body keeps its tracked changes; the
+# bibliography is rebuilt clean — 30 entries of tracked-change noise would be unreadable
+# and the bibliography is a generated artifact, not something the reviewer redlines.
+
+_BIB_HEADING = "annotated bibliography"
+
+
+def _accepted_para_text(p_el) -> str:
+    """Text of a paragraph as it reads with all tracked changes accepted."""
+    return "".join(t.text or "" for t in p_el.iter(qn("w:t")))
+
+
+def accepted_body_text(path: Path, stop_heading: str = _BIB_HEADING) -> str:
+    """Reconstruct the narrative (citekeys intact) from a redlined docx.
+
+    Returns the body up to the bibliography heading, with tracked changes accepted, so
+    callers can see which [@citekey] tags the revised draft now cites.
+    """
+    doc = Document(str(path))
+    parts: list[str] = []
+    for p in doc.paragraphs:
+        txt = _accepted_para_text(p._p)
+        if txt.strip().lower().startswith(stop_heading):
+            break
+        if txt.strip():
+            parts.append(txt)
+    return "\n\n".join(parts)
+
+
+def _parse_bibliography_md(md: str) -> tuple[str, list[tuple[str, list[str]]]]:
+    """Parse bibliography markdown into (heading, [(citation, [claim_line, ...])])."""
+    heading = "Annotated Bibliography"
+    blocks: list[tuple[str, list[str]]] = []
+    cur: tuple[str, list[str]] | None = None
+    for line in md.splitlines():
+        s = line.strip()
+        if s.startswith("## "):
+            heading = s[3:].strip()
+        elif s.startswith("**") and s.endswith("**") and len(s) > 4:
+            cur = (s[2:-2].strip(), [])
+            blocks.append(cur)
+        elif s.startswith("- ") and cur is not None:
+            cur[1].append(s[2:].strip())
+    return heading, blocks
+
+
+def _strip_md(text: str) -> str:
+    """Drop the light markdown emphasis the bibliography lines carry (*…*)."""
+    return text.replace("*", "")
+
+
+def replace_bibliography(path: Path, biblio_md: str) -> dict:
+    """Replace the annotated-bibliography section of ``path`` with freshly built entries.
+
+    Deletes from the bibliography heading to the end of the body and rebuilds it from
+    ``biblio_md``, reusing the heading's own style so it matches the document. The body
+    (and its tracked changes + comments) above the heading is untouched. Returns a summary.
+    """
+    doc = Document(str(path))
+    bib_idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if p.text.strip().lower().startswith(_BIB_HEADING):
+            bib_idx = i
+            break
+    heading_style = doc.paragraphs[bib_idx].style if bib_idx is not None else None
+    if bib_idx is not None:
+        for p in list(doc.paragraphs[bib_idx:]):
+            p._element.getparent().remove(p._element)
+
+    heading, blocks = _parse_bibliography_md(biblio_md)
+    h = doc.add_paragraph()
+    if heading_style is not None:
+        h.style = heading_style
+    h.add_run(heading)
+    for citation, claims in blocks:
+        cp = doc.add_paragraph()
+        cp.add_run(_strip_md(citation)).bold = True
+        for cl in claims:
+            doc.add_paragraph().add_run("•  " + _strip_md(cl))
+
+    doc.save(str(path))
+    return {"bib_entries": len(blocks), "had_existing_section": bib_idx is not None}
 
 
 # ── orchestration ──────────────────────────────────────────────────────────────

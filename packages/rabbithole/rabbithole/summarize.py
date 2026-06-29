@@ -569,9 +569,24 @@ Use ONLY the provided paper text for locations and quotes — do not invent. Omi
 any statement you cannot locate in the text. Return [] if none can be located."""
 
 
+def _all_citekeys(text: str) -> list[str]:
+    """Every individual citekey, splitting grouped citations like [@a; @b; @c].
+
+    The naive [@([^\\]]+)] capture treats a grouped bracket as one key, so any source
+    cited only inside a multi-citation bracket would be dropped from locate and the
+    bibliography. Split on ';' and strip the leading '@' to recover each key."""
+    keys: list[str] = []
+    for grp in re.findall(r"\[@([^\]]+)\]", text):
+        for part in grp.split(";"):
+            k = part.strip().lstrip("@").strip()
+            if k:
+                keys.append(k)
+    return keys
+
+
 def _cited_indices(narrative: str, citekeys: dict[int, str]) -> list[int]:
     """Return corpus indices whose [@citekey] tags appear in the narrative."""
-    found = set(re.findall(r"\[@([^\]]+)\]", narrative))
+    found = set(_all_citekeys(narrative))
     key_to_idx = {v: k for k, v in citekeys.items()}
     return [key_to_idx[k] for k in found if k in key_to_idx]
 
@@ -582,10 +597,10 @@ def _located_filename(citekey: str) -> str:
 
 
 def _claim_sentences(narrative: str, citekey: str) -> str:
-    """Sentences in the narrative that cite this citekey."""
-    tag = f"[@{citekey}]"
+    """Sentences in the narrative that cite this citekey (incl. grouped citations)."""
     return " ".join(
-        s.strip() for s in re.split(r"(?<=[.!?])\s+", narrative) if tag in s)
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", narrative)
+        if citekey in _all_citekeys(s))
 
 
 def _locate_prompt(c: Candidate, statements: str, body: str) -> str:
@@ -679,7 +694,7 @@ def bibliography(corpus: list[Candidate], located: dict[int, list]) -> str:
 def citation_check(narrative: str, citekeys: dict[int, str]) -> list[str]:
     """[@citekey] tags in the narrative that don't map to a corpus item."""
     known = set(citekeys.values())
-    found = set(re.findall(r"\[@([^\]]+)\]", narrative))
+    found = set(_all_citekeys(narrative))
     return sorted(found - known)
 
 
