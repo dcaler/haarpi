@@ -260,10 +260,13 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
 
     edits: list[dict] = []
     skipped: list[str] = []
+    outcomes: dict[str, str] = {}   # comment id -> "edited" | "corpus" | "skipped"
     for a in anchors:
+        ids = [str(i) for i in a["ids"]]
         comments = [cmap[i]["text"] for i in a["ids"] if i in cmap and cmap[i]["text"]]
         if not comments or not a["text"].strip():
             skipped.append(f"para {a['para']} (no text or no comment body)")
+            outcomes.update({i: "skipped" for i in ids})
             continue
         # A comment on a heading is not a prose edit — rewriting the heading would mangle
         # it. These are usually "add a source" / "find more" asks (a corpus action). Leave
@@ -272,6 +275,7 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
             skipped.append(f"para {a['para']} (comment on heading "
                            f"'{a['text'][:48]}' — needs ingest/gather routing, "
                            f"not a prose rewrite)")
+            outcomes.update({i: "corpus" for i in ids})
             continue
         print(f"  {runlog.stamp()}Revising para {a['para']} for "
               f"{len(comments)} comment(s)...", flush=True)
@@ -285,13 +289,18 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] para {a['para']} revise failed ({e}); leaving as-is.",
                   file=sys.stderr)
+            outcomes.update({i: "skipped" for i in ids})
             continue
         if new_text:
             edits.append({"para": a["para"], "op": "replace", "text": new_text})
+            outcomes.update({i: "edited" for i in ids})
+        else:
+            outcomes.update({i: "skipped" for i in ids})
 
     _, out_docx = _revision_paths(paths, docx)
     summary = redline.apply_edits(docx, out_docx, edits, author="rabbitHole")
     summary["skipped_paras"] = skipped
+    summary["comment_outcomes"] = outcomes
 
     # Regenerate the annotated bibliography against the POST-edit narrative so a
     # newly-cited source still gets a verifiable entry. Read the accepted body text
@@ -346,7 +355,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 # ── route comments that a redline cannot satisfy in place ──────────────────────
 
 def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
-                            revision_context: str, corpus: list[Candidate]) -> None:
+                            revision_context: str, corpus: list[Candidate]) -> dict:
     """Queue the corpus work the comments imply but a redline cannot do in place.
 
     The redline answers prose / quantify / scope comments now. Comments that ask for new
@@ -363,14 +372,14 @@ def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
     except SystemExit:
         print("  [warn] follow-up planning failed; no corpus work queued.",
               file=sys.stderr)
-        return
+        return {"queued": False, "tier": None}
     tier = plan_obj["tier"]
     needs_corpus = (tier in ("gap_fill", "redirection")
                     or plan_obj.get("added_references"))
     if not needs_corpus:
         print(f"  {runlog.stamp()}Follow-up: every comment was addressable in the "
               f"redline (tier=cosmetic); no corpus work queued.", flush=True)
-        return
+        return {"queued": False, "tier": tier}
 
     steps = plan._chain_for(tier, plan_obj)
     print()
@@ -386,11 +395,45 @@ def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
         fp = plan._write_redirect_config(directory, plan_obj)
         print(f"  Drafted redirected research brief: {fp.name} (inspect/edit any time)")
     if gc.have_trundlr:
-        plan._submit_chain(gc, cfg, directory, steps, plan_obj)
+        rc = plan._submit_chain(gc, cfg, directory, steps, plan_obj)
+        return {"queued": rc == 0, "tier": tier}
+    print("  [trundlr] not configured ([trundlr] url in config.toml) — "
+          "run these manually:")
+    plan._print_manual(steps)
+    return {"queued": False, "tier": tier}
+
+
+def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) -> None:
+    """Add a rabbitHole-authored threaded reply to each reviewer comment saying what was
+    done: an in-place edit, or a queued corpus follow-up for comments needing new sources."""
+    from . import redline
+    if not outcomes:
+        return
+    tier = routing.get("tier")
+    if routing.get("queued"):
+        corpus_msg = (f"rabbitHole: this needs sources not yet in the corpus, which an "
+                      f"in-place edit can't add — queued a {tier} follow-up cycle "
+                      f"(gather → … → revise) to bring them in.")
     else:
-        print("  [trundlr] not configured ([trundlr] url in config.toml) — "
-              "run these manually:")
-        plan._print_manual(steps)
+        corpus_msg = ("rabbitHole: this needs sources not yet in the corpus, which an "
+                      "in-place edit can't add — run `rabbitHole gather` (or `ingest` for a "
+                      "named paper), then revise.")
+    replies = []
+    for cid, outcome in outcomes.items():
+        if outcome == "edited":
+            replies.append({"parent_id": cid, "text": "rabbitHole: revised the paragraph "
+                            "above as a tracked change to address this comment."})
+        elif outcome == "corpus":
+            replies.append({"parent_id": cid, "text": corpus_msg})
+        # "skipped" (empty comment / failed rewrite) gets no reply
+    if not replies:
+        return
+    try:
+        rsum = redline.add_reply_comments(out_docx, replies, author="rabbitHole")
+        print(f"  Replies added: {rsum['replies_added']} reviewer comment(s) answered "
+              f"(authored rabbitHole).")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not add reply comments ({e}).", file=sys.stderr)
 
 
 # ── orchestration ─────────────────────────────────────────────────────────────
@@ -494,9 +537,13 @@ def run(directory: str = ".", brain_override: str | None = None,
             print(f"  Review (docx): {out_docx}")
         # Route comments a redline cannot satisfy (new sources, deeper coverage) to a
         # queued corpus chain. --no-queue (chain revises, runner) skips this.
+        routing = {"queued": False, "tier": None}
         if queue:
-            _route_corpus_followups(brain, cfg, gc, directory, docx,
-                                    revision_context, corpus)
+            routing = _route_corpus_followups(brain, cfg, gc, directory, docx,
+                                              revision_context, corpus)
+        # Reply to each reviewer comment, authored "rabbitHole", with what was done —
+        # the docx itself becomes the accountability record (no separate ledger).
+        _reply_to_comments(out_docx, summary.get("comment_outcomes", {}), routing)
         return 0
 
     # 5. Style profile

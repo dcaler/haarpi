@@ -42,11 +42,19 @@ from __future__ import annotations
 
 import copy
 import datetime
+import secrets
+import zipfile
 from pathlib import Path
 
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from lxml import etree
+
+# Threaded-comment namespaces: w14 carries paraId on each comment paragraph; w15
+# (commentsExtended.xml) links a reply's paraId to its parent's via paraIdParent.
+_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 
 # python-docx's nsmap does not register the reserved ``xml`` prefix, so qn("xml:space")
 # would KeyError — use the literal namespaced attribute name.
@@ -325,6 +333,98 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
 
     doc.save(str(path))
     return {"bib_entries": len(blocks), "had_existing_section": bib_idx is not None}
+
+
+# ── reply comments (rabbitHole's account of what it did) ─────────────────────────
+# A threaded reply on each reviewer comment, authored "rabbitHole", saying briefly what
+# was done about it — so the docx itself is the accountability record. python-docx adds
+# the comment but not the threading link, so we (1) add the reply via add_comment with a
+# paraId we assign, then (2) zip-patch commentsExtended.xml with a paraIdParent link to
+# the parent comment. If the doc has no commentsExtended part, the replies are still added
+# as authored comments — just not visually nested.
+
+
+def _patch_comments_extended(path: Path, reply_links: list[tuple[str, str]]) -> None:
+    """Add <w15:commentEx paraIdParent=…> links so each reply nests under its parent.
+
+    reply_links: (reply_paraId, parent_comment_id). The parent's canonical paraId is the
+    one already referenced in commentsExtended (a comment body may span several paragraphs).
+    """
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        if "word/commentsExtended.xml" not in names:
+            return  # no threading part — replies stay top-level (still authored, visible)
+        data = {n: z.read(n) for n in names}
+    croot = etree.fromstring(data["word/comments.xml"])
+    cid_paras = {c.get(qn("w:id")): [p.get(f"{{{_W14}}}paraId") for p in c.findall(qn("w:p"))]
+                 for c in croot.findall(qn("w:comment"))}
+    ce_root = etree.fromstring(data["word/commentsExtended.xml"])
+    ext_paraids = set(ce_root.xpath("//@w15:paraId", namespaces={"w15": _W15}))
+
+    def parent_canonical(pcid: str) -> str | None:
+        for pid in cid_paras.get(pcid, []):
+            if pid in ext_paraids:
+                return pid
+        ps = cid_paras.get(pcid, [])
+        return ps[0] if ps else None
+
+    for reply_pid, parent_cid in reply_links:
+        ppid = parent_canonical(parent_cid)
+        if not ppid:
+            continue
+        ce = etree.SubElement(ce_root, f"{{{_W15}}}commentEx")
+        ce.set(f"{{{_W15}}}paraId", reply_pid)
+        ce.set(f"{{{_W15}}}paraIdParent", ppid)
+        ce.set(f"{{{_W15}}}done", "0")
+    data["word/commentsExtended.xml"] = etree.tostring(
+        ce_root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in data.items():
+            z.writestr(n, b)
+
+
+def add_reply_comments(path: Path, replies: list[dict], author: str = "rabbitHole") -> dict:
+    """Add a threaded reply (authored ``author``) to each reviewer comment.
+
+    Each reply: {"parent_id": <reviewer comment id>, "text": <what rabbitHole did>}.
+    Returns {"replies_added": n}. A reply with no resolvable anchor is skipped.
+    """
+    if not replies:
+        return {"replies_added": 0}
+    with zipfile.ZipFile(path) as z:
+        used = set(etree.fromstring(z.read("word/comments.xml")).xpath(
+            "//@w14:paraId", namespaces={"w14": _W14}))
+
+    def new_paraId() -> str:
+        while True:
+            pid = secrets.token_hex(4).upper()
+            if pid not in used:
+                used.add(pid)
+                return pid
+
+    doc = Document(str(path))
+    # parent comment id -> the paragraph that opens its range (where we anchor the reply)
+    para_by_cid: dict[str, object] = {}
+    for p in doc.paragraphs:
+        for s in p._p.findall(qn("w:commentRangeStart")):
+            para_by_cid.setdefault(s.get(qn("w:id")), p)
+
+    reply_links: list[tuple[str, str]] = []
+    for r in replies:
+        pcid = str(r.get("parent_id"))
+        text = (r.get("text") or "").strip()
+        p = para_by_cid.get(pcid)
+        if p is None or not text or not p.runs:
+            continue  # need a parent range and a run to anchor onto
+        c = doc.add_comment(p.runs, text=text, author=author, initials="rH")
+        reply_pid = new_paraId()
+        c.paragraphs[-1]._p.set(f"{{{_W14}}}paraId", reply_pid)
+        reply_links.append((reply_pid, pcid))
+    if not reply_links:
+        return {"replies_added": 0}
+    doc.save(str(path))
+    _patch_comments_extended(path, reply_links)
+    return {"replies_added": len(reply_links)}
 
 
 # ── orchestration ──────────────────────────────────────────────────────────────
