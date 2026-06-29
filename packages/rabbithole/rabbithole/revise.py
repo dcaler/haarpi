@@ -1,13 +1,18 @@
 """rabbitHole revise — apply reviewer annotations from a _ra.docx to re-draft the narrative.
 
-Pipeline (fast — no re-annotation):
+Default mode is an in-place REDLINE: edit a copy of the annotated docx, answering each
+comment with a rabbitHole-authored tracked change on the paragraph it anchors to, and
+leave every reviewer comment in place so the next output shows them. The reviewer reads a
+true tracked-changes redline beside their own notes. See `redline.py`.
+
+Pass --resynth for the alternative clean rewrite (no tracked changes, comments dropped):
   1. Find *_ra.docx in output/ (or accept --file path)
   2. Extract tracked changes + comments from the docx
   3. Load existing notes from work/annotations/ and slim corpus from work/corpus.json
   4. Re-synthesise the narrative using the revision brief
   5. Re-locate the cited claims against the current full text (embedding retrieval,
      keyed by citekey) so the annotated bibliography stays verifiable
-  6. Write output/*_ra_r{N}.md and .docx
+  6. Write output/*_ra.md and .docx
 """
 
 from __future__ import annotations
@@ -301,7 +306,7 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 # ── orchestration ─────────────────────────────────────────────────────────────
 
 def run(directory: str = ".", brain_override: str | None = None,
-        docx_path: str | None = None, redline: bool = False) -> int:
+        docx_path: str | None = None, redline: bool = True) -> int:
     docxio.require_docx()
     t0 = runlog.start()
 

@@ -1,11 +1,12 @@
 """In-place, comment-preserving revision with tracked changes.
 
-The default `revise` re-synthesises the whole narrative from markdown and renders a
-fresh .docx — which discards the reviewer's Word comments and gives them no redline to
-read the tool's edits against. This module instead edits a COPY of the annotated .docx
-in place: it answers each comment by rewriting only the paragraph(s) that comment is
-anchored to, records every rewrite as a Word tracked change attributed to `rabbitHole`,
-and leaves the comments anchored and every un-flagged paragraph byte-for-byte untouched.
+This is what `revise` does by default. The alternative (`revise --resynth`) re-synthesises
+the whole narrative from markdown and renders a fresh .docx — which discards the reviewer's
+Word comments and gives them no redline to read the tool's edits against. This module instead
+edits a COPY of the annotated .docx in place: it answers each comment by rewriting only the
+paragraph(s) that comment is anchored to, records every rewrite as a Word tracked change
+attributed to `rabbitHole`, and leaves the comments anchored and every un-flagged paragraph
+byte-for-byte untouched.
 
 The reviewer opens the result and sees, per comment, their note beside the tool's
 tracked-change answer — accept/reject, re-comment, repeat.
