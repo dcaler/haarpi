@@ -68,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
                      help="override the brain backend for this run (for A/B comparison)")
     rep.add_argument("--from-folder", action="store_true",
                      help="ingest PDFs from the local pdfs/ folder instead of Zotero")
+    rep.add_argument("--no-refresh-notes", action="store_true",
+                     help="keep cached per-paper notes even when the extraction logic has "
+                          "changed since they were written (faster, but a prompt fix won't "
+                          "reach the existing corpus). Default re-reads stale notes")
 
     rev = sub.add_parser("revise",
                          help="apply reviewer annotations from a _ra.docx to re-draft")
@@ -121,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=True)
         from . import summarize
         return summarize.run(args.dir, brain_override=args.brain,
-                             from_folder=args.from_folder)
+                             from_folder=args.from_folder,
+                             refresh_notes=not args.no_refresh_notes)
 
     if args.command == "revise":
         _check_env(need_pandoc=True)

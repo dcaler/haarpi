@@ -145,6 +145,14 @@ Write each field in plain English; paraphrase rather than copying technical phra
 Exception: in "findings", reproduce reported quantities (numbers, units, statistics) EXACTLY — never round them away or replace a figure with words like "significantly" or "substantially"."""
 
 
+# Bump whenever the extraction logic (READ_SYS, _read_prompt, _condense, the retrieval
+# queries) changes in a way that should re-read papers already in the cache. A cached
+# note carries its _v; when it is older than this, read_notes re-extracts it so a prompt
+# fix actually reaches the existing corpus instead of silently applying only to new papers.
+#   v1 (2026-06-29): findings now capture quantitative effect estimates verbatim.
+_NOTES_VERSION = 1
+
+
 def _read_prompt(c: Candidate, topic: str, focus: str, body: str) -> str:
     return (f"Review topic: {topic}\nFocus: {focus}\n\n"
             f"Paper: {c.title} ({c.author_year()})\nVenue: {c.venue}\n\n"
@@ -165,22 +173,34 @@ def _condense(brain: Brain, text: str) -> str:
 
 
 def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
-               collection=None, citekeys: dict[int, str] | None = None) -> list[dict]:
+               collection=None, citekeys: dict[int, str] | None = None,
+               refresh_notes: bool = True) -> list[dict]:
     citekeys = citekeys or {}
     d = paths.annotations_dir
     d.mkdir(parents=True, exist_ok=True)
     notes: list[dict] = [None] * len(corpus)  # type: ignore
     done = 0
+    refreshed = 0
     t_step = time.time()
     for i, c in enumerate(corpus):
         fp = d / f"{i:03d}.json"
+        is_refresh = False
         if fp.exists():
-            notes[i] = json.loads(fp.read_text(encoding="utf-8"))
-            done += 1
-            continue
+            cached = json.loads(fp.read_text(encoding="utf-8"))
+            # Use the cache unless its extraction is older than the current logic. An
+            # unversioned note (no _v) predates versioning and counts as stale, so an
+            # extraction-prompt fix re-reads the existing corpus instead of silently
+            # applying only to papers added later. --no-refresh-notes keeps stale notes.
+            if not refresh_notes or cached.get("_v", 0) >= _NOTES_VERSION:
+                notes[i] = cached
+                done += 1
+                continue
+            is_refresh = True
+            refreshed += 1
         ck = citekeys.get(i) or f"{i:03d}"
         label = f"{c.first_author_last} {c.year or ''}".strip()
-        print(f"  {_stamp()}[{i + 1}/{len(corpus)}] {label}", end="", flush=True)
+        tag = " (refresh)" if is_refresh else ""
+        print(f"  {_stamp()}[{i + 1}/{len(corpus)}] {label}{tag}", end="", flush=True)
         text = _paper_text(c)
         # Index full page-marked text in ChromaDB before condensing for notes
         if collection is not None and not _chroma.is_paper_indexed(collection, ck):
@@ -205,6 +225,7 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
                                     READ_SYS)
             note = _parse_json_obj(raw)
             note["_paper"] = c.author_year()
+            note["_v"] = _NOTES_VERSION
             fp.write_text(json.dumps(note, indent=2, ensure_ascii=False),
                           encoding="utf-8")  # write only on success -> resumable
             done += 1
@@ -214,7 +235,9 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             note = {"argument": "", "methods": "", "findings": "", "limitations": "",
                     "relevance": "", "themes": [], "_paper": c.author_year()}
         notes[i] = note
-    print(f"  notes ready: {done}/{len(corpus)}  [{_fmt_dt(time.time() - t_step)}]")
+    extra = f", {refreshed} refreshed for updated extraction" if refreshed else ""
+    print(f"  notes ready: {done}/{len(corpus)}{extra}  "
+          f"[{_fmt_dt(time.time() - t_step)}]")
     return notes
 
 
@@ -773,7 +796,7 @@ def _export_bibtex(cfg, gc, paths, citekeys: dict[int, str],
 # Orchestration
 # ──────────────────────────────────────────────────────────────────────────
 def run(directory: str = ".", brain_override: str | None = None,
-        from_folder: bool = False) -> int:
+        from_folder: bool = False, refresh_notes: bool = True) -> int:
     cfg = config.load_project(directory)
     gc = config.load_global()
     paths = config.project_paths(directory).ensure()
@@ -828,7 +851,7 @@ def run(directory: str = ".", brain_override: str | None = None,
 
     print(f"\n{_stamp()}[1/3] Reading papers (notes for synthesis)...")
     notes = read_notes(brain, corpus, cfg, paths, collection=collection,
-                       citekeys=citekeys)
+                       citekeys=citekeys, refresh_notes=refresh_notes)
 
     print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""
