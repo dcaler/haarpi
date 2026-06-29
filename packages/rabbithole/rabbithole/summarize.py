@@ -134,14 +134,15 @@ paper text and respond with ONLY a JSON object, no other text:
 {
   "argument": "the paper's main argument / contribution (1-2 sentences)",
   "methods": "methods or approach (1 sentence)",
-  "findings": "key findings (1-2 sentences)",
+  "findings": "key findings, stated QUANTITATIVELY wherever the paper reports numbers — copy effect sizes, percentages, p-values, odds/risk ratios, correlation coefficients, and sample sizes verbatim, each with its direction and the outcome it refers to (e.g. 'reducing collection-point distance cut miss-sorted packaging by ~30%'). If the paper gives no numbers, say so. 1-3 sentences",
   "limitations": "stated or evident limitations (1 sentence, or empty)",
   "relevance": "why this paper matters for the review — what it specifically contributes or enables (1 sentence)",
   "gaps": "a genuine, load-bearing gap WITHIN the paper's own scope that a reader would expect it to cover but it does not. Leave empty if the only 'gaps' are topics outside the paper's discipline (1 sentence, or empty)",
   "themes": ["3-6 short theme tags"]
 }
 Base everything strictly on the provided text. Do not invent.
-Write each field in plain English; paraphrase rather than copying technical phrases verbatim."""
+Write each field in plain English; paraphrase rather than copying technical phrases verbatim.
+Exception: in "findings", reproduce reported quantities (numbers, units, statistics) EXACTLY — never round them away or replace a figure with words like "significantly" or "substantially"."""
 
 
 def _read_prompt(c: Candidate, topic: str, focus: str, body: str) -> str:
@@ -154,7 +155,10 @@ def _condense(brain: Brain, text: str) -> str:
     """Map step for long papers: summarise chunks, then concatenate."""
     chunks = _chunk(text, _MAP_CHUNK_CHARS)
     sys = ("Extract the key points (argument, methods, findings, notable quotes "
-           "with page markers) from this section. Be concise.")
+           "with page markers) from this section. Be concise, but reproduce every "
+           "reported quantity VERBATIM — effect sizes, percentages, p-values, "
+           "odds/risk ratios, correlation coefficients, sample sizes — each with the "
+           "outcome it refers to. Do not summarise numbers away into words.")
     jobs = [(sys, f"Section:\n{ch}\n\nKey points:") for ch in chunks]
     parts = brain.worker_map(jobs, num_ctx=8192)
     return "\n\n".join(parts)
@@ -232,6 +236,11 @@ EXPLAIN WHY IT MATTERS (the priority)
 - State significance positively: what a source contributes or enables. Only name a gap when it is genuine and load-bearing for the topic. Do NOT note that a source omits a field outside its discipline (e.g. a musicology paper "did not use agent-based modeling") — that is obvious and adds nothing.
 - Name gaps, tensions, and directions specifically; never "further work is needed".
 
+QUANTIFY (do not flatten results into direction)
+- When the digest gives a magnitude for a finding, STATE IT: the number, its direction, and what it measures — "kerbside collection raised paper-sorting accuracy by 30% [@key]", not "kerbside collection improves sorting". Reporting only the direction when a magnitude is available is a defect.
+- Carry the effect size, percentage, p-value, odds/risk ratio, correlation, or sample size through to the claim, exactly as the digest states it. When several sources speak to one idea, prefer the strongest quantitative evidence.
+- Never substitute "significantly", "substantially", or "markedly" for a number the digest actually provides.
+
 CITATIONS
 - EVERY paragraph cites at least one source. There are no transition-only, scene-setting, or conclusion-only paragraphs: if a paragraph states ideas worth a paragraph, those ideas have sources — name them. A paragraph containing no [@citekey] is a defect, not a stylistic choice.
 - State each finding as a claim in its own right, then attach the source in square brackets immediately after: "Modest tolerance thresholds produce exaggerated segregation [@schelling1971]."
@@ -239,7 +248,7 @@ CITATIONS
 - Use the citekey EXACTLY as given in the digest (the [@key] tag beside each source). Do not invent or alter citekeys.
 
 LANGUAGE
-- Paraphrase; do not lift technical phrases verbatim from the sources. A reader should not need the original papers' vocabulary to follow your argument.
+- Paraphrase; do not lift technical phrases verbatim from the sources. A reader should not need the original papers' vocabulary to follow your argument. This does NOT apply to quantities: keep reported numbers exact (see QUANTIFY) — a figure is evidence, not jargon.
 - When a field-specific term is genuinely needed — no plain equivalent carries the same precision — introduce it once with a brief gloss in parentheses: "...using principal component analysis (a technique that compresses many correlated variables into a smaller, uncorrelated set)..."
 - Prefer concrete, active verbs. "The study found that participants who received X showed Y" beats "an association between X and Y was observed".
 - Write for an intelligent reader who is not already expert in this exact sub-field. They can follow careful reasoning but should not be expected to know domain acronyms or insider shorthand on sight.
@@ -327,6 +336,10 @@ Judge:
    load-bearing gap.
 7. Coherence — flag breaks in the through-line: sections that do not build on each
    other, or a theme raised and then dropped.
+8. Unquantified findings — flag any claim stated only directionally ("improves",
+   "increases", "is more effective") when the digest gives a magnitude for it. Quote
+   the claim and name the number from the digest that should appear in it. Vague words
+   ("significantly", "substantially") standing in for an available figure are defects.
 
 Output: numbered list with quoted text; skip checks with no issues. If strong, "OK"."""
 
