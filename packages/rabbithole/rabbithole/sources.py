@@ -294,6 +294,22 @@ def _strip_jats(s: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 # Semantic Scholar
 # ──────────────────────────────────────────────────────────────────────────
+# Their limit is 1 request/second cumulative across all endpoints, and they ask
+# clients to stay *below* it. Pace every S2 request to ≥ this interval, process-
+# wide, so back-to-back calls (and retries) never trip the limit proactively.
+_S2_MIN_INTERVAL = 1.2  # seconds between Semantic Scholar requests
+_s2_last_request = 0.0
+
+
+def _s2_throttle() -> None:
+    import time as _t
+    global _s2_last_request
+    wait = _S2_MIN_INTERVAL - (_t.monotonic() - _s2_last_request)
+    if wait > 0:
+        _t.sleep(wait)
+    _s2_last_request = _t.monotonic()
+
+
 def search_semantic_scholar(query: str, limit: int, email: str,
                             api_key: str = "") -> list[Candidate]:
     fields = ("title,year,abstract,venue,authors,externalIds,openAccessPdf,"
@@ -308,6 +324,7 @@ def search_semantic_scholar(query: str, limit: int, email: str,
     try:
         with _client(email) as c:
             for attempt in range(attempts):
+                _s2_throttle()
                 r = c.get("https://api.semanticscholar.org/graph/v1/paper/search",
                           params=params, headers=headers)
                 if r.status_code == 429:           # shared pool rate limit
