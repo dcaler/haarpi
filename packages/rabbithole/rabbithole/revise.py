@@ -5,6 +5,12 @@ comment with a rabbitHole-authored tracked change on the paragraph it anchors to
 leave every reviewer comment in place so the next output shows them. The reviewer reads a
 true tracked-changes redline beside their own notes. See `redline.py`.
 
+Comments a redline cannot satisfy in place — "include paper X", "mine its citations",
+"a lot more on Y" — need the corpus to change first. After the redline, the parseNplan
+planner classifies the annotation set and, when any such corpus work is required, queues
+the gather→collect→revise→comment chain in trundlr (the chain's revise carries --no-queue
+so it re-drafts without re-planning). --no-queue / queue=False skips this step.
+
 Pass --resynth for the alternative clean rewrite (no tracked changes, comments dropped):
   1. Find *_ra.docx in output/ (or accept --file path)
   2. Extract tracked changes + comments from the docx
@@ -337,10 +343,61 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
                               revision_context, digest)
 
 
+# ── route comments that a redline cannot satisfy in place ──────────────────────
+
+def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
+                            revision_context: str, corpus: list[Candidate]) -> None:
+    """Queue the corpus work the comments imply but a redline cannot do in place.
+
+    The redline answers prose / quantify / scope comments now. Comments that ask for new
+    sources — "include paper X", "mine its citations", "a lot more on Y" — need the corpus
+    to change first, which a paragraph rewrite cannot do. Reuse the parseNplan planner to
+    classify the annotation set and, when any corpus work is required, queue the
+    gather→collect→revise→comment chain. The chain's revise carries --no-queue so it
+    re-drafts from the expanded corpus without re-planning (no runaway re-queue). No-op for
+    a purely cosmetic annotation set."""
+    from . import plan
+    try:
+        coverage = plan._coverage_summary(corpus)
+        plan_obj = plan._make_plan(brain, cfg, coverage, revision_context)
+    except SystemExit:
+        print("  [warn] follow-up planning failed; no corpus work queued.",
+              file=sys.stderr)
+        return
+    tier = plan_obj["tier"]
+    needs_corpus = (tier in ("gap_fill", "redirection")
+                    or plan_obj.get("added_references"))
+    if not needs_corpus:
+        print(f"  {runlog.stamp()}Follow-up: every comment was addressable in the "
+              f"redline (tier=cosmetic); no corpus work queued.", flush=True)
+        return
+
+    steps = plan._chain_for(tier, plan_obj)
+    print()
+    extra = ", references added" if plan_obj.get("added_references") else ""
+    print(f"  {runlog.stamp()}Some comments need new sources (tier={tier}{extra}).")
+    if plan_obj.get("assessment"):
+        print(f"  Why: {plan_obj['assessment']}")
+    print(f"  Follow-up chain: {' -> '.join(steps)}")
+    if tier == "gap_fill":
+        fp = plan._write_gap_config(directory, plan_obj)
+        print(f"  Wrote gather-steering config: {fp.name}")
+    elif tier == "redirection":
+        fp = plan._write_redirect_config(directory, plan_obj)
+        print(f"  Drafted redirected research brief: {fp.name} (inspect/edit any time)")
+    if gc.have_trundlr:
+        plan._submit_chain(gc, cfg, directory, steps, plan_obj)
+    else:
+        print("  [trundlr] not configured ([trundlr] url in config.toml) — "
+              "run these manually:")
+        plan._print_manual(steps)
+
+
 # ── orchestration ─────────────────────────────────────────────────────────────
 
 def run(directory: str = ".", brain_override: str | None = None,
-        docx_path: str | None = None, redline: bool = True) -> int:
+        docx_path: str | None = None, redline: bool = True,
+        queue: bool = True) -> int:
     docxio.require_docx()
     t0 = runlog.start()
 
@@ -435,6 +492,11 @@ def run(directory: str = ".", brain_override: str | None = None,
                 print(f"    - {s}")
         if out_docx.exists():
             print(f"  Review (docx): {out_docx}")
+        # Route comments a redline cannot satisfy (new sources, deeper coverage) to a
+        # queued corpus chain. --no-queue (chain revises, runner) skips this.
+        if queue:
+            _route_corpus_followups(brain, cfg, gc, directory, docx,
+                                    revision_context, corpus)
         return 0
 
     # 5. Style profile
@@ -486,4 +548,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  Review (md)  : {out_md}")
     if out_docx.exists():
         print(f"  Review (docx): {out_docx}")
+    if queue:
+        _route_corpus_followups(brain, cfg, gc, directory, docx,
+                                revision_context, corpus)
     return 0

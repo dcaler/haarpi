@@ -276,9 +276,17 @@ def _print_plan(cfg, docx: Path, plan: dict, steps: list[str]) -> None:
 
 def _build_command(step: str) -> str | None:
     """Command for a runner step. The trundlr runner cd's into the project's
-    folder before running, so a bare `rabbitHole <verb>` is sufficient."""
+    folder before running, so a bare `rabbitHole <verb>` is sufficient.
+
+    The chain's `revise` carries --no-queue: it re-drafts from the expanded corpus but
+    must NOT re-plan and re-queue another chain (the comments it sees are the same ones
+    that produced this chain, so it would loop). Queuing is a decision made once, here."""
     verb = _STEP[step]["verb"]
-    return f"rabbitHole {verb}" if verb else None
+    if not verb:
+        return None
+    if step == "revise":
+        return "rabbitHole revise --no-queue"
+    return f"rabbitHole {verb}"
 
 
 def _next_cycle(titles: list[str]) -> int:

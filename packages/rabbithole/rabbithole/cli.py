@@ -80,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
                           "no tracked changes, reviewer comments dropped). Default is an "
                           "in-place redline: rabbitHole-authored tracked changes with the "
                           "reviewer's comments preserved")
+    rev.add_argument("--no-queue", action="store_true",
+                     help="do not queue follow-up corpus work (ingest/gather) for comments "
+                          "that ask for new sources; just do the in-place edits. Set "
+                          "automatically on runner-executed chain steps to avoid re-planning")
 
     ing = sub.add_parser("ingest",
                          help="pull reviewer-supplied references from a _ra.docx into the corpus")
@@ -123,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=True)
         from . import revise
         return revise.run(args.dir, brain_override=args.brain, docx_path=args.file,
-                          redline=not args.resynth)
+                          redline=not args.resynth, queue=not args.no_queue)
 
     if args.command == "ingest":
         _check_env()
