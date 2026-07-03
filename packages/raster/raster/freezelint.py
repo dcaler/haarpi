@@ -57,9 +57,16 @@ Checks (each maps to an observed defect class):
 """
 
 import ast
+import json
+import os
 import re
+import subprocess
+import sys
 
 from raster.spec import declared_modules, lint_spec, load_project
+
+# how long the external-symbol resolvability probe subprocess may run (one probe over ALL symbols).
+PROBE_TIMEOUT = int(os.environ.get("RASTER_PROBE_TIMEOUT", 60))
 
 # comment phrases that confess a literal is a hand-synced COPY of a canonical constant elsewhere.
 _COPY_MARKERS = ("based on", "copy of", "copied from", "keep in sync", "kept in sync",
@@ -861,6 +868,207 @@ def lint_phantom_attr_spies(code, package: str) -> list:
                     f"across every sibling the same freeze pass authored — grep the whole tests/ tree "
                     f"(gates included) for {name!r} and fix all instances in this reconcile.")
     return violations
+
+
+# --------------------------------------------------------------------------- external-symbol
+# resolvability. UNLIKE every check above (pure AST, zero imports), this one EXECUTES imports in
+# the runner env — a frozen test that names a THIRD-PARTY API existing in no installed version is
+# unsatisfiable BEFORE any assertion (a hallucinated / wrong-major-version symbol, e.g.
+# `pygame_gui.events.UISliderFinishedDragging` against pygame_gui 0.6.14), the most expensive
+# oracle class: the doer can't even reach the assertion, and plateaus for hours on a library
+# ImportError. So it lives OUTSIDE lint_violations (which advertises pure-AST/no-import) and is run
+# by the freeze-review gate, which already executes tests (frozen-thirdparty-api guidance, YY/ZZ).
+
+def _tests_local_modules(tests_dir) -> set:
+    """Top-level module/package names that live INSIDE the tests/ tree — sibling test modules,
+    conftest, a golden/constants package. A bare `from golden import X` or `import conftest`
+    resolves at pytest time (the rootdir is on sys.path) but is NOT a third-party symbol, so the
+    external-resolvability probe must skip it (else it false-flags every local test import)."""
+    local = {"tests"}
+    if not tests_dir.is_dir():
+        return local
+    for f in tests_dir.rglob("*.py"):
+        local.add(f.stem)
+    for d in tests_dir.rglob("*"):
+        if d.is_dir():
+            local.add(d.name)
+    return local
+
+
+def _attr_root_chain(node):
+    """For a (possibly nested) Attribute `a.b.c`, return (root_name, ['b','c']); (None, []) when the
+    chain doesn't bottom out in a bare Name (it's rooted at a call/subscript result — an instance,
+    not a module, which we deliberately do NOT introspect)."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        return node.id, list(reversed(parts))
+    return None, []
+
+
+def _module_external_targets(tree, package: str, local: set) -> list:
+    """Third-party dotted symbols one test module resolves against the runner env, as [(lineno,
+    dotted)]:
+      * every imported module (`import a.b.c` -> a.b.c);
+      * every from-imported name (`from a.b import x` -> a.b.x);
+      * attribute chains rooted at an imported MODULE name (`np.diff` -> numpy.diff;
+        `pygame_gui.events.UISliderFinishedDragging` -> the full dotted path).
+    Skips the product package (built later / stubbed at freeze), local tests/ siblings, and relative
+    imports. Anything installed (stdlib or third-party) resolves, so no stdlib carve-out is needed."""
+    def external_top(top: str) -> bool:
+        return bool(top) and top != package and top not in local
+    module_of = {}      # local bound name -> dotted module it names (import forms only)
+    targets = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                top = a.name.split(".")[0]
+                if not external_top(top):
+                    continue
+                targets.append((node.lineno, a.name))               # resolve the module itself
+                module_of[a.asname or top] = a.name if a.asname else top
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            top = node.module.split(".")[0]
+            if not external_top(top):
+                continue
+            for a in node.names:
+                if a.name != "*":
+                    targets.append((node.lineno, f"{node.module}.{a.name}"))
+    # attribute chains rooted at an imported module name — MAXIMAL chains only (skip an Attribute
+    # that is itself the `.value` of an enclosing one, so we resolve `x.y.z`, not also `x.y`).
+    inner = {id(n.value) for n in ast.walk(tree)
+             if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Attribute)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and id(node) not in inner:
+            root, parts = _attr_root_chain(node)
+            if root in module_of and parts:
+                targets.append((node.lineno, module_of[root] + "." + ".".join(parts)))
+    return targets
+
+
+def external_symbols(code, package: str) -> list:
+    """Every DISTINCT third-party symbol any frozen test OR gate under tests/ names, as
+    [(file, lineno, dotted)] (deduplicated by dotted, first occurrence kept). Sweeps the WHOLE
+    tests/ tree (gates included) so a fictitious symbol the freeze author reused across siblings is
+    caught in one pass (oracle-bug propagation). Pure AST — the actual resolution is
+    `probe_external_symbols`."""
+    tests = code / "tests"
+    if not tests.is_dir():
+        return []
+    local = _tests_local_modules(tests)
+    seen, out = set(), []
+    for f in sorted(tests.rglob("*.py")):
+        try:
+            tree = ast.parse(f.read_text(), filename=str(f))
+        except (SyntaxError, OSError):
+            continue                                    # a syntax error is a louder failure elsewhere
+        for lineno, dotted in _module_external_targets(tree, package, local):
+            if dotted not in seen:
+                seen.add(dotted)
+                out.append((f.name, lineno, dotted))
+    return out
+
+
+# Child probe: resolve each dotted target against the runner env. Imports run with stdout/stderr
+# muted (a lib like pygame prints a banner on import); the verdict is written on a SENTINEL line so
+# any escaped native-level noise before it is ignored. Per target: OK / MISSING (name exists in no
+# installed version — the fictitious-API class we BLOCK on) / ENV (import raised for another reason
+# — a missing native dep or a display requirement; surfaced as a warning, never a block).
+_PROBE_SRC = r'''
+import contextlib, importlib, json, os, sys
+
+def resolve(dotted):
+    parts = dotted.split(".")
+    try:
+        obj = importlib.import_module(parts[0])
+    except ModuleNotFoundError as e:
+        return ["MISSING", "%s: %s" % (type(e).__name__, e)]
+    except BaseException as e:
+        return ["ENV", "%s: %s" % (type(e).__name__, e)]
+    resolved = parts[0]
+    for p in parts[1:]:
+        try:
+            if hasattr(obj, p):
+                obj = getattr(obj, p); resolved += "." + p; continue
+        except BaseException as e:
+            return ["ENV", "%s: %s" % (type(e).__name__, e)]
+        try:
+            obj = importlib.import_module(resolved + "." + p)
+            resolved += "." + p
+        except ModuleNotFoundError:
+            return ["MISSING", "%r has no attribute or submodule %r" % (resolved, p)]
+        except BaseException as e:
+            return ["ENV", "%s: %s" % (type(e).__name__, e)]
+    return ["OK", ""]
+
+targets = json.load(sys.stdin)
+results = {}
+with open(os.devnull, "w") as dn, contextlib.redirect_stdout(dn), contextlib.redirect_stderr(dn):
+    for dotted in targets:
+        try:
+            results[dotted] = resolve(dotted)
+        except BaseException as e:
+            results[dotted] = ["ENV", "%s: %s" % (type(e).__name__, e)]
+sys.stdout.write("\n__RASTER_PROBE__" + json.dumps(results) + "\n")
+'''
+
+
+def _parse_probe_output(text: str):
+    """The JSON verdict map from the child's SENTINEL line, or None if it never got that far."""
+    for line in reversed(text.splitlines()):
+        if line.startswith("__RASTER_PROBE__"):
+            try:
+                return json.loads(line[len("__RASTER_PROBE__"):])
+            except ValueError:
+                return None
+    return None
+
+
+def probe_external_symbols(code, symbols: list):
+    """Resolve `symbols` (from `external_symbols`) against the runner env in ONE isolated
+    subprocess. Returns (missing, env_warn, ok_count): `missing` are BLOCKING freeze violations
+    (a frozen test/gate names a third-party API that imports NOWHERE — unsatisfiable before any
+    assertion); `env_warn` are non-blocking (the import raised for an env reason, not a bad name)."""
+    if not symbols:
+        return [], [], 0
+    loc = {dotted: (f, ln) for f, ln, dotted in symbols}
+    dotted_list = list(loc)
+    try:
+        proc = subprocess.run([sys.executable, "-c", _PROBE_SRC], input=json.dumps(dotted_list),
+                              cwd=str(code), capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return ([f"external-symbol resolvability probe timed out after {PROBE_TIMEOUT}s over "
+                 f"{len(dotted_list)} symbol(s) — importing a third-party library likely hangs "
+                 f"(opens a window / waits on a device). Probe them by hand "
+                 f"(`python -c \"import ...\"`) before `queue`."], [], 0)
+    results = _parse_probe_output(proc.stdout)
+    if results is None:
+        tail = (proc.stderr or proc.stdout).strip()[-400:]
+        return ([f"external-symbol resolvability probe produced no verdict — the child crashed "
+                 f"before finishing (a library import may hard-exit the interpreter). Tail:\n    "
+                 f"{tail}"], [], 0)
+    missing, env_warn, ok = [], [], 0
+    for dotted in dotted_list:
+        status, detail = results.get(dotted, ["MISSING", "no result returned"])
+        f, ln = loc[dotted]
+        if status == "OK":
+            ok += 1
+        elif status == "MISSING":
+            missing.append(
+                f"{f}:{ln}: third-party symbol {dotted!r} resolves in NO installed version "
+                f"({detail}) — a frozen test/gate names a hallucinated or wrong-version library API. "
+                f"No implementation can satisfy it: the test raises at import/construction BEFORE any "
+                f"assertion, so the doer plateaus on a library ImportError (never on the deliverable). "
+                f"Pin the REAL installed API (find it with `python -c \"import ...; help(...)\"`), and "
+                f"sweep siblings + gates for the same name (a freeze author reuses it across them).")
+        else:                                           # ENV — installed but import-time error
+            env_warn.append(
+                f"{f}:{ln}: third-party symbol {dotted!r} could not be resolved because importing it "
+                f"raised {detail} — likely an ENVIRONMENT issue (missing native dep, needs a display), "
+                f"not a hallucinated name. Verify by hand; not treated as a freeze block.")
+    return missing, env_warn, ok
 
 
 def lint_violations(project) -> list:

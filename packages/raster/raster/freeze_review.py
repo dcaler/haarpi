@@ -4,10 +4,10 @@ Across SchellingChords almost every COSTLY failure was a Phase-0 (frozen-layer) 
 implementation defect — bad goldens and blind/unsatisfiable tests that the doer then spent hours
 of GPU implementing against on the assumption the freeze was sound (freeze_review_gate guidance,
 UU/VV/WW/XX). The cheapest place to catch them is the freeze; the most expensive is a multi-hour
-build plateau. This command runs the four-property freeze checklist as a gate BEFORE any task is
+build plateau. This command runs the five-property freeze checklist as a gate BEFORE any task is
 queued — so the scarce human checkpoint and the GPU budget are spent only on what survives it.
 
-Three of the four properties are mechanical and run here; the fourth is a reasoning pass the
+Four of the five properties are mechanical and run here; the fifth is a reasoning pass the
 command prints as a checklist for the human + Claude review (no linter can promote it):
 
   (1) Static cross-reference — the full `raster lint` suite (Layer-1 AST checks).
@@ -18,11 +18,17 @@ command prints as a checklist for the human + Claude review (no linter can promo
   (3) Gate red-before-green — the same, for every module GATE. Gates are the structural blind spot:
       authored with the unit tests but exercised only later, so they silently carry the same bugs
       (a green unit task says nothing about its gate). Exercise them at freeze.
-  (4) Reasoning checklist — per-assertion satisfiability, producer-correspondence, and the
+  (4) External-symbol resolvability — every THIRD-PARTY symbol a frozen test/gate names must import
+      in the runner env. A hallucinated / wrong-version library API (pygame_gui.events.
+      UISliderFinishedDragging against pygame_gui 0.6.14) is unsatisfiable BEFORE any assertion, so
+      the doer plateaus for hours on a library ImportError, not on the deliverable's logic. A
+      two-second `import ...; getattr(...)` probe per symbol converts that into a freeze failure
+      (frozen-thirdparty-api guidance, YY/ZZ).
+  (5) Reasoning checklist — per-assertion satisfiability, producer-correspondence, and the
       sibling/gate assumption sweep; printed for the human+Claude pass, not auto-graded.
 """
 from raster import execlib
-from raster.freezelint import lint_violations
+from raster.freezelint import external_symbols, lint_violations, probe_external_symbols
 from raster.spec import load_project
 
 
@@ -104,8 +110,27 @@ def run_freeze_review(args) -> int:
         print(f"      … {g_missing} gate(s) not authored yet")
     blocking += g_greens
 
-    # (4) reasoning checklist — human + Claude, not mechanical
-    print("\n(4) Reasoning pass (human + Claude — no linter promotes these). Before `queue`, confirm:")
+    # (4) external-symbol resolvability — every THIRD-PARTY symbol a frozen test/gate NAMES must
+    # import in the runner env. A hallucinated or wrong-version library symbol
+    # (pygame_gui.events.UISliderFinishedDragging vs the installed pygame_gui 0.6.14) is an oracle
+    # UNSATISFIABLE before any assertion — the doer plateaus for hours on a third-party ImportError,
+    # never reaching the deliverable's logic. Probe it now; block on any that don't resolve (YY/ZZ).
+    print("\n(4) External-symbol resolvability — every third-party symbol a frozen test/gate names "
+          "must import in the runner env:")
+    syms = external_symbols(project.code, project.package)
+    missing, env_warn, ok = probe_external_symbols(project.code, syms)
+    for v in missing:
+        print(f"      ✗ {v}")
+    for w in env_warn:
+        print(f"      ! {w}")
+    if ok:
+        print(f"      ✓ {ok} external symbol(s) resolve against the installed env")
+    if not syms:
+        print("      … the frozen suite names no third-party symbols")
+    blocking += missing
+
+    # (5) reasoning checklist — human + Claude, not mechanical
+    print("\n(5) Reasoning pass (human + Claude — no linter promotes these). Before `queue`, confirm:")
     for line in (
         "satisfiability per assertion — can ANY faithful impl pass each one, given the rest of the suite?",
         "producer-correspondence — is each expected value DERIVED from the real producer, not hand-encoded in parallel?",

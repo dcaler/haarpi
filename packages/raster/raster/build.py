@@ -189,6 +189,23 @@ def run_build(args) -> int:
             fail_counts.append(failed)
             if sig and sig == prev_sig:
                 span = "across an escalation" if idx > start else "on two consecutive attempts"
+                tp = execlib.thirdparty_import_failure(output, project.package)
+                if tp:
+                    # YY: the tell that a plateau is a frozen third-party API bug, not a weak model,
+                    # is that the repeated red names a LIBRARY symbol, not project code. A stronger
+                    # rung can't conjure a symbol that exists in no installed version — reconcile the
+                    # frozen test against the INSTALLED API, don't escalate.
+                    log(f"FAILED build={args.task}: STABLE failing value {span} on a THIRD-PARTY "
+                        f"import — the byte-identical red names {tp!r}, a LIBRARY module/symbol, not "
+                        f"project code. That is the tell of a frozen test that froze a HALLUCINATED "
+                        f"or WRONG-VERSION third-party API (it exists in no installed version), which "
+                        f"is UNSATISFIABLE before any assertion — no impl can even reach the "
+                        f"deliverable's logic, so a stronger rung cannot help. Do NOT escalate: "
+                        f"RECONCILE the frozen test against the INSTALLED API (`python -c \"import "
+                        f"...; getattr(...)\"` to find the real name), and sweep sibling tests + the "
+                        f"module gate for the same symbol (a freeze author reuses it). "
+                        f"Signature:\n    {sig.replace(chr(10), chr(10) + '    ')}")
+                    return 1
                 log(f"FAILED build={args.task}: STABLE failing value {span} — the byte-identical "
                     f"failure repeated, so a stronger rung can't fix it. This is the signature of a "
                     f"correct computation against a WRONG expected value (an oracle bug in the frozen "

@@ -568,6 +568,111 @@ def test_freeze_review_passes_when_red(tmp_path, monkeypatch, capsys):
     assert "mechanical checks clean" in out
 
 
+# --------------------------------------------- external-symbol resolvability (YY/ZZ)
+def test_external_symbols_extracts_thirdparty_and_excludes_local(tmp_path):
+    from raster.freezelint import external_symbols
+    code = tmp_path / "code"
+    tests = code / "tests"
+    tests.mkdir(parents=True)
+    (tests / "golden.py").write_text("VALUE = 1\n")                # a LOCAL sibling module
+    (tests / "test_gui.py").write_text(
+        "import pygame_gui\n"
+        "import numpy as np\n"
+        "from pygame_gui.elements import UIHorizontalSlider\n"
+        "from golden import VALUE\n"                                # local -> excluded
+        "from pkg.model import Model\n"                             # product -> excluded
+        "def test_x():\n"
+        "    ev = pygame_gui.events.UISliderFinishedDragging(1)\n"  # attr chain on a module name
+        "    return np.diff([1, 2]), UIHorizontalSlider, VALUE, Model, ev\n")
+    dotted = {d for _, _, d in external_symbols(code, "pkg")}
+    assert "pygame_gui" in dotted                                  # imported module
+    assert "numpy" in dotted                                       # aliased import (np -> numpy)
+    assert "pygame_gui.elements.UIHorizontalSlider" in dotted      # from-import
+    assert "pygame_gui.events.UISliderFinishedDragging" in dotted  # maximal attr chain on `pygame_gui`
+    assert "numpy.diff" in dotted                                  # attr chain on the alias `np`
+    assert not any(d.split(".")[0] == "golden" for d in dotted)    # local sibling excluded
+    assert not any(d.split(".")[0] == "pkg" for d in dotted)       # product package excluded
+
+
+def test_probe_external_symbols_resolves_and_flags(tmp_path):
+    from raster.freezelint import probe_external_symbols
+    code = tmp_path / "code"
+    code.mkdir()
+    symbols = [
+        ("test_a.py", 1, "os.path.join"),                # real stdlib attribute chain -> OK
+        ("test_a.py", 2, "json"),                        # real module -> OK
+        ("test_a.py", 3, "os.this_attr_does_not_exist"), # real module, fictitious attr -> MISSING
+        ("test_a.py", 4, "totally_fake_pkg_zzz9"),       # no such module anywhere -> MISSING
+    ]
+    missing, env_warn, ok = probe_external_symbols(code, symbols)
+    assert ok == 2                                       # os.path.join + json resolve in the env
+    joined = "\n".join(missing)
+    assert "os.this_attr_does_not_exist" in joined and "totally_fake_pkg_zzz9" in joined
+    assert len(missing) == 2 and env_warn == []
+    assert "resolves in NO installed version" in joined
+
+
+def test_probe_external_symbols_empty_is_noop(tmp_path):
+    from raster.freezelint import probe_external_symbols
+    assert probe_external_symbols(tmp_path, []) == ([], [], 0)     # no symbols -> no subprocess
+
+
+def test_freeze_review_flags_fictitious_thirdparty_symbol(tmp_path, monkeypatch, capsys):
+    # A frozen test naming a third-party library that imports NOWHERE is unsatisfiable before any
+    # assertion -> property (4) probes it against the runner env and BLOCKS queue (ZZ).
+    from types import SimpleNamespace
+    from raster import freeze_review
+    project = _clean_review_project(tmp_path)
+    (project.code / "tests" / "test_smoke.py").write_text(
+        "import totally_fake_lib_zzz9\ndef test_x():\n    assert totally_fake_lib_zzz9\n")
+    (project.code / "tests" / "gate.py").write_text("import pkg\ndef test_g():\n    assert pkg\n")
+    monkeypatch.setattr(freeze_review, "load_project", lambda d: project)
+    # (2)/(3) red-before-green pass (product absent); (4) runs the REAL resolvability subprocess.
+    monkeypatch.setattr(freeze_review.execlib, "run_test",
+                        lambda proj, cmd, stub_pkg=None: (False, "1 failed"))
+    rc = freeze_review.run_freeze_review(SimpleNamespace(dir=str(tmp_path)))
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "totally_fake_lib_zzz9" in out and "resolves in NO installed version" in out
+    assert "BLOCKING" in out
+
+
+def test_thirdparty_import_failure_classifier():
+    from raster.execlib import thirdparty_import_failure as t
+    assert (t("E   ModuleNotFoundError: No module named 'pygame_gui.events'", "pkg")
+            == "pygame_gui.events")
+    assert (t("E   ImportError: cannot import name 'UISlider' from 'pygame_gui.elements'", "pkg")
+            == "pygame_gui.elements.UISlider")
+    assert (t("E   AttributeError: module 'numpy' has no attribute 'nonexistent'", "pkg")
+            == "numpy.nonexistent")
+    # a PRODUCT import error is NOT a third-party API bug (that's the stub/model path)
+    assert t("No module named 'pkg'", "pkg") is None
+    assert t("No module named 'pkg.model'", "pkg") is None
+    # a genuine logic failure names no library import -> None (falls through to the oracle-bug path)
+    assert t("E   assert 0.0833 == 0.8", "pkg") is None
+
+
+def test_build_loop_thirdparty_import_plateau_says_reconcile(tmp_path, monkeypatch, capsys):
+    # YY: a byte-identical THIRD-PARTY ImportError plateau aborts WITHOUT escalating, and the tell is
+    # named — the red is a LIBRARY symbol, so reconcile the frozen test against the installed API,
+    # don't spend the strong tier chasing a name that exists in no installed version.
+    rc, sizes = _drive_build(
+        tmp_path, monkeypatch,
+        lambda i: "E   ModuleNotFoundError: No module named 'pygame_gui.events'\n"
+                  "FAILED tests/test_smoke.py::test_x")
+    assert rc == 1 and len(sizes) == 2                             # aborted on the 2nd identical red
+    out = capsys.readouterr().out
+    assert "THIRD-PARTY import" in out and "pygame_gui.events" in out
+    assert "RECONCILE" in out and "Do NOT escalate" in out
+
+
+def test_author_instructions_pin_installed_thirdparty_api():
+    from raster.execlib import _AUTHOR_INSTRUCTIONS as ai
+    assert "INSTALLED THIRD-PARTY API" in ai
+    assert "UISliderFinishedDragging" in ai                        # the concrete cautionary example
+    assert "freeze-review" in ai and "BLOCKS" in ai               # tells the author raster probes it
+
+
 def test_freezelint_half_matrix_lookup(tmp_path):
     from raster.freezelint import lint_frozen_tests
     code = tmp_path / "code"

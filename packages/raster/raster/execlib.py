@@ -329,6 +329,31 @@ def failure_signature(output: str) -> str:
     return "\n".join(lines)
 
 
+def thirdparty_import_failure(output: str, package: str):
+    """If a failing run's error names a THIRD-PARTY (non-product) library module/symbol that does
+    not resolve — `No module named 'lib'`, `cannot import name 'X' from 'lib'`, `module 'lib' has
+    no attribute 'X'` — return a short `lib`/`lib.X` description; else None. This is the TELL that
+    a plateau is a frozen HALLUCINATED / wrong-version third-party API (unsatisfiable before any
+    assertion — reconcile the frozen test against the INSTALLED library, do NOT escalate), as
+    opposed to a weak model plateauing on the deliverable's own LOGIC, where the red names PROJECT
+    code (frozen-thirdparty-api guidance, YY). raster's freeze-review probe (ZZ) should catch this
+    before queue; this is the in-loop backstop for anything that slips through."""
+    def external(mod: str) -> bool:
+        top = mod.split(".")[0]
+        return bool(top) and top != package and not mod.startswith(package + ".")
+    for line in output.splitlines():
+        m = re.search(r"No module named '([\w.]+)'", line)
+        if m and external(m.group(1)):
+            return m.group(1)
+        m = re.search(r"cannot import name '(\w+)' from '([\w.]+)'", line)
+        if m and external(m.group(2)):
+            return f"{m.group(2)}.{m.group(1)}"
+        m = re.search(r"module '([\w.]+)' has no attribute '(\w+)'", line)
+        if m and external(m.group(1)):
+            return f"{m.group(1)}.{m.group(2)}"
+    return None
+
+
 def normalize_pytest_cmd(cmd: str) -> str:
     """Run pytest through THIS interpreter so the check uses the exact Python/site-packages
     raster is running under, instead of a bare `pytest` that may not be on PATH."""
@@ -457,6 +482,20 @@ _AUTHOR_INSTRUCTIONS = (
     "turns that schism into a PERMANENT green that never runs — the worst false-green. Import "
     "product modules DIRECTLY, by their EXACT declared deliverable module name (if the deliverable "
     "is `pkg/chords.py`, import `pkg.chords` — never `pkg.chord`); a wrong name must fail loudly.\n"
+    "TARGET THE INSTALLED THIRD-PARTY API, NEVER A REMEMBERED ONE. When a frozen test imports or "
+    "constructs a symbol from a THIRD-PARTY library (a GUI toolkit, a plotting lib, an ORM, a "
+    "framework), it must name a symbol that exists in the version INSTALLED in the runner env — not "
+    "a plausible-sounding blend of versions from training memory. A hallucinated class/event/"
+    "attribute (`pygame_gui.events.UISliderFinishedDragging` against pygame_gui 0.6.14, which has no "
+    "such name — the real slider is `UIHorizontalSlider`, its event `UI_HORIZONTAL_SLIDER_MOVED`, "
+    "its range `.value_range`) is the MOST EXPENSIVE frozen bug of all: unlike a product import "
+    "(stubbed at collect), a third-party import is REAL, so the test raises at import/construction "
+    "BEFORE any assertion — no implementation can even reach the behavior under test, and the doer "
+    "plateaus for hours walking impossible import paths. Use ONLY third-party symbols you are "
+    "certain exist at the installed version; prefer documented STABLE names over invented "
+    "Finished/Changed/Updated variants that merely sound right. raster PROBES every external symbol "
+    "the frozen suite names against the runner env at freeze-review and BLOCKS on any that don't "
+    "resolve — so an invented name costs a re-author now, not a multi-hour build plateau later.\n"
     "DELEGATE, DON'T RE-STUB a pinned algorithm — when several tests need the same formula/metric, "
     "assert against the ONE canonical product symbol everywhere; never let a second call site get a "
     "fresh fake (a coarse tolerance lets a stub pass by luck and the real value is never checked).\n"
