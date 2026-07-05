@@ -42,14 +42,19 @@ def _read_litrev_yaml(litrev_path: Path) -> dict:
         return {}
 
 
+def _warn_missing(tool: str, what: str, label: str) -> None:
+    print(f"[warn]   {tool} output not found ({label}/) — has {tool} been run?", file=sys.stderr)
+
+
 def _check_litrev(cfg: ProjectConfig, project_dir: Path) -> dict:
-    """Check for litReview/, ask if found, return litrev.yaml data dict if yes."""
-    litrev_path = project_dir / (cfg.litrev_dir or "litReview")
+    """Check for the rabbitHole literature review, ask if found, warn if not."""
+    label = cfg.litrev_dir or "litReview"
+    litrev_path = project_dir / label
     if not litrev_path.is_dir():
+        _warn_missing("rabbitHole", "literature review", label)
         cfg.litrev_dir = ""
         return {}
-    label = cfg.litrev_dir or "litReview"
-    if not _yn(f"Found {label}/ — include literature review as context?"):
+    if not _yn(f"Found {label}/ (rabbitHole) — include literature review as context?"):
         cfg.litrev_dir = ""
         return {}
     cfg.litrev_dir = label
@@ -57,20 +62,24 @@ def _check_litrev(cfg: ProjectConfig, project_dir: Path) -> dict:
 
 
 def _ask_context_dirs(cfg: ProjectConfig, project_dir: Path) -> None:
-    """Check for code/ and results/ and ask whether to use each."""
+    """Check for raster (code/) and rayleigh (results/) output; ask or warn."""
     print()
-    methods_check = project_dir / (cfg.methods_dir or "code")
-    if methods_check.is_dir():
-        label = cfg.methods_dir or "code"
-        cfg.methods_dir = label if _yn(f"Found {label}/ — use as methods context?") else ""
+    methods_label = cfg.methods_dir or "code"
+    if (project_dir / methods_label).is_dir():
+        cfg.methods_dir = methods_label if _yn(
+            f"Found {methods_label}/ (raster) — use as methods context?"
+        ) else ""
     else:
+        _warn_missing("raster", "analysis code", methods_label)
         cfg.methods_dir = ""
 
-    results_check = project_dir / (cfg.results_dir or "results")
-    if results_check.is_dir():
-        label = cfg.results_dir or "results"
-        cfg.results_dir = label if _yn(f"Found {label}/ — use as results context?") else ""
+    results_label = cfg.results_dir or "results"
+    if (project_dir / results_label).is_dir():
+        cfg.results_dir = results_label if _yn(
+            f"Found {results_label}/ (rayleigh) — use as results context?"
+        ) else ""
     else:
+        _warn_missing("rayleigh", "experiment results", results_label)
         cfg.results_dir = ""
 
 
@@ -145,11 +154,12 @@ def run(project_dir: Path) -> None:
 
 
 def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> None:
-    """Collect style preferences and confirm the Zotero publication list.
+    """Collect the required author style and confirm the Zotero publication list.
 
-    Interactive-only: saves author name and confirmed paper keys to config.
-    Actual LLM training happens headlessly in 'raconteur style', which runs
-    automatically before 'raconteur outline' if the profile is missing.
+    Author voice is required. This interactive step saves the author name and
+    confirmed paper keys to config; the actual LLM training happens headlessly
+    in 'raconteur style', which runs automatically before 'raconteur onepager'
+    if the profile is missing.
     """
     from .style import STYLE_PROFILE_PATH, _load_existing_profile
     from .zotero import ZoteroClient
@@ -162,14 +172,13 @@ def _check_style(cfg: ProjectConfig, gcfg: GlobalConfig, project_dir: Path) -> N
         n = len(existing.get("paper_keys", []))
         last = existing.get("last_updated", "?")
         print(f"  Style profile found: {author}, {n} paper(s), last trained {last}")
-        cfg.use_style = _yn("Apply this author style when drafting?", default_yes=True)
-        if cfg.use_style:
-            cfg.style_author = cfg.style_author or author
+        print("  Author style is required — it will be applied when drafting.")
+        cfg.use_style = True
+        cfg.style_author = cfg.style_author or author
         return
 
-    if not _yn("Apply an author style profile when drafting?", default_yes=False):
-        cfg.use_style = False
-        return
+    print("  Author style is required — setting up an author voice profile.")
+    cfg.use_style = True
 
     zcfg = ZoteroConfig.from_env()
     if not zcfg.available:

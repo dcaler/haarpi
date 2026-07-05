@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig, VenueConfig
-from .context import load_litreview
+from .context import load_litreview, load_onepager
 from .naming import parse, today
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -36,7 +36,7 @@ Identify candidate academic publication venues for this research paper.
 Description: {description}
 Topic: {topic}
 Focus: {focus}
-{litrev_context}
+{narrative_context}{litrev_context}
 Generate 8–12 candidate venues (a mix of journals and conferences) appropriate for \
 this paper. Include venues at different tiers — field-leading, strong specialist, \
 and broad/general.
@@ -203,7 +203,7 @@ def _deadline_end() -> str:
     return d.strftime("%Y-%m-%d")
 
 
-def _paper_profile_block(cfg: ProjectConfig, litrev: str) -> str:
+def _paper_profile_block(cfg: ProjectConfig, litrev: str, narrative: str = "") -> str:
     parts = [
         f"Title: {cfg.title}" if cfg.title else "",
         f"Description: {cfg.description}",
@@ -211,6 +211,8 @@ def _paper_profile_block(cfg: ProjectConfig, litrev: str) -> str:
         f"Focus: {cfg.focus}" if cfg.focus else "",
     ]
     block = "\n".join(p for p in parts if p)
+    if narrative:
+        block += f"\n\nNarrative spine (author-approved concise path through the paper):\n{narrative}"
     if litrev:
         snippet = litrev[:2000] + ("\n\n[truncated]" if len(litrev) > 2000 else "")
         block += f"\n\nLiterature review context:\n{snippet}"
@@ -218,8 +220,12 @@ def _paper_profile_block(cfg: ProjectConfig, litrev: str) -> str:
 
 
 def _brainstorm_candidates(
-    brain: Brain, cfg: ProjectConfig, litrev: str
+    brain: Brain, cfg: ProjectConfig, litrev: str, narrative: str = ""
 ) -> list[dict]:
+    narrative_context = (
+        f"Narrative spine (author-approved concise path through the paper):\n{narrative}\n"
+        if narrative else ""
+    )
     litrev_context = ""
     if litrev:
         snippet = litrev[:3000] + ("\n\n[truncated]" if len(litrev) > 3000 else "")
@@ -231,6 +237,7 @@ def _brainstorm_candidates(
             description=cfg.description,
             topic=cfg.topic or "",
             focus=cfg.focus or "",
+            narrative_context=narrative_context,
             litrev_context=litrev_context,
         ),
         system=_BRAINSTORM_SYSTEM,
@@ -466,10 +473,11 @@ def _venue_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path, gcfg: GlobalConfig
 ) -> str:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    paper_profile = _paper_profile_block(cfg, litrev)
+    narrative = load_onepager(project_dir, cfg.short_title)
+    paper_profile = _paper_profile_block(cfg, litrev, narrative)
 
     # Pass 1: brainstorm candidates
-    candidates = _brainstorm_candidates(brain, cfg, litrev)
+    candidates = _brainstorm_candidates(brain, cfg, litrev, narrative)
 
     # Step 2: web research
     email = gcfg.notify_to or ""
@@ -491,7 +499,8 @@ def _venue_revise(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path, user_rev: Path
 ) -> str:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    paper_profile = _paper_profile_block(cfg, litrev)
+    narrative = load_onepager(project_dir, cfg.short_title)
+    paper_profile = _paper_profile_block(cfg, litrev, narrative)
 
     analysis_text = read_text(user_rev)
     revision_notes = build_revision_context(user_rev)

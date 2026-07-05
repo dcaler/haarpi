@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile
+from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile, load_onepager
 from .log import log
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
@@ -262,7 +262,7 @@ def run(project_dir: Path, section: str) -> None:
 
     paper_path = find_latest(
         paper_dir, cfg.short_title, "md",
-        last_initials="ra", chain_excludes=["outline", "venue"],
+        last_initials="ra", chain_excludes=["outline", "venue", "onepager"],
     )
     if paper_path is None:
         log("[error] no paper found — run 'raconteur paper' first")
@@ -295,12 +295,13 @@ def run(project_dir: Path, section: str) -> None:
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
+    narrative = load_onepager(project_dir, cfg.short_title)
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(
         Brain(gcfg, coordinator=cfg.brain.coordinator_model),
-        cfg.description, litrev, code, results,
+        cfg.description, litrev, code, results, narrative,
     )
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)

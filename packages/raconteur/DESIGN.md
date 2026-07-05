@@ -9,13 +9,28 @@ into successive drafts — all reasoning done by local LLMs via Ollama.
 The intended loop:
 
 ```
-raconteur init     →  raconteur.yaml + paper/ directory
-raconteur outline  →  structured outline (.md + .docx)
-raconteur draft    →  first full draft (.md + .docx)
-   [you annotate]  →  save your Word file with initials appended
-raconteur draft    →  reads your annotations, writes revised draft
-raconteur focus N  →  refines one section, minor-version the file
+raconteur init      →  raconteur.yaml + paper/ directory
+raconteur onepager  →  concise narrative one-pager (.md + .docx)
+   [you annotate]   →  save your Word file with initials appended
+raconteur onepager  →  reads your annotations, revises the one-pager
+raconteur outline   →  structured outline, derived from the approved one-pager
+raconteur draft     →  first full draft (.md + .docx)
+   [you annotate]   →  save your Word file with initials appended
+raconteur draft     →  reads your annotations, writes revised draft
+raconteur focus N   →  refines one section, minor-version the file
 ```
+
+The **one-pager** is the first deliverable: the most concise path through the
+paper's narrative — high notes only, at most two figures embedded from rayleigh's
+output. Like every deliverable it goes through the human edit/revise cycle. It is
+a required precursor to `outline`, which uses the approved narrative to design the
+full paper; the narrative is then carried into `draft` and `focus` as well.
+
+The one-pager is written in the author's voice: a **required** author style
+profile (trained from Zotero publications, stored globally and reused across
+projects) is a mandatory input. `onepager` trains it automatically if missing and
+hard-errors if it cannot be produced, so author voice is guaranteed from the very
+first deliverable onward.
 
 ---
 
@@ -50,6 +65,7 @@ YYMMDD_<short_title>_<initials_chain>.<ext>
 
 | Command | Effect on filename |
 |---|---|
+| `onepager` | `YYMMDD_title_onepager_ra.md` — fresh, chain is `onepager_ra` |
 | `outline` | `YYMMDD_title_ra.md` — fresh, chain reset to `ra` |
 | `draft` | `YYMMDD_title_ra.md` — fresh, chain reset to `ra`, date updated |
 | `focus` | `YYMMDD_title_<existing_chain>_ra.md` — chain extended, date updated |
@@ -97,21 +113,43 @@ for it), but not yet implemented.
 
 ---
 
+## Upstream Pipeline
+
+Raconteur is the last stage of the `ra*` toolchain. It expects three upstream
+tools to have run to completion before it does:
+
+| Tool | Output directory | Feeds |
+|---|---|---|
+| [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review (`output/*.md`, `refs.bib`) |
+| [raster](https://github.com/dcaler/raster) | `code/` | analysis code → methods |
+| [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results → results |
+
+At the start of `outline` (and during `init`), `check_prerequisites` verifies
+each output is present and **warns loudly** for any that is missing, naming the
+tool that should have produced it. The warning is non-fatal: a theory paper may
+legitimately have no experiments, so raconteur proceeds with reduced context
+rather than erroring. The point is that an absent source is a deliberate choice,
+not a silent oversight.
+
 ## Context Sources
 
-Before generating an outline or draft, raconteur reads two optional sources:
+Given the upstream outputs, raconteur reads three sources before generating an
+outline or draft:
 
-**`litReview/output/*.md`** (RabbitHole output)
+**`litReview/output/*.md`** (rabbitHole)
 Read the most recently modified file. Truncated to 12 000 characters. Passed to
-the LLM as literature review context — informs all sections. If absent, silently
-skipped.
+the LLM as literature review context — informs all sections. `refs.bib` from the
+same directory supplies a compact citekey list for citation guidance.
 
-**`code/`** (analysis scripts and notebooks)
-Recursively reads `.py`, `.R`, `.jl`, `.ipynb` files, up to 80 lines each,
-capped at 4 000 characters total. Passed as analysis code context — primarily
-informs the methods and results sections. If absent, silently skipped.
+**`code/`** (raster)
+Recursively reads `.py`, `.R`, `.jl`, `.ipynb` files. Passed as analysis code
+context — primarily informs the methods section.
 
-Both sources are discovered relative to the project root (the directory containing
+**`results/`** (rayleigh)
+Reads `findings.json`, `tables/*.csv`, and other result files. Passed as results
+context — primarily informs the results section.
+
+All sources are discovered relative to the project root (the directory containing
 `raconteur.yaml`), not relative to `paper/`.
 
 ---
@@ -139,9 +177,10 @@ raconteur/
 ├── cli.py       argparse entry point; Ollama reachability check; match dispatch
 ├── config.py    ProjectConfig (YAML) + GlobalConfig (TOML/env)
 ├── wizard.py    init interactive flow
+├── onepager.py  concise narrative one-pager; embeds ≤2 rayleigh figures; revise cycle
 ├── brain.py     Ollama coordinator + worker; streaming; retry with backoff
 ├── naming.py    filename parse / generate; major + minor versioning; discovery
-├── context.py   load litreview and code snippets for LLM context
+├── context.py   load litreview/code/results context; warn on missing upstream outputs
 ├── outline.py   outline generation
 ├── draft.py     fresh draft or revision-aware draft
 ├── focus.py     section extraction by number or heading; refinement; minor versioning

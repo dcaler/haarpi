@@ -13,6 +13,61 @@ _MAX_RESULTS_CHARS = 4000
 _MAX_FILE_LINES = 200
 _MAX_BIB_CHARS = 4000
 
+# Default output directories of the upstream ra* tools raconteur consumes.
+DEFAULT_LITREV_DIR = "litReview"   # rabbitHole
+DEFAULT_METHODS_DIR = "code"       # raster
+DEFAULT_RESULTS_DIR = "results"    # rayleigh
+
+
+def _litrev_complete(d: Path) -> bool:
+    out = d / "output"
+    return out.is_dir() and any(out.glob("*.md"))
+
+
+def _methods_complete(d: Path) -> bool:
+    return d.is_dir() and any(
+        p.is_file() and p.suffix in _CODE_SUFFIXES for p in d.rglob("*")
+    )
+
+
+def _results_complete(d: Path) -> bool:
+    if not d.is_dir():
+        return False
+    if (d / "findings.json").exists():   # rayleigh's structured results
+        return True
+    return any(
+        p.is_file() and p.suffix in _RESULTS_SUFFIXES for p in d.rglob("*")
+    )
+
+
+def check_prerequisites(project_dir: Path, cfg) -> None:
+    """Warn loudly for any upstream ra* tool whose output is missing.
+
+    raconteur expects rabbitHole, raster, and rayleigh to have run to
+    completion before it does. Missing outputs are non-fatal (a theory paper
+    may legitimately have no experiments), but each is warned loudly so the
+    absence is a deliberate choice rather than an oversight.
+    """
+    checks = [
+        ("rabbitHole", "literature review",
+         project_dir / (cfg.litrev_dir or DEFAULT_LITREV_DIR), _litrev_complete),
+        ("raster", "analysis code",
+         project_dir / (cfg.methods_dir or DEFAULT_METHODS_DIR), _methods_complete),
+        ("rayleigh", "experiment results",
+         project_dir / (cfg.results_dir or DEFAULT_RESULTS_DIR), _results_complete),
+    ]
+    missing = [(tool, what, d) for tool, what, d, fn in checks if not fn(d)]
+    if not missing:
+        log("[raconteur] upstream outputs present: rabbitHole, raster, rayleigh")
+        return
+    log("[warn] ────────────────────────────────────────────────")
+    log("[warn] raconteur expects rabbitHole, raster, and rayleigh")
+    log("[warn] to be complete before it runs. Missing:")
+    for tool, what, d in missing:
+        log(f"[warn]   • {tool} — no {what} found ({d.name}/)")
+    log("[warn] Proceeding with reduced context.")
+    log("[warn] ────────────────────────────────────────────────")
+
 
 def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
     """Read the most recent literature review from {subdir}/output/."""
@@ -149,6 +204,47 @@ def load_style_profile(project_dir: Path) -> str:
     if len(text) > 2000:
         text = text[:2000] + "\n[…truncated]"
     log("[raconteur] reading style_profile.md")
+    return text
+
+
+_FIGURE_SUFFIXES = {".png", ".svg", ".pdf", ".jpg", ".jpeg"}
+_MAX_FIGURES_LISTED = 12
+
+
+def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[str]:
+    """List rayleigh figure files as project-relative paths, for figure embedding.
+
+    Returns paths like 'results/figures/opinion_drift.png' that pandoc can
+    resolve via --resource-path=<project_dir>. Prefers a figures/ subdir; falls
+    back to image files anywhere under the results directory.
+    """
+    base = project_dir / (subdir or "results")
+    fig_dir = base / "figures"
+    search = fig_dir if fig_dir.is_dir() else base
+    if not search.is_dir():
+        return []
+    paths = sorted(
+        p for p in search.rglob("*")
+        if p.is_file() and p.suffix.lower() in _FIGURE_SUFFIXES
+    )
+    rel = [str(p.relative_to(project_dir)) for p in paths[:_MAX_FIGURES_LISTED]]
+    if rel:
+        log(f"[raconteur] found {len(rel)} figure(s) under {subdir}/")
+    return rel
+
+
+def load_onepager(project_dir: Path, short_title: str) -> str:
+    """Return the latest tool-generated one-pager narrative (paper/*_onepager_ra.md)."""
+    from .naming import find_latest
+    paper_dir = project_dir / "paper"
+    path = find_latest(
+        paper_dir, short_title, "md",
+        last_initials="ra", chain_includes="onepager",
+    )
+    if path is None:
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    log(f"[raconteur] reading one-pager: {path.name}")
     return text
 
 

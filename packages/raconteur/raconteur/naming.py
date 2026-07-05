@@ -35,6 +35,11 @@ def major_outline_name(short_title: str, ext: str) -> str:
     return f"{today()}_{short_title}_outline_ra.{ext}"
 
 
+def major_onepager_name(short_title: str, ext: str) -> str:
+    """Fresh one-pager file — chain is onepager_ra."""
+    return f"{today()}_{short_title}_onepager_ra.{ext}"
+
+
 def minor_name(short_title: str, current_chain: list[str], ext: str) -> str:
     """Minor update (focus) — appends ra to the existing chain."""
     chain = "_".join(current_chain + ["ra"])

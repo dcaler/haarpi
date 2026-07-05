@@ -8,16 +8,29 @@ draft. Repeat until done.
 > Four commands. Your edits drive the revision loop.
 
 ```
-raconteur init     ▸ walks you through setup, writes raconteur.yaml + paper/
-raconteur outline  ▸ generates a structured outline → paper/YYMMDD_title_ra.md (.docx)
-raconteur draft    ▸ writes the full paper, or incorporates your Word revision
-raconteur focus N  ▸ refines a single section without touching the rest
+raconteur init      ▸ walks you through setup, writes raconteur.yaml + paper/
+raconteur onepager  ▸ concise narrative one-pager → paper/YYMMDD_title_onepager_ra.md (.docx)
+raconteur outline   ▸ generates a structured outline from the approved one-pager
+raconteur draft     ▸ writes the full paper, or incorporates your Word revision
+raconteur focus N   ▸ refines a single section without touching the rest
 ```
 
-Works alongside [RabbitHole](https://github.com/dcaler/rabbithole) — if a
-literature review is present in `litReview/output/`, raconteur reads it
-automatically and uses it to inform the draft. Analysis code in `code/` is read
-the same way for the methods and results sections.
+The **one-pager** comes first: the most concise path through your paper's
+narrative — high notes only, up to two figures. You edit it in Word like any
+other draft, and `outline` uses the approved version to design the full paper.
+
+Raconteur is the final stage of the `ra*` toolchain. It expects three upstream
+tools to have run first, and reads their output automatically:
+
+| Tool | Output | Informs |
+|---|---|---|
+| [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review — all sections |
+| [raster](https://github.com/dcaler/raster) | `code/` | analysis code — methods |
+| [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results — results |
+
+If any of the three is missing, raconteur **warns loudly** (during `init` and at
+the start of `outline`) and proceeds with reduced context — nothing is silently
+skipped.
 
 ---
 
@@ -113,15 +126,43 @@ Re-run `init` at any time to update the topic or focus; other config is preserve
 
 ---
 
-## 4. outline — plan the paper
+## 4. onepager — the narrative spine
+
+```bash
+raconteur onepager
+```
+
+Writes the most concise path through your paper's narrative: high notes only —
+motivation, gap, approach, key result(s), implication — in ~500 words, in your
+own authorial voice. If rayleigh produced figures in `results/figures/`, up to
+two of the most load-bearing are embedded directly in the `.docx`.
+
+The author voice is **required**: an author style profile (trained from your
+Zotero publications) is a mandatory input here. If one does not exist yet,
+`onepager` trains it automatically before drafting — so configure Zotero and
+confirm your publications during `init`. Once trained, the profile is reused
+across projects and applied at every stage (`outline`, `draft`, `focus`).
+
+Output: `paper/YYMMDD_shorttitle_onepager_ra.md` and `.docx`.
+
+Edit it in Word — Track Changes and Comments — then save with your initials
+appended (`…_onepager_ra_DCR.docx`) and re-run `raconteur onepager` to fold your
+edits in. This is where you shape the story before any structure is committed. The
+approved one-pager is **required** before `outline`, and its narrative is carried
+into `draft` and `focus` too, so the whole paper stays true to the through-line
+you signed off on.
+
+---
+
+## 5. outline — plan the paper
 
 ```bash
 raconteur outline
 ```
 
-Generates a structured markdown outline from your topic and focus. If a RabbitHole
-literature review is present in `litReview/output/`, it is read and used to inform
-the section structure and content notes.
+Generates a structured markdown outline by expanding the approved one-pager into
+full section structure, grounded in the literature review, code, and results.
+Requires a one-pager — run `raconteur onepager` first.
 
 Output: `paper/YYMMDD_shorttitle_ra.md` and `paper/YYMMDD_shorttitle_ra.docx`.
 
@@ -131,7 +172,7 @@ pick it up and treat it as the revised outline. Or just run `draft` directly.
 
 ---
 
-## 5. draft — write the paper
+## 6. draft — write the paper
 
 ```bash
 raconteur draft
@@ -151,7 +192,7 @@ version; the prior history lives in git).
 
 ---
 
-## 6. The revision loop
+## 7. The revision loop
 
 This is the core workflow. After each draft:
 
@@ -177,7 +218,7 @@ needed.
 
 ---
 
-## 7. focus — refine one section
+## 8. focus — refine one section
 
 ```bash
 raconteur focus 3
@@ -202,26 +243,32 @@ rather than running a full redraft.
 
 ---
 
-## 8. Working with RabbitHole
+## 9. The ra* pipeline
 
-If the project was also used for a RabbitHole literature review, raconteur picks
-it up automatically. The expected directory layout:
+Raconteur assumes rabbitHole, raster, and rayleigh have already run in this
+project. The expected directory layout:
 
 ```
 my-paper/
-├── litReview/         ← RabbitHole output
+├── litReview/         ← rabbitHole output
 │   └── output/
-│       └── project_litreview_ollama.md
-├── code/              ← analysis scripts (optional)
-│   ├── analysis.py
-│   └── results.R
+│       ├── project_litreview_ollama.md
+│       └── refs.bib
+├── code/              ← raster output (analysis code)
+│   └── <package>/
+├── results/           ← rayleigh output (experiments)
+│   ├── findings.json
+│   ├── tables/*.csv
+│   └── figures/
 ├── paper/             ← raconteur output
 └── raconteur.yaml
 ```
 
-Raconteur reads the most recent `.md` file in `litReview/output/` and up to
-4 000 characters of code from `code/`. Both are passed to the LLM as context.
-Neither is required.
+Raconteur reads the most recent `.md` in `litReview/output/`, the analysis code
+in `code/`, and the results in `results/`, passing all three to the LLM as
+context. None is strictly required — a missing source triggers a loud warning
+naming the tool that should have produced it, and raconteur proceeds with what
+it has.
 
 ---
 

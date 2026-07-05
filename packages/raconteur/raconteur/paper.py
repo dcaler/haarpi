@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile
+from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile, load_onepager
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
@@ -323,10 +323,11 @@ def _draft_paper(
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
+    narrative = load_onepager(project_dir, cfg.short_title)
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     venue_section = _venue_block(cfg)
     bib_section = _bib_block(bib_summary)
@@ -379,10 +380,11 @@ def _revise_paper(
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
+    narrative = load_onepager(project_dir, cfg.short_title)
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     existing_text = read_text(user_rev)
     annotations = build_revision_context(user_rev)
@@ -452,9 +454,9 @@ def run(project_dir: Path) -> None:
     log(f"[raconteur] using outline: {outline_path.name}")
 
     user_rev = find_user_revision(paper_dir, cfg.short_title,
-                                  chain_excludes=["outline", "venue"])
+                                  chain_excludes=["outline", "venue", "onepager"])
     existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
-                           chain_excludes=["outline", "venue"])
+                           chain_excludes=["outline", "venue", "onepager"])
 
     if not existing:
         _draft_paper(project_dir, cfg, brain, paper_dir, outline_text)

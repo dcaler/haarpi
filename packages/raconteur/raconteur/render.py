@@ -12,11 +12,19 @@ def check_pandoc() -> bool:
         return False
 
 
-def to_docx(md_path: Path, bib_path: Path | None = None) -> Path | None:
+def to_docx(
+    md_path: Path,
+    bib_path: Path | None = None,
+    resource_path: Path | None = None,
+) -> Path | None:
     docx_path = md_path.with_suffix(".docx")
     cmd = ["pandoc", str(md_path), "-o", str(docx_path)]
     if bib_path is not None and bib_path.exists():
         cmd += ["--bibliography", str(bib_path), "--citeproc"]
+    if resource_path is not None:
+        # let pandoc resolve figure paths (e.g. results/figures/x.png) relative
+        # to the project root regardless of the current working directory
+        cmd += ["--resource-path", str(resource_path)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:

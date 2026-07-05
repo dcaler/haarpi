@@ -5,7 +5,7 @@ from .log import log
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_venue_analysis
+from .context import load_litreview, load_code, load_results, load_venue_analysis, check_prerequisites, load_onepager
 from .naming import major_name, major_outline_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -36,7 +36,7 @@ the paper's intellectual structure.
 
 Description:
 {description}
-{litrev_context}
+{narrative_context}{litrev_context}
 {content_status}
 Extract the following and return as JSON with exactly these keys:
 - "contribution": the core claimed contribution — name the specific method, \
@@ -112,10 +112,13 @@ Focus: {focus}
 {venue_section}
 Structural analysis:
 {analysis}
-{litrev_section}
+{narrative_section}{litrev_section}
 {code_section}
 {results_section}
 Rules:
+- The outline must expand the author-approved narrative spine, if provided — every \
+beat of that narrative must be represented, and the section structure must serve \
+that through-line rather than diverge from it
 - All section and subsection names must be derived from the paper's content — \
 do not use generic names such as "Related Work", "Case Study", "Implications", \
 or "Theoretical Framework"
@@ -349,14 +352,27 @@ def _extract_findings(brain: Brain, results: str) -> list[dict]:
 
 
 def _analyze_structure(
-    brain: Brain, description: str, litrev: str, code: str, results: str
+    brain: Brain, description: str, litrev: str, code: str, results: str,
+    narrative: str = "",
 ) -> str:
-    """Return structural analysis as a JSON string (coordinator call)."""
+    """Return structural analysis as a JSON string (coordinator call).
+
+    ``narrative`` is the human-approved one-pager: the concise path through the
+    paper. When present it anchors the intellectual structure — the extracted
+    contribution, pillars, and discussion angle must honour that through-line.
+    """
     litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
+    narrative_context = (
+        "\nNarrative spine (author-approved concise path through the paper — the "
+        "structure you extract must follow this through-line):\n"
+        f"{narrative}\n"
+        if narrative else ""
+    )
     status = _content_status(litrev, code, results)
     raw = brain.coordinator(
         _ANALYZE_PROMPT.format(
             description=description,
+            narrative_context=narrative_context,
             litrev_context=litrev_context,
             content_status=status,
         ),
@@ -447,6 +463,12 @@ def run(project_dir: Path) -> None:
         log("[error] no research description — run 'raconteur init' first")
         raise SystemExit(1)
 
+    check_prerequisites(project_dir, cfg)
+
+    if not load_onepager(project_dir, cfg.short_title):
+        log("[error] no one-pager found — run 'raconteur onepager' first")
+        raise SystemExit(1)
+
     # Train style profile before outlining if opted in but profile is missing.
     if cfg.use_style:
         from .style import STYLE_PROFILE_PATH
@@ -504,12 +526,14 @@ def _outline_fresh(
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    narrative = load_onepager(project_dir, cfg.short_title)
 
     # Pass 1: structural analysis
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     venue_section = _build_venue_section(cfg, project_dir)
+    narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     code_section = f"Methods Source Code:\n{code}\n" if code else ""
     results_section = f"Results Content:\n{results}\n" if results else ""
@@ -523,6 +547,7 @@ def _outline_fresh(
             focus=cfg.focus,
             venue_section=venue_section,
             analysis=analysis,
+            narrative_section=narrative_section,
             litrev_section=litrev_section,
             code_section=code_section,
             results_section=results_section,
@@ -555,9 +580,10 @@ def _refresh_content(
     results: str,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    narrative = load_onepager(project_dir, cfg.short_title)
 
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir)
@@ -603,6 +629,7 @@ def _revise(
     code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
+    narrative = load_onepager(project_dir, cfg.short_title)
     outline_text = read_text(user_rev)
     revision_notes = build_revision_context(user_rev)
 
@@ -611,7 +638,7 @@ def _revise(
         return
 
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     venue_section = _build_venue_section(cfg, project_dir)
     code_section = f"Methods Source Code:\n{code}\n\n" if code else ""
