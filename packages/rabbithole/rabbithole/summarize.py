@@ -351,9 +351,10 @@ Judge:
    topic/focus is asserted hollowly or left implicit. Every source you include should
    earn its place by advancing an idea; say where one does not.
 5. Missed ideas — name any idea in the digest that genuinely bears on the project's
-   topic/focus but the narrative never develops. Do NOT flag a source merely for being
-   uncited: using every source is not required, and dropping one that serves no
-   project-relevant idea is correct.
+   topic/focus but the narrative never develops. The narrative is a curated synthesis, not
+   a catalogue: it need not weave in every source, and every curated source still appears in
+   the annotated bibliography as part of the verifiable foundation — so do NOT flag a source
+   merely for being uncited. Flag only a genuinely load-bearing IDEA left on the table.
 6. Specific gaps — flag any gap, tension, or future direction stated vaguely
    ("more research is needed", "warrants further study") rather than as a named,
    load-bearing gap.
@@ -634,16 +635,25 @@ def _locate_prompt(c: Candidate, statements: str, body: str) -> str:
 
 def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
                   notes: list[dict], cfg, paths, collection=None,
-                  citekeys: dict[int, str] | None = None) -> dict[int, list]:
+                  citekeys: dict[int, str] | None = None,
+                  scope: str = "cited") -> dict[int, list]:
+    """Locate the evidentiary support for the review's sources.
+
+    scope="cited" (default): only sources the narrative cites — narrative-linked claims.
+    scope="all": every curated source, so the annotated bibliography can be the full
+    verifiable foundation. For a source the narrative does not cite, the statements to
+    locate fall back to that source's own notes (relevance/findings/argument), grounding
+    it in its own text rather than a narrative claim."""
     citekeys = citekeys or {}
     located_dir = paths.work / "located"
     located_dir.mkdir(parents=True, exist_ok=True)
     cited = _cited_indices(narrative, citekeys)
-    print(f"  {_stamp()}{len(cited)} of {len(corpus)} sources are cited "
-          f"— locating their claims...", flush=True)
+    targets = list(range(len(corpus))) if scope == "all" else cited
+    print(f"  {_stamp()}{len(cited)} of {len(corpus)} sources cited; "
+          f"locating claims for {len(targets)} source(s)...", flush=True)
     located: dict[int, list] = {}
     t_step = time.time()
-    for i in cited:
+    for i in targets:
         c = corpus[i]
         ck = citekeys.get(i) or f"{i:03d}"
         # Cache keyed by citekey, not corpus index: the corpus is re-gathered and
@@ -687,13 +697,18 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
 # ──────────────────────────────────────────────────────────────────────────
 # Annotated bibliography (cited sources only) + citation guard
 # ──────────────────────────────────────────────────────────────────────────
-def bibliography(corpus: list[Candidate], located: dict[int, list]) -> str:
-    order = sorted(located.keys(), key=lambda i: corpus[i].first_author_last.lower())
-    out = ["## Annotated Bibliography", ""]
-    for i in order:
+def bibliography(corpus: list[Candidate], located: dict[int, list],
+                 cited_indices: set[int] | None = None) -> str:
+    """Annotated bibliography as markdown.
+
+    When ``cited_indices`` is given, entries split into two tiers: **Cited in the review**
+    (narrative-linked claims) and **Additional curated sources** (grounded via their own
+    text). This makes the bibliography the full verifiable foundation for downstream writing
+    while the narrative stays a curated synthesis. When ``cited_indices`` is None, every
+    located entry renders as one list (legacy behaviour)."""
+    def _entry(i: int) -> list[str]:
         c = corpus[i]
-        out.append(f"**{c.full_citation()}**")
-        out.append("")
+        lines = [f"**{c.full_citation()}**", ""]
         claims = [cl for cl in (located[i] or [])
                   if isinstance(cl, dict) and (cl.get("claim") or "").strip()]
         if claims:
@@ -706,11 +721,32 @@ def bibliography(corpus: list[Candidate], located: dict[int, list]) -> str:
                     line += f" — *{loc}*"
                 if quote:
                     line += f': "{quote}"'
-                out.append(line)
+                lines.append(line)
         else:
-            out.append("- *(no supporting passage found in this source's full text "
-                       "— verify the citation against the original)*")
-        out.append("")
+            lines.append("- *(no supporting passage found in this source's full text "
+                         "— verify the citation against the original)*")
+        lines.append("")
+        return lines
+
+    def _in_order(idxs) -> list[int]:
+        return sorted(idxs, key=lambda i: corpus[i].first_author_last.lower())
+
+    keys = set(located.keys())
+    out = ["## Annotated Bibliography", ""]
+    if cited_indices is None:
+        for i in _in_order(keys):
+            out += _entry(i)
+        return "\n".join(out)
+
+    cited = keys & set(cited_indices)
+    extra = keys - cited
+    out += ["### Cited in the review", ""]
+    for i in _in_order(cited):
+        out += _entry(i)
+    if extra:
+        out += ["### Additional curated sources", ""]
+        for i in _in_order(extra):
+            out += _entry(i)
     return "\n".join(out)
 
 
@@ -865,11 +901,13 @@ def run(directory: str = ".", brain_override: str | None = None,
                   "run 'rabbitHole style' to train one.")
     narrative = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
 
-    print(f"\n{_stamp()}[3/3] Locating cited claims for the annotated bibliography...")
+    print(f"\n{_stamp()}[3/3] Locating claims for the annotated bibliography "
+          f"(full curated corpus)...")
     located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
-                            collection=collection, citekeys=citekeys)
+                            collection=collection, citekeys=citekeys, scope="all")
 
-    biblio = bibliography(corpus, located)
+    biblio = bibliography(corpus, located,
+                          cited_indices=set(_cited_indices(narrative, citekeys)))
     unmatched = citation_check(narrative, citekeys)
     if unmatched:
         print(f"\n[citation check] {len(unmatched)} citekey(s) not matched to a source: "

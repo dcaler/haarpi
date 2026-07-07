@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import copy
 import datetime
+import difflib
+import re
 import secrets
 import zipfile
 from pathlib import Path
@@ -190,6 +192,78 @@ def tracked_replace(p_el, new_text: str, author: str, ids: _Ids) -> bool:
     return True
 
 
+def _sentence_units(text: str) -> list[str]:
+    """Split text into sentence units, each carrying its trailing whitespace, so that
+    ``"".join(_sentence_units(text)) == text``.
+
+    Boundaries are sentence-final punctuation followed by whitespace — the same heuristic
+    used across the codebase (chroma.py, summarize._claim_sentences). Keeping the units
+    lossless lets the diff preserve an unchanged sentence byte-for-byte, so its [@citekey]
+    tags survive the revision untouched.
+    """
+    if not text:
+        return []
+    toks = re.split(r"(?<=[.!?])(\s+)", text)
+    units: list[str] = []
+    i = 0
+    while i < len(toks):
+        unit = toks[i]
+        if i + 1 < len(toks):  # the captured whitespace separator after this sentence
+            unit += toks[i + 1]
+        if unit:
+            units.append(unit)
+        i += 2
+    return units
+
+
+def tracked_replace_sentencewise(p_el, new_text: str, author: str, ids: _Ids) -> bool:
+    """Replace a paragraph's text with SENTENCE-level tracked changes.
+
+    Diffs the old and new paragraph at sentence granularity and records a tracked deletion
+    + insertion only for the sentences that actually changed; every unchanged sentence is
+    re-laid as a plain (accepted) run, byte-for-byte. This keeps the reviewer's edit
+    surgical and — critically — preserves the [@citekey] tags and grounding of the
+    sentences the comment did not require changing (whole-paragraph replacement threw them
+    away). Comment-range markers and reference runs are re-attached around the whole
+    paragraph, exactly as `tracked_replace` does.
+
+    Returns False (a no-op) when there is no text to replace or the text is unchanged.
+    """
+    text_runs = [r for r in p_el.findall(qn("w:r")) if _is_text_run(r)]
+    old_text = "".join(t.text or "" for r in text_runs for t in r.findall(qn("w:t")))
+    if not text_runs or new_text.strip() == old_text.strip():
+        return False
+    rpr = _rpr_clone(text_runs[0])
+
+    old_units = _sentence_units(old_text)
+    new_units = _sentence_units(new_text)
+    sm = difflib.SequenceMatcher(a=old_units, b=new_units, autojunk=False)
+    body: list = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for u in old_units[i1:i2]:
+                body.append(_text_run(u, rpr))  # unchanged — plain accepted run
+            continue
+        if tag in ("delete", "replace"):
+            body.append(_del("".join(old_units[i1:i2]), author, ids.next(), rpr))
+        if tag in ("insert", "replace"):
+            body.append(_ins("".join(new_units[j1:j2]), author, ids.next(), rpr))
+
+    # Detach the comment plumbing and old text, then re-lay: [starts] <body> [ends] [refs].
+    starts = p_el.findall(qn("w:commentRangeStart"))
+    ends = p_el.findall(qn("w:commentRangeEnd"))
+    ref_runs = [r for r in p_el.findall(qn("w:r"))
+                if r.find(qn("w:commentReference")) is not None]
+    for el in text_runs + starts + ends + ref_runs:
+        p_el.remove(el)
+    ppr = p_el.find(qn("w:pPr"))
+    insert_at = list(p_el).index(ppr) + 1 if ppr is not None else 0
+    seq = list(starts) + body + list(ends) + list(ref_runs)
+    for offset, el in enumerate(seq):
+        p_el.insert(insert_at + offset, el)
+    return True
+
+
 def tracked_insert_after(p_el, text: str, author: str, ids: _Ids):
     """Insert a brand-new paragraph (wholly a tracked insertion) after ``p_el``,
     cloning its paragraph properties. For structural comments that ask to split a
@@ -280,21 +354,27 @@ def accepted_body_text(path: Path, stop_heading: str = _BIB_HEADING) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_bibliography_md(md: str) -> tuple[str, list[tuple[str, list[str]]]]:
-    """Parse bibliography markdown into (heading, [(citation, [claim_line, ...])])."""
+def _parse_bibliography_md(md: str) -> tuple[str, list[tuple[str, object]]]:
+    """Parse bibliography markdown into (heading, items).
+
+    Each item is ("sub", subheading_text) for a ``### `` tier heading, or
+    ("entry", (citation, [claim_line, ...])) for a source entry."""
     heading = "Annotated Bibliography"
-    blocks: list[tuple[str, list[str]]] = []
-    cur: tuple[str, list[str]] | None = None
+    items: list[tuple[str, object]] = []
+    cur_claims: list[str] | None = None
     for line in md.splitlines():
         s = line.strip()
-        if s.startswith("## "):
+        if s.startswith("### "):
+            items.append(("sub", s[4:].strip()))
+            cur_claims = None
+        elif s.startswith("## "):
             heading = s[3:].strip()
         elif s.startswith("**") and s.endswith("**") and len(s) > 4:
-            cur = (s[2:-2].strip(), [])
-            blocks.append(cur)
-        elif s.startswith("- ") and cur is not None:
-            cur[1].append(s[2:].strip())
-    return heading, blocks
+            cur_claims = []
+            items.append(("entry", (s[2:-2].strip(), cur_claims)))
+        elif s.startswith("- ") and cur_claims is not None:
+            cur_claims.append(s[2:].strip())
+    return heading, items
 
 
 def _strip_md(text: str) -> str:
@@ -320,19 +400,26 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
         for p in list(doc.paragraphs[bib_idx:]):
             p._element.getparent().remove(p._element)
 
-    heading, blocks = _parse_bibliography_md(biblio_md)
+    heading, items = _parse_bibliography_md(biblio_md)
     h = doc.add_paragraph()
     if heading_style is not None:
         h.style = heading_style
     h.add_run(heading)
-    for citation, claims in blocks:
+    n_entries = 0
+    for kind, payload in items:
+        if kind == "sub":
+            sp = doc.add_paragraph()
+            sp.add_run(_strip_md(payload)).bold = True  # tier heading (cited / additional)
+            continue
+        citation, claims = payload
+        n_entries += 1
         cp = doc.add_paragraph()
         cp.add_run(_strip_md(citation)).bold = True
         for cl in claims:
             doc.add_paragraph().add_run("•  " + _strip_md(cl))
 
     doc.save(str(path))
-    return {"bib_entries": len(blocks), "had_existing_section": bib_idx is not None}
+    return {"bib_entries": n_entries, "had_existing_section": bib_idx is not None}
 
 
 # ── reply comments (rabbitHole's account of what it did) ─────────────────────────
@@ -448,7 +535,7 @@ def apply_edits(src: Path, out: Path, edits: list[dict], author: str = "rabbitHo
             tracked_insert_after(p_el, e["text"], author, ids)
             applied["insert_after"] += 1
         else:
-            ok = tracked_replace(p_el, e["text"], author, ids)
+            ok = tracked_replace_sentencewise(p_el, e["text"], author, ids)
             applied["replace" if ok else "skipped"] += 1
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
