@@ -55,11 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="pre-queue gate: lint + executed red-before-green over the frozen suite")
     _common(freeze_review)
 
-    report = sub.add_parser("report",
-                            help="emit a Methods Digest (for raconteur) from DESIGN.md + tasks.yaml + frozen tests")
-    _common(report)
-    report.add_argument("--out", "-o", help="output path (default: {root}/{YYMMDD}_{slug}_methods_ra.md)")
-    report.add_argument("--dry-run", action="store_true", help="print the digest to stdout, write nothing")
+    handoff = sub.add_parser("handoff",
+                             help="emit a Methods Digest (for raconteur) from DESIGN.md + tasks.yaml + frozen tests")
+    _common(handoff)
+    handoff.add_argument("--out", "-o", help="output path (default: {root}/{YYMMDD}_{slug}_methods_ra.md)")
+    handoff.add_argument("--dry-run", action="store_true", help="print the digest to stdout, write nothing")
 
     return ap
 
@@ -87,7 +87,7 @@ def main(argv=None) -> int:
     if args.cmd == "freeze-review":
         from raster.freeze_review import run_freeze_review
         return run_freeze_review(args)
-    if args.cmd == "report":
+    if args.cmd == "handoff":
         from raster.report import run_report
         return run_report(args)
     return 1
