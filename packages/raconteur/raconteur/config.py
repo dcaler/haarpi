@@ -58,9 +58,9 @@ class ProjectConfig:
     topic: str = ""
     focus: str = ""
     litrev_dir: str = ""
-    methods_dir: str = ""
+    use_methods: bool = False
     results_dir: str = ""
-    methods_dir_drafted: bool = False
+    methods_drafted: bool = False
     results_dir_drafted: bool = False
     style_author: str = ""
     use_style: bool = False
@@ -82,6 +82,11 @@ class ProjectConfig:
             data = yaml.safe_load(f)
         data.pop("scope", None)
         data.pop("author_initials", None)
+        # backward compat: raster methods moved from a code/ dir to a root file
+        if "methods_dir" in data:
+            data["use_methods"] = bool(data.pop("methods_dir"))
+        if "methods_dir_drafted" in data:
+            data["methods_drafted"] = bool(data.pop("methods_dir_drafted"))
         brain_data = data.pop("brain", {})
         # backward compat: old field names
         if "coordinator" in brain_data:

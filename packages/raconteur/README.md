@@ -25,7 +25,7 @@ tools to have run first, and reads their output automatically:
 | Tool | Output | Informs |
 |---|---|---|
 | [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review — all sections |
-| [raster](https://github.com/dcaler/raster) | `code/` | analysis code — methods |
+| [raster](https://github.com/dcaler/raster) | `<date>_methods_<chain>.md` | methods writeup — methods |
 | [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results — results |
 
 If any of the three is missing, raconteur **warns loudly** (during `init` and at
@@ -179,7 +179,7 @@ raconteur draft
 ```
 
 Reads the latest outline from `paper/` and writes a full draft. If a literature
-review or analysis code is present, both are used as context.
+review or a raster methods writeup is present, both are used as context.
 
 If raconteur finds a user-revised `.docx` in `paper/` (i.e. a file whose last
 initials are not `ra`), it reads the tracked changes and comments and writes a
@@ -254,8 +254,7 @@ my-paper/
 │   └── output/
 │       ├── project_litreview_ollama.md
 │       └── refs.bib
-├── code/              ← raster output (analysis code)
-│   └── <package>/
+├── 260705_methods_ra.md  ← raster output (methods writeup, project root)
 ├── results/           ← rayleigh output (experiments)
 │   ├── findings.json
 │   ├── tables/*.csv
@@ -264,11 +263,11 @@ my-paper/
 └── raconteur.yaml
 ```
 
-Raconteur reads the most recent `.md` in `litReview/output/`, the analysis code
-in `code/`, and the results in `results/`, passing all three to the LLM as
-context. None is strictly required — a missing source triggers a loud warning
-naming the tool that should have produced it, and raconteur proceeds with what
-it has.
+Raconteur reads the most recent `.md` in `litReview/output/`, the latest
+`<date>_methods_<chain>.md` methods writeup at the project root, and the results
+in `results/`, passing all three to the LLM as context. None is strictly required
+— a missing source triggers a loud warning naming the tool that should have
+produced it, and raconteur proceeds with what it has.
 
 ---
 

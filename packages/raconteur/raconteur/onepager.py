@@ -4,7 +4,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import (
-    load_litreview, load_code, load_results, load_bib_summary,
+    load_litreview, load_methods, load_results, load_bib_summary,
     load_style_profile, load_figure_manifest, check_prerequisites,
 )
 from .naming import major_onepager_name, find_latest, find_user_revision
@@ -147,7 +147,7 @@ def _onepager_fresh(
     from .outline import _analyze_structure, _build_venue_section
 
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     figures = load_figure_manifest(project_dir, cfg.results_dir or "results")
     style_profile = load_style_profile(project_dir)
@@ -157,7 +157,7 @@ def _onepager_fresh(
 
     venue_section = _build_venue_section(cfg, project_dir)
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
-    code_section = f"Methods Source Code:\n{code}\n" if code else ""
+    code_section = f"Methods (raster writeup):\n{code}\n" if code else ""
     results_section = f"Results Content:\n{results}\n" if results else ""
 
     log("[raconteur] drafting one-pager…")
@@ -199,7 +199,7 @@ def _revise(
     from .outline import _analyze_structure, _build_venue_section
 
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     figures = load_figure_manifest(project_dir, cfg.results_dir or "results")
     style_profile = load_style_profile(project_dir)

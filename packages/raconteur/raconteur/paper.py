@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_bib_summary, load_style_profile, load_onepager
+from .context import load_litreview, load_methods, load_results, load_bib_summary, load_style_profile, load_onepager
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
@@ -189,7 +189,7 @@ def _context_for_section(heading: str, litrev: str, code: str, results: str) -> 
     if any(kw in h for kw in _LITREV_KW) and litrev:
         parts.append(f"Literature review:\n{litrev}")
     if any(kw in h for kw in _CODE_KW) and code:
-        parts.append(f"Methods Source Code:\n{code}")
+        parts.append(f"Methods (raster writeup):\n{code}")
     if any(kw in h for kw in _RESULTS_KW) and results:
         parts.append(f"Results Content:\n{results}")
     return ("\n\n".join(parts) + "\n\n") if parts else ""
@@ -319,7 +319,7 @@ def _draft_paper(
     outline_text: str,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
@@ -376,7 +376,7 @@ def _revise_paper(
     outline_text: str,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""

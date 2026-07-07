@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_venue_analysis
+from .context import load_litreview, load_methods, load_results, load_venue_analysis
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -123,7 +123,7 @@ def _draft_fresh(
 
     outline = outline_path.read_text(encoding="utf-8")
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     venue_scope = _venue_section(cfg, project_dir)

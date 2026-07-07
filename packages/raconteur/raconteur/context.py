@@ -5,18 +5,19 @@ from .log import log
 from pathlib import Path
 
 _LIT_GLOB = "{litrev_dir}/output/*.md"
-_CODE_SUFFIXES = {".py", ".R", ".jl", ".ipynb"}
 _RESULTS_SUFFIXES = {".py", ".R", ".jl", ".ipynb", ".txt", ".md", ".csv", ".tsv", ".json"}
 _MAX_LITREV_CHARS = 12000
-_MAX_CODE_CHARS = 20000
+_MAX_METHODS_CHARS = 20000
 _MAX_RESULTS_CHARS = 4000
 _MAX_FILE_LINES = 200
 _MAX_BIB_CHARS = 4000
 
-# Default output directories of the upstream ra* tools raconteur consumes.
+# Default output locations of the upstream ra* tools raconteur consumes.
 DEFAULT_LITREV_DIR = "litReview"   # rabbitHole
-DEFAULT_METHODS_DIR = "code"       # raster
 DEFAULT_RESULTS_DIR = "results"    # rayleigh
+# raster writes a purpose-built methods writeup at the project root:
+#   <date>_methods_<initials_chain>.md
+_METHODS_RE = re.compile(r"^(\d{6})_methods((?:_[A-Za-z]+)+)\.md$")
 
 
 def _litrev_complete(d: Path) -> bool:
@@ -24,10 +25,22 @@ def _litrev_complete(d: Path) -> bool:
     return out.is_dir() and any(out.glob("*.md"))
 
 
-def _methods_complete(d: Path) -> bool:
-    return d.is_dir() and any(
-        p.is_file() and p.suffix in _CODE_SUFFIXES for p in d.rglob("*")
-    )
+def find_methods_file(project_dir: Path) -> Path | None:
+    """Latest raster methods writeup at the project root.
+
+    Matches ``<date>_methods_<chain>.md`` (chained like paper files). Picks the
+    highest datestamp, breaking ties by most-recent mtime, so the newest state
+    of the writeup wins regardless of who last touched the chain.
+    """
+    candidates = []
+    for p in project_dir.glob("*_methods_*.md"):
+        m = _METHODS_RE.match(p.name)
+        if m:
+            candidates.append((m.group(1), p.stat().st_mtime, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    return candidates[-1][2]
 
 
 def _results_complete(d: Path) -> bool:
@@ -48,23 +61,25 @@ def check_prerequisites(project_dir: Path, cfg) -> None:
     may legitimately have no experiments), but each is warned loudly so the
     absence is a deliberate choice rather than an oversight.
     """
+    litrev_dir = project_dir / (cfg.litrev_dir or DEFAULT_LITREV_DIR)
+    results_dir = project_dir / (cfg.results_dir or DEFAULT_RESULTS_DIR)
     checks = [
         ("rabbitHole", "literature review",
-         project_dir / (cfg.litrev_dir or DEFAULT_LITREV_DIR), _litrev_complete),
-        ("raster", "analysis code",
-         project_dir / (cfg.methods_dir or DEFAULT_METHODS_DIR), _methods_complete),
+         _litrev_complete(litrev_dir), f"{litrev_dir.name}/"),
+        ("raster", "methods writeup",
+         find_methods_file(project_dir) is not None, "*_methods_*.md"),
         ("rayleigh", "experiment results",
-         project_dir / (cfg.results_dir or DEFAULT_RESULTS_DIR), _results_complete),
+         _results_complete(results_dir), f"{results_dir.name}/"),
     ]
-    missing = [(tool, what, d) for tool, what, d, fn in checks if not fn(d)]
+    missing = [(tool, what, where) for tool, what, ok, where in checks if not ok]
     if not missing:
         log("[raconteur] upstream outputs present: rabbitHole, raster, rayleigh")
         return
     log("[warn] ────────────────────────────────────────────────")
     log("[warn] raconteur expects rabbitHole, raster, and rayleigh")
     log("[warn] to be complete before it runs. Missing:")
-    for tool, what, d in missing:
-        log(f"[warn]   • {tool} — no {what} found ({d.name}/)")
+    for tool, what, where in missing:
+        log(f"[warn]   • {tool} — no {what} found ({where})")
     log("[warn] Proceeding with reduced context.")
     log("[warn] ────────────────────────────────────────────────")
 
@@ -86,29 +101,16 @@ def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
     return text
 
 
-def load_code(project_dir: Path, subdir: str = "code") -> str:
-    """Read analysis scripts from methods directory."""
-    code_dir = project_dir / subdir
-    if not code_dir.is_dir():
+def load_methods(project_dir: Path) -> str:
+    """Read raster's methods writeup (<date>_methods_<chain>.md at project root)."""
+    path = find_methods_file(project_dir)
+    if path is None:
         return ""
-    parts = []
-    total = 0
-    for p in sorted(code_dir.rglob("*")):
-        if p.suffix not in _CODE_SUFFIXES or not p.is_file():
-            continue
-        try:
-            snippet = p.read_text(encoding="utf-8", errors="replace")
-            chunk = f"### {p.relative_to(code_dir)}\n```\n{snippet}\n```\n"
-            if total + len(chunk) > _MAX_CODE_CHARS:
-                break
-            parts.append(chunk)
-            total += len(chunk)
-        except Exception:
-            continue
-    if not parts:
-        return ""
-    log(f"[raconteur] reading methods ({subdir}): {len(parts)} file(s)")
-    return "\n".join(parts)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if len(text) > _MAX_METHODS_CHARS:
+        text = text[:_MAX_METHODS_CHARS] + "\n\n[truncated]"
+    log(f"[raconteur] reading methods: {path.name}")
+    return text
 
 
 def load_results(project_dir: Path, subdir: str = "results") -> str:

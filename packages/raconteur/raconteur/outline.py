@@ -5,7 +5,7 @@ from .log import log
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_code, load_results, load_venue_analysis, check_prerequisites, load_onepager
+from .context import load_litreview, load_methods, load_results, load_venue_analysis, check_prerequisites, load_onepager
 from .naming import major_name, major_outline_name, find_latest, find_user_revision
 from .render import to_docx
 from .revise import read_text, build_revision_context
@@ -64,14 +64,14 @@ Return ONLY valid JSON."""
 
 _EXTRACT_EQUATIONS_PROMPT = """\
 List every named mathematical equation, formula, update rule, or computational \
-expression defined in this code — including those written as inline assignments \
-or inside functions (e.g. opinion update rules, confidence bounds, weight decay, \
-trust decay, distance metrics, threshold conditions).
-For each return: {{"name": "short name", "symbol": "the expression as written in the code", \
+expression described in this methods writeup — including those written inline or \
+in prose (e.g. opinion update rules, confidence bounds, weight decay, trust decay, \
+distance metrics, threshold conditions).
+For each return: {{"name": "short name", "symbol": "the expression as written", \
 "purpose": "what it computes or represents"}}
-Return ONLY a JSON array. Return [] only if the code contains no mathematical expressions.
+Return ONLY a JSON array. Return [] only if the writeup contains no mathematical expressions.
 
-Code:
+Methods writeup:
 {code}"""
 
 # ── findings extraction (worker) ──────────────────────────────────────────────
@@ -312,7 +312,7 @@ def _content_status(litrev: str, code: str, results: str) -> str:
     lines = [
         "Content availability:",
         f"  - Literature review : {'yes' if litrev else 'no'}",
-        f"  - Methods / code    : {'yes' if code else 'no'}",
+        f"  - Methods writeup   : {'yes' if code else 'no'}",
         f"  - Results / data    : {'yes' if results else 'no'}",
     ]
     if not code or not results:
@@ -387,7 +387,7 @@ def _analyze_structure(
         return f"{status}\n\n{cleaned}"
 
     if code:
-        log("[raconteur] extracting equations from code…")
+        log("[raconteur] extracting equations from methods writeup…")
         parsed["key_equations"] = _extract_equations(brain, code)
 
     if results:
@@ -502,7 +502,7 @@ def run(project_dir: Path) -> None:
         log(f"[raconteur] found revision: {user_rev.name}")
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
-        code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir and not cfg.methods_dir_drafted else ""
+        code = load_methods(project_dir) if cfg.use_methods and not cfg.methods_drafted else ""
         results = load_results(project_dir, cfg.results_dir) if cfg.results_dir and not cfg.results_dir_drafted else ""
         if code or results:
             _refresh_content(project_dir, cfg, brain, paper_dir, existing, code, results)
@@ -524,7 +524,7 @@ def _outline_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     narrative = load_onepager(project_dir, cfg.short_title)
 
@@ -535,7 +535,7 @@ def _outline_fresh(
     venue_section = _build_venue_section(cfg, project_dir)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
-    code_section = f"Methods Source Code:\n{code}\n" if code else ""
+    code_section = f"Methods (raster writeup):\n{code}\n" if code else ""
     results_section = f"Results Content:\n{results}\n" if results else ""
 
     # Pass 2: draft
@@ -562,7 +562,7 @@ def _outline_fresh(
 
     _write(project_dir, cfg, paper_dir, outline)
     if code:
-        cfg.methods_dir_drafted = True
+        cfg.methods_drafted = True
     if results:
         cfg.results_dir_drafted = True
     cfg.save(project_dir)
@@ -587,7 +587,7 @@ def _refresh_content(
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Methods Source Code:\n{code}\n\n" if code else ""
+    code_section = f"Methods (raster writeup):\n{code}\n\n" if code else ""
     results_section = f"Results Content:\n{results}\n\n" if results else ""
 
     what = " + ".join(filter(None, ["Methods" if code else "", "Results" if results else ""]))
@@ -610,7 +610,7 @@ def _refresh_content(
     updated = _critique_revise(brain, updated, analysis, n=2)
     _write(project_dir, cfg, paper_dir, updated)
     if code:
-        cfg.methods_dir_drafted = True
+        cfg.methods_drafted = True
     if results:
         cfg.results_dir_drafted = True
     cfg.save(project_dir)
@@ -626,7 +626,7 @@ def _revise(
     user_rev: Path,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    code = load_code(project_dir, cfg.methods_dir) if cfg.methods_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     narrative = load_onepager(project_dir, cfg.short_title)
@@ -641,7 +641,7 @@ def _revise(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
     venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Methods Source Code:\n{code}\n\n" if code else ""
+    code_section = f"Methods (raster writeup):\n{code}\n\n" if code else ""
     results_section = f"Results Content:\n{results}\n\n" if results else ""
 
     log("[raconteur] revising outline…")

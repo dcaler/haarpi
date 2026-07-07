@@ -118,11 +118,16 @@ for it), but not yet implemented.
 Raconteur is the last stage of the `ra*` toolchain. It expects three upstream
 tools to have run to completion before it does:
 
-| Tool | Output directory | Feeds |
+| Tool | Output | Feeds |
 |---|---|---|
 | [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review (`output/*.md`, `refs.bib`) |
-| [raster](https://github.com/dcaler/raster) | `code/` | analysis code → methods |
+| [raster](https://github.com/dcaler/raster) | `<date>_methods_<chain>.md` (project root) | methods writeup → methods |
 | [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results → results |
+
+raster writes a purpose-built **methods writeup** for raconteur at the project
+root — `<date>_methods_<initials_chain>.md`, chained like raconteur's own files.
+raconteur reads the latest such file (highest datestamp) as its methods context;
+it no longer reads a `code/` source directory.
 
 At the start of `outline` (and during `init`), `check_prerequisites` verifies
 each output is present and **warns loudly** for any that is missing, naming the
@@ -141,9 +146,10 @@ Read the most recently modified file. Truncated to 12 000 characters. Passed to
 the LLM as literature review context — informs all sections. `refs.bib` from the
 same directory supplies a compact citekey list for citation guidance.
 
-**`code/`** (raster)
-Recursively reads `.py`, `.R`, `.jl`, `.ipynb` files. Passed as analysis code
-context — primarily informs the methods section.
+**`<date>_methods_<chain>.md`** (raster, project root)
+The latest methods writeup (highest datestamp). Truncated to 20 000 characters.
+Passed as methods context — primarily informs the methods section; the outline's
+equation-extraction pass mines it for named equations and update rules.
 
 **`results/`** (rayleigh)
 Reads `findings.json`, `tables/*.csv`, and other result files. Passed as results
@@ -180,7 +186,7 @@ raconteur/
 ├── onepager.py  concise narrative one-pager; embeds ≤2 rayleigh figures; revise cycle
 ├── brain.py     Ollama coordinator + worker; streaming; retry with backoff
 ├── naming.py    filename parse / generate; major + minor versioning; discovery
-├── context.py   load litreview/code/results context; warn on missing upstream outputs
+├── context.py   load litreview / methods writeup / results context; warn on missing upstream outputs
 ├── outline.py   outline generation
 ├── draft.py     fresh draft or revision-aware draft
 ├── focus.py     section extraction by number or heading; refinement; minor versioning

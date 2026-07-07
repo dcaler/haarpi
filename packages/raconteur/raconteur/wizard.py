@@ -62,16 +62,18 @@ def _check_litrev(cfg: ProjectConfig, project_dir: Path) -> dict:
 
 
 def _ask_context_dirs(cfg: ProjectConfig, project_dir: Path) -> None:
-    """Check for raster (code/) and rayleigh (results/) output; ask or warn."""
+    """Check for raster (methods writeup) and rayleigh (results/) output; ask or warn."""
+    from .context import find_methods_file
     print()
-    methods_label = cfg.methods_dir or "code"
-    if (project_dir / methods_label).is_dir():
-        cfg.methods_dir = methods_label if _yn(
-            f"Found {methods_label}/ (raster) — use as methods context?"
-        ) else ""
+    methods_file = find_methods_file(project_dir)
+    if methods_file is not None:
+        cfg.use_methods = _yn(
+            f"Found {methods_file.name} (raster) — use as methods context?"
+        )
     else:
-        _warn_missing("raster", "analysis code", methods_label)
-        cfg.methods_dir = ""
+        print("[warn]   raster output not found (no *_methods_*.md at project root) "
+              "— has raster been run?", file=sys.stderr)
+        cfg.use_methods = False
 
     results_label = cfg.results_dir or "results"
     if (project_dir / results_label).is_dir():
@@ -138,7 +140,7 @@ def run(project_dir: Path) -> None:
     else:
         cfg.description = _ask("Research description", default=cfg.description)
 
-    # 4 & 5. code/ and results/
+    # 4 & 5. methods writeup and results/
     _ask_context_dirs(cfg, project_dir)
 
     # 6. Author style
