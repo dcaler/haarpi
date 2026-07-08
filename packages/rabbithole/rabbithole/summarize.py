@@ -1341,15 +1341,9 @@ def run(directory: str = ".", brain_override: str | None = None,
 
     # Train style profile if needed before anything else.
     if cfg.use_style:
-        from .style import STYLE_PROFILE_PATH, _load_existing_meta
-        existing_meta = _load_existing_meta()
-        existing_keys = set(existing_meta.get("paper_keys", []))
-        confirmed_keys = set(cfg.style_paper_keys or [])
-        needs_training = (not STYLE_PROFILE_PATH.exists()
-                          or (confirmed_keys and not confirmed_keys.issubset(existing_keys)))
-        if needs_training:
+        from . import style as _style
+        if _style.needs_training(cfg.style_paper_keys):
             print("[style] Training style profile before synthesis…")
-            from . import style as _style
             result = _style.run(directory)
             if result != 0:
                 print("[style] Training failed — continuing without style profile.",

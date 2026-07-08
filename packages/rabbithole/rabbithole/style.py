@@ -99,6 +99,24 @@ def load_style_profile() -> str:
     return text
 
 
+def needs_training(confirmed_keys: list[str] | None) -> bool:
+    """True when the style profile is absent, or was never trained against some paper the
+    project now names.
+
+    Compares against the keys the profile was TRAINED AGAINST, not the ones that yielded
+    usable prose. A paper with no PDF attachment is attempted, skipped, and recorded — if it
+    were left out of `paper_keys`, this check would fail on every run and retrain the profile
+    forever, refetching the whole Zotero collection each time. Run `rabbitHole style` to force
+    a retrain after attaching a PDF that was previously skipped.
+    """
+    if not STYLE_PROFILE_PATH.exists():
+        return True
+    wanted = set(confirmed_keys or [])
+    if not wanted:
+        return False
+    return not wanted.issubset(set(_load_existing_meta().get("paper_keys", [])))
+
+
 def _load_existing_meta() -> dict:
     """Read YAML frontmatter from existing style_profile.md."""
     if not STYLE_PROFILE_PATH.exists():
@@ -113,14 +131,22 @@ def _load_existing_meta() -> dict:
     return {}
 
 
-def _write_profile(author: str, paper_keys: list[str],
-                   papers_used: list[str], analysis: str) -> Path:
+def _write_profile(author: str, paper_keys: list[str], papers_used: list[str],
+                   analysis: str, papers_skipped: list[str] | None = None) -> Path:
+    """Write the profile.
+
+    `paper_keys` records every key the profile was TRAINED AGAINST, including those with no
+    retrievable fulltext — that is what `needs_training` compares the config against.
+    `papers_used` and `papers_skipped` say what actually reached the model, so a human can
+    see why nine papers produced the profile when twenty-one were named.
+    """
     today = date.today().strftime("%y%m%d")
     frontmatter = yaml.safe_dump({
         "author": author,
         "last_updated": today,
         "paper_keys": paper_keys,
         "papers_used": papers_used,
+        "papers_skipped": papers_skipped or [],
     }, default_flow_style=False, allow_unicode=True).strip()
     content = f"---\n{frontmatter}\n---\n\n{analysis.strip()}\n"
     STYLE_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -134,12 +160,19 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
     zc = _zotero.ZoteroClient(gc)
 
     excerpts_parts: list[str] = []
-    paper_keys: list[str] = []
+    # Every key we CONSIDERED, not just the ones that yielded prose. `needs_training` asks
+    # whether the config's style_paper_keys are a subset of what the profile was trained
+    # against; recording only the usable papers made that subset check unsatisfiable, so a
+    # paper with no PDF re-triggered a full retrain on every single run — forever.
+    attempted_keys: list[str] = []
     papers_used: list[str] = []
+    papers_skipped: list[str] = []
 
     for item in confirmed_items:
         key = item.get("data", {}).get("key", "")
         label = _item_label(item)
+        if key:
+            attempted_keys.append(key)
         print(f"  {runlog.stamp()}fetching fulltext: {label[:60]}…", flush=True)
         att_key = zc.pdf_attachment_key(key)
         text = ""
@@ -147,13 +180,14 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
             text = zc.fulltext(att_key)
         if not text:
             print(f"  [skip] no fulltext for {label[:50]}")
+            papers_skipped.append(label)
             continue
         prose = _extract_prose(text)
         if not prose:
             print(f"  [skip] no usable prose in {label[:50]}")
+            papers_skipped.append(label)
             continue
         excerpts_parts.append(f"--- From: {label} ---\n{prose[:1500]}")
-        paper_keys.append(key)
         papers_used.append(label)
 
     if not excerpts_parts:
@@ -172,7 +206,7 @@ def fetch_and_train(gc, cfg, author_name: str, confirmed_items: list[dict]) -> P
         num_ctx=16384,
     )
 
-    path = _write_profile(author_name, paper_keys, papers_used, analysis)
+    path = _write_profile(author_name, attempted_keys, papers_used, analysis, papers_skipped)
     print(f"  wrote {path}")
     return path
 
