@@ -47,7 +47,27 @@ def _check_env(need_pandoc: bool = False) -> None:
               file=sys.stderr)
 
 
+def _line_buffer_output() -> None:
+    """Emit every line as it is printed, even when stdout is a file rather than a terminal.
+
+    Python block-buffers stdout (8 KB) when it is not a tty. Under trundlr, every rabbitHole
+    run redirects into logs/task-NNN.log — so an operator watching a multi-hour report saw an
+    empty file, with no way to tell a working run from a hung one. The prints that carry
+    progress already pass flush=True; the ones that carry structure (the banner, the section
+    headings, the polestar metrics) did not, and those are the ones you need when you are
+    deciding whether to kill the job.
+
+    A stream without a `reconfigure` (a pipe replaced in a test, say) is left alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _line_buffer_output()
     parser = argparse.ArgumentParser(
         prog="rabbitHole",
         description="Offline-first literature-review assistant.",
