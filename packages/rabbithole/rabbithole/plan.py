@@ -39,6 +39,13 @@ from .models import Candidate
 from .revise import _load_corpus
 
 # Pipeline per tier (order matters; each step depends on the previous one).
+#
+# Every chain used to end in `revise`, which is the in-place redline: it rewrites the
+# paragraph a comment anchors to. A redline cannot ADD A SECTION — so a comment like "I want
+# a section on X" was classified correctly as gap_fill, gathered the right sources, and then
+# handed them to a step structurally incapable of using them. `report` appears in no chain at
+# all. `_chain_for` swaps in `report` when the redline reported a comment it could not satisfy
+# because it asked for a new section (the audit's `CORPUS: section` verdict).
 _PIPELINE = {
     "cosmetic":    ["revise", "comment"],
     "gap_fill":    ["gather", "collect", "revise", "comment"],
@@ -63,6 +70,10 @@ _STEP = {
                 "desc": "Download the new PDFs and add them to the Zotero collection."},
     "revise":  {"human": False, "verb": "revise", "hours": 4.0,
                 "desc": "Re-draft the review from the expanded corpus + your annotations."},
+    "report":  {"human": False, "verb": "report", "hours": 3.0,
+                "desc": "Re-plan the review's sections and re-synthesise from the corpus. "
+                        "Starts a new revision cycle: it does NOT read the redline, so the "
+                        "reviewer's intent must reach it through the project config."},
     "comment": {"human": True,  "verb": None,    "hours": 0.15,
                 "desc": "Review the new draft and annotate it."},
 }
@@ -139,16 +150,41 @@ gather_topics and focus_addition are needed for gap_fill or redirection; the new
 are needed only for redirection; added_references may be set for any tier."""
 
 
-def _chain_for(tier: str, plan: dict) -> list[str]:
-    """Pipeline steps for this plan. When the reviewer pasted references, prepend an
-    `ingest` step and guarantee a `collect` step precedes `revise` (so the human can
-    add any not-in-Zotero references before the re-draft)."""
+def _chain_for(tier: str, plan: dict, needs_report: bool = False) -> list[str]:
+    """Pipeline steps for this plan.
+
+    When the reviewer pasted references, prepend an `ingest` step and guarantee a `collect`
+    step precedes the re-draft (so the human can add any not-in-Zotero references first).
+
+    When any comment asked for a NEW SECTION, the re-draft must be `report`, not `revise`:
+    a redline edits the paragraph a comment anchors to and cannot add a section. `report`
+    re-plans the review's sections from the corpus — which is exactly the work being asked
+    for, and is orthogonal to the tier (a section may be wanted with or without new sources).
+    """
     steps = list(_PIPELINE[tier])
+    if needs_report and "revise" in steps:
+        steps[steps.index("revise")] = "report"
     if plan.get("added_references"):
         steps = ["ingest"] + steps
-        if "collect" not in steps and "revise" in steps:
-            steps.insert(steps.index("revise"), "collect")
+        redraft = "report" if needs_report else "revise"
+        if "collect" not in steps and redraft in steps:
+            steps.insert(steps.index(redraft), "collect")
     return steps
+
+
+def section_focus(comments: list[str], limit: int = 240) -> str:
+    """Turn "add a section on X" comments into a focus line the section planner will read.
+
+    `report` never reads the annotated docx — it re-plans from the corpus. The reviewer's
+    intent therefore has to reach it through the project config, which is the one channel
+    both steps share. Their own words, not a paraphrase: nothing here is an LLM call, so
+    nothing here can drift from what they asked for.
+    """
+    asks = [" ".join(c.split())[:limit] for c in comments if c and c.strip()]
+    if not asks:
+        return ""
+    return ("Develop a dedicated section addressing each of the following, or say in the "
+            "narrative why the evidence does not support one: " + "; ".join(asks))
 
 
 # ── coverage + plan ────────────────────────────────────────────────────────────
@@ -213,18 +249,40 @@ def _make_plan(brain: Brain, cfg, coverage: str, revision_context: str) -> dict:
 
 # ── config steering for gap_fill ───────────────────────────────────────────────
 
-def _write_gap_config(directory: str, plan: dict) -> Path:
-    """Write a new numbered litrev config whose focus steers gather at the gaps."""
+def _append_focus(cfg, *additions: str) -> None:
+    for addition in additions:
+        if addition:
+            cfg.focus = f"{cfg.focus}; {addition}" if cfg.focus else addition
+
+
+def _write_gap_config(directory: str, plan: dict, extra_focus: str = "") -> Path:
+    """Write a new numbered litrev config whose focus steers gather at the gaps.
+
+    `extra_focus` carries a section the reviewer asked for. The focus line is the only
+    channel between an annotated docx and a later `report`, which re-plans from the corpus
+    and never reads the docx.
+    """
     prev = config.load_project(directory)
     topics = ", ".join(t for t in plan.get("gather_topics", []) if t)
     addition = plan.get("focus_addition") or (f"Expand coverage of: {topics}" if topics else "")
-    if addition:
-        prev.focus = f"{prev.focus}; {addition}" if prev.focus else addition
+    _append_focus(prev, addition, extra_focus)
     fp = config.next_project_file(directory)
     return config.save_project_to(prev, fp)
 
 
-def _write_redirect_config(directory: str, plan: dict) -> Path:
+def _write_section_config(directory: str, extra_focus: str) -> Path:
+    """Write a new numbered litrev config that asks `report` for a section, nothing else.
+
+    The corpus already holds the evidence — no gather is needed — but a redline cannot add a
+    section, so the review has to be re-planned. This is the config that tells the planner why.
+    """
+    prev = config.load_project(directory)
+    _append_focus(prev, extra_focus)
+    fp = config.next_project_file(directory)
+    return config.save_project_to(prev, fp)
+
+
+def _write_redirect_config(directory: str, plan: dict, extra_focus: str = "") -> Path:
     """Write a new iterated litrev config that re-aims the project at the reviewer's
     redirected research question.
 
@@ -233,7 +291,11 @@ def _write_redirect_config(directory: str, plan: dict) -> Path:
     focus from, so we overwrite all three — topic, focus, and research_prompt — with the
     coordinator's reframe. The new file is a fresh iteration (litrev_<N+1>.yaml) that gather
     uses on the next run; inspect or edit it whenever. Project binding (name, trundlr id,
-    models, source policy) is inherited from the previous config untouched."""
+    models, source policy) is inherited from the previous config untouched.
+
+    `extra_focus` (a section the reviewer asked for) is appended AFTER the reframe, so a
+    section request survives a change of direction rather than being overwritten by it.
+    """
     prev = config.load_project(directory)
     new_topic = (plan.get("new_topic") or "").strip()
     new_focus = (plan.get("new_focus") or "").strip()
@@ -244,6 +306,7 @@ def _write_redirect_config(directory: str, plan: dict) -> Path:
         prev.focus = new_focus
     if new_prompt:
         prev.research_prompt = new_prompt
+    _append_focus(prev, extra_focus)
     fp = config.next_project_file(directory)
     return config.save_project_to(prev, fp)
 
@@ -280,7 +343,11 @@ def _build_command(step: str) -> str | None:
 
     The chain's `revise` carries --no-queue: it re-drafts from the expanded corpus but
     must NOT re-plan and re-queue another chain (the comments it sees are the same ones
-    that produced this chain, so it would loop). Queuing is a decision made once, here."""
+    that produced this chain, so it would loop). Queuing is a decision made once, here.
+
+    `report` needs no such guard: it never reads annotations, so it cannot re-plan a chain
+    from them. That is the same property that makes it the right re-draft step for a comment
+    asking for a new section, and the reason the ask must reach it through the project focus."""
     verb = _STEP[step]["verb"]
     if not verb:
         return None

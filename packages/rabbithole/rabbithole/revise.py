@@ -46,7 +46,7 @@ from .models import Candidate
 from .summarize import (
     _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check, read_notes,
     locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
-    _HAVE_CHROMA, _cited_indices,
+    _HAVE_CHROMA, _cited_indices, _legacy_notes_by_paper, _located_filename,
 )
 
 
@@ -94,11 +94,26 @@ def _load_corpus(paths) -> list[Candidate]:
     return [Candidate.from_dict(d) for d in data]
 
 
-def _load_notes(paths, n: int) -> list[dict]:
-    notes = []
-    for i in range(n):
-        fp = paths.annotations_dir / f"{i:03d}.json"
-        notes.append(json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else {})
+def _load_notes(paths, corpus: list[Candidate], citekeys: dict[int, str]) -> list[dict]:
+    """Read the per-paper notes `report` cached, keyed by citekey.
+
+    Notes belong to the paper, not to its position in a list that changes whenever the Zotero
+    collection does. A legacy positional note is accepted only when the paper it names matches
+    the paper we are asking about; otherwise this loader would confidently hand Zhang's
+    findings to Parrish. Missing notes come back empty rather than wrong.
+    """
+    legacy = _legacy_notes_by_paper(paths.annotations_dir)
+    notes: list[dict] = []
+    for i, c in enumerate(corpus):
+        ck = citekeys.get(i) or f"{i:03d}"
+        fp = paths.annotations_dir / f"{_located_filename(ck)}.json"
+        if fp.exists():
+            try:
+                notes.append(json.loads(fp.read_text(encoding="utf-8")))
+                continue
+            except (OSError, json.JSONDecodeError):
+                pass
+        notes.append(legacy.get(c.author_year(), {}))
     return notes
 
 
@@ -643,18 +658,38 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 
 # ── route comments that a redline cannot satisfy in place ──────────────────────
 
-def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
-                            revision_context: str, corpus: list[Candidate]) -> dict:
-    """Queue the corpus work the comments imply but a redline cannot do in place.
+def _section_comments(outcomes: dict[str, str], cmap: dict[str, dict]) -> list[str]:
+    """The reviewer's own words for every comment the audit judged to need a new section."""
+    return [cmap[cid]["text"] for cid, outcome in outcomes.items()
+            if outcome == "corpus:section" and cid in cmap and cmap[cid].get("text")]
 
-    The redline answers prose / quantify / scope comments now. Comments that ask for new
-    sources — "include paper X", "mine its citations", "a lot more on Y" — need the corpus
-    to change first, which a paragraph rewrite cannot do. Reuse the parseNplan planner to
-    classify the annotation set and, when any corpus work is required, queue the
-    gather→collect→revise→comment chain. The chain's revise carries --no-queue so it
-    re-drafts from the expanded corpus without re-planning (no runaway re-queue). No-op for
-    a purely cosmetic annotation set."""
+
+def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
+                            revision_context: str, corpus: list[Candidate],
+                            section_asks: list[str] | None = None) -> dict:
+    """Queue the work the comments imply but a redline cannot do in place.
+
+    The redline answers prose / quantify / scope comments now. Two kinds of comment it
+    cannot:
+
+      * NEW SOURCES — "include paper X", "mine its citations", "a lot more on Y". The corpus
+        must change first, which a paragraph rewrite cannot do.
+      * A NEW SECTION — the redline edits the paragraph a comment anchors to. It has no way
+        to add a section, however much evidence is already in the corpus. Such a comment
+        comes back from the audit as `CORPUS: section`.
+
+    Reuse the parseNplan planner to classify the annotation set, then queue the chain. The
+    re-draft step is `report` when a section was asked for and `revise` otherwise: `report`
+    re-plans the review's sections from the corpus, which is precisely the work requested.
+    That is orthogonal to the tier — a section may be wanted with or without new sources.
+
+    `report` never reads the annotated docx, so the reviewer's intent reaches it through the
+    project config's focus line, and the redline it supersedes stays on disk as the record of
+    this cycle. The chain's re-draft carries --no-queue so it does not re-plan (no runaway
+    re-queue). No-op for a purely cosmetic annotation set.
+    """
     from . import plan
+    section_asks = section_asks or []
     try:
         coverage = plan._coverage_summary(corpus)
         plan_obj = plan._make_plan(brain, cfg, coverage, revision_context)
@@ -665,31 +700,46 @@ def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
     tier = plan_obj["tier"]
     needs_corpus = (tier in ("gap_fill", "redirection")
                     or plan_obj.get("added_references"))
-    if not needs_corpus:
+    needs_report = bool(section_asks)
+    if not needs_corpus and not needs_report:
         print(f"  {runlog.stamp()}Follow-up: every comment was addressable in the "
               f"redline (tier=cosmetic); no corpus work queued.", flush=True)
-        return {"queued": False, "tier": tier}
+        return {"queued": False, "tier": tier, "needs_report": False}
 
-    steps = plan._chain_for(tier, plan_obj)
+    steps = plan._chain_for(tier, plan_obj, needs_report=needs_report)
+    extra_focus = plan.section_focus(section_asks)
     print()
-    extra = ", references added" if plan_obj.get("added_references") else ""
-    print(f"  {runlog.stamp()}Some comments need new sources (tier={tier}{extra}).")
+    if needs_report:
+        print(f"  {runlog.stamp()}{len(section_asks)} comment(s) ask for a new section, "
+              f"which a redline cannot add — the chain re-drafts with `report`, not `revise`.")
+        print(f"  `report` re-plans every section from the corpus and does NOT read this "
+              f"redline; it starts a new revision cycle.")
+    if needs_corpus:
+        ref = ", references added" if plan_obj.get("added_references") else ""
+        print(f"  {runlog.stamp()}Some comments need new sources (tier={tier}{ref}).")
     if plan_obj.get("assessment"):
         print(f"  Why: {plan_obj['assessment']}")
     print(f"  Follow-up chain: {' -> '.join(steps)}")
+
     if tier == "gap_fill":
-        fp = plan._write_gap_config(directory, plan_obj)
+        fp = plan._write_gap_config(directory, plan_obj, extra_focus)
         print(f"  Wrote gather-steering config: {fp.name}")
     elif tier == "redirection":
-        fp = plan._write_redirect_config(directory, plan_obj)
+        fp = plan._write_redirect_config(directory, plan_obj, extra_focus)
         print(f"  Drafted redirected research brief: {fp.name} (inspect/edit any time)")
+    elif needs_report:
+        fp = plan._write_section_config(directory, extra_focus)
+        print(f"  Wrote section-steering config: {fp.name} (the only channel from your "
+              f"comments to `report` — inspect/edit any time)")
+
+    routing = {"tier": tier, "needs_report": needs_report}
     if gc.have_trundlr:
         rc = plan._submit_chain(gc, cfg, directory, steps, plan_obj)
-        return {"queued": rc == 0, "tier": tier}
+        return {**routing, "queued": rc == 0}
     print("  [trundlr] not configured ([trundlr] url in config.toml) — "
           "run these manually:")
     plan._print_manual(steps)
-    return {"queued": False, "tier": tier}
+    return {**routing, "queued": False}
 
 
 def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) -> None:
@@ -704,10 +754,26 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
     if not outcomes:
         return
     tier = routing.get("tier")
-    if routing.get("queued"):
-        fetch = (f"Queued a {tier} follow-up cycle (gather → … → revise) to bring them in.")
+    queued = routing.get("queued")
+    redraft = "report" if routing.get("needs_report") else "revise"
+    if queued:
+        fetch = f"Queued a {tier} follow-up cycle (gather → … → {redraft}) to bring them in."
     else:
-        fetch = ("Run `rabbitHole gather` (or `ingest` for a named paper), then revise.")
+        fetch = "Run `rabbitHole gather` (or `ingest` for a named paper), then revise."
+
+    if queued and routing.get("needs_report"):
+        section_msg = ("rabbitHole: this asks for a new section, which an in-place redline "
+                       "can't add — it only rewrites the paragraph a comment sits on. Queued "
+                       "a follow-up cycle ending in `report`, which re-plans the review's "
+                       "sections from the corpus. Your ask is carried across in the project "
+                       "focus; `report` does not read this file, so this redline stays as the "
+                       "record of the current cycle.")
+    else:
+        section_msg = ("rabbitHole: this asks for a new section, which an in-place redline "
+                       "can't add — it only rewrites the paragraph a comment sits on. Left "
+                       "the paragraph as it stands. Run `rabbitHole report` to re-plan the "
+                       "review's sections from the corpus; note it starts a new cycle and "
+                       "does not read this file.")
 
     corpus_msg = {
         "sources": ("rabbitHole: this needs sources not yet in the corpus, which an in-place "
@@ -715,9 +781,7 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
         "table": ("rabbitHole: this asks for a table, which isn't a prose edit — a redline "
                   "can only rewrite sentences. Left the paragraph as it stands; add the "
                   "table yourself, or ask for the numbers to be restated in the prose."),
-        "section": ("rabbitHole: this asks for a new section rather than a change to this "
-                    "paragraph, which an in-place redline can't add. Left the paragraph as "
-                    "it stands — raise it as a scope change and re-run `report`."),
+        "section": section_msg,
     }
     replies = []
     for cid, outcome in outcomes.items():
@@ -792,8 +856,9 @@ def run(directory: str = ".", brain_override: str | None = None,
         current_narrative = md_path.read_text(encoding="utf-8")
 
     # 4. Load corpus + notes. Pull in anything added to the Zotero collection since the
-    #    last build (e.g. via `ingest` and your `collect` step). Append-only, so existing
-    #    per-paper notes stay index-aligned; only the new tail gets annotated.
+    #    last build (e.g. via `ingest` and your `collect` step). Notes are keyed by citekey,
+    #    so a source appearing or disappearing anywhere in the collection cannot shift another
+    #    paper's notes onto it; only papers without a note get annotated.
     corpus = _load_corpus(paths)
     if not corpus:
         print("[error] work/corpus.json not found — run 'rabbitHole report' first.",
@@ -807,7 +872,7 @@ def run(directory: str = ".", brain_override: str | None = None,
             corpus_mod.persist(paths, corpus)
             print(f"  {runlog.stamp()}Corpus refresh: +{len(new)} new source(s) "
                   f"from Zotero; annotating…", flush=True)
-            read_notes(brain, corpus, cfg, paths)
+            read_notes(brain, corpus, cfg, paths, citekeys=_make_citekeys(corpus))
         # Heal a corpus first built before citekeys were captured: fill any empty
         # citekey from Zotero's Extra so the review cites the user's curated keys
         # instead of generated ones. Cheap metadata call; no re-ingest.
@@ -818,13 +883,14 @@ def run(directory: str = ".", brain_override: str | None = None,
                   f"into the cached corpus.", flush=True)
     if persist_needed:
         corpus_mod.persist(paths, corpus)
-    notes = _load_notes(paths, len(corpus))
-    citekeys = _make_citekeys(corpus)
+    citekeys = _make_citekeys(corpus)   # before the notes: they are keyed by it
+    notes = _load_notes(paths, corpus, citekeys)
 
     # 4b. Redline mode: edit the annotated docx in place with tracked changes, leaving
     #     comments anchored and un-flagged paragraphs untouched. Skips the full
     #     re-synthesis (steps 5-8) entirely.
     if redline:
+        from . import redline as redline_mod   # the parameter shadows the module here
         print()
         out_docx, summary = _redline_revise(brain, cfg, paths, docx,
                                             corpus, notes, citekeys)
@@ -844,12 +910,14 @@ def run(directory: str = ".", brain_override: str | None = None,
                 print(f"    - {s}")
         if out_docx.exists():
             print(f"  Review (docx): {out_docx}")
-        # Route comments a redline cannot satisfy (new sources, deeper coverage) to a
-        # queued corpus chain. --no-queue (chain revises, runner) skips this.
-        routing = {"queued": False, "tier": None}
+        # Route comments a redline cannot satisfy (new sources, a new section) to a queued
+        # chain. --no-queue (chain revises, runner) skips this.
+        routing = {"queued": False, "tier": None, "needs_report": False}
         if queue:
+            outcomes = summary.get("comment_outcomes", {})
+            section_asks = _section_comments(outcomes, redline_mod.comments_by_id(docx))
             routing = _route_corpus_followups(brain, cfg, gc, directory, docx,
-                                              revision_context, corpus)
+                                              revision_context, corpus, section_asks)
         # Reply to each reviewer comment, authored "rabbitHole", with what was done —
         # the docx itself becomes the accountability record (no separate ledger).
         _reply_to_comments(out_docx, summary.get("comment_outcomes", {}), routing)
