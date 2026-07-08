@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import httpx
 
@@ -138,11 +139,43 @@ class Brain:
                     out[i] = []  # unembeddable doc -> 0 similarity, never tanks the batch
         return out
 
+    # ── context budget ───────────────────────────────────────────────────
+    # Ollama silently discards the head of a prompt that exceeds num_ctx. Nothing errors,
+    # nothing logs, and the model answers confidently from whatever survived. A 31k-token
+    # evidence digest sent at num_ctx=16384 lost its first two-thirds, so a "curated
+    # synthesis of 84 sources" was in fact a synthesis of the last 45 — invisibly, for
+    # months. Silent truncation of the evidence is the worst failure this tool can have:
+    # the output looks founded and is not. So: estimate, and say so.
+    #
+    # ~4 chars/token is crude but the failure it catches is a 2x-4x overrun, not a 5% one.
+    _CHARS_PER_TOKEN = 4
+    _RESERVE_FRACTION = 0.35   # leave room for the model's own answer
+
+    def _check_context(self, prompt: str, system: str, num_ctx: int, model: str) -> None:
+        est = (len(prompt) + len(system)) // self._CHARS_PER_TOKEN
+        budget = int(num_ctx * (1 - self._RESERVE_FRACTION))
+        if est <= budget:
+            return
+        caller = "?"
+        try:  # name the call site — "which prompt is too big" is the only useful part
+            import traceback
+            for fr in reversed(traceback.extract_stack()[:-2]):
+                if "rabbithole" in fr.filename and "brain.py" not in fr.filename:
+                    caller = f"{Path(fr.filename).name}:{fr.lineno} in {fr.name}()"
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"  [WARN] prompt ~{est:,} tokens exceeds the {budget:,}-token budget of "
+              f"num_ctx={num_ctx:,} ({model}). Ollama will DISCARD the beginning of this "
+              f"prompt — evidence at the top will be invisible to the model. "
+              f"Called from {caller}.", file=sys.stderr, flush=True)
+
     # ── backends ─────────────────────────────────────────────────────────
     def _ollama(self, model: str, prompt: str, system: str,
                 num_ctx: int, temperature: float, retries: int = 3,
                 think: bool = False) -> str:
         import json as _json
+        self._check_context(prompt, system, num_ctx, model)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
