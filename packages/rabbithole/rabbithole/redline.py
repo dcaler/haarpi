@@ -30,10 +30,22 @@ verifiable entry. Comments anchored to a heading are NOT rewritten as prose — 
 routes those elsewhere (a heading comment usually means "add a source" / "find more",
 which is a corpus action, not a paragraph edit).
 
+A paragraph is modelled as an ordered stream of TEXT and OPAQUE atoms (equations,
+hyperlinks, footnote references), not as the text inside its ``w:r/w:t`` runs. That older
+model was blind to everything else in the paragraph: an equation is a SIBLING of the text
+runs, so the differ saw prose with holes where every number had been, no sentence could
+match, and each rewrite collapsed to a whole-paragraph replacement — with the equations
+left stranded at the paragraph tail, severed from the claims they verified.
+
+Atoms serialize to sentinels (``⟦m:1⟧``) for the differ and for the LLM, and expand back to
+their original elements on write. rabbitHole never authors an atom: an equation is re-laid
+as accepted content between the redlined prose around it, never inside a ``w:ins``/``w:del``.
+
 Known limitations (documented, not bugs):
   * Multiple comments on one paragraph are coarsened to bracket the whole revised
     paragraph — every comment stays valid and anchored, but loses sub-paragraph
-    precision.
+    precision. (`comment_spans` recovers that precision on the way IN, which is what tells
+    the minimal-edit guard which sentences a comment actually bears on.)
   * Assumes the annotated draft has no still-open tracked changes from a prior cycle
     (true for a freshly rendered _ra draft the reviewer annotated).
 """
@@ -53,10 +65,19 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from lxml import etree
 
+from . import guards
+
 # Threaded-comment namespaces: w14 carries paraId on each comment paragraph; w15
 # (commentsExtended.xml) links a reply's paraId to its parent's via paraIdParent.
 _W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 _W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
+
+# OOXML math. An equation is a sibling of the text runs, NOT inside one, so any paragraph
+# model built from <w:r><w:t> alone is blind to it: the differ sees prose with holes where
+# every number was, no sentence can match, and the whole paragraph is replaced. The
+# equations then survive the re-lay only because nothing removed them — stranded at the
+# paragraph tail, severed from the claims they verify. Hence the atom stream below.
+_MATH = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 
 # python-docx's nsmap does not register the reserved ``xml`` prefix, so qn("xml:space")
 # would KeyError — use the literal namespaced attribute name.
@@ -143,124 +164,217 @@ def _del(text: str, author: str, wid: int, rpr=None):
     return el
 
 
-# ── paragraph inspection ─────────────────────────────────────────────────────────
+# ── the paragraph as an atom stream ──────────────────────────────────────────────
+# A paragraph is an ordered stream of TEXT and OPAQUE atoms. An opaque atom — an equation,
+# a hyperlink, a footnote reference — is content rabbitHole must carry through verbatim but
+# must never author. Serialising it as a sentinel (``⟦m:1⟧``) gives the differ stable
+# sentences and gives the LLM something it can copy but not invent. On write, each sentinel
+# expands back to its original element, in place.
+#
+# This is what makes the sentence-level redline real: an untouched sentence containing an
+# equation now matches, so it stays verbatim, and its citekeys and its numbers survive.
+
+_SENTINEL_SPLIT = re.compile(r"(⟦[a-z]+:\d+⟧)")
+
+_OPAQUE_RUN_CHILDREN = ("w:footnoteReference", "w:endnoteReference",
+                        "w:drawing", "w:pict", "w:object")
+
 
 def _is_text_run(r) -> bool:
     """A run carrying visible text (not a comment-reference marker run)."""
     return r.find(qn("w:t")) is not None and r.find(qn("w:commentReference")) is None
 
 
-def _para_text(p_el) -> str:
-    return "".join(t.text or "" for r in p_el.findall(qn("w:r"))
-                   if _is_text_run(r) for t in r.findall(qn("w:t")))
+def _is_ref_run(r) -> bool:
+    return r.tag == qn("w:r") and r.find(qn("w:commentReference")) is not None
+
+
+def _is_opaque(el) -> bool:
+    """Content we preserve but never author."""
+    if el.tag in (f"{{{_MATH}}}oMath", f"{{{_MATH}}}oMathPara"):
+        return True
+    if el.tag == qn("w:hyperlink"):
+        return True
+    if el.tag == qn("w:r"):
+        return any(el.find(qn(t)) is not None for t in _OPAQUE_RUN_CHILDREN)
+    return False
+
+
+def _sentinel_kind(el) -> str:
+    if el.tag.startswith(f"{{{_MATH}}}"):
+        return "m"
+    if el.tag == qn("w:hyperlink"):
+        return "h"
+    return "x"
+
+
+def serialize_paragraph(p_el) -> tuple[str, dict[str, object], list]:
+    """Render a paragraph as (text_with_sentinels, sentinel -> element, consumed children).
+
+    Comment plumbing and ``w:pPr`` are left alone — they are re-attached around the rebuilt
+    body. Prior tracked deletions are dropped (the paragraph reads as it currently stands);
+    prior insertions read as accepted text.
+    """
+    parts: list[str] = []
+    smap: dict[str, object] = {}
+    consumed: list = []
+    n = 0
+    for child in list(p_el):
+        tag = child.tag
+        if tag == qn("w:pPr") or tag in (qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
+            continue
+        if _is_ref_run(child) or tag == qn("w:del"):
+            continue
+        if _is_opaque(child):
+            n += 1
+            key = f"⟦{_sentinel_kind(child)}:{n}⟧"
+            smap[key] = child
+            parts.append(key)
+            consumed.append(child)
+        elif tag == qn("w:ins"):
+            parts.append("".join(t.text or "" for t in child.iter(qn("w:t"))))
+            consumed.append(child)
+        elif tag == qn("w:r") and child.findall(qn("w:t")):
+            parts.append("".join(t.text or "" for t in child.findall(qn("w:t"))))
+            consumed.append(child)
+    return "".join(parts), smap, consumed
+
+
+def paragraph_text(p_el) -> str:
+    """The paragraph as the reviser and the differ see it: prose with sentinels for atoms."""
+    return serialize_paragraph(p_el)[0]
+
+
+def _render(text: str, smap: dict, rpr) -> list:
+    """Text with sentinels -> runs, each sentinel expanded to its original element.
+
+    An unknown sentinel (one the model invented) renders as nothing: rabbitHole never
+    authors an equation. The adversary's ``dropped_sentinels`` guard rejects the rewrite
+    before it reaches here, so this is a backstop, not a path.
+    """
+    out: list = []
+    for piece in _SENTINEL_SPLIT.split(text):
+        if not piece:
+            continue
+        if _SENTINEL_SPLIT.fullmatch(piece):
+            el = smap.get(piece)
+            if el is not None:
+                out.append(copy.deepcopy(el))
+        else:
+            out.append(_text_run(piece, rpr))
+    return out
+
+
+def _segments(chunk: str) -> tuple[list[str], list[str]]:
+    """Split on sentinels: (text segments, sentinels). ``len(texts) == len(sents) + 1``."""
+    parts = _SENTINEL_SPLIT.split(chunk)
+    return parts[0::2], parts[1::2]
+
+
+def _redline_chunk(old_chunk: str, new_chunk: str, smap: dict,
+                   author: str, ids: _Ids, rpr) -> list:
+    """Redline one changed span, never touching an atom.
+
+    An equation is re-laid as accepted content between the redlined prose around it —
+    rabbitHole cannot author an equation, so it must not claim to have deleted or inserted
+    one. When the sentinel sequence is unchanged (the guarded case) the prose segments
+    around each atom are redlined individually, so even a rewritten sentence keeps its
+    numbers exactly where they were.
+    """
+    o_texts, o_sents = _segments(old_chunk)
+    n_texts, n_sents = _segments(new_chunk)
+    body: list = []
+
+    if o_sents != n_sents:
+        # The reviser moved, dropped, or invented an atom. The guard rejects this upstream;
+        # here we simply never lose one: redline the prose, then re-lay every original atom.
+        o_all, n_all = "".join(o_texts), "".join(n_texts)
+        if o_all:
+            body.append(_del(o_all, author, ids.next(), rpr))
+        if n_all:
+            body.append(_ins(n_all, author, ids.next(), rpr))
+        body.extend(copy.deepcopy(smap[s]) for s in o_sents if s in smap)
+        return body
+
+    for k in range(len(o_sents) + 1):
+        o = o_texts[k] if k < len(o_texts) else ""
+        n = n_texts[k] if k < len(n_texts) else ""
+        if o and o == n:
+            body.append(_text_run(o, rpr))     # unchanged prose around an atom
+        else:
+            if o:
+                body.append(_del(o, author, ids.next(), rpr))
+            if n:
+                body.append(_ins(n, author, ids.next(), rpr))
+        if k < len(o_sents):
+            el = smap.get(o_sents[k])
+            if el is not None:
+                body.append(copy.deepcopy(el))  # the atom itself: accepted, in place
+    return body
+
+
+def _relay(p_el, body: list, consumed: list) -> None:
+    """Detach what we consumed and re-lay [starts] <body> [ends] [reference runs]."""
+    starts = p_el.findall(qn("w:commentRangeStart"))
+    ends = p_el.findall(qn("w:commentRangeEnd"))
+    ref_runs = [r for r in p_el.findall(qn("w:r")) if _is_ref_run(r)]
+    for el in consumed + starts + ends + ref_runs:
+        p_el.remove(el)
+    ppr = p_el.find(qn("w:pPr"))
+    insert_at = list(p_el).index(ppr) + 1 if ppr is not None else 0
+    for offset, el in enumerate(list(starts) + body + list(ends) + list(ref_runs)):
+        p_el.insert(insert_at + offset, el)
 
 
 # ── tracked edits ─────────────────────────────────────────────────────────────
 
 def tracked_replace(p_el, new_text: str, author: str, ids: _Ids) -> bool:
-    """Replace a paragraph's text with a tracked deletion of the old + insertion of the
-    new, preserving any comment-range markers and comment-reference runs so the comment
-    stays anchored to the revised paragraph.
+    """Replace a paragraph's text with one tracked deletion of the old + insertion of the
+    new, preserving comment anchors and every opaque atom.
+
+    Coarse: the whole paragraph is redlined. `tracked_replace_sentencewise` is what the
+    redline path uses; this remains for callers that genuinely mean to replace wholesale.
 
     Returns False (a no-op) when there is no text to replace or the text is unchanged.
     """
-    text_runs = [r for r in p_el.findall(qn("w:r")) if _is_text_run(r)]
-    old_text = "".join(t.text or "" for r in text_runs for t in r.findall(qn("w:t")))
-    if not text_runs or new_text.strip() == old_text.strip():
+    old_text, smap, consumed = serialize_paragraph(p_el)
+    if not consumed or new_text.strip() == old_text.strip():
         return False
-    rpr = _rpr_clone(text_runs[0])
-
-    # Detach the comment plumbing and old text so we can re-lay the paragraph cleanly.
-    starts = p_el.findall(qn("w:commentRangeStart"))
-    ends = p_el.findall(qn("w:commentRangeEnd"))
-    ref_runs = [r for r in p_el.findall(qn("w:r"))
-                if r.find(qn("w:commentReference")) is not None]
-    for el in text_runs + starts + ends + ref_runs:
-        p_el.remove(el)
-
-    # Re-lay as: [starts] <del old> <ins new> [ends] [reference runs]. Every comment in
-    # the paragraph now brackets the revised text (sub-paragraph precision is coarsened
-    # to the paragraph, but every comment stays valid and anchored).
-    ppr = p_el.find(qn("w:pPr"))
-    insert_at = list(p_el).index(ppr) + 1 if ppr is not None else 0
-    seq = (list(starts)
-           + [_del(old_text, author, ids.next(), rpr),
-              _ins(new_text, author, ids.next(), rpr)]
-           + list(ends) + list(ref_runs))
-    for offset, el in enumerate(seq):
-        p_el.insert(insert_at + offset, el)
+    rpr = next((_rpr_clone(r) for r in consumed
+                if r.tag == qn("w:r") and _is_text_run(r)), None)
+    _relay(p_el, _redline_chunk(old_text, new_text, smap, author, ids, rpr), consumed)
     return True
-
-
-def _sentence_units(text: str) -> list[str]:
-    """Split text into sentence units, each carrying its trailing whitespace, so that
-    ``"".join(_sentence_units(text)) == text``.
-
-    Boundaries are sentence-final punctuation followed by whitespace — the same heuristic
-    used across the codebase (chroma.py, summarize._claim_sentences). Keeping the units
-    lossless lets the diff preserve an unchanged sentence byte-for-byte, so its [@citekey]
-    tags survive the revision untouched.
-    """
-    if not text:
-        return []
-    toks = re.split(r"(?<=[.!?])(\s+)", text)
-    units: list[str] = []
-    i = 0
-    while i < len(toks):
-        unit = toks[i]
-        if i + 1 < len(toks):  # the captured whitespace separator after this sentence
-            unit += toks[i + 1]
-        if unit:
-            units.append(unit)
-        i += 2
-    return units
 
 
 def tracked_replace_sentencewise(p_el, new_text: str, author: str, ids: _Ids) -> bool:
     """Replace a paragraph's text with SENTENCE-level tracked changes.
 
-    Diffs the old and new paragraph at sentence granularity and records a tracked deletion
-    + insertion only for the sentences that actually changed; every unchanged sentence is
-    re-laid as a plain (accepted) run, byte-for-byte. This keeps the reviewer's edit
-    surgical and — critically — preserves the [@citekey] tags and grounding of the
-    sentences the comment did not require changing (whole-paragraph replacement threw them
-    away). Comment-range markers and reference runs are re-attached around the whole
-    paragraph, exactly as `tracked_replace` does.
+    Diffs old against new at sentence granularity and redlines only the sentences that
+    actually changed; every unchanged sentence is re-laid as a plain (accepted) run,
+    byte-for-byte, so its [@citekey] tags, its grounding, and its equations survive the
+    revision untouched. Opaque atoms are never deleted or inserted — see `_redline_chunk`.
 
     Returns False (a no-op) when there is no text to replace or the text is unchanged.
     """
-    text_runs = [r for r in p_el.findall(qn("w:r")) if _is_text_run(r)]
-    old_text = "".join(t.text or "" for r in text_runs for t in r.findall(qn("w:t")))
-    if not text_runs or new_text.strip() == old_text.strip():
+    old_text, smap, consumed = serialize_paragraph(p_el)
+    if not consumed or new_text.strip() == old_text.strip():
         return False
-    rpr = _rpr_clone(text_runs[0])
+    rpr = next((_rpr_clone(r) for r in consumed
+                if r.tag == qn("w:r") and _is_text_run(r)), None)
 
-    old_units = _sentence_units(old_text)
-    new_units = _sentence_units(new_text)
+    old_units = guards.sentence_units(old_text)
+    new_units = guards.sentence_units(new_text)
     sm = difflib.SequenceMatcher(a=old_units, b=new_units, autojunk=False)
     body: list = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for u in old_units[i1:i2]:
-                body.append(_text_run(u, rpr))  # unchanged — plain accepted run
-            continue
-        if tag in ("delete", "replace"):
-            body.append(_del("".join(old_units[i1:i2]), author, ids.next(), rpr))
-        if tag in ("insert", "replace"):
-            body.append(_ins("".join(new_units[j1:j2]), author, ids.next(), rpr))
-
-    # Detach the comment plumbing and old text, then re-lay: [starts] <body> [ends] [refs].
-    starts = p_el.findall(qn("w:commentRangeStart"))
-    ends = p_el.findall(qn("w:commentRangeEnd"))
-    ref_runs = [r for r in p_el.findall(qn("w:r"))
-                if r.find(qn("w:commentReference")) is not None]
-    for el in text_runs + starts + ends + ref_runs:
-        p_el.remove(el)
-    ppr = p_el.find(qn("w:pPr"))
-    insert_at = list(p_el).index(ppr) + 1 if ppr is not None else 0
-    seq = list(starts) + body + list(ends) + list(ref_runs)
-    for offset, el in enumerate(seq):
-        p_el.insert(insert_at + offset, el)
+                body.extend(_render(u, smap, rpr))  # unchanged — accepted, atoms in place
+        else:
+            body.extend(_redline_chunk("".join(old_units[i1:i2]),
+                                       "".join(new_units[j1:j2]),
+                                       smap, author, ids, rpr))
+    _relay(p_el, body, consumed)
     return True
 
 
@@ -296,21 +410,74 @@ def comments_by_id(path: Path) -> dict[str, dict]:
     return out
 
 
+def comment_spans(p_el) -> dict[str, tuple[int, int]]:
+    """Character offsets ``[start, end)`` of each comment's anchored range, measured over
+    the same serialized text `paragraph_text` returns.
+
+    The reviewer highlights the phrase their comment is about, so this recovers WHICH
+    SENTENCES a comment actually bears on. `apply_edits` later coarsens the surviving
+    anchors to the whole paragraph, but on the way in the precision is there — and it is
+    what lets the minimal-edit guard know that a comment on sentence 2 does not license
+    rewriting sentences 1 and 3-7.
+    """
+    offset = 0
+    opens: dict[str, int] = {}
+    spans: dict[str, tuple[int, int]] = {}
+    for child in list(p_el):
+        tag = child.tag
+        if tag == qn("w:commentRangeStart"):
+            opens[child.get(qn("w:id"))] = offset
+        elif tag == qn("w:commentRangeEnd"):
+            cid = child.get(qn("w:id"))
+            if cid in opens:
+                spans[cid] = (opens.pop(cid), offset)
+        elif tag == qn("w:pPr") or _is_ref_run(child) or tag == qn("w:del"):
+            continue
+        elif _is_opaque(child):
+            offset += len(f"⟦{_sentinel_kind(child)}:0⟧")
+        elif tag == qn("w:ins"):
+            offset += sum(len(t.text or "") for t in child.iter(qn("w:t")))
+        elif tag == qn("w:r"):
+            offset += sum(len(t.text or "") for t in child.findall(qn("w:t")))
+    for cid, start in opens.items():  # range never closed in this paragraph
+        spans[cid] = (start, offset)
+    return spans
+
+
+def anchored_sentences(text: str, span: tuple[int, int]) -> set[int]:
+    """Indices of the sentences a comment's character range overlaps."""
+    out: set[int] = set()
+    pos = 0
+    for i, unit in enumerate(guards.sentence_units(text)):
+        if pos < span[1] and span[0] < pos + len(unit):
+            out.add(i)
+        pos += len(unit)
+    return out
+
+
 def comment_anchors(path: Path) -> list[dict]:
     """Paragraphs carrying a comment anchor, with the comment ids and current text.
 
-    Returns a list of {para, ids, text, style} in document order. ``style`` is the
-    paragraph's style name, so callers can tell a comment on a heading from one on a
-    body paragraph (a heading comment must not be answered by rewriting the heading).
-    Paragraphs with no comment are omitted.
+    Returns a list of {para, ids, text, style, anchored} in document order. ``text`` is the
+    serialized paragraph (atoms as sentinels) — the exact string the reviser is asked to
+    revise. ``style`` lets callers tell a comment on a heading from one on a body paragraph
+    (a heading comment must not be answered by rewriting the heading). ``anchored`` is the
+    union of sentence indices the paragraph's comments bear on. Paragraphs with no comment
+    are omitted.
     """
     doc = Document(str(path))
     out = []
     for i, p in enumerate(doc.paragraphs):
         ids = [s.get(qn("w:id")) for s in p._p.findall(qn("w:commentRangeStart"))]
-        if ids:
-            style = p.style.name if p.style is not None else ""
-            out.append({"para": i, "ids": ids, "text": p.text, "style": style})
+        if not ids:
+            continue
+        text = paragraph_text(p._p)
+        anchored: set[int] = set()
+        for span in comment_spans(p._p).values():
+            anchored |= anchored_sentences(text, span)
+        out.append({"para": i, "ids": ids, "text": text,
+                    "style": p.style.name if p.style is not None else "",
+                    "anchored": sorted(anchored)})
     return out
 
 

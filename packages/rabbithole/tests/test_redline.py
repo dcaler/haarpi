@@ -9,15 +9,41 @@ from __future__ import annotations
 
 from docx import Document
 from docx.oxml.ns import qn
+from lxml import etree
 
-from rabbithole import redline
+from rabbithole import guards, redline
 from rabbithole.summarize import bibliography
+
+_MATH = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _para(text: str):
     return Document().add_paragraph(text)
+
+
+def _omath(text: str):
+    """A minimal <m:oMath> element carrying `text` — an equation, as Word stores it:
+    a sibling of the text runs, not inside one. Built with lxml because python-docx's
+    OxmlElement only knows its own registered prefixes, and `m` is not one of them."""
+    om = etree.SubElement(etree.Element("root"), f"{{{_MATH}}}oMath")
+    t = etree.SubElement(etree.SubElement(om, f"{{{_MATH}}}r"), f"{{{_MATH}}}t")
+    t.text = text
+    return om
+
+
+def _para_with_math(before: str, equation: str, after: str):
+    """A paragraph whose prose is interrupted by an equation, as pandoc renders stats."""
+    p = _para(before)
+    p._p.append(_omath(equation))
+    p._p.append(redline._text_run(after))
+    return p
+
+
+def _math_texts(p_el) -> list[str]:
+    return ["".join(t.text or "" for t in om.iter(f"{{{_MATH}}}t"))
+            for om in p_el.iter(f"{{{_MATH}}}oMath")]
 
 
 def _accepted(p_el) -> str:
@@ -48,19 +74,94 @@ def _n(p_el, tag: str) -> int:
     return len(p_el.findall(qn(tag)))
 
 
-# ── _sentence_units ──────────────────────────────────────────────────────────
+# ── sentence_units (canonical in guards; redline diffs on it) ────────────────
 
 def test_sentence_units_lossless():
     for text in ("One. Two. Three.",
                  "Single sentence with no boundary",
                  "Q? A! Done.",
                  "Trailing whitespace.  Kept spacing here.  "):
-        assert "".join(redline._sentence_units(text)) == text
-    assert redline._sentence_units("") == []
+        assert "".join(guards.sentence_units(text)) == text
+    assert guards.sentence_units("") == []
 
 
 def test_sentence_units_count():
-    assert len(redline._sentence_units("A stable. B falls. C rises.")) == 3
+    assert len(guards.sentence_units("A stable. B falls. C rises.")) == 3
+
+
+# ── the paragraph atom stream ────────────────────────────────────────────────
+
+def test_serialize_paragraph_sentinels_math():
+    """An equation is a sibling of the text runs. A w:t-only paragraph model is blind to
+    it, which is what collapsed every sentence diff to a whole-paragraph replacement."""
+    p = _para_with_math("Correlation was ", "ρ=0.95", " across conditions [@a1].")
+    text, smap, consumed = redline.serialize_paragraph(p._p)
+    assert text == "Correlation was ⟦m:1⟧ across conditions [@a1]."
+    assert list(smap) == ["⟦m:1⟧"]
+    assert len(consumed) == 3  # run, oMath, run
+    assert guards.sentinels(text) == ["⟦m:1⟧"]
+
+
+def test_untouched_sentence_with_math_stays_verbatim():
+    """The whole point: a sentence carrying an equation now matches, so it is not redlined
+    and its numbers are not severed from the claim they verify."""
+    p = _para_with_math("Alpha rises [@a1]. Correlation was ", "ρ=0.95",
+                        " here [@b2]. Gamma is stable [@c3].")
+    old = redline.paragraph_text(p._p)
+    new = old.replace("Gamma is stable [@c3].", "Gamma is stable under load [@c3].")
+
+    assert redline.tracked_replace_sentencewise(
+        p._p, new, "rabbitHole", redline._Ids(1)) is True
+    assert _n(p._p, "w:ins") == 1 and _n(p._p, "w:del") == 1
+    # the equation survives, in place, untouched by any tracked change
+    assert _math_texts(p._p) == ["ρ=0.95"]
+    om = next(p._p.iter(f"{{{_MATH}}}oMath"))
+    assert om.getparent().tag == qn("w:p"), "equation must not be inside w:ins/w:del"
+    assert "ρ" not in _accepted(p._p)  # math lives in m:t, never copied into prose
+
+
+def test_math_survives_a_rewrite_of_its_own_sentence():
+    """rabbitHole cannot author an equation, so it never deletes or inserts one: the prose
+    around the atom is redlined and the atom is re-laid as accepted content, in place."""
+    p = _para_with_math("Correlation was ", "ρ=0.95", " across conditions [@a1].")
+    old = redline.paragraph_text(p._p)
+    new = "The measured correlation was ⟦m:1⟧ across every condition [@a1]."
+
+    assert redline.tracked_replace_sentencewise(
+        p._p, new, "rabbitHole", redline._Ids(1)) is True
+    assert _math_texts(p._p) == ["ρ=0.95"]
+    om = next(p._p.iter(f"{{{_MATH}}}oMath"))
+    assert om.getparent().tag == qn("w:p")
+    assert "[@a1]" in _accepted(p._p)
+
+
+def test_math_is_never_lost_when_the_reviser_drops_the_sentinel():
+    """Backstop for the guarded case: even if a rewrite omits the sentinel entirely, the
+    equation is re-laid rather than stranded or deleted."""
+    p = _para_with_math("Correlation was ", "ρ=0.95", " across conditions [@a1].")
+    new = "Correlation was strong across conditions [@a1]."
+    redline.tracked_replace_sentencewise(p._p, new, "rabbitHole", redline._Ids(1))
+    assert _math_texts(p._p) == ["ρ=0.95"]
+
+
+def test_dropped_sentinel_is_a_guard_failure():
+    old = "Correlation was ⟦m:1⟧ across conditions [@a1]."
+    new = "Correlation was strong across conditions [@a1]."
+    findings = guards.dropped_sentinels(old, new)
+    assert len(findings) == 1 and findings[0].kind == "dropped-equation"
+    assert "⟦m:1⟧" in findings[0].imperative
+    assert guards.dropped_sentinels(old, old) == []
+
+
+# ── comment anchors: which sentences a comment actually bears on ─────────────
+
+def test_comment_spans_locate_the_anchored_sentence():
+    p = _para("First point [@a1]. Second point [@b2]. Third point [@c3].")
+    text = redline.paragraph_text(p._p)
+    # a reviewer highlighting "Second point [@b2]." — offsets into the serialized text
+    start = text.index("Second")
+    span = (start, start + len("Second point [@b2]."))
+    assert redline.anchored_sentences(text, span) == {1}
 
 
 # ── tracked_replace_sentencewise ─────────────────────────────────────────────
