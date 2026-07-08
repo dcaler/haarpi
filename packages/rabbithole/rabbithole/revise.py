@@ -1,9 +1,20 @@
 """rabbitHole revise — apply reviewer annotations from a _ra.docx to re-draft the narrative.
 
 Default mode is an in-place REDLINE: edit a copy of the annotated docx, answering each
-comment with a rabbitHole-authored tracked change on the paragraph it anchors to, and
+comment with a rabbitHole-authored tracked change on the sentence(s) it anchors to, and
 leave every reviewer comment in place so the next output shows them. The reviewer reads a
 true tracked-changes redline beside their own notes. See `redline.py`.
+
+The per-paragraph reviser returns only the sentences it CHANGED, keyed by index, so the set
+of touched sentences is known exactly rather than estimated from a prose diff. Minimality,
+citation integrity, and equation integrity are decided in Python (`guards`); the LLM audit
+is left with the one question code cannot answer — does the edit mean what the comment
+asked for? When no revision clears every guard, the paragraph is left as the reviewer wrote
+it and the reply says so: a tracked change that quietly dropped a source, under a reply
+claiming the comment was addressed, is the failure this path exists to prevent.
+
+Breadth guards deliberately do NOT run here. A revise answers the reviewer's annotations and
+nothing else; comments that need new sources route to the corpus chain below.
 
 Comments a redline cannot satisfy in place — "include paper X", "mine its citations",
 "a lot more on Y" — need the corpus to change first. After the redline, the parseNplan
@@ -29,19 +40,41 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, docxio, render, runlog
+from . import config, corpus as corpus_mod, docxio, guards, render, runlog
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
-    _make_citekeys, _digest, bibliography, citation_check, read_notes,
+    _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check, read_notes,
     locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
-    _HAVE_CHROMA, _all_citekeys, _CITE_TAG_RE, _cited_indices,
+    _HAVE_CHROMA, _cited_indices,
 )
 
-# A citation written in author-year narrative form ("Smith (2021)", "Jones et al. (2019)")
-# instead of the required [@citekey] tag. The per-paragraph reviser used to emit these and
-# nothing caught them, silently dropping the source from the citekey-keyed bibliography.
-_AUTHOR_YEAR_RE = re.compile(r"[A-Z][a-z]+(?:\s+et al\.|’s|'s)?\s*\((?:19|20)\d\d")
+
+def _para_digest(compact: dict[str, str], full: dict[str, str],
+                 para_keys: list[str], budget: int = 20_000) -> str:
+    """The evidence list for one paragraph rewrite, sized to fit the context window.
+
+    Full digest lines — the ones carrying the numbers — for the sources the paragraph already
+    cites, because those are the claims the reviser must keep grounded. Compact lines for the
+    rest of the corpus, so it knows what else exists without spending 31k tokens saying so.
+
+    The old code sent the full digest for all 84 sources to every paragraph call. At
+    num_ctx=16384 Ollama discarded most of it, silently, and the reviser cited from whatever
+    happened to survive at the tail.
+    """
+    lines: list[str] = []
+    spent = 0
+    for k in dict.fromkeys(para_keys):
+        line = full.get(k)
+        if line:
+            lines.append(line)
+            spent += len(line)
+    for k, line in compact.items():
+        if k in set(para_keys) or spent + len(line) > budget:
+            continue
+        lines.append(line)
+        spent += len(line)
+    return "\n".join(lines)
 
 
 # ── output paths ───────────────────────────────────────────────────────────────
@@ -226,24 +259,39 @@ def _audit_revise_loop(brain: Brain, cfg, previous: str, narrative: str,
 
 _PARA_REVISE_SYS = """\
 You are revising ONE paragraph of a scholarly literature review to satisfy a reviewer's
-comment(s) on it. Make the SMALLEST change that fully and genuinely addresses every
-comment: rewrite only the sentence(s) the comment bears on and leave every other sentence
-word-for-word as it stands, so most of the paragraph is preserved verbatim. Stay grounded
-in the supplied evidence and keep the paragraph's role in the surrounding argument. House
-style: organise around ideas not sources; state a claim, then attach its citation
+comment(s) on it. The paragraph is given to you as NUMBERED SENTENCES. You return only the
+sentences you changed, keyed by their number — never the whole paragraph. A sentence you do
+not return survives word for word, which is the point: it keeps its citations, its
+grounding, and its evidence intact.
+
+Make the SMALLEST change that fully and genuinely addresses every comment. Revise the
+sentence(s) the comment bears on. Leave the rest alone.
+
+HOUSE STYLE — organise around ideas not sources; state a claim, then attach its citation
 immediately after; never make a citation the grammatical subject; tight, active prose.
-CITATIONS — cite ONLY sources in the EVIDENCE list, and ALWAYS as a [@citekey] tag using
-the exact key shown there: write "[@smith2021]", NEVER "Smith (2021)" or "(Smith, 2021)".
-Every [@citekey] already in the paragraph must survive verbatim unless a comment asks you
-to remove that source. Output ONLY the revised paragraph text — no heading, no list, no
-commentary, no bibliography."""
+
+CITATIONS — cite ONLY sources in the EVIDENCE list, and ALWAYS as a [@citekey] tag using the
+exact key shown there: write "[@smith2021]", NEVER "Smith (2021)" or "(Smith, 2021)". An
+author-year citation is invisible to the bibliography and silently unverifies the claim.
+Every [@citekey] in a sentence you rewrite must survive in your version unless a comment
+asks you to remove that source.
+
+PLACEHOLDERS — a token like ⟦m:1⟧ stands for an equation in the original. Reproduce it
+exactly, in the sentence whose claim it supports. Never retype an equation as prose, never
+move one to another sentence, and never invent a placeholder of your own.
+
+OUTPUT — a single JSON object mapping sentence number to its replacement text. Use null to
+delete a sentence. Return nothing else: no prose, no commentary, no code fence.
+  {"2": "The revised second sentence [@smith2021].", "5": null}
+If no sentence needs to change, return {}."""
 
 _PARA_REVISE_PROMPT = """\
 Review topic: {topic}
 Focus: {focus}
 
-PARAGRAPH (revise only this):
-{paragraph}
+PARAGRAPH, as numbered sentences. ▶ marks the sentence(s) the reviewer's comment is
+anchored to — those are the ones to revise:
+{sentences}
 
 REVIEWER COMMENT(S) on this paragraph (address every one):
 {comments}
@@ -251,7 +299,64 @@ REVIEWER COMMENT(S) on this paragraph (address every one):
 EVIDENCE you may cite — each line begins with the [@citekey] to cite that source by:
 {digest}
 
-Output only the revised paragraph."""
+Return the JSON object of changed sentences only."""
+
+
+def _number_sentences(units: list[str], anchored: set[int]) -> str:
+    """Render the paragraph as numbered sentences, marking those a comment bears on."""
+    return "\n".join(
+        f"{'▶' if i in anchored else ' '} {i + 1}. {u.strip()}"
+        for i, u in enumerate(units))
+
+
+def _apply_sentence_edits(units: list[str], edits: dict) -> str:
+    """Rebuild the paragraph from the original units plus the reviser's replacements.
+
+    Every sentence the reviser did not return is copied byte-for-byte. This is what makes
+    the sentence-level redline true by construction rather than hoped for from a diff: the
+    untouched sentences are literally the original objects.
+    """
+    out: list[str] = []
+    for i, unit in enumerate(units):
+        key = str(i + 1)
+        if key not in edits:
+            out.append(unit)
+            continue
+        repl = edits[key]
+        if repl is None:
+            continue  # deleted
+        trailing = unit[len(unit.rstrip()):]  # keep the original inter-sentence spacing
+        out.append(repl.strip() + trailing)
+    return "".join(out)
+
+
+def _parse_sentence_edits(raw: str, n_units: int) -> tuple[dict, list[str]]:
+    """Parse the reviser's JSON, keeping only in-range integer keys. Returns (edits, errors).
+
+    Strict on purpose: `summarize._parse_json_obj` falls back to a read-notes-shaped dict on
+    a parse failure, which here would silently look like a well-formed edit of nothing.
+    """
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    obj = None
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+            obj = parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            obj = None
+    if obj is None:
+        return {}, ['Output was not a JSON object. Return only a JSON object mapping '
+                    'sentence number to replacement text, e.g. {"2": "…"}.']
+    edits, errors = {}, []
+    for k, v in obj.items():
+        if not str(k).strip().isdigit() or not (1 <= int(k) <= n_units):
+            errors.append(f'"{k}" is not a sentence number between 1 and {n_units}.')
+            continue
+        if v is not None and not isinstance(v, str):
+            errors.append(f'The value for sentence {k} must be text or null.')
+            continue
+        edits[str(int(k))] = v
+    return edits, errors
 
 
 # ── per-paragraph adversary (LINT + AUDIT parity for the redline path) ──────────
@@ -264,15 +369,20 @@ Output only the revised paragraph."""
 
 _PARA_AUDIT_SYS = """\
 You audit ONE revised paragraph of a literature review against the reviewer comment(s) it
-was meant to satisfy. Respond with EXACTLY one of three things, nothing else:
-- "OK" — if the revision fully and genuinely addresses every comment AND changes little
-  beyond what the comment required.
-- A line beginning "CORPUS:" then a brief reason — if a comment CANNOT be satisfied by
-  editing this paragraph's prose because it asks for a table, a new section or figure, or
-  evidence/sources not present in the review. Do not accept a prose gesture as satisfying
-  such a request.
-- Otherwise a numbered list of specific problems (a comment not really addressed, or
-  unrelated sentences needlessly rewritten), quoting the text you mean."""
+was meant to satisfy. Mechanical checks — citation format, dropped citations, equations,
+which sentences were touched — have already been made in code and passed; do not repeat
+them. Judge only what code cannot: MEANING.
+
+Respond with EXACTLY one of three things, nothing else:
+- "OK" — the revision fully and genuinely addresses every comment.
+- A line "CORPUS: <class>: <brief reason>" — a comment that CANNOT be satisfied by editing
+  this paragraph's prose. <class> is exactly one of:
+      table     — asks for a table, chart, or figure
+      section   — asks for a new section, subsection, or discussion not belonging here
+      sources   — asks for evidence or sources not present in the review
+  Do not accept a prose gesture as satisfying such a request.
+- Otherwise a numbered list of specific problems: a comment not really addressed, or
+  addressed in name only. Quote the text you mean."""
 
 _PARA_AUDIT_PROMPT = """\
 Review topic: {topic}
@@ -287,64 +397,104 @@ ORIGINAL PARAGRAPH:
 REVISED PARAGRAPH (under audit):
 {revised}
 
-Judge only against the comment(s): is each fully and genuinely addressed, is the change
-minimal (unrelated sentences left alone), and is the comment even satisfiable by editing
-this paragraph's prose at all? Respond "OK", or "CORPUS: <reason>", or a numbered list."""
+Judge only against the comment(s): is each fully and genuinely addressed, and is the comment
+even satisfiable by editing this paragraph's prose at all? Respond "OK", or
+"CORPUS: <class>: <reason>", or a numbered list."""
+
+# The reason class the audit returns, mapped to what the reviewer is told. Answering a
+# request for a table with "this needs sources not yet in the corpus" is a false diagnosis:
+# gathering papers will never satisfy it. The class is what makes the reply honest.
+_CORPUS_CLASSES = ("table", "section", "sources")
+
+
+def _corpus_class(verdict: str) -> str:
+    """Extract the reason class from a "CORPUS: <class>: <reason>" verdict."""
+    rest = verdict.split(":", 1)[1] if ":" in verdict else ""
+    head = rest.strip().split(":", 1)[0].strip().lower()
+    return head if head in _CORPUS_CLASSES else "sources"
+
+
+def _para_guard_findings(old_text: str, new_text: str, touched: set[int],
+                         anchored: set[int], n_units: int) -> list[guards.Finding]:
+    """Everything about a paragraph rewrite that Python can decide precisely.
+
+    Note what is NOT here: whether the edit means what the comment asked for. That is the
+    audit's only remaining job — everything else moved into code, where it is exact.
+    """
+    return (guards.author_year_prose(new_text)
+            + ([] if guards.CITE_TAG_RE.search(new_text) else [guards.Finding(
+                "uncited", "paragraph",
+                "The paragraph now cites no source — every paragraph must carry at least "
+                "one [@citekey] from the EVIDENCE list.")])
+            + guards.dropped_citekeys(old_text, new_text)
+            + guards.dropped_sentinels(old_text, new_text)
+            + guards.invented_sentinels(old_text, new_text)
+            + guards.minimal_edit_violation(touched, anchored, n_units))
 
 
 def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[str],
-                            digest: str, rounds: int | None = None) -> tuple[str | None, str]:
+                            digest: str, anchored: set[int] | None = None,
+                            rounds: int | None = None) -> tuple[str | None, str]:
     """Rewrite one commented paragraph and hold it to the adversarial bar.
 
+    The reviser returns only the sentences it changed, keyed by index, so the set of touched
+    sentences is known exactly rather than estimated from a prose diff. Minimality, citation
+    integrity, and equation integrity are all decided in Python; the LLM audit is left with
+    the one question code cannot answer — does the edit mean what the comment asked for.
+
     Returns (new_text, outcome):
-      - ("...text...", "edited") — a rewrite that passes the citation guards and the audit.
-      - (None, "corpus")         — a comment a prose edit cannot satisfy (needs the corpus /
-                                    a table / a new section); do NOT edit, route it instead.
-      - (None, "skipped")        — the rewrite failed or could not be made citation-clean.
+      - ("...text...", "edited")     — passes every deterministic guard and the audit.
+      - (None, "corpus:<class>")     — a comment a prose edit cannot satisfy; route it.
+      - (None, "skipped")            — no edit could be produced that keeps the paragraph
+                                       verifiable. Fail closed: leave the reviewer's
+                                       paragraph alone and say so, rather than emit a
+                                       paragraph that quietly lost a source or an equation.
     """
     if rounds is None:
         rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
-    old_keys = set(_all_citekeys(paragraph))
+    anchored = anchored or set()
+    units = guards.sentence_units(paragraph)
+    if not units:
+        return None, "skipped"
     comment_block = "\n".join(f"- {c}" for c in comments)
     base_prompt = _PARA_REVISE_PROMPT.format(
         topic=cfg.topic, focus=cfg.focus or "",
-        paragraph=paragraph, comments=comment_block, digest=digest)
+        sentences=_number_sentences(units, anchored),
+        comments=comment_block, digest=digest)
 
-    new_text = None
     critique: str | None = None
     for _ in range(rounds):
         prompt = base_prompt if critique is None else (
             base_prompt + f"\n\nYour previous attempt had these problems — fix every one, "
-            f"changing as little else as possible:\n{critique}\n\nOutput only the revised "
-            f"paragraph.")
+            f"changing as little else as possible:\n{critique}\n\nReturn the corrected JSON "
+            f"object of changed sentences only.")
         try:
-            new_text = brain.coordinator(prompt, _PARA_REVISE_SYS, num_ctx=16384).strip()
+            raw = brain.coordinator(prompt, _PARA_REVISE_SYS, num_ctx=16384).strip()
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] paragraph revise failed ({e}); leaving as-is.", file=sys.stderr)
             return None, "skipped"
-        if not new_text:
+
+        edits, errors = _parse_sentence_edits(raw, len(units))
+        if errors:
+            critique = "\n".join(f"- {e}" for e in errors)
+            continue
+        if not edits:
+            # The reviser says nothing needs changing. It cannot both leave the paragraph
+            # alone and have addressed the comment; let the audit route it.
             return None, "skipped"
 
-        # Deterministic citation guards — mechanical, so we check them precisely here rather
-        # than trust an LLM lint. Any failure feeds a focused re-revise.
-        problems: list[str] = []
-        ay = sorted(set(_AUTHOR_YEAR_RE.findall(new_text)))
-        if ay:
-            problems.append(f"Citations must be [@citekey] tags from the EVIDENCE list, not "
-                            f"author-year prose. Rewrite these as [@citekey]: {', '.join(ay[:6])}.")
-        if not _CITE_TAG_RE.search(new_text):
-            problems.append("The paragraph cites no source — every paragraph must carry at "
-                            "least one [@citekey] from the EVIDENCE list.")
-        dropped = old_keys - set(_all_citekeys(new_text))
-        if dropped:
-            problems.append("Restore these [@citekey] tags dropped from the original (unless "
-                            "a comment asked to remove the source): "
-                            + ", ".join(f"[@{k}]" for k in sorted(dropped)) + ".")
-        if problems:
-            critique = "\n".join(f"- {p}" for p in problems)
+        new_text = _apply_sentence_edits(units, edits)
+        touched = {int(k) - 1 for k in edits}
+
+        # Deterministic guards — mechanical, so decided precisely here rather than guessed
+        # at by an LLM lint. Any failure feeds a focused re-revise. Cheap, and they run
+        # first: the expensive audit never sees a paragraph that is already broken.
+        findings = _para_guard_findings(paragraph, new_text, touched, anchored, len(units))
+        if findings:
+            critique = "\n".join(f"- {f.imperative}" for f in findings)
             continue
 
-        # Substantive audit: addresses the comment, minimally, and is satisfiable in place.
+        # The only question left for the brain: does this edit mean what the comment asked?
         try:
             verdict = brain.coordinator(
                 _PARA_AUDIT_PROMPT.format(
@@ -352,18 +502,22 @@ def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[st
                     comments=comment_block, paragraph=paragraph, revised=new_text),
                 _PARA_AUDIT_SYS, num_ctx=16384).strip()
         except Exception as e:  # noqa: BLE001
-            print(f"  [warn] paragraph audit failed ({e}); accepting rewrite.", file=sys.stderr)
-            return new_text, "edited"
+            # Fail closed. The guards prove the text is verifiable, not that it answers the
+            # comment — and replying "revised to address this" when nothing checked that
+            # claim is exactly the fabricated reply this adversary exists to prevent.
+            print(f"  [warn] paragraph audit failed ({e}); leaving the paragraph unchanged.",
+                  file=sys.stderr)
+            return None, "skipped"
         if verdict.upper().startswith("CORPUS"):
-            return None, "corpus"
+            return None, f"corpus:{_corpus_class(verdict)}"
         if _is_ok(verdict):
             return new_text, "edited"
         critique = verdict  # audit found problems → another round
 
-    # Rounds exhausted: keep the last attempt only if it is citation-clean, else skip rather
-    # than emit a malformed edit.
-    if new_text and _CITE_TAG_RE.search(new_text) and not _AUTHOR_YEAR_RE.search(new_text):
-        return new_text, "edited"
+    # Rounds exhausted. Fail closed: a paragraph that still trips any guard would emit a
+    # tracked change that silently dropped a source or an equation, over a reply claiming
+    # the comment was addressed. Under the polestar that is an unverification, not a
+    # tolerable imperfection — leave the paragraph as the reviewer wrote it.
     return None, "skipped"
 
 
@@ -378,7 +532,8 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
     from . import redline
     anchors = redline.comment_anchors(docx)
     cmap = redline.comments_by_id(docx)
-    digest = _digest(corpus, notes, citekeys)
+    compact = _compact_lines(corpus, notes, citekeys)
+    full = _full_lines(corpus, notes, citekeys)
 
     edits: list[dict] = []
     skipped: list[str] = []
@@ -397,23 +552,29 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
             skipped.append(f"para {a['para']} (comment on heading "
                            f"'{a['text'][:48]}' — needs ingest/gather routing, "
                            f"not a prose rewrite)")
-            outcomes.update({i: "corpus" for i in ids})
+            outcomes.update({i: "corpus:sources" for i in ids})
             continue
+        anchored = set(a.get("anchored") or ())
         print(f"  {runlog.stamp()}Revising para {a['para']} for "
-              f"{len(comments)} comment(s)...", flush=True)
+              f"{len(comments)} comment(s)"
+              f"{f' (anchored to sentence {sorted(i + 1 for i in anchored)})' if anchored else ''}"
+              f"...", flush=True)
+        digest = _para_digest(compact, full, guards.all_citekeys(a["text"]))
         new_text, outcome = _redline_para_adversary(
-            brain, cfg, a["text"].strip(), comments, digest)
+            brain, cfg, a["text"], comments, digest, anchored=anchored)
         if outcome == "edited" and new_text:
             edits.append({"para": a["para"], "op": "replace", "text": new_text})
             outcomes.update({i: "edited" for i in ids})
-        elif outcome == "corpus":
+        elif outcome.startswith("corpus"):
             # The audit found a comment a prose edit can't satisfy (a table, a new section,
             # sources not yet in the review). Don't fabricate a rewrite — route it and reply
             # honestly instead of falsely claiming the paragraph was fixed.
             skipped.append(f"para {a['para']} (comment needs a non-prose change / new "
                            f"sources — routed, not rewritten)")
-            outcomes.update({i: "corpus" for i in ids})
+            outcomes.update({i: outcome for i in ids})
         else:
+            skipped.append(f"para {a['para']} (no revision passed the citation / equation / "
+                           f"minimal-edit guards — left unchanged)")
             outcomes.update({i: "skipped" for i in ids})
 
     _, out_docx = _revision_paths(paths, docx)
@@ -454,7 +615,15 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
                          notes: list[dict], citekeys: dict[int, str],
                          current_narrative: str, revision_context: str,
                          style_profile: str = "") -> str:
-    digest = _digest(corpus, notes, citekeys)
+    """Re-draft the whole narrative in one call (`revise --resynth`).
+
+    Document-scale by nature: it must hold the previous draft, the new draft, and the evidence
+    at once. The compact digest keeps that tractable for a modest corpus, but a large one will
+    still overflow the coordinator's context — `brain._check_context` says so, loudly, naming
+    this call site. The default redline path has no such limit: it works one paragraph at a
+    time. Prefer it.
+    """
+    digest = "\n".join(_compact_lines(corpus, notes, citekeys).values())
     prompt = _REVISE_PROMPT.format(
         topic=cfg.topic, focus=cfg.focus,
         narrative=current_narrative.strip(),
@@ -525,27 +694,47 @@ def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
 
 def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) -> None:
     """Add a rabbitHole-authored threaded reply to each reviewer comment saying what was
-    done: an in-place edit, or a queued corpus follow-up for comments needing new sources."""
+    actually done — an in-place edit, a routed follow-up, or nothing.
+
+    The reply must name the real reason. Telling a reviewer who asked for a table that "this
+    needs sources not yet in the corpus" is a false diagnosis: no amount of gathering will
+    satisfy it. The audit returns a reason class precisely so this reply can be honest.
+    """
     from . import redline
     if not outcomes:
         return
     tier = routing.get("tier")
     if routing.get("queued"):
-        corpus_msg = (f"rabbitHole: this needs sources not yet in the corpus, which an "
-                      f"in-place edit can't add — queued a {tier} follow-up cycle "
-                      f"(gather → … → revise) to bring them in.")
+        fetch = (f"Queued a {tier} follow-up cycle (gather → … → revise) to bring them in.")
     else:
-        corpus_msg = ("rabbitHole: this needs sources not yet in the corpus, which an "
-                      "in-place edit can't add — run `rabbitHole gather` (or `ingest` for a "
-                      "named paper), then revise.")
+        fetch = ("Run `rabbitHole gather` (or `ingest` for a named paper), then revise.")
+
+    corpus_msg = {
+        "sources": ("rabbitHole: this needs sources not yet in the corpus, which an in-place "
+                    "edit can't add — " + fetch[0].lower() + fetch[1:]),
+        "table": ("rabbitHole: this asks for a table, which isn't a prose edit — a redline "
+                  "can only rewrite sentences. Left the paragraph as it stands; add the "
+                  "table yourself, or ask for the numbers to be restated in the prose."),
+        "section": ("rabbitHole: this asks for a new section rather than a change to this "
+                    "paragraph, which an in-place redline can't add. Left the paragraph as "
+                    "it stands — raise it as a scope change and re-run `report`."),
+    }
     replies = []
     for cid, outcome in outcomes.items():
         if outcome == "edited":
             replies.append({"parent_id": cid, "text": "rabbitHole: revised the paragraph "
                             "above as a tracked change to address this comment."})
-        elif outcome == "corpus":
-            replies.append({"parent_id": cid, "text": corpus_msg})
-        # "skipped" (empty comment / failed rewrite) gets no reply
+        elif outcome.startswith("corpus"):
+            cls = outcome.split(":", 1)[1] if ":" in outcome else "sources"
+            replies.append({"parent_id": cid, "text": corpus_msg.get(cls, corpus_msg["sources"])})
+        elif outcome == "skipped":
+            # Say so. Silence here reads as "the tool ignored me"; worse, an earlier version
+            # emitted the edit anyway and claimed success.
+            replies.append({"parent_id": cid, "text":
+                            "rabbitHole: could not produce a revision that addressed this "
+                            "without dropping a citation or an equation from the paragraph, "
+                            "so the paragraph is unchanged. Narrow the comment, or revise "
+                            "this one by hand."})
     if not replies:
         return
     try:
@@ -702,10 +891,15 @@ def run(directory: str = ".", brain_override: str | None = None,
               f"{', '.join(f'[@{k}]' for k in unmatched[:8])}"
               + (" ..." if len(unmatched) > 8 else ""))
 
-    # 8. Write output
+    # 8. Write output. The resynth path rebuilds the narrative wholesale, so it reports the
+    # same foundation metrics `report` does — but it does NOT run the breadth guards: a
+    # revise answers the reviewer's annotations and nothing else (see guards, scoping rule).
+    metrics_line = guards.metrics(narrative, set(citekeys.values())).line()
+    print(f"  {runlog.stamp()}[polestar] {metrics_line}")
     out_md, out_docx = _revision_paths(paths, docx)
     from .render import build_markdown, pandoc_convert
-    md_text = build_markdown(cfg, brain.backend, narrative, biblio, corpus, unmatched)
+    md_text = build_markdown(cfg, brain.backend, narrative, biblio, corpus, unmatched,
+                             metrics_line)
     out_md.write_text(md_text, encoding="utf-8")
     pandoc_convert(out_md, out_docx)
 

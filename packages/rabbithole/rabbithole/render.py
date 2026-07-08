@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
-                   corpus, unmatched: list[str]) -> str:
+                   corpus, unmatched: list[str], metrics_line: str = "") -> str:
     brain = cfg.brain
     if brain_backend == "claude":
         model_str = brain.claude_model
@@ -29,6 +29,10 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
     ]
     if cfg.focus:
         parts.append(f"*Focus:* {cfg.focus}  ")
+    if metrics_line:
+        # Breadth, depth, and verifiability, in the document itself. A reader should not have
+        # to open the run log to learn that the review cites 15 of its 83 curated sources.
+        parts.append(f"*Foundation:* {metrics_line}  ")
     parts += ["", "## Narrative Review", "", narrative.strip(), "", biblio.strip(), ""]
 
     if unmatched:
@@ -44,8 +48,8 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
 
 
 def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
-                 corpus, unmatched: list[str]) -> tuple[Path, Path | None]:
-    md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched)
+                 corpus, unmatched: list[str], metrics_line: str = "") -> tuple[Path, Path | None]:
+    md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched, metrics_line)
     today = date.today().strftime("%y%m%d")
     stem = f"{today}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"

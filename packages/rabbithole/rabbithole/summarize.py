@@ -10,17 +10,25 @@ Pipeline (annotation is a POST-synthesis product, not an independent per-paper s
                      that paper the review's claims live (section/page + quote). That
                      set of located claims IS the annotated bibliography. Written
                      per-paper to work/located/NNN.json (resumable).
+
+The corpus is the FOUNDATION the review rests on, not a menu to select from. Synthesis
+therefore drives every curated source to a decision — cited, or rejected with a reason —
+and records the ledger in work/disposition.json. Breadth, density, and verifiability are
+enforced by `guards`, deterministically; the LLM is asked only what code cannot decide
+(whether a source earns a place, whether an edit means what a comment asked for).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, render, runlog
+from . import config, corpus as corpus_mod, guards, render, runlog
 from .brain import Brain
 from .models import Candidate, norm_doi
 from .pdfs import page_marked_text
@@ -66,6 +74,13 @@ def _make_citekeys(corpus: list[Candidate]) -> dict[int, str]:
                 j += 1
             used.add(key)
             keys[i] = key
+
+    # Two Zotero items can carry the same Better BibTeX key (a dedup miss upstream: same
+    # paper, different titles, one without a DOI). Step 1 honours both verbatim, and then the
+    # key→index inversion silently keeps whichever comes last — so the bibliography can print
+    # the poorer record, with no year and no link, for a source the narrative cites.
+    for f in guards.duplicate_citekeys(keys):
+        print(f"  [warn] {f.imperative}", file=sys.stderr)
     return keys
 
 try:
@@ -172,21 +187,63 @@ def _condense(brain: Brain, text: str) -> str:
     return "\n\n".join(parts)
 
 
+def _legacy_notes_by_paper(d: Path) -> dict[str, dict]:
+    """Index-keyed notes (``057.json``) from before the cache was keyed by citekey.
+
+    A positional cache is only valid while the corpus keeps its order. De-duplicate one
+    Zotero item and every paper after it inherits its neighbour's notes — silently, because
+    nothing compared the cached ``_paper`` to the paper at that index. Re-key by the paper
+    the note actually describes; an ambiguous label (two papers, same author and year) is
+    dropped so it is re-read rather than guessed at.
+    """
+    found: dict[str, dict] = {}
+    ambiguous: set[str] = set()
+    for fp in sorted(d.glob("[0-9][0-9][0-9].json")):
+        try:
+            note = json.loads(fp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        paper = note.get("_paper")
+        if not paper:
+            continue          # unidentifiable: cannot be trusted at any index
+        if paper in found:
+            ambiguous.add(paper)
+        found[paper] = note
+    for paper in ambiguous:
+        found.pop(paper, None)
+    return found
+
+
 def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
                collection=None, citekeys: dict[int, str] | None = None,
                refresh_notes: bool = True) -> list[dict]:
     citekeys = citekeys or {}
     d = paths.annotations_dir
     d.mkdir(parents=True, exist_ok=True)
+    legacy = _legacy_notes_by_paper(d)
     notes: list[dict] = [None] * len(corpus)  # type: ignore
     done = 0
     refreshed = 0
+    migrated = 0
     t_step = time.time()
     for i, c in enumerate(corpus):
-        fp = d / f"{i:03d}.json"
-        is_refresh = False
+        ck = citekeys.get(i) or f"{i:03d}"
+        # Keyed by citekey, as work/located/ already is: a paper's notes belong to the paper,
+        # not to its position in a list that changes whenever the collection does.
+        fp = d / f"{_located_filename(ck)}.json"
+        cached = None
         if fp.exists():
-            cached = json.loads(fp.read_text(encoding="utf-8"))
+            try:
+                cached = json.loads(fp.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cached = None
+        elif c.author_year() in legacy:
+            cached = legacy[c.author_year()]     # migrate, preserving the expensive read
+            fp.write_text(json.dumps(cached, indent=2, ensure_ascii=False), encoding="utf-8")
+            migrated += 1
+
+        is_refresh = False
+        if cached is not None:
             # Use the cache unless its extraction is older than the current logic. An
             # unversioned note (no _v) predates versioning and counts as stale, so an
             # extraction-prompt fix re-reads the existing corpus instead of silently
@@ -197,7 +254,6 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
                 continue
             is_refresh = True
             refreshed += 1
-        ck = citekeys.get(i) or f"{i:03d}"
         label = f"{c.first_author_last} {c.year or ''}".strip()
         tag = " (refresh)" if is_refresh else ""
         print(f"  {_stamp()}[{i + 1}/{len(corpus)}] {label}{tag}", end="", flush=True)
@@ -236,6 +292,7 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
                     "relevance": "", "themes": [], "_paper": c.author_year()}
         notes[i] = note
     extra = f", {refreshed} refreshed for updated extraction" if refreshed else ""
+    extra += f", {migrated} re-keyed from the positional cache" if migrated else ""
     print(f"  notes ready: {done}/{len(corpus)}{extra}  "
           f"[{_fmt_dt(time.time() - t_step)}]")
     return notes
@@ -248,7 +305,9 @@ SYNTH_SYS = """\
 You are writing the narrative section of a scholarly literature review.
 
 STRUCTURE
-- Organise around IDEAS, not sources. The unit of the review is an idea about the project's topic and focus, traceable to the source(s) that support it. Sources are evidence for ideas, never a catalogue to march through. You are NOT required to use every source you gathered — drop any that does not serve an idea worth making here. A tight argument on fewer sources beats a roll-call of all of them.
+- Organise around IDEAS, not sources. The unit of the review is an idea about the project's topic and focus, traceable to the source(s) that support it. Sources are evidence for ideas, never a catalogue to march through.
+- The corpus is the FOUNDATION this review rests on, not a menu to select from. Every source you were given is either cited in the narrative or explicitly rejected with a reason — silence is not a decision. A review that quietly uses a third of its evidence has not been made tight; it has been left unfinished.
+- The failure to avoid is SERIAL EXPOSITION: sources introduced one at a time, each getting its sentence or its paragraph, marched through in sequence. That failure is about STRUCTURE, not about how many sources you cite. Citing many sources is the goal. Weaving is citation-dense by construction — you cannot compare, qualify, or connect sources you have not cited.
 - Build a SMALL number of thematic sections. Each develops a few related ideas and WEAVES them — comparing, qualifying, connecting — into a claim that says something about THIS project. Fit sections to the material; do not use a fixed template. A 20-source review has perhaps 4-6 sections, never one per source.
 - Develop each section by ACCRETION across at least three paragraphs: the first puts a few citable ideas on the table, each grounded in its source(s); every later paragraph brings in NEW sources and connects them to the ideas already raised, so the evidence base grows paragraph by paragraph. "Three paragraphs" means three paragraphs' worth of cited ideas building on one another — NOT two citations padded across three paragraphs. Carry the "what this means for the project" point INSIDE these evidence-bearing paragraphs; never park it in a separate, citation-free conclusion. A heading over a single paragraph that just reports one source's findings is an annotated-bibliography entry — the failure to avoid.
 - Each "## " heading names ONE idea in <=6 words. Never join concepts with commas or "and" (avoid "Dimensionality, Complexity, and Temporal Evolution"). If a section spans several ideas, split it or pick the single organising idea.
@@ -266,6 +325,8 @@ QUANTIFY (do not flatten results into direction)
 
 CITATIONS
 - EVERY paragraph cites at least one source. There are no transition-only, scene-setting, or conclusion-only paragraphs: if a paragraph states ideas worth a paragraph, those ideas have sources — name them. A paragraph containing no [@citekey] is a defect, not a stylistic choice.
+- TRIANGULATE. A claim resting on one source is a lead; a claim two or three sources agree on, qualify, or conflict over is a foundation. Reach for the second and third source on every substantive claim, and say how they relate: "Modest tolerance thresholds produce exaggerated segregation [@schelling1971], an effect that survives when preferences are made asymmetric [@zhang2011] but weakens once physical venues constrain movement [@silver2021]."
+- Roughly one source per three sentences of argument is a floor, not a target. A long paragraph standing on two citations is assertion with a citation attached.
 - State each finding as a claim in its own right, then attach the source in square brackets immediately after: "Modest tolerance thresholds produce exaggerated segregation [@schelling1971]."
 - Never make a citation the grammatical subject or agent of a sentence. Do NOT write "[@schelling1971] showed that...". Rewrite so the claim leads and the citation follows.
 - Use the citekey EXACTLY as given in the digest (the [@key] tag beside each source). Do not invent or alter citekeys.
@@ -290,100 +351,87 @@ Write only the narrative review."""
 # argument; it runs with reasoning on (the coordinator default). Keeping them apart
 # stops the cheap mechanical wins from starving the judgement that needs attention.
 
+# Citation format, uncited paragraphs, and heading shape are all decided in `guards`, so
+# they are gone from here. Two detectors for one defect burns a pass, and an LLM can
+# hallucinate an offender the regex knows isn't there. What is left is what code cannot
+# judge: whether a phrase is empty, and whether the evidence is introduced in the wrong
+# order.
 _LINT_SYS = """\
-You are a copy-editor auditing a literature-review narrative for MECHANICAL defects
+You are a copy-editor auditing one section of a literature review for MECHANICAL defects
 only. Respond with ONLY a numbered list of specific, actionable problems, one per
 line, each quoting the offending text. If there are none, respond "OK"."""
 
 _LINT_PROMPT = """\
-Audit this narrative for mechanical defects only. Do NOT comment on argument,
-coverage, or substance — a separate reviewer handles those.
+Audit this section for mechanical defects only. Do NOT comment on argument, coverage, or
+substance — a separate reviewer handles those. Citation format and uncited paragraphs are
+checked in code; ignore them.
 
-Narrative:
+Section: {heading}
+
 {narrative}
 
 Check:
-1. Citation format — flag (a) any citation not in [@citekey] form (e.g. "(Smith, 2021)"
-   or "Smith (2021)"); (b) any sentence where the citation opens or precedes the claim
-   instead of following it. Quote each offending sentence.
-2. Filler phrases — flag any of: "it is worth noting", "this highlights",
+1. Filler phrases — flag any of: "it is worth noting", "this highlights",
    "further work is needed", "a growing body of research", "underscores",
    "plays a crucial role", "rests on the demonstration that", "has been shown to",
    or similar content-free phrases.
-3. Section headings — flag any "## " heading that joins multiple concepts with a
-   comma, "and", or "/". Each heading must name exactly one idea.
-4. Section order — flag any section that opens with a recent (post-2020) or preprint
-   source before citing the foundational or well-cited work on that theme.
-5. Uncited paragraphs — flag any body paragraph (prose under a "## " heading, not the
-   heading itself) that contains no [@citekey] citation anywhere in it. Quote its first
-   sentence. Every paragraph must cite at least one source.
+2. Evidence order — flag any paragraph that opens with a recent (post-2020) or preprint
+   source before citing the foundational or well-cited work on the same point.
 
 Output: numbered list with quoted text; skip checks with no issues. If all pass, "OK"."""
 
+# Section-scoped, because a whole-narrative critique cannot be applied without re-emitting
+# the whole narrative — and at 84 sources neither fits the context window. The reviewer sees
+# ONE section and the evidence that section was drafted from.
 _SUBSTANCE_SYS = """\
-You are a demanding peer reviewer reading a literature-review narrative for the
+You are a demanding peer reviewer reading one section of a literature review for the
 QUALITY OF ITS ARGUMENT. Ignore formatting, citation style, and typography — a
-copy-editor handles those. Respond with ONLY a numbered list of specific, actionable
-problems, one per line, quoting the text you mean. If the narrative is genuinely
-strong, respond "OK"."""
+copy-editor handles those, and citation mechanics are checked in code. Respond with ONLY a
+numbered list of specific, actionable problems, one per line, quoting the text you mean. If
+the section is genuinely strong, respond "OK"."""
 
 _SUBSTANCE_PROMPT = """\
 Review topic: {topic}
 Focus: {focus}
 
-Evidence digest (ground truth — what the narrative draws on):
-{digest}
+This section's idea: {heading} — {claim}
 
-Narrative under review:
+Evidence this section may draw on (ground truth; each line begins with its [@citekey]):
+{candidates}
+
+Section under review:
 {narrative}
 
 Judge:
-1. Annotated bibliography — flag any section that merely reports a source's findings
-   instead of developing an idea about the project, or that runs a single paragraph per
-   source. The test is whether ideas are woven into a claim about the topic/focus — NOT
-   how many sources are cited. Name the theme a thin section should merge into. One
-   short report-per-source section is the primary failure to catch.
+1. Serial exposition — flag any passage that introduces its sources one at a time, each
+   getting its own sentence or paragraph, instead of setting them against each other around
+   a shared point. This is about STRUCTURE, not citation count: a densely cited paragraph
+   that weaves is right; a lightly cited one that marches is wrong.
 2. Synthesis vs summary — flag any paragraph that walks through sources one at a time
    instead of connecting their ideas around a shared point.
-3. Claim support — flag any claim not backed by the digest, or that overstates what
+3. Claim support — flag any claim not backed by the evidence above, or that overstates what
    its cited source actually shows. Quote the claim and name the mismatch.
-4. Significance — flag any source the narrative DOES cite whose relevance to THIS
-   topic/focus is asserted hollowly or left implicit. Every source you include should
-   earn its place by advancing an idea; say where one does not.
-5. Missed ideas — name any idea in the digest that genuinely bears on the project's
-   topic/focus but the narrative never develops. The narrative is a curated synthesis, not
-   a catalogue: it need not weave in every source, and every curated source still appears in
-   the annotated bibliography as part of the verifiable foundation — so do NOT flag a source
-   merely for being uncited. Flag only a genuinely load-bearing IDEA left on the table.
-6. Specific gaps — flag any gap, tension, or future direction stated vaguely
+4. Under-triangulated claims — flag any substantive claim resting on a single source when
+   the evidence above holds others that agree with it, qualify it, or contradict it. Name the
+   source that should be brought alongside. A claim on one source is a lead, not a foundation.
+5. Unused evidence — name any source above that bears on this section's idea and is not
+   cited. The evidence list is the foundation this section rests on, not a menu; say what
+   each unused source would add, or why it genuinely bears on nothing here.
+6. Does it serve the idea — flag anything in the section that does not develop
+   "{heading}", and anything the idea needs that is missing.
+7. Specific gaps — flag any gap, tension, or future direction stated vaguely
    ("more research is needed", "warrants further study") rather than as a named,
    load-bearing gap.
-7. Coherence — flag breaks in the through-line: sections that do not build on each
-   other, or a theme raised and then dropped.
 8. Unquantified findings — flag any claim stated only directionally ("improves",
-   "increases", "is more effective") when the digest gives a magnitude for it. Quote
-   the claim and name the number from the digest that should appear in it. Vague words
-   ("significantly", "substantially") standing in for an available figure are defects.
+   "increases", "is more effective") when the evidence gives a magnitude for it. Quote
+   the claim and name the number that should appear in it. Vague words ("significantly",
+   "substantially") standing in for an available figure are defects.
 
 Output: numbered list with quoted text; skip checks with no issues. If strong, "OK"."""
 
-_REVISE_FROM_CRITIQUE_PROMPT = """\
-Revise the narrative to fix every problem in the critique below. Preserve all correct
-content; change only what the critique flags. Keep [@citekey] citation format throughout.
-
-Review topic: {topic}
-Focus: {focus}
-
-Evidence digest:
-{digest}
-
-Current narrative:
-{narrative}
-
-Problems to fix:
-{critique}
-
-Output only the revised narrative — no preamble or explanation."""
+# A whole-narrative revise prompt used to live here. It cannot exist any more: applying a
+# critique to the review meant re-emitting the review, and at 84 sources neither the evidence
+# nor the output fits a 16k window. Repairs are section-scoped — see `_SECTION_REVISE_PROMPT`.
 
 _GROUND_PROMPT = """\
 Every paragraph in a literature review must cite at least one source. The paragraphs listed
@@ -403,10 +451,11 @@ Paragraphs lacking a citation:
 
 Output only the revised narrative."""
 
-# Matches a pandoc citation tag, e.g. [@schelling1971]. Used to verify every body
-# paragraph carries at least one source — the "weave the argument" rule turned, without
-# this guard, into citation-free transition/conclusion paragraphs.
-_CITE_TAG_RE = re.compile(r"\[@[^\]\s]+\]")
+# Canonical in `guards` now, so redline/revise/summarize share one definition of a citation
+# and one sentence splitter. Re-exported here because callers already import them from this
+# module.
+_CITE_TAG_RE = guards.CITE_TAG_RE
+_all_citekeys = guards.all_citekeys
 
 
 def _is_ok(text: str) -> bool:
@@ -418,15 +467,516 @@ def _uncited_paragraphs(narrative: str, max_snippet: int = 160) -> list[str]:
 
     Returns a short snippet of each offender, for use as a critique item or in the
     grounding backstop. Headings, blank lines, and pure-heading blocks are ignored."""
-    out: list[str] = []
-    for block in re.split(r"\n\s*\n", narrative):
-        prose = "\n".join(ln for ln in block.splitlines()
-                          if not ln.lstrip().startswith("#")).strip()
-        if not prose or _CITE_TAG_RE.search(prose):
+    return [p.snippet(max_snippet) for p in guards.parse_paragraphs(narrative) if not p.keys]
+
+
+def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]) -> str:
+    lines = []
+    for i, (c, a) in enumerate(zip(corpus, notes)):
+        ck = citekeys.get(i, "")
+        label = f"[@{ck}]" if ck else f"({c.author_year()})"
+        themes = ", ".join(a.get("themes", []))
+        cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
+        gaps = a.get("gaps", "").strip()
+        gap_str = f" NOT addressed: {gaps}" if gaps else ""
+        rel = a.get("relevance", "").strip()
+        rel_str = f" Relevance: {rel}" if rel else ""
+        lines.append(
+            f"- {label}{cites} {a.get('argument','')} "
+            f"Findings: {a.get('findings','')}{rel_str} Themes: {themes}{gap_str}".strip())
+    return "\n".join(lines)
+
+
+# ── sectioned synthesis ───────────────────────────────────────────────────────
+# A whole-corpus synthesis does not fit in a 16k context: 84 sources' worth of evidence is
+# ~31k tokens of digest alone, and Ollama silently discards the head of an oversized prompt.
+# The last SchellingChords review cited 15 of 84 sources — every one of them from the tail of
+# the digest, because the model never saw the rest. No prompt could have fixed that.
+#
+# So the review is built one section at a time, and no call ever sees more than it can hold:
+#
+#   1. plan       compact digest of the WHOLE corpus (~250 chars/source) -> section ideas.
+#                 The only call that needs a global view, and the only one cheap enough to
+#                 have one. Section count follows the material, never the corpus size.
+#   2. shortlist  embed each source's compact line, embed each section's idea, cosine ->
+#                 the ~18 sources that bear on it. Retrieval, not judgement: no LLM call,
+#                 exactly as `locate` already works. Deliberately recall-biased — the
+#                 shortlist over-offers and the drafting prunes.
+#   3. draft      one call per section, seeing ONLY its own shortlist's full digest lines.
+#                 A section re-cites freely; a foundational source belongs in several.
+#   4. polish     per-section critique -> re-draft that section. Local defects, local fix.
+#   5. orphans    a source no section cited is offered to its nearest section. What survives
+#                 must be rejected BY NAME, with a reason.
+#   6. repair     deterministic guards over the assembly; each Finding carries its section,
+#                 so a repair re-drafts ONE section rather than re-emitting the review.
+
+_COMPACT_ARG_CHARS = 150      # enough to tell what a paper argues, cheap enough for 84 of them
+_SHORTLIST_K = 18             # recall-biased: over-offer, let drafting prune to ~12
+_SHORTLIST_CHARS = 24_000     # ~6k tokens of full digest lines per drafting call
+_MAX_SECTIONS = 12
+
+# A revision call carries the section's current text and a critique on top of its evidence,
+# so it gets a smaller evidence budget than a fresh draft. Without this the orphan pass — which
+# appends every orphan's full digest line to an already-full candidate list — sent 15k-token
+# prompts into a 10.6k-token budget, and Ollama quietly ate the front of them.
+_REVISE_CANDIDATE_CHARS = 16_000
+_MAX_ORPHANS_PER_ROUND = 6    # more than a section can absorb in one revision anyway
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _compact_lines(corpus: list[Candidate], notes: list[dict],
+                   citekeys: dict[int, str]) -> dict[str, str]:
+    """One short line per source: enough to know it exists and what it argues.
+
+    The whole corpus in ~5k tokens, so the planner can see all of it at once. The full line
+    (`_digest`) carries the numbers and is spent only where a section actually draws on it.
+    """
+    out: dict[str, str] = {}
+    for i, (c, a) in enumerate(zip(corpus, notes)):
+        ck = citekeys.get(i)
+        if not ck:
             continue
-        snippet = " ".join(prose.split())
-        out.append(snippet[:max_snippet] + ("…" if len(snippet) > max_snippet else ""))
+        cites = f", {c.cited_by_count} cites" if c.cited_by_count else ""
+        themes = ", ".join((a.get("themes") or [])[:4])
+        arg = _truncate(a.get("argument", ""), _COMPACT_ARG_CHARS)
+        out[ck] = f"- [@{ck}] ({c.author_year()}{cites}) {arg}" + (f" [{themes}]" if themes else "")
     return out
+
+
+def _full_lines(corpus: list[Candidate], notes: list[dict],
+                citekeys: dict[int, str]) -> dict[str, str]:
+    """Digest lines indexed by citekey — the detailed evidence, spent per section."""
+    out: dict[str, str] = {}
+    for line in _digest(corpus, notes, citekeys).splitlines():
+        keys = guards.all_citekeys(line)
+        if keys:
+            out[keys[0]] = line.strip()
+    return out
+
+
+@dataclass
+class Section:
+    """One idea, its shortlisted evidence, and its drafted paragraphs."""
+    heading: str
+    claim: str
+    candidates: list[str] = field(default_factory=list)   # citekeys, most relevant first
+    text: str = ""
+
+
+# ── 1. plan the sections ──────────────────────────────────────────────────────
+
+_PLAN_SYS = """\
+You plan the thematic sections of a scholarly literature review. Each section is ONE IDEA
+about the project's topic and focus — never a source, never a bucket of sources, never a
+list of related concepts joined by "and". Respond with ONLY a JSON array, nothing else."""
+
+_PLAN_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+You have {n} curated sources. Here is one line per source:
+{compact}
+
+Plan the sections of the review.
+
+- Each section names ONE idea in at most 6 words. Never join concepts with a comma, "and",
+  or "/". "Dimensionality, Complexity, and Temporal Evolution" is three sections, not one.
+- Each section carries a claim: one sentence saying what the section argues about THIS
+  project's topic and focus. Not a description of the sources — an argument.
+- The corpus is the foundation this review rests on, not a menu to select from. A section
+  develops its idea across at least three paragraphs and can carry perhaps 8-12 sources, so
+  {n} sources need enough sections to hold them. You will be asked to justify, by name, any
+  source no section uses.
+- A source may serve several sections. Foundational work usually does. Do not try to
+  partition the corpus.
+- Order the sections so the argument builds: foundations first, then what they enable, then
+  the tensions and what remains open.
+
+Output a JSON array of objects, between 4 and {max_sections} of them:
+[{{"heading": "Preference thresholds drive clustering", "claim": "Mild local preferences \
+suffice to produce macro-level segregation, which gives the project its mechanism for \
+emergent tonal stability."}}]"""
+
+
+def _plan_sections(brain: Brain, cfg, compact: dict[str, str]) -> list[Section]:
+    raw = brain.coordinator(
+        _PLAN_PROMPT.format(topic=cfg.topic, focus=cfg.focus or "", n=len(compact),
+                            compact="\n".join(compact.values()),
+                            max_sections=_MAX_SECTIONS),
+        _PLAN_SYS, num_ctx=16384)
+    sections: list[Section] = []
+    for obj in _parse_json_list(raw)[:_MAX_SECTIONS]:
+        if isinstance(obj, dict) and obj.get("heading"):
+            sections.append(Section(heading=str(obj["heading"]).strip(),
+                                    claim=str(obj.get("claim", "")).strip()))
+    return sections
+
+
+# ── 2. shortlist each section's evidence (embeddings, no LLM) ─────────────────
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _shortlist(brain: Brain, sections: list[Section], compact: dict[str, str],
+               full: dict[str, str], top_k: int = _SHORTLIST_K) -> list[list[float]]:
+    """Rank every source against every section idea. Returns the similarity matrix
+    (section × source) so the orphan pass can reuse it, and fills `sec.candidates`.
+
+    Selection is retrieval, not judgement — the same reasoning that keeps `locate` free of
+    LLM calls. The shortlist is capped by CHARACTER BUDGET, not just count, so a section
+    whose sources carry long digest lines still fits the drafting call's context.
+    """
+    keys = list(compact)
+    print(f"  {_stamp()}Embedding {len(keys)} sources and {len(sections)} section ideas...",
+          flush=True)
+    src_vecs = brain.embed_batch([compact[k] for k in keys])
+    sec_vecs = brain.embed_batch([f"{s.heading}. {s.claim}" for s in sections])
+
+    matrix: list[list[float]] = []
+    for sec, sv in zip(sections, sec_vecs):
+        sims = [_cosine(sv, v) for v in src_vecs]
+        matrix.append(sims)
+        ranked = sorted(range(len(keys)), key=lambda i: sims[i], reverse=True)
+        chosen, budget = [], _SHORTLIST_CHARS
+        for i in ranked[:top_k * 2]:
+            line = full.get(keys[i], "")
+            if len(chosen) >= top_k or len(line) > budget:
+                continue
+            chosen.append(keys[i])
+            budget -= len(line)
+        sec.candidates = chosen
+        print(f"    §{len(matrix)} {sec.heading[:44]:<44} {len(chosen)} candidate sources",
+              flush=True)
+    return matrix
+
+
+def _candidate_block(sec: Section, full: dict[str, str], extra: list[str] = (),
+                     budget: int = _SHORTLIST_CHARS) -> str:
+    """The evidence a section may cite, capped so the call fits its context window.
+
+    `extra` goes first and is never dropped: it is what this call exists to add (an orphan
+    source being offered a home). The shortlist fills whatever budget remains.
+    """
+    lines, spent = [], 0
+    for k in dict.fromkeys(list(extra) + list(sec.candidates)):
+        line = full.get(k, f"- [@{k}]")
+        if lines and spent + len(line) > budget:
+            continue
+        lines.append(line)
+        spent += len(line)
+    return "\n".join(lines)
+
+
+# ── 3/4. draft and polish one section ─────────────────────────────────────────
+
+_DRAFT_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+You are writing ONE section of the review. The full outline, in order:
+{outline}
+
+Write the section marked ▶: "{heading}"
+Its claim: {claim}
+{transition}
+EVIDENCE you may cite — each line begins with the [@citekey] to cite that source by. Cite
+ONLY from this list, using the exact key shown:
+{candidates}
+
+Write at least three paragraphs that ACCRETE: the first puts a few cited ideas on the table,
+each later paragraph brings in sources not yet used in this section and connects them to what
+is already established. Most paragraphs should cite several sources — weaving means setting
+sources against each other, so it is citation-dense by construction. Aim to use most of the
+evidence above; a source you leave out is a source you are asserting bears on nothing here.
+
+Carry the "what this means for the project" point INSIDE the evidence-bearing paragraphs.
+Never end with a citation-free conclusion.
+
+Do NOT write the "## " heading — output only the paragraphs of this section."""
+
+_SECTION_REVISE_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+Section: {heading} — {claim}
+
+EVIDENCE you may cite — cite ONLY from this list, using the exact key shown:
+{candidates}
+
+Current draft of this section:
+{narrative}
+
+Problems to fix:
+{critique}
+
+Fix every problem. Preserve all correct content; change only what the problems require.
+Keep [@citekey] citation format. Do NOT write the "## " heading — output only the
+paragraphs of this section."""
+
+
+def _outline(sections: list[Section], current: int) -> str:
+    return "\n".join(f"{'▶' if i == current else ' '} {i + 1}. {s.heading}"
+                     for i, s in enumerate(sections))
+
+
+def _tail_sentence(text: str) -> str:
+    units = guards.sentence_units(text)
+    return units[-1].strip() if units else ""
+
+
+def _draft_section(brain: Brain, cfg, sections: list[Section], i: int,
+                   full: dict[str, str], sys_prompt: str,
+                   prev_tail: str = "", extra: list[str] = ()) -> str:
+    sec = sections[i]
+    transition = (f"\nThe previous section ends: \"{prev_tail}\"\nOpen so the argument "
+                  f"continues from there.\n" if prev_tail else "")
+    return brain.coordinator(
+        _DRAFT_PROMPT.format(
+            topic=cfg.topic, focus=cfg.focus or "", outline=_outline(sections, i),
+            heading=sec.heading, claim=sec.claim, transition=transition,
+            candidates=_candidate_block(sec, full, extra)),
+        sys_prompt, num_ctx=16384).strip()
+
+
+def _section_guards(sec: Section, text: str, corpus_keys: set[str]) -> list[guards.Finding]:
+    """The deterministic batteries, applied to one section in isolation.
+
+    `thin_sections` and the disposition ledger are deliberately absent: they are properties
+    of the whole review, and are enforced later against the assembly.
+    """
+    mini = f"## {sec.heading}\n\n{text.strip()}"
+    paras = guards.parse_paragraphs(mini)
+    return (guards.uncited_paragraphs(paras)
+            + guards.author_year_prose(text)
+            + (guards.unresolved_keys(text, corpus_keys) if corpus_keys else [])
+            + guards.short_sections(paras)
+            + guards.accretion_violations(paras)
+            + guards.triangulation_violations(paras)
+            + guards.sparse_paragraphs(paras))
+
+
+def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
+                    full: dict[str, str], sys_prompt: str, corpus_keys: set[str],
+                    rounds: int | None = None) -> str:
+    """Critique -> re-draft, scoped to one section.
+
+    Deterministic guards first (they decide precisely, and cost nothing), then the two LLM
+    passes on what they cannot decide. A clean lint can no longer let a one-paragraph section
+    or a paragraph resting on one source slip through: the guards hold a veto over early exit.
+    """
+    if rounds is None:
+        rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
+    sec = sections[i]
+    text = sec.text
+    for r in range(1, rounds + 1):
+        findings = _section_guards(sec, text, corpus_keys)
+        try:
+            lint = brain.coordinator(_LINT_PROMPT.format(heading=sec.heading, narrative=text),
+                                     _LINT_SYS, num_ctx=16384, think=False)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] lint failed ({e}); skipping.", file=sys.stderr)
+            lint = "OK"
+        try:
+            substance = brain.coordinator(
+                _SUBSTANCE_PROMPT.format(
+                    topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
+                    claim=sec.claim, narrative=text,
+                    candidates=_candidate_block(sec, full, budget=_REVISE_CANDIDATE_CHARS)),
+                _SUBSTANCE_SYS, num_ctx=16384)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] peer review failed ({e}); skipping.", file=sys.stderr)
+            substance = "OK"
+
+        if _is_ok(lint) and _is_ok(substance) and not findings:
+            break
+
+        parts = []
+        if findings:
+            kinds = sorted({f.kind for f in findings})
+            print(f"    [guard] §{i + 1} {len(findings)} finding(s): {', '.join(kinds)}",
+                  flush=True)
+            parts.append(guards.as_critique(findings, "MECHANICAL — fix every one:"))
+        if not _is_ok(lint):
+            parts.append("COPY-EDIT:\n" + lint.strip())
+        if not _is_ok(substance):
+            parts.append("SUBSTANTIVE:\n" + substance.strip())
+
+        print(f"    {_stamp()}§{i + 1} revising (round {r}/{rounds})...", flush=True)
+        try:
+            text = brain.coordinator(
+                _SECTION_REVISE_PROMPT.format(
+                    topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
+                    claim=sec.claim, narrative=text, critique="\n\n".join(parts),
+                    candidates=_candidate_block(sec, full, budget=_REVISE_CANDIDATE_CHARS)),
+                sys_prompt, num_ctx=16384).strip()
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] section revision failed ({e}); keeping current.", file=sys.stderr)
+            break
+    return text
+
+
+def _assemble(sections: list[Section]) -> str:
+    return "\n\n".join(f"## {s.heading}\n\n{s.text.strip()}"
+                       for s in sections if s.text.strip())
+
+
+# ── 5. orphans and the rejection ledger ───────────────────────────────────────
+# Every curated source is cited, or explicitly rejected with a reason. No threshold to argue
+# about and no percentage to game: it forces a decision per source instead of letting silence
+# do the work. Silence is how an 84-source corpus became a 15-source narrative without anyone
+# deciding to drop 69 sources. Placing runs BEFORE rejecting — the corpus is the foundation
+# the argument rests on, so dropping a source has to be argued for.
+
+_REJECT_SYS = """\
+You decide which curated sources a literature review may legitimately leave uncited. Respond
+with ONLY a JSON object mapping each citekey to a one-sentence reason it does not belong in
+THIS review. Include a key only if the source genuinely bears on none of the review's ideas.
+If every source should be cited, respond {}."""
+
+_REJECT_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+The review's sections:
+{outline}
+
+These curated sources are cited in no section, after an attempt to weave each into the
+section closest to it:
+{unplaced}
+
+For each, decide: does it genuinely bear on none of these ideas? A source is NOT rejectable
+merely because the review is already long enough, because its finding resembles one already
+cited, or because it will appear in the annotated bibliography anyway — corroborating
+evidence is what turns a claim into a foundation.
+
+Reject only what is truly off-topic, superseded by a source already cited, or too weak to
+support any claim. Give the reason in one sentence.
+
+Output only the JSON object: {{"citekey": "reason", ...}}"""
+
+
+def _place_orphans(brain: Brain, cfg, sections: list[Section], matrix: list[list[float]],
+                   keys: list[str], full: dict[str, str], sys_prompt: str,
+                   corpus_keys: set[str], rounds: int = 2) -> dict[str, str]:
+    """Offer every uncited source to the section it is nearest, then demand a reason for
+    whatever is still uncited. Re-drafts only the sections that gain a source."""
+    rejected: dict[str, str] = {}
+    key_idx = {k: i for i, k in enumerate(keys)}
+    for r in range(1, rounds + 1):
+        unplaced = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
+        if not unplaced:
+            break
+        # nearest section for each orphan, by the similarity we already computed
+        by_sec: dict[int, list[str]] = {}
+        for k in sorted(unplaced):
+            if k not in key_idx:
+                continue
+            best = max(range(len(sections)), key=lambda s: matrix[s][key_idx[k]])
+            # more than a handful cannot be absorbed in one revision, and their digest lines
+            # would push the prompt past the context budget. The rest wait for the next round.
+            if len(by_sec.setdefault(best, [])) < _MAX_ORPHANS_PER_ROUND:
+                by_sec[best].append(k)
+        if not by_sec:
+            break
+        print(f"  {_stamp()}[breadth] {len(unplaced)} source(s) undecided — offering to "
+              f"{len(by_sec)} section(s) (round {r}/{rounds})...", flush=True)
+        for si, orphans in sorted(by_sec.items()):
+            sec = sections[si]
+            listing = "\n".join(f"- [@{k}]" for k in orphans)
+            critique = (f"These curated sources bear on this section's idea more than on any "
+                        f"other, and the review cites them nowhere. Weave in each one that "
+                        f"genuinely supports, qualifies, or complicates a claim here, saying "
+                        f"what it adds — do not append a sentence that merely names it. Add a "
+                        f"paragraph if the evidence needs one. Leave out only what bears on "
+                        f"nothing here:\n{listing}")
+            try:
+                sec.text = brain.coordinator(
+                    _SECTION_REVISE_PROMPT.format(
+                        topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
+                        claim=sec.claim, narrative=sec.text, critique=critique,
+                        candidates=_candidate_block(sec, full, orphans,
+                                                    budget=_REVISE_CANDIDATE_CHARS)),
+                    sys_prompt, num_ctx=16384).strip()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] orphan placement in §{si + 1} failed ({e}).", file=sys.stderr)
+
+    unplaced = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
+    if unplaced:
+        print(f"  {_stamp()}[breadth] {len(unplaced)} source(s) still uncited — "
+              f"requiring a reason for each...", flush=True)
+        try:
+            raw = brain.coordinator(
+                _REJECT_PROMPT.format(
+                    topic=cfg.topic, focus=cfg.focus or "",
+                    outline=_outline(sections, -1),
+                    unplaced="\n".join(full.get(k, f"- [@{k}]") for k in sorted(unplaced))),
+                _REJECT_SYS, num_ctx=16384)
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            parsed = json.loads(m.group(0)) if m else {}
+            rejected.update({k: str(v) for k, v in parsed.items() if k in unplaced and v})
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] rejection ledger failed ({e}).", file=sys.stderr)
+
+    still = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
+    if still:
+        # Not fatal — an unjustified omission is a reportable defect, not a reason to throw
+        # the review away. It lands in the run log, the metrics line, and disposition.json.
+        print(f"  [warn] {len(still)} source(s) neither cited nor justified: "
+              f"{', '.join(sorted(still)[:8])}{' …' if len(still) > 8 else ''}",
+              file=sys.stderr)
+    return rejected
+
+
+# ── 6. deterministic repair over the assembly ─────────────────────────────────
+
+def _repair_assembly(brain: Brain, cfg, sections: list[Section], full: dict[str, str],
+                     sys_prompt: str, corpus_keys: set[str],
+                     rejected: dict[str, str] | None = None, rounds: int = 2) -> None:
+    """Run the guard batteries over the whole review and re-draft only the sections at fault.
+
+    Every section-scoped Finding carries its section index, so the repair is routed rather
+    than parsed out of prose. Narrative-wide findings (unresolved keys, unplaced sources) are
+    handled elsewhere — they have no single section to fix, and `_place_orphans` has already
+    had its say about them.
+    """
+    for r in range(1, rounds + 1):
+        narrative = _assemble(sections)
+        findings = (guards.verifiability_battery(narrative, corpus_keys)
+                    + guards.breadth_battery(narrative, corpus_keys, {}, rejected))
+        grouped = guards.by_section(findings)
+        if not grouped:
+            break
+        n = sum(len(v) for v in grouped.values())
+        print(f"  {_stamp()}[guard] {n} section-scoped finding(s) across {len(grouped)} "
+              f"section(s) — repairing (round {r}/{rounds})...", flush=True)
+        for si, fs in sorted(grouped.items()):
+            if si >= len(sections):
+                continue
+            sec = sections[si]
+            print(f"    §{si + 1} {', '.join(sorted({f.kind for f in fs}))}", flush=True)
+            try:
+                sec.text = brain.coordinator(
+                    _SECTION_REVISE_PROMPT.format(
+                        topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
+                        claim=sec.claim, narrative=sec.text,
+                        critique=guards.as_critique(fs, "Fix every one:"),
+                        candidates=_candidate_block(sec, full,
+                                                    budget=_REVISE_CANDIDATE_CHARS)),
+                    sys_prompt, num_ctx=16384).strip()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] repair of §{si + 1} failed ({e}).", file=sys.stderr)
 
 
 def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
@@ -454,124 +1004,64 @@ def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
     return narrative
 
 
-def _critique_revise_synthesis(brain: Brain, narrative: str, digest: str,
-                                topic: str, focus: str,
-                                rounds: int | None = None) -> str:
-    """Iterate a two-pass critique→revise loop on the synthesis narrative.
-
-    Each round runs a mechanical LINT pass (no reasoning) and a substantive
-    PEER-REVIEW pass (reasoning on), then a single revise applying the union of
-    both critiques. Stops early when both passes return "OK", or after `rounds`
-    rounds (default: brain.cfg.critique_rounds)."""
-    if rounds is None:
-        rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
-
-    for r in range(1, rounds + 1):
-        tag = f" (round {r}/{rounds})" if rounds > 1 else ""
-
-        print(f"  {_stamp()}Critiquing synthesis — lint{tag}...", flush=True)
-        try:
-            lint = brain.coordinator(
-                _LINT_PROMPT.format(narrative=narrative),
-                _LINT_SYS, num_ctx=16384, think=False)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] lint critique failed ({e}); skipping.", file=sys.stderr)
-            lint = "OK"
-
-        print(f"  {_stamp()}Critiquing synthesis — peer review{tag}...", flush=True)
-        try:
-            substance = brain.coordinator(
-                _SUBSTANCE_PROMPT.format(
-                    topic=topic, focus=focus, digest=digest, narrative=narrative),
-                _SUBSTANCE_SYS, num_ctx=16384)  # think on (coordinator default)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] peer-review critique failed ({e}); skipping.", file=sys.stderr)
-            substance = "OK"
-
-        # Deterministic guard: no body paragraph may be citation-free. Folded in here
-        # so the reviser fixes it alongside everything else, and so a clean lint can't
-        # let an uncited paragraph slip through to early-exit.
-        uncited = _uncited_paragraphs(narrative)
-        if uncited:
-            print(f"  {_stamp()}[guard] {len(uncited)} paragraph(s) lack a citation "
-                  f"— forcing revision.", flush=True)
-
-        if _is_ok(lint) and _is_ok(substance) and not uncited:
-            print(f"  {_stamp()}Critique clean — no further revision needed.", flush=True)
-            break
-
-        parts = []
-        if not _is_ok(lint):
-            parts.append("MECHANICAL:\n" + lint.strip())
-        if uncited:
-            listing = "\n".join(f'- "{p}"' for p in uncited)
-            parts.append(
-                "UNCITED PARAGRAPHS — every paragraph must cite at least one source. "
-                "Ground each of these in the source(s) for its ideas (in [@citekey] form "
-                "from the digest) or merge it into an adjacent cited paragraph; do not "
-                "leave a transition- or conclusion-only paragraph:\n" + listing)
-        if not _is_ok(substance):
-            parts.append("SUBSTANTIVE:\n" + substance.strip())
-        critique = "\n\n".join(parts)
-
-        print(f"  {_stamp()}Revising synthesis{tag}...", flush=True)
-        try:
-            narrative = brain.coordinator(
-                _REVISE_FROM_CRITIQUE_PROMPT.format(
-                    topic=topic, focus=focus, digest=digest,
-                    narrative=narrative, critique=critique),
-                SYNTH_SYS, num_ctx=16384)  # think on
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] synthesis revision failed ({e}); keeping current.",
-                  file=sys.stderr)
-            break
-
-    # Hard backstop: if the loop ran out of rounds with any paragraph still
-    # citation-free, force-ground them before returning.
-    return _enforce_paragraph_citations(brain, narrative, digest)
-
-
-def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]) -> str:
-    lines = []
-    for i, (c, a) in enumerate(zip(corpus, notes)):
-        ck = citekeys.get(i, "")
-        label = f"[@{ck}]" if ck else f"({c.author_year()})"
-        themes = ", ".join(a.get("themes", []))
-        cites = f" [{c.cited_by_count} citations]" if c.cited_by_count else ""
-        gaps = a.get("gaps", "").strip()
-        gap_str = f" NOT addressed: {gaps}" if gaps else ""
-        rel = a.get("relevance", "").strip()
-        rel_str = f" Relevance: {rel}" if rel else ""
-        lines.append(
-            f"- {label}{cites} {a.get('argument','')} "
-            f"Findings: {a.get('findings','')}{rel_str} Themes: {themes}{gap_str}".strip())
-    return "\n".join(lines)
-
-
 def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
-               citekeys: dict[int, str], style_profile: str = "") -> str:
-    digest = _digest(corpus, notes, citekeys)
-    n = len(corpus)
-    target_sections = max(3, min(8, round(n / 4)))
-    prompt = (f"Review topic: {cfg.topic}\nFocus: {cfg.focus}\n"
-              f"Number of sources: {n}\n\n"
-              f"Evidence digest (one line per source):\n{digest}\n\n"
-              f"Write the thematic narrative review now. Organise it around ideas about "
-              f"the project, not around the {n} sources — you need not use every source; "
-              f"drop any that serves no project-relevant idea. Aim for about "
-              f"{target_sections} thematic sections; each develops a few related ideas "
-              f"across at least three paragraphs that ACCRETE — every paragraph brings in "
-              f"new sources and ties them to the ideas already raised, so every paragraph "
-              f"cites at least one source — weaving toward what those ideas mean for the "
-              f"project's focus.")
+               citekeys: dict[int, str], style_profile: str = "") -> tuple[str, dict[str, str]]:
+    """Build the narrative section by section, and drive every curated source to a decision.
+
+    Returns (narrative, rejected) where `rejected` maps citekey -> the reason that source was
+    left uncited. An empty ledger with sources still uncited is a defect; it shows up in the
+    metrics line rather than being quietly absorbed.
+
+    No call here sees more evidence than its context can hold. That is the whole point: the
+    previous one-shot synthesis handed a 31k-token digest to a 16k-token window and lost two
+    thirds of the corpus without a word in the log.
+    """
+    compact = _compact_lines(corpus, notes, citekeys)
+    full = _full_lines(corpus, notes, citekeys)
+    corpus_keys = set(citekeys.values())
+    keys = list(compact)
+
     sys_prompt = SYNTH_SYS
     if style_profile:
         sys_prompt = (sys_prompt.rstrip()
                       + f"\n\nWRITING STYLE\nMatch the following author's voice and "
                         f"prose style throughout:\n{style_profile}")
-    print(f"  {_stamp()}Synthesising narrative (coordinator)...", flush=True)
-    narrative = brain.coordinator(prompt, sys_prompt, num_ctx=16384)
-    return _critique_revise_synthesis(brain, narrative, digest, cfg.topic, cfg.focus or "")
+
+    print(f"  {_stamp()}Planning sections from {len(compact)} sources "
+          f"(compact digest, ~{sum(map(len, compact.values())) // 4:,} tokens)...", flush=True)
+    sections = _plan_sections(brain, cfg, compact)
+    if not sections:
+        raise SystemExit("  [error] section planning returned no sections; cannot synthesise.")
+    for i, s in enumerate(sections, 1):
+        print(f"    {i}. {s.heading}", flush=True)
+
+    matrix = _shortlist(brain, sections, compact, full)
+
+    prev_tail = ""
+    for i, sec in enumerate(sections):
+        print(f"\n  {_stamp()}Drafting §{i + 1}/{len(sections)}: {sec.heading}", flush=True)
+        try:
+            sec.text = _draft_section(brain, cfg, sections, i, full, sys_prompt, prev_tail)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] drafting §{i + 1} failed ({e}); section dropped.", file=sys.stderr)
+            continue
+        sec.text = _polish_section(brain, cfg, sections, i, full, sys_prompt, corpus_keys)
+        prev_tail = _tail_sentence(sec.text)
+
+    sections = [s for s in sections if s.text.strip()]
+    if not sections:
+        raise SystemExit("  [error] every section failed to draft; cannot synthesise.")
+
+    print(f"\n  {_stamp()}{guards.metrics(_assemble(sections), corpus_keys).line()}", flush=True)
+
+    rejected = _place_orphans(brain, cfg, sections, matrix, keys, full,
+                              sys_prompt, corpus_keys)
+    _repair_assembly(brain, cfg, sections, full, sys_prompt, corpus_keys, rejected)
+
+    narrative = _assemble(sections)
+    print(f"  {_stamp()}[polestar] {guards.metrics(narrative, corpus_keys, rejected).line()}",
+          flush=True)
+    return narrative, rejected
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -591,21 +1081,6 @@ JSON array:
 
 Use ONLY the provided paper text for locations and quotes — do not invent. Omit
 any statement you cannot locate in the text. Return [] if none can be located."""
-
-
-def _all_citekeys(text: str) -> list[str]:
-    """Every individual citekey, splitting grouped citations like [@a; @b; @c].
-
-    The naive [@([^\\]]+)] capture treats a grouped bracket as one key, so any source
-    cited only inside a multi-citation bracket would be dropped from locate and the
-    bibliography. Split on ';' and strip the leading '@' to recover each key."""
-    keys: list[str] = []
-    for grp in re.findall(r"\[@([^\]]+)\]", text):
-        for part in grp.split(";"):
-            k = part.strip().lstrip("@").strip()
-            if k:
-                keys.append(k)
-    return keys
 
 
 def _cited_indices(narrative: str, citekeys: dict[int, str]) -> list[int]:
@@ -828,6 +1303,27 @@ def _export_bibtex(cfg, gc, paths, citekeys: dict[int, str],
     return out
 
 
+def _write_disposition(paths, corpus: list[Candidate], citekeys: dict[int, str],
+                       narrative: str, rejected: dict[str, str]) -> Path:
+    """Persist what happened to every curated source. The polestar, auditable after the run.
+
+    An unplaced source — neither cited nor rejected — is the defect the ledger exists to make
+    impossible to miss. Silence used to look identical to a decision.
+    """
+    corpus_keys = set(citekeys.values())
+    d = guards.disposition(narrative, corpus_keys, rejected)
+    title_by_key = {citekeys[i]: c.title for i, c in enumerate(corpus) if i in citekeys}
+    payload = {
+        "metrics": guards.metrics(narrative, corpus_keys, rejected).__dict__,
+        "cited": sorted(d.cited),
+        "rejected": {k: rejected[k] for k in sorted(d.rejected)},
+        "unplaced": {k: title_by_key.get(k, "") for k in sorted(d.unplaced)},
+    }
+    out = paths.work / "disposition.json"
+    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Orchestration
 # ──────────────────────────────────────────────────────────────────────────
@@ -899,7 +1395,8 @@ def run(directory: str = ".", brain_override: str | None = None,
         else:
             print("  [note] use_style=true but no style_profile.md found; "
                   "run 'rabbitHole style' to train one.")
-    narrative = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
+    narrative, rejected = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
+    _write_disposition(paths, corpus, citekeys, narrative, rejected)
 
     print(f"\n{_stamp()}[3/3] Locating claims for the annotated bibliography "
           f"(full curated corpus)...")
@@ -915,7 +1412,8 @@ def run(directory: str = ".", brain_override: str | None = None,
               + (" ..." if len(unmatched) > 8 else ""))
 
     out_md, out_docx = render.write_review(
-        cfg, paths, brain.backend, narrative, biblio, corpus, unmatched)
+        cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
+        metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line())
 
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
 
