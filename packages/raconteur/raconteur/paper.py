@@ -1,10 +1,19 @@
 from __future__ import annotations
-import re
 from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_methods, load_results, load_bib_summary, load_style_profile, load_onepager
+from . import guards
+from .guards import (
+    LITREV_KW as _LITREV_KW,
+    CODE_KW as _CODE_KW,
+    RESULTS_KW as _RESULTS_KW,
+    is_references as _is_references,
+)
+from .context import (
+    load_litreview, load_methods, load_results, load_bib_summary,
+    load_bib_keys, load_style_profile, load_onepager,
+)
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
@@ -73,13 +82,14 @@ Check for:
 1. Subsections missing, out of order, or misnamed relative to the outline
 2. Outline bullets reproduced as bullet points rather than converted to prose
 3. Generic academic statements not grounded in this paper's specific content
-4. Methods text that does not reference specific code details (functions, equations, \
-parameters) when source code was available
+4. Methods text that does not reference specific details (algorithms, equations, \
+parameters) when a methods writeup was available
 5. Results text that does not cite specific values or findings when results were available
-6. Background that lists or summarises individual papers rather than synthesising \
-ideas into argument
-7. Discussion that does not address the discussion_angle or limitations from the analysis
-8. Subsections under 100 words or over 500 words
+6. Discussion that does not address the discussion_angle or limitations from the analysis
+7. Subsections under 100 words or over 500 words
+
+Do not comment on citation density or on whether the prose lists rather than synthesises — \
+those are checked mechanically after this critique and reported separately.
 
 Output: numbered list of specific, actionable problems. One line each. \
 Write "No issues found." if all checks pass. No preamble.
@@ -176,11 +186,10 @@ def _parse_sections(text: str) -> list[tuple[str, str]]:
     return sections
 
 
-_LITREV_KW = {"background", "related", "literature", "prior", "review", "introduction"}
-_CODE_KW = {"method", "approach", "implement", "model", "framework",
-            "algorithm", "system", "pipeline", "design"}
-_RESULTS_KW = {"result", "evaluation", "experiment", "finding",
-               "outcome", "performance", "validation", "empirical"}
+# Section classification lives in guards.py so the guards and the context selector agree on
+# what a "Methods" section is. Context selection deliberately lets a heading match more than
+# one kind ("Model Evaluation" wants both code and results context), so it uses the keyword
+# sets directly rather than guards.section_kind(), which picks a single winner.
 
 
 def _context_for_section(heading: str, litrev: str, code: str, results: str) -> str:
@@ -215,8 +224,7 @@ def _venue_block(cfg: ProjectConfig) -> str:
     return ("Venue specifications:\n" + "\n".join(lines) + "\n") if lines else ""
 
 
-def _is_references(heading: str) -> bool:
-    return bool(re.match(r"^\d*\.?\s*references?\b", heading, re.IGNORECASE))
+# _is_references is imported from guards at the top of this module.
 
 
 def _critique_revise(
@@ -253,6 +261,89 @@ def _critique_revise(
         system=_SYSTEM,
         num_ctx=8192,
     )
+
+
+_GUARD_REPAIR_PROMPT = """\
+Revise the {heading} section to satisfy every requirement below. These were computed \
+mechanically from the text, not judged — each one is a fact about what you wrote.
+
+Section outline (maintain this structure):
+{section_outline}
+
+{bib_section}Current text:
+{text}
+
+Requirements:
+{imperatives}
+
+Change only what the requirements demand. Do not restructure the section, and do not \
+remove any [@citekey] the text already carries. Output only the revised section — no \
+preamble."""
+
+
+def _guard_section(
+    text: str, heading: str, known: set[str], have_results: bool
+) -> list[guards.Finding]:
+    """Draft-phase guards for one section.
+
+    Wrapping the section body in its own heading lets ``parse_paragraphs`` classify it, so
+    the citation floor is gated on section kind — a Methods paragraph is grounded in the
+    writeup, not the bibliography.
+    """
+    md = f"## {heading}\n\n{text}"
+    paras = guards.parse_paragraphs(md)
+    findings: list[guards.Finding] = []
+    if known:  # an empty bib would make every key "unresolved"
+        findings += guards.unresolved_keys(text, known)
+    findings += guards.author_year_prose(text)
+    findings += guards.uncited_paragraphs(paras)
+    findings += guards.sparse_paragraphs(paras)
+    if have_results:
+        findings += guards.unnumbered_results_paragraphs(paras)
+    return findings
+
+
+def _guard_repair(
+    brain: Brain,
+    heading: str,
+    text: str,
+    section_outline: str,
+    bib_section: str,
+    known: set[str],
+    have_results: bool,
+    rounds: int = 2,
+) -> str:
+    """Feed mechanical findings back as imperatives until they clear or rounds run out.
+
+    Python decides THAT something is wrong; the LLM decides how to fix it. A finding that
+    survives every round is logged, not silently dropped.
+    """
+    for n in range(1, rounds + 1):
+        findings = _guard_section(text, heading, known, have_results)
+        if not findings:
+            return text
+        log(f"[raconteur] guards '{heading}' ({n}): {len(findings)} finding(s)")
+        for f in findings:
+            log(f"  · {f.kind} — {f.where}")
+        imperatives = "\n".join(f"- {f.imperative}" for f in findings)
+        text = brain.coordinator(
+            _GUARD_REPAIR_PROMPT.format(
+                heading=heading,
+                section_outline=section_outline,
+                bib_section=bib_section,
+                text=text,
+                imperatives=imperatives,
+            ),
+            system=_SYSTEM,
+            num_ctx=16384,
+        )
+    remaining = _guard_section(text, heading, known, have_results)
+    if remaining:
+        log(f"[warn] '{heading}': {len(remaining)} guard finding(s) survived "
+            f"{rounds} repair round(s) — shipping anyway:")
+        for f in remaining:
+            log(f"[warn]   · {f.kind} — {f.where}")
+    return text
 
 
 def _draft_abstract(
@@ -322,6 +413,7 @@ def _draft_paper(
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
     narrative = load_onepager(project_dir, cfg.short_title)
 
@@ -357,12 +449,15 @@ def _draft_paper(
         )
         text = _critique_revise(brain, heading, text, section_outline, analysis, 1)
         text = _critique_revise(brain, heading, text, section_outline, analysis, 2)
+        text = _guard_repair(brain, heading, text, section_outline, bib_section,
+                             bib_keys, bool(results))
         drafted.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
-    _write(project_dir, cfg, paper_dir,
-           _assemble(cfg.title, abstract, drafted))
+    assembled = _assemble(cfg.title, abstract, drafted)
+    _write(project_dir, cfg, paper_dir, assembled)
+    log(f"[raconteur] {guards.metrics(assembled, bib_keys)}")
 
 
 # ── user-annotation revision ──────────────────────────────────────────────────
@@ -429,7 +524,32 @@ def _revise_paper(
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
-def run(project_dir: Path) -> None:
+def _redline_paper(
+    project_dir: Path,
+    cfg: ProjectConfig,
+    brain: Brain,
+    paper_dir: Path,
+    user_rev: Path,
+) -> None:
+    """Answer each anchored comment with an in-place tracked change on the reviewer's .docx.
+
+    The default revise path. It edits a copy of the annotated document rather than
+    regenerating markdown, so the reviewer sees a redline they can accept or reject, and the
+    sections they approved are provably untouched.
+    """
+    from .redline_revise import redline_revise
+
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
+
+    redline_revise(project_dir, cfg, brain, paper_dir, user_rev,
+                   litrev, code, results, _bib_block(bib_summary), bib_keys)
+
+
+def run(project_dir: Path, resynth: bool = False) -> None:
     if not ProjectConfig.exists(project_dir):
         log("[error] no paper/raconteur.yaml — run 'raconteur init' first")
         raise SystemExit(1)
@@ -462,7 +582,14 @@ def run(project_dir: Path) -> None:
         _draft_paper(project_dir, cfg, brain, paper_dir, outline_text)
     elif user_rev:
         log(f"[raconteur] found revision: {user_rev.name}")
-        _revise_paper(project_dir, cfg, brain, paper_dir, user_rev, outline_text)
+        if resynth:
+            # Opt-in clean rewrite: regenerates the whole manuscript from markdown, which
+            # discards the reviewer's comments and gives them no redline to read the edits
+            # against. Major version — new datestamp, chain reset.
+            log("[raconteur] --resynth: regenerating the whole draft (no redline)")
+            _revise_paper(project_dir, cfg, brain, paper_dir, user_rev, outline_text)
+        else:
+            _redline_paper(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         log("[raconteur] draft exists — annotate paper/*.docx with your initials and re-run")
         return

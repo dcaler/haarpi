@@ -173,6 +173,20 @@ def _parse_bib(text: str) -> list[tuple[str, str, str, str]]:
     return entries
 
 
+def load_bib_keys(project_dir: Path, subdir: str = "litReview") -> set[str]:
+    """Return the set of citekeys defined in refs.bib.
+
+    ``load_bib_summary`` formats these for a prompt and throws the set away. The guards
+    need the set itself: a [@key] outside it is unresolvable and renders as literal text
+    in the .docx.
+    """
+    bib_path = project_dir / subdir / "output" / "refs.bib"
+    if not bib_path.exists():
+        return set()
+    text = bib_path.read_text(encoding="utf-8", errors="replace")
+    return {e[0] for e in _parse_bib(text) if e[0]}
+
+
 def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
     """Return compact citekey list from refs.bib for citation guidance in prompts."""
     bib_path = project_dir / subdir / "output" / "refs.bib"
