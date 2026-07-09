@@ -245,10 +245,12 @@ def atom_text(el) -> str:
     An equation's characters live in ``m:t``, not ``w:t``, so anything reading only ``w:t``
     sees a paragraph with holes where every number was. Used to flatten a paragraph for
     callers that want plain prose rather than sentinels.
+
+    One ordered pass over both tags: no atom carries m:t and w:t together today, but an
+    atom that ever did — a hyperlink inside an equation — would reorder the prose under a
+    tag-at-a-time read, and the damage would look like a model error rather than a reader bug.
     """
-    parts = [t.text or "" for t in el.iter(f"{{{_MATH}}}t")]
-    parts += [t.text or "" for t in el.iter(qn("w:t"))]
-    return "".join(parts)
+    return "".join(t.text or "" for t in el.iter(f"{{{_MATH}}}t", qn("w:t")))
 
 
 def flatten_paragraph(p_el) -> str:
