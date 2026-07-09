@@ -300,6 +300,31 @@ def test_comment_spans_width_correct_past_the_tenth_atom():
     )
 
 
+def test_comment_past_the_tenth_atom_still_anchors_to_one_sentence():
+    """The drift above, in the form the reviser experiences it. Twelve inline statistics close
+    sentence 0; the comment brackets sentence 1. A three-character drift reaches the span start
+    back across the sentence boundary, so the reviser is licensed to rewrite a sentence of
+    statistics that no comment ever touched."""
+    head  = "Estimates "
+    joint = " hold [@a1]. "                    # closes sentence 0
+    tail  = "The mechanism is unclear [@b2]."  # the sentence the reviewer commented on
+
+    p = _para(head)
+    for i in range(12):
+        p._p.append(_omath(f"e{i}"))
+    p._p.append(redline._text_run(joint))
+    p._p.append(redline._text_run(tail))
+    _add_comment_range(p, "9", 2, 3)           # runs: head, joint, tail
+
+    sentinels = "".join(f"⟦m:{i}⟧" for i in range(1, 13))
+    span = redline.comment_spans(p._p)["9"]
+    # Assert the anchoring before the offsets: a width regression must report itself as the
+    # reviser being handed a sentence nobody commented on, not as an arithmetic discrepancy.
+    anchored = redline.anchored_sentences(redline.paragraph_text(p._p), span)
+    assert anchored == {1}, f"comment bears on sentence 1 only, got {anchored}"
+    assert span == (len(head + sentinels + joint), len(head + sentinels + joint + tail))
+
+
 def test_comment_anchors_survive_a_redline():
     p = Document().add_paragraph("")
     p._p.append(redline._text_run("One. "))
@@ -435,6 +460,17 @@ def test_roundtrip_references_and_title_are_never_redlined(tmp_path):
 def test_flatten_paragraph_renders_atoms_as_their_text():
     p = _para_with_math("Accuracy rose to ", "0.94", " overall.")
     assert redline.flatten_paragraph(p._p) == "Accuracy rose to 0.94 overall."
+
+
+def test_atom_text_reads_mixed_tags_in_document_order():
+    """No atom carries both m:t and w:t today, so this is a contract test, not a regression:
+    a tag-at-a-time read emits all the equation's characters before any of the prose's."""
+    om = etree.SubElement(etree.Element("root"), f"{{{_MATH}}}oMath")
+    etree.SubElement(om, f"{{{_MATH}}}t").text = "x="
+    etree.SubElement(om, qn("w:t")).text = "see"
+    etree.SubElement(om, f"{{{_MATH}}}t").text = "2"
+
+    assert redline.atom_text(om) == "x=see2"
 
 
 def test_python_docx_text_property_loses_the_equation():
