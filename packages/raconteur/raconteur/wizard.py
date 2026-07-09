@@ -241,4 +241,4 @@ def _finish(project_dir: Path) -> None:
     paper_dir = project_dir / "paper"
     paper_dir.mkdir(exist_ok=True)
     print(f"[raconteur] paper output: {paper_dir}")
-    print("\nNext step: raconteur outline")
+    print("\nNext step: raconteur onepager")
