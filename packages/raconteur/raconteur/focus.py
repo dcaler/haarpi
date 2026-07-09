@@ -5,6 +5,11 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_methods, load_results, load_bib_summary, load_style_profile, load_onepager
+from .guards import (
+    LITREV_KW as _LITREV_KW,
+    CODE_KW as _CODE_KW,
+    RESULTS_KW as _RESULTS_KW,
+)
 from .log import log
 from .naming import find_latest, minor_name, parse
 from .render import to_docx
@@ -180,11 +185,8 @@ def _bib_block(bib_summary: str) -> str:
     return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
 
 
-_LITREV_KW = {"background", "related", "literature", "prior", "review", "introduction"}
-_CODE_KW = {"method", "approach", "implement", "model", "framework",
-            "algorithm", "system", "pipeline", "design"}
-_RESULTS_KW = {"result", "evaluation", "experiment", "finding",
-               "outcome", "performance", "validation", "empirical"}
+# Section keyword sets are imported from guards at the top of this module — one definition,
+# shared with paper.py and the guards themselves.
 
 
 def _context_for_section(heading: str, litrev: str, code: str, results: str) -> str:
@@ -339,7 +341,8 @@ def run(project_dir: Path, section: str) -> None:
 
     parsed = parse(paper_path, cfg.short_title)
     current_chain = parsed[1] if parsed else ["ra"]
-    out_path = paper_dir / minor_name(cfg.short_title, current_chain, "md")
+    datestamp = parsed[0] if parsed else None
+    out_path = paper_dir / minor_name(cfg.short_title, current_chain, "md", datestamp)
     out_path.write_text(new_text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 

@@ -12,6 +12,9 @@ _BACKOFF = 5
 
 
 class Brain:
+    _CHARS_PER_TOKEN = 4
+    _RESERVE_FRACTION = 0.35   # leave room for the model's own answer
+
     def __init__(self, cfg: GlobalConfig, coordinator: str | None = None, think: bool = False):
         self._url = cfg.ollama_url
         self._coord = coordinator or cfg.coordinator_model
@@ -37,7 +40,35 @@ class Brain:
                 out.append("")
         return out
 
+    def _check_context(self, prompt: str, system: str, num_ctx: int, model: str) -> None:
+        """Warn when a prompt will overflow num_ctx.
+
+        Ollama's response to an over-length prompt is to silently discard the head —
+        no error, no log. Evidence at the top of the prompt becomes invisible to the
+        model while the prompt's own rules argue downstream of a hard cut. This does
+        not truncate or fail; it makes the invisible visible.
+        """
+        est = (len(prompt) + len(system)) // self._CHARS_PER_TOKEN
+        budget = int(num_ctx * (1 - self._RESERVE_FRACTION))
+        if est <= budget:
+            return
+        caller = "?"
+        try:  # name the call site — "which prompt is too big" is the only useful part
+            import traceback
+            from pathlib import Path
+            for fr in reversed(traceback.extract_stack()[:-2]):
+                if "raconteur" in fr.filename and "brain.py" not in fr.filename:
+                    caller = f"{Path(fr.filename).name}:{fr.lineno} in {fr.name}()"
+                    break
+        except Exception:
+            pass
+        log(f"[warn] prompt ~{est:,} tokens exceeds the {budget:,}-token budget of "
+            f"num_ctx={num_ctx:,} ({model}). Ollama will DISCARD the beginning of this "
+            f"prompt — evidence at the top will be invisible to the model. "
+            f"Called from {caller}.")
+
     def _call(self, model: str, prompt: str, system: str, num_ctx: int, temperature: float) -> str:
+        self._check_context(prompt, system, num_ctx, model)
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})

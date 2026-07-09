@@ -4,6 +4,22 @@ import sys
 from pathlib import Path
 
 
+def _line_buffer_output() -> None:
+    """Emit every line as it is printed, even when stdout is a file rather than a terminal.
+
+    Python block-buffers stdout (8 KB) when it is not a tty. Under trundlr, a raconteur
+    run redirects into a log file — so an operator watching a multi-hour draft sees an
+    empty file, with no way to tell a working run from a hung one.
+
+    A stream without a `reconfigure` (a pipe replaced in a test, say) is left alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
 def _check_ollama(url: str) -> bool:
     try:
         import httpx
@@ -22,6 +38,7 @@ def _check_python() -> None:
 
 
 def main() -> None:
+    _line_buffer_output()
     _check_python()
 
     parser = argparse.ArgumentParser(
@@ -41,7 +58,13 @@ def main() -> None:
     sub.add_parser("onepager", help="draft the concise narrative one-pager (before outline)")
     sub.add_parser("venue", help="analyse and recommend publication venues")
     sub.add_parser("outline", help="generate a paper outline from the approved one-pager")
-    sub.add_parser("paper", help="write a fresh draft or incorporate a revision")
+    paper_p = sub.add_parser("paper", help="write a fresh draft or redline your revision")
+    paper_p.add_argument(
+        "--resynth",
+        action="store_true",
+        help="regenerate the whole draft from markdown instead of redlining your .docx "
+             "in place (discards comments; no tracked changes to review)",
+    )
 
     focus_p = sub.add_parser("focus", help="refine a specific section of the paper")
     focus_p.add_argument(
@@ -80,7 +103,7 @@ def main() -> None:
             run(project_dir)
         case "paper":
             from .paper import run
-            run(project_dir)
+            run(project_dir, resynth=args.resynth)
         case "focus":
             from .focus import run
             run(project_dir, args.section)

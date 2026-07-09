@@ -40,10 +40,17 @@ def major_onepager_name(short_title: str, ext: str) -> str:
     return f"{today()}_{short_title}_onepager_ra.{ext}"
 
 
-def minor_name(short_title: str, current_chain: list[str], ext: str) -> str:
-    """Minor update (focus) — appends ra to the existing chain."""
+def minor_name(short_title: str, current_chain: list[str], ext: str,
+               datestamp: str | None = None) -> str:
+    """Minor update (focus, redline) — appends ra to the existing chain.
+
+    A minor version keeps the source file's datestamp; only a major version
+    (a fresh draft) starts a new revision cycle with today's date. Pass the
+    datestamp from ``parse()``; it falls back to today only when the source
+    filename could not be parsed.
+    """
     chain = "_".join(current_chain + ["ra"])
-    return f"{today()}_{short_title}_{chain}.{ext}"
+    return f"{datestamp or today()}_{short_title}_{chain}.{ext}"
 
 
 def find_latest(
