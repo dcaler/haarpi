@@ -178,6 +178,19 @@ so in the reply. rabbitHole's rule, learned the hard way: a broken edit under a 
 "done" is the worst outcome — worse than a visibly skipped comment. `revise._redline_para_adversary`
 fails closed on both rounds-exhaustion and audit exception; mirror that.
 
+#### A fail-closed handler and a test double are natural enemies
+
+The corollary, and it will recur every time someone adds an `except Exception`. Any handler that
+converts a failure into a benign, *assertable* value — `skipped`, `None`, `[]` — will also convert
+a broken test into a passing one. A double that runs out of scripted responses, or is asked for one
+it does not have, raises; the handler swallows it; the test asserts `skipped` and goes green. The
+suite now certifies that the code fails closed, which it does, while saying nothing about whether it
+ever ran.
+
+So: **exhaustion and mis-scripting signals from a test double must inherit from `BaseException`,
+never `Exception`.** `tests/test_revise_adversary.py` does this — `class Exhausted(BaseException)`.
+Keep it that way, and reach for it whenever a new double meets a new fail-closed path.
+
 ### What is different for raconteur (the glue you must write)
 
 rabbitHole's narrative is a flat run of body paragraphs. raconteur's `.docx` has a title,
