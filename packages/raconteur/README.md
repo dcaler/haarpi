@@ -95,24 +95,23 @@ cd ~/papers/trust-in-ai
 raconteur init
 ```
 
-The wizard asks for:
+`init` makes **no LLM call** and does not require Ollama to be running — it is
+purely an interactive setup step. The wizard asks for:
 
-- **Paper title** — the full title of the paper.
-- **Short title** — used in all filenames (no spaces; e.g. `trust_ai`).
-- **Your initials** — appended to files when you revise (e.g. `DCR`).
-- **Research description** — describe your research in plain language. A local LLM
-  parses this into a `topic` and `focus` field in the background while the wizard
-  continues.
-- **Target venue** — the journal or conference you are writing for (e.g. `CHI 2026`,
-  `Nature Human Behaviour`, `ICML`). Optional. A local LLM looks up the venue's
-  format specifications — page limit, word limit, citation style, column format,
-  abstract length — and stores them in the project config. Always verify these
-  against the venue's official call for papers.
-- **Scope and length target** — a brief description of what kind of paper this is
-  and any constraints on coverage (e.g. `4-page conference short paper, focus on
-  empirical findings only`, `8000-word journal article`). Optional. This is passed
-  directly to the LLM when generating the outline and draft, so it will calibrate
-  depth, breadth, and section count accordingly.
+- **Literature review** — if `litReview/` (rabbitHole) is present, whether to use it
+  as context. If absent, you get a loud warning.
+- **Short title** — used in all filenames (no spaces; e.g. `trust_ai`). Offered from
+  rabbitHole's `litrev.yaml` when available.
+- **Research description** — describe your research in plain language. Also offered
+  from rabbitHole's `litrev.yaml`. It is parsed into `topic`/`focus` later, on first
+  use in `raconteur onepager`.
+- **Methods writeup and results** — if raster's `<date>_methods_<chain>.md` and
+  rayleigh's `results/` are present, whether to use each as context. Loud warning
+  for either that is missing.
+- **Author style** — required. Confirms your Zotero publication list if the style
+  profile has not been trained yet. This is init's only network access.
+
+Target venue is set by the separate `raconteur venue` command, not by `init`.
 
 `init` creates:
 
@@ -181,14 +180,43 @@ raconteur draft
 Reads the latest outline from `paper/` and writes a full draft. If a literature
 review or a raster methods writeup is present, both are used as context.
 
-If raconteur finds a user-revised `.docx` in `paper/` (i.e. a file whose last
-initials are not `ra`), it reads the tracked changes and comments and writes a
-**revision** instead of a fresh draft. You do not need to pass a flag — detection
-is automatic.
+Each drafted section is then checked **mechanically**, not by asking the LLM's
+opinion: every `[@citekey]` must resolve against `refs.bib`, Background and
+Discussion paragraphs must carry citations, Results paragraphs must report actual
+numbers. Failures are fed back as imperatives. The run ends with a metrics line:
+
+```
+citekeys resolved 47/47 · uncited body paragraphs 0 · sparse 2 · sections 6
+```
 
 Output: `paper/YYMMDD_shorttitle_ra.md` and `paper/YYMMDD_shorttitle_ra.docx`.
-`draft` always resets the initials chain and updates the date stamp (it is a major
-version; the prior history lives in git).
+A fresh draft is a major version — new date stamp, chain reset to `ra`.
+
+### Revising: the redline
+
+If raconteur finds a user-revised `.docx` in `paper/` (a file whose last initials
+are not `ra`), it **edits a copy of your document in place**, answering each comment
+with Word tracked changes you can accept or reject. Detection is automatic.
+
+Only the paragraphs your comments are anchored to are touched. Sections you approved
+are left byte-for-byte identical, equations and citations survive untouched, and every
+comment gets an explicit disposition — applied, routed, or declined with a reason.
+Nothing is silently skipped.
+
+Some comments *cannot* be a tracked change. "Add a section on X" or "run this
+ablation" are reported and routed — to `raconteur outline`, or to rabbitHole,
+rayleigh, or raster. raconteur will not manufacture evidence.
+
+Output: `paper/YYMMDD_shorttitle_ra_DCR_ra.docx` — a **minor** version, keeping your
+date stamp and extending the chain.
+
+```bash
+raconteur paper --resynth   # opt out: regenerate the whole draft from markdown
+```
+
+`--resynth` gives you the old clean-rewrite behaviour. It discards your comments and
+produces no redline, so it is the right choice only when you want a fresh draft rather
+than an answer to your annotations. It is a major version.
 
 ---
 
@@ -197,24 +225,30 @@ version; the prior history lives in git).
 This is the core workflow. After each draft:
 
 1. Open `paper/YYMMDD_title_ra.docx` in Word (or LibreOffice).
-2. Use **Track Changes** to make edits directly in the text.
-3. Use **Comments** to leave instructions (e.g. "expand this argument", "cite the
-   Smith 2022 paper here", "this paragraph is redundant").
-4. Save the file with your initials appended:
-   `paper/YYMMDD_title_ra_DCR.docx`
-5. Run `raconteur draft` again.
+2. **Highlight the text a comment is about** and leave a **Comment** on it
+   ("tighten this", "wrong citation", "this is vague"). The highlighted range is
+   what raconteur uses to decide which sentences it may touch — a comment on one
+   sentence will never rewrite its neighbours.
+3. Save the file with your initials appended: `paper/YYMMDD_title_ra_DCR.docx`
+4. Run `raconteur paper` again.
 
-Raconteur reads all tracked deletions, tracked insertions, and comments, then
-writes a new `_ra` draft that incorporates them. You can iterate as many times as
-needed.
+Raconteur answers each comment with a tracked change in your own document. Open the
+result, accept or reject each edit, comment again, repeat.
 
 ```
-260607_trust_ai_ra.docx          ← raconteur's first draft
-260607_trust_ai_ra_DCR.docx      ← your revision
-260608_trust_ai_ra.docx          ← raconteur incorporates your changes
-260608_trust_ai_ra_DCR.docx      ← your second revision
-260609_trust_ai_ra.docx          ← raconteur's second revision
+260607_trust_ai_ra.docx             ← raconteur's first draft (major)
+260607_trust_ai_ra_DCR.docx         ← your comments
+260607_trust_ai_ra_DCR_ra.docx      ← raconteur's redline — tracked changes, same date (minor)
+260607_trust_ai_ra_DCR_ra_DCR.docx  ← you accept/reject and comment again
 ```
+
+A **new date stamp** means a new revision cycle (a fresh draft). Within a cycle the
+date stays put and the initials chain grows, so the lineage stays readable.
+
+Watch the log: every comment is reported as **applied**, **routed** (it needs a new
+section, new sources, or a result that does not exist yet), or **declined** (no edit
+could be made without dropping a citation or an equation, so your paragraph was left
+alone). A comment is never silently ignored.
 
 ---
 
@@ -230,12 +264,13 @@ Extracts the specified section from the current draft, asks the LLM to improve i
 for clarity, depth, and flow, and writes the result back. Accepts a section number
 or a heading name (partial match, case-insensitive).
 
-Unlike `draft`, `focus` is a **minor version** — it appends `_ra` to the existing
-initials chain rather than resetting it, so the lineage stays readable:
+Like the redline, `focus` is a **minor version** — it appends `_ra` to the existing
+initials chain and **keeps the source file's date stamp** rather than starting a new
+revision cycle, so the lineage stays readable:
 
 ```
 260608_trust_ai_ra.docx             ← current draft
-260608_trust_ai_ra_ra.docx          ← after focus (chain extended)
+260608_trust_ai_ra_ra.docx          ← after focus (chain extended, same date)
 ```
 
 Use `focus` when the overall draft is solid but individual sections need work,

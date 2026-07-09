@@ -17,10 +17,19 @@ def _require() -> None:
 
 
 def read_text(path: Path) -> str:
-    """Read body text from a docx, accepting track changes (insertions visible, deletions gone)."""
+    """Read body text from a docx, accepting track changes (insertions visible, deletions gone).
+
+    Reads atoms too. ``python-docx``'s ``paragraph.text`` walks ``w:t`` runs only, but an
+    inline equation is an ``m:oMath`` SIBLING of those runs and its characters live in
+    ``m:t`` — so the naive read returns prose with a hole where every number was, and the
+    equation is silently lost from whatever is regenerated from it. ``flatten_paragraph``
+    renders each atom as its own text.
+    """
     _require()
+    from . import redline
     doc = Document(str(path))
-    return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    parts = [t for p in doc.paragraphs if (t := redline.flatten_paragraph(p._p)).strip()]
+    return "\n\n".join(parts)
 
 
 def read_comments(path: Path) -> list[dict]:
