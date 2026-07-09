@@ -421,6 +421,7 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
     rewriting sentences 1 and 3-7.
     """
     offset = 0
+    n = 0  # must track serialize_paragraph's counter: ⟦m:10⟧ is wider than ⟦m:1⟧
     opens: dict[str, int] = {}
     spans: dict[str, tuple[int, int]] = {}
     for child in list(p_el):
@@ -434,7 +435,8 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
         elif tag == qn("w:pPr") or _is_ref_run(child) or tag == qn("w:del"):
             continue
         elif _is_opaque(child):
-            offset += len(f"⟦{_sentinel_kind(child)}:0⟧")
+            n += 1
+            offset += len(f"⟦{_sentinel_kind(child)}:{n}⟧")
         elif tag == qn("w:ins"):
             offset += sum(len(t.text or "") for t in child.iter(qn("w:t")))
         elif tag == qn("w:r"):

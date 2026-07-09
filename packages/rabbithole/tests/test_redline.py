@@ -8,6 +8,7 @@ Runnable two ways:
 from __future__ import annotations
 
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from lxml import etree
 
@@ -162,6 +163,33 @@ def test_comment_spans_locate_the_anchored_sentence():
     start = text.index("Second")
     span = (start, start + len("Second point [@b2]."))
     assert redline.anchored_sentences(text, span) == {1}
+
+
+def test_comment_spans_width_correct_past_the_tenth_atom():
+    """⟦m:10⟧ is one character wider than ⟦m:1⟧. A span measured with a fixed 5-char
+    sentinel drifts from the tenth atom on, and anchors the comment to the wrong
+    sentence — licensing the reviser to rewrite prose the comment never bore on."""
+    head = "Estimates "                       # a Results paragraph: twelve inline statistics,
+    joint = " hold [@a1]. "                    # then a second sentence the reviewer comments on
+    tail = "The mechanism is unclear [@b2]."
+
+    p = _para(head)
+    for i in range(12):
+        p._p.append(_omath(f"e{i}"))
+    p._p.append(redline._text_run(joint))
+    run = redline._text_run(tail)
+    p._p.append(run)
+
+    for tag, place in (("w:commentRangeStart", run.addprevious),
+                       ("w:commentRangeEnd", run.addnext)):
+        el = OxmlElement(tag)
+        el.set(qn("w:id"), "9")
+        place(el)
+
+    sentinels = "".join(f"⟦m:{i}⟧" for i in range(1, 13))  # ⟦m:10⟧..⟦m:12⟧ are 6 chars, not 5
+    span = redline.comment_spans(p._p)["9"]
+    assert span == (len(head + sentinels + joint), len(head + sentinels + joint + tail))
+    assert redline.anchored_sentences(redline.paragraph_text(p._p), span) == {1}
 
 
 # ── tracked_replace_sentencewise ─────────────────────────────────────────────
