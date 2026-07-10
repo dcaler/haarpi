@@ -1,0 +1,170 @@
+# {{PROJECT}} — rayleigh design playbook (cycle {{CYCLE}})
+
+*Read by the interactive `rayleigh init` session. You (Claude) and the user (Cale)
+co-design this cycle's experiments here. Heavy human involvement is the point — this is
+where preregistration happens, and it is a conversation, not a form to autofill.*
+
+> Research brief (from init): {{BRIEF}}
+> Codebase under test: `{{CODE_PATH}}` (package `{{PACKAGE}}`)
+
+---
+
+## Your job
+
+Turn the research brief into a set of **preregistered experiments**, written to
+`designdocs/experiments.yaml` (executable) and mirrored in `designdocs/EXPERIMENTS.md`
+(human-facing). The atomic unit is the **experiment**: one question + one design + one
+metric + planned outputs = one finding. Design each *before* any data exists — that is
+what makes a later result honest.
+
+Do **not** run anything, and do **not** modify `{{CODE_PATH}}`. rayleigh designs; `code/`
+runs. Your output is the spec; `conduct_exp` executes it later.
+
+### Non-negotiables (the user should never have to remind you of these)
+
+These are the three things past sessions have skipped and had to be corrected on. Do them, in
+order, without being prompted:
+
+1. **Priors before predictions.** Read the priors — *including the annotated `litReview/`
+   documents, not just `code/`* — **before** you propose any `expected_direction`. Every
+   confirmatory prediction names the prior it rests on (§1, §2.4). A prediction with no cited
+   basis is not preregistration.
+2. **Surface every resource/compute decision.** State `resource:` (cpu|gpu) and `workers` with
+   your reasoning and let the user confirm or override *before* you write them — never set them
+   silently (§2.7). Right-but-invisible is still wrong here.
+3. **You design and preregister — you never run, and you never pre-state results.** Execution is
+   `rayleigh conduct_exp`/`queue`, not this session. `expected_direction` is a *prediction*:
+   phrase it as one, cite its basis, and never quote a specific un-run number as if you had
+   measured it.
+
+## 1. Absorb the context, then PROPOSE — don't start blank
+
+By the time rayleigh runs, the earlier ra* tools have usually left a lot to work from.
+`init` has indexed it in **`designdocs/PRIORS.md`** — read that first, then open the
+artifacts it points to. Your first deliverable is a **proposed starting experiment set**
+synthesized from them, which you then refine WITH the user (§2) — not a blank skeleton.
+
+What each prior gives you:
+
+- **`code/` (raster)** — `designdocs/DESIGN.md` + `tasks.yaml` are the model's design and its
+  parameters/interfaces; **`code/configs/`** are real parameter sets — the candidate **sweep
+  axes and baselines**. This is where experiment *designs* come from.
+- **`litReview/` (rabbitHole)** — the literature: the **expected directions** and prior
+  findings that motivate each `expected_direction`, and what's already known (don't re-ask it).
+  **Actually open and read these documents** — prefer the most recent user-annotated one (the
+  `..._DCR.docx`); their content is what grounds your predictions. Skipping them until the user
+  asks "did we discuss priors?" is the failure mode to avoid.
+- **`paper/` (raconteur)** — the argument and venue: **which questions matter** and what a
+  result has to support. This is where experiment *priorities* come from.
+
+Also read `designdocs/EXPERIMENTS.md` and `experiments.yaml` (the skeletons you'll fill).
+
+**Intake first — this is a conversation.** The brief above may be thin or empty: `init` no
+longer prompts for it, because pinning down what's worth finding out is the actual work of
+this session, and a text box can't do it. Grounded in the priors, ask the user what they want
+to find out this cycle and draw it out in discussion. Then draft a proposed set of experiments
+from the intake + priors, walk the user through them, and write the finalized brief back into
+`rayleigh.yaml`.
+
+Read `{{CODE_PATH}}/` for the codebase specifics — its README / CLAUDE.md, its CLI, and its
+config schema. You are looking for three things (they become the `run_adapter`):
+  1. the **single-run entrypoint** — the callable or CLI command that takes one config
+     and produces one output (e.g. `Simulation(cfg).run()` or `python -m pkg.cli run …`);
+  2. the **config surface** — which parameters an experiment can vary (the axes);
+  3. the **output format** — what one run writes, and the metrics recoverable from it.
+
+Record 1–3 in `experiments.yaml` under `code.run_adapter` and summarize them in the
+"codebase under test" section of `EXPERIMENTS.md`. If `code/` exposes no clean single-run
+entrypoint, surface that to the user now — it's a gap the code side should close.
+
+`conduct_exp` calls the entrypoint under a fixed **calling contract** (see the comments in
+`experiments.yaml`): `kind: import` invokes `callable(params, seed, output)` — or, if a cell
+writes **several artifacts** (declared as `outputs: {name: template}`),
+`callable(params, seed, outputs)` with `outputs = {name: path}`; `kind: subprocess` writes a
+per-cell JSON config and substitutes `{config}`/`{seed}`/`{out}`/`{out_<name>}` into
+`command`. If code/'s real entrypoint doesn't match, author a **thin adapter shim** (a small
+module in code/ or results/, e.g. `{{PACKAGE}}_adapter.py`) and point `entrypoint` at it.
+If a run emits multiple files and the metric needs more than column means, also author an
+`output_adapter.load(outputs) -> {metric: value}`. Writing these with the user is part of
+this session.
+
+## 2. The preregistration ritual (per experiment)
+
+For each experiment, walk the user through these in order. Push back where the design is
+underpowered, the metric won't answer the question, or the expected direction isn't
+theoretically motivated. Write each answer into an `experiments:` entry as you go.
+
+1. **Question** — the one specific thing this experiment decides. If it needs two figures
+   to answer, it's probably two experiments.
+2. **Design** — what varies and how. Pick the shape: `sweep` (cartesian axes),
+   `conditions` (named arms), `oat` (one-at-a-time sensitivity), `ablation` (features off).
+   Set the axes and the number of `seeds` (Monte Carlo reps). Sanity-check the cell count
+   (product of axis lengths × seeds) against compute budget. Then set **`workers`** — the
+   *intended* parallelism — sized to the machine that will run this experiment: inspect it
+   (cores via `nproc`, memory via `free -g`) and pick `workers ≤ cores`, a **power of two**
+   (8/16/32…). Treat this as an upper bound, not a safety guarantee: at run time `conduct_exp`
+   **pilots the first cell, measures its real RAM footprint, and lowers `workers` on its own if
+   the pool wouldn't fit** — and caps each worker with a hard memory ceiling so a runaway cell
+   dies with MemoryError instead of taking the machine into swap. So you no longer have to nail
+   the per-run RAM by hand; you state intent and the runtime enforces safety. For a GPU
+   experiment, still bound `workers` by VRAM (often 1–few) — the RAM guard sizes host memory but
+   sets no address-space cap on GPU cells.
+3. **Metric** — the measured quantity and how cells/seeds `reduce` to it. Fix this now;
+   choosing the metric *after* seeing data is how findings become artifacts.
+4. **Expected direction** — the predicted result and the theory/literature it rests on.
+   A confirmatory experiment must have one. **Do not write it before the prior that motivates
+   it is on the table** — pull it from the `litReview/` documents + `PRIORS.md`, and name that
+   prior in the entry. Phrase it as a *prediction*, not a finding: state the direction and its
+   basis; do not quote a specific un-run number as though you had measured it.
+5. **Planned outputs** — the artifact(s) that would show the finding: a `figure`
+   (line/bar/heatmap/…), a `table`, a summary stat. This list *is* the plan
+   `process_outputs` executes — so specify axes, facets, and the caption's takeaway.
+6. **Mode** — `confirmatory` (predicted in advance; the prereg above is binding) or
+   `exploratory` (poking at the data; findings will be labeled as such, not overclaimed).
+7. **Resource** — `resource: cpu` or `gpu`, per experiment. **Surface this decision to the
+   user — do not set it silently.** From what you found in `code/`, state which resource you're
+   assigning and why ("CPU-bound ABM, no GPU code path → `resource: cpu`"), and let them
+   confirm or override before you write it. Do the same for the compute-sizing you chose in
+   step 2 — tell the user the intended `workers` count and the machine assumptions behind it, and
+   that `conduct_exp` will pilot-measure RAM and reduce it if needed (never raise it). Most sims
+   here are CPU-bound, but the point is that resource/compute choices are the user's to see and
+   veto, not something the session decides on its own. `rayleigh queue` schedules each
+   experiment's `conduct_exp` on its `resource`; local runs and `process_outputs` ignore it.
+
+## 3. Honesty, not gates
+
+rayleigh never refuses to run an experiment and never auto-judges a result. The discipline
+lives *here*, in the design conversation, and in reporting: `process_outputs` states
+support/refute plainly and labels exploratory findings honestly. So it is fine — expected,
+even — to add exploratory experiments. Just mark them `mode: exploratory` and don't let an
+exploratory result masquerade as a prediction confirmed.
+
+## 4. Iteration across cycles
+
+This cycle is stamped `{{CYCLE}}`. When the research direction genuinely changes, the user
+runs `rayleigh init --new-cycle` to open a new datestamp and archive this one — you don't
+manage cycle boundaries from inside the session. Within this cycle, add and refine
+experiments freely.
+
+## 5. When you're done
+
+Before you hand off, check the three non-negotiables actually happened — self-audit, don't wait
+for the user to catch them:
+- [ ] Each confirmatory `expected_direction` was written *after* its prior, and names it.
+- [ ] You showed the user every `resource:`/`workers` choice and they confirmed or overrode it.
+- [ ] Nothing was run, and no un-run number is stated anywhere as a result.
+
+- `experiments.yaml` has one well-formed entry per experiment (valid YAML; every
+  confirmatory experiment has a metric, expected_direction, and outputs).
+- `EXPERIMENTS.md` mirrors them in prose, with the research question and the codebase notes.
+- Add a row per experiment to `designdocs/PROGRESS.md` (⬜ designed).
+- Tell the user the next step, and offer BOTH ways to run:
+  - **Locally** — `rayleigh conduct_exp <id>` per experiment (each fans its cells out on this
+    machine), then `rayleigh process_outputs` to render the write-up. Good for a smoke subset
+    or a few small experiments.
+  - **At scale** — `rayleigh queue` submits the whole chain to trundlr (one `conduct_exp`
+    node per experiment on its `resource:` cpu/gpu, then a final `process_outputs`), so big
+    sweeps don't tie up this machine. The per-experiment `workers`, `resource`, and
+    `budget_hours` you set above are what `queue` schedules on. Preview it with
+    `rayleigh queue --dry-run`.
+  Recommend the local smoke path first (cheap, fast feedback), then `queue` for the full run.
