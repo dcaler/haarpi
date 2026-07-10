@@ -38,7 +38,7 @@ Recommended models (adjust to what you have):
 ## 2. One-time machine setup
 
 `rabbitHole init` creates the global config on first run. Or write it yourself
-at `~/.config/rabbithole/config.toml`:
+at `~/.config/haarpi/config.toml` (the unified HAARPi config; a legacy per-tool file is still honored underneath it):
 
 ```toml
 ollama_url = "http://localhost:11434"

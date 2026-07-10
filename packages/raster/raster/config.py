@@ -1,85 +1,21 @@
-"""Machine-level config for raster — ~/.config/raster/config.toml.
+"""raster's machine-config binding — the unified ~/.config/haarpi/config.toml.
 
-This is the PII boundary: personal/account details live here and never travel
+This is the PII boundary: personal/account details live there and never travel
 into a project's committed files. Repos that raster builds are committed under a
 deliberately non-PII identity (git.author_name/email) with no co-authorship.
-Created with sensible defaults on first run.
+The legacy ~/.config/raster/config.toml is still honored underneath the unified
+file; first run writes the unified template.
 """
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
-try:                                # stdlib on Python 3.11+
-    import tomllib
-except ModuleNotFoundError:         # 3.10 and older
-    try:
-        import tomli as tomllib    # type: ignore
-    except ModuleNotFoundError:
-        tomllib = None             # fall back to the tiny parser below
+from haarpi import config as haarpi_config
 
 
-def _loads_toml(text: str) -> dict:
-    """Parse raster's own simple config.toml when no TOML lib is available.
-    Handles `[section]`, `key = "str" | int | true/false`, comments, and inline
-    comments — sufficient for the flat schema raster writes (not general TOML)."""
-    if tomllib is not None:
-        return tomllib.loads(text)
-    data: dict = {}
-    section = data
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            section = data.setdefault(line[1:-1].strip(), {})
-            continue
-        if "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        val = val.strip()
-        if val and val[0] in "\"'":          # quoted string (ignore trailing comment)
-            q = val[0]
-            val = val[1:val.index(q, 1)]
-        else:
-            val = val.split("#", 1)[0].strip()
-            if val.lower() in ("true", "false"):
-                val = val.lower() == "true"
-            else:
-                try:
-                    val = int(val)
-                except ValueError:
-                    pass
-        section[key.strip()] = val
-    return data
-
-DEFAULT_CONFIG_TOML = """\
-# raster machine config. Personal details stay here — never committed into a project.
-
-[ollama]
-url    = "http://localhost:11434"
-strong = "qwen3.6:27b-16k"   # conceptually tricky tasks + gate/test authoring
-worker = "llama3.1:8b"       # scaffolding / boilerplate
-
-[trundlr]
-api_url      = "http://100.87.86.57:8251"
-gpu_resource = 2             # runs LLM/doer tasks
-cpu_resource = 3             # runs gate pytest
-human_resource  = 0          # human reviewer's trundlr resource id — set this to queue plan tasks
-claude_resource = 0          # Claude agent trundlr resource id — set this to queue plan tasks
-
-[git]
-host         = "github.com"
-owner        = "dcaler"
-author_name  = "raster"          # non-PII identity used for commits in BUILT repos
-author_email = "raster@localhost"
-co_authorship = false            # never emit Co-Authored-By trailers
-"""
-
-
-def config_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "raster" / "config.toml"
+def config_path():
+    """raster's legacy per-tool config path (still honored as a fallback)."""
+    return haarpi_config.legacy_path("raster")
 
 
 @dataclass
@@ -99,26 +35,44 @@ class Config:
     co_authorship: bool = False
 
 
-def load_config(create: bool = True) -> Config:
-    """Load machine config, writing defaults on first run. Env vars override:
-    OLLAMA_URL, RASTER_TRUNDLR_API."""
-    p = config_path()
-    if not p.exists():
-        if create:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(DEFAULT_CONFIG_TOML)
-        data = {}
-    else:
-        data = _loads_toml(p.read_text())
+def _legacy_normalized() -> dict:
+    """raster's old config.toml translated to the unified schema
+    (ollama.strong -> ollama.coordinator, trundlr.api_url -> trundlr.url)."""
+    data = haarpi_config.load_toml(config_path())
+    if not data:
+        return {}
+    out: dict = {}
+    o = data.get("ollama", {})
+    if o:
+        out["ollama"] = {k: v for k, v in o.items() if k in ("url", "worker")}
+        if "strong" in o:
+            out["ollama"]["coordinator"] = o["strong"]
+    t = data.get("trundlr", {})
+    if t:
+        out["trundlr"] = {k: v for k, v in t.items() if k != "api_url"}
+        if "api_url" in t:
+            out["trundlr"]["url"] = t["api_url"]
+    if data.get("git"):
+        out["git"] = data["git"]
+    return out
 
+
+def load_config(create: bool = True) -> Config:
+    """Load machine config, writing the unified template on first run (when
+    neither the unified nor the legacy file exists). Env vars override:
+    OLLAMA_URL, RASTER_TRUNDLR_API."""
+    if create and not haarpi_config.unified_path().exists() and not config_path().exists():
+        haarpi_config.write_default_unified()
+
+    data = haarpi_config.merged_config("raster", _legacy_normalized())
     o = data.get("ollama", {})
     t = data.get("trundlr", {})
     g = data.get("git", {})
     cfg = Config(
         ollama_url=o.get("url", Config.ollama_url),
-        strong_model=o.get("strong", Config.strong_model),
+        strong_model=o.get("coordinator", Config.strong_model),
         worker_model=o.get("worker", Config.worker_model),
-        trundlr_api=t.get("api_url", Config.trundlr_api),
+        trundlr_api=t.get("url", Config.trundlr_api),
         gpu_resource=int(t.get("gpu_resource", Config.gpu_resource)),
         cpu_resource=int(t.get("cpu_resource", Config.cpu_resource)),
         human_resource=int(t.get("human_resource", Config.human_resource)),

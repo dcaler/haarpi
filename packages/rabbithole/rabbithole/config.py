@@ -3,7 +3,8 @@
 Two layers:
 
   * Project config  ./litrev.yaml          (created by `rabbitHole init`, per topic)
-  * Global config   ~/.config/rabbithole/config.toml  (secrets + machine settings, once)
+  * Global config   ~/.config/haarpi/config.toml  (unified; the legacy
+    ~/.config/rabbithole/config.toml is still honored underneath it)
 
 Environment variables always override the global config file:
   OLLAMA_URL, RABBITHOLE_CONTACT_EMAIL,
@@ -15,17 +16,18 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import yaml
 
+from haarpi import config as haarpi_config
+
 PROJECT_FILE = "litrev.yaml"          # first/active project config (version 1)
 PROJECT_STEM = "litrev"               # later iterations: litrev_2.yaml, litrev_3.yaml, ...
 _PROJECT_RE = re.compile(r"^litrev(?:_(\d+))?\.yaml$")
 LITREVIEW_DIR = "litReview"           # all rabbitHole files live under <project>/litReview/
-GLOBAL_CONFIG_PATH = Path.home() / ".config" / "rabbithole" / "config.toml"
+GLOBAL_CONFIG_PATH = haarpi_config.legacy_path("rabbithole")
 
 # Default model assignments — change to match what you have in Ollama.
 DEFAULT_COORDINATOR_MODEL = "qwen3.6:27b-16k"
@@ -248,12 +250,33 @@ class GlobalConfig:
         return self.notify_to or self.contact_email
 
 
-def load_global() -> GlobalConfig:
-    data: dict = {}
-    if GLOBAL_CONFIG_PATH.exists():
-        with open(GLOBAL_CONFIG_PATH, "rb") as fh:
-            data = tomllib.load(fh)
+def _legacy_normalized() -> dict:
+    """rabbitHole's old ~/.config/rabbithole/config.toml, translated to the
+    unified haarpi schema (top-level ollama_url becomes [ollama] url, trundlr
+    resource ids drop their _id suffix)."""
+    data = haarpi_config.load_toml(GLOBAL_CONFIG_PATH)
+    if not data:
+        return {}
+    tr = data.get("trundlr", {})
+    out = {k: v for k, v in data.items()
+           if k in ("contact_email", "zotero", "anthropic", "semantic_scholar", "notify")}
+    if "ollama_url" in data:
+        out["ollama"] = {"url": data["ollama_url"]}
+    if data.get("notify_to"):
+        out.setdefault("notify", {}).setdefault("to", data["notify_to"])
+    if tr:
+        out["trundlr"] = {"url": tr.get("url", "")}
+        if tr.get("runner_resource_id") is not None:
+            out["trundlr"]["runner_resource"] = tr["runner_resource_id"]
+        if tr.get("human_resource_id") is not None:
+            out["trundlr"]["human_resource"] = tr["human_resource_id"]
+    return out
 
+
+def load_global() -> GlobalConfig:
+    data = haarpi_config.merged_config("rabbithole", _legacy_normalized())
+
+    o = data.get("ollama", {})
     z = data.get("zotero", {})
     a = data.get("anthropic", {})
     s2 = data.get("semantic_scholar", {})
@@ -261,18 +284,18 @@ def load_global() -> GlobalConfig:
     tr = data.get("trundlr", {})
 
     gc = GlobalConfig(
-        ollama_url=data.get("ollama_url", DEFAULT_OLLAMA_URL),
+        ollama_url=o.get("url", DEFAULT_OLLAMA_URL),
         contact_email=data.get("contact_email", ""),
         zotero_api_key=z.get("api_key", ""),
         zotero_library_id=str(z.get("library_id", "")),
         zotero_library_type=z.get("library_type", "user"),
         anthropic_api_key=a.get("api_key", ""),
         s2_api_key=s2.get("api_key", ""),
-        notify_to=nt.get("to", "") or data.get("notify_to", ""),
+        notify_to=nt.get("to", ""),
         mail_prog=nt.get("mail_prog", ""),
         trundlr_url=tr.get("url", ""),
-        trundlr_runner_resource_id=tr.get("runner_resource_id"),
-        trundlr_human_resource_id=tr.get("human_resource_id"),
+        trundlr_runner_resource_id=tr.get("runner_resource") or None,
+        trundlr_human_resource_id=tr.get("human_resource") or None,
     )
 
     # Env overrides.

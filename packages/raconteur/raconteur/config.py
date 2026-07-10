@@ -1,12 +1,12 @@
 from __future__ import annotations
 import os
-import sys
-import tomllib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import yaml
 
-GLOBAL_CONFIG_PATH = Path.home() / ".config" / "raconteur" / "config.toml"
+from haarpi import config as haarpi_config
+
+GLOBAL_CONFIG_PATH = haarpi_config.legacy_path("raconteur")
 PROJECT_CONFIG_FILE = Path("paper") / "raconteur.yaml"
 
 
@@ -119,20 +119,17 @@ class GlobalConfig:
 
     @classmethod
     def load(cls) -> "GlobalConfig":
+        # raconteur's legacy file already uses the unified [ollama]/[notify] shape.
+        legacy = haarpi_config.load_toml(GLOBAL_CONFIG_PATH)
+        data = haarpi_config.merged_config("raconteur", legacy)
         cfg = cls()
-        if GLOBAL_CONFIG_PATH.exists():
-            try:
-                with open(GLOBAL_CONFIG_PATH, "rb") as f:
-                    data = tomllib.load(f)
-                ollama = data.get("ollama", {})
-                cfg.ollama_url = ollama.get("url", cfg.ollama_url)
-                cfg.coordinator_model = ollama.get("coordinator", cfg.coordinator_model)
-                cfg.worker_model = ollama.get("worker", cfg.worker_model)
-                notify = data.get("notify", {})
-                cfg.notify_to = notify.get("to", "")
-                cfg.mail_prog = notify.get("mail_prog", "")
-            except Exception as e:
-                print(f"[warn] could not read global config: {e}", file=sys.stderr)
+        ollama = data.get("ollama", {})
+        cfg.ollama_url = ollama.get("url", cfg.ollama_url)
+        cfg.coordinator_model = ollama.get("coordinator", cfg.coordinator_model)
+        cfg.worker_model = ollama.get("worker", cfg.worker_model)
+        notify = data.get("notify", {})
+        cfg.notify_to = notify.get("to", "")
+        cfg.mail_prog = notify.get("mail_prog", "")
         cfg.ollama_url = os.environ.get("OLLAMA_URL", cfg.ollama_url)
         cfg.notify_to = os.environ.get("RACONTEUR_NOTIFY_TO", cfg.notify_to)
         cfg.mail_prog = os.environ.get("RACONTEUR_MAIL_PROG", cfg.mail_prog)

@@ -148,7 +148,7 @@ into `topic`/`focus` fields (lazily, on first use in `onepager`), extracting
 equations from the methods writeup, and looking up venue format specs in `venue`.
 
 The coordinator model is stored in `raconteur.yaml` so it can be changed per
-project. The global config at `~/.config/raconteur/config.toml` sets the default.
+project. The global config at `~/.config/haarpi/config.toml` sets the default.
 Same model defaults as RabbitHole: `qwen3.6:27b-16k` / `qwen3.5:9b-q4_K_M`.
 
 Claude API support is a planned option (the `brain.py` abstraction is designed
@@ -350,7 +350,7 @@ and length to the submission target. Venue format specs are looked up by the wor
 LLM in the `venue` command using training knowledge of common venues; they should be
 verified against the official call for papers.
 
-### `~/.config/raconteur/config.toml` (machine-level)
+### `~/.config/haarpi/config.toml` (machine-level)
 
 ```toml
 [ollama]

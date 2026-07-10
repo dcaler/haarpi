@@ -73,7 +73,7 @@ worker:      qwen3.5:9b-q4_K_M (parsing the research description during init)
 
 ## 2. One-time machine setup
 
-Create `~/.config/raconteur/config.toml`:
+Create `~/.config/haarpi/config.toml` (the unified HAARPi config; a legacy per-tool file is still honored underneath it):
 
 ```toml
 [ollama]

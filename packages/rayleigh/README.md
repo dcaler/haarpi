@@ -40,7 +40,7 @@ design session).
 
 ## Machine setup
 
-First run writes `~/.config/rayleigh/config.toml` (the PII boundary): the author identity
+First run writes `~/.config/haarpi/config.toml` (the unified HAARPi config; a legacy per-tool file is still honored underneath it) — the PII boundary: the author identity
 stamped into the `.docx` write-up and the initials used by the document-revision naming
 chain (`ra` = tool, e.g. `DCR` = human reviewer). Personal details live only here and never
 enter a project. It also sets `[models] design` — the model `init` launches the design
@@ -172,7 +172,7 @@ Each experiment carries its own scheduling knobs, set during `init`:
 - **`budget_hours`** — the trundlr scheduling window.
 
 The `trundlr:` block in `results/rayleigh.yaml` holds the resource ids (`{gpu, cpu}`) and
-`project_id` (defaults from `~/.config/rayleigh/config.toml`); a name-form `project_id` is
+`project_id` (defaults from `~/.config/haarpi/config.toml`); a name-form `project_id` is
 resolved to a numeric id and cached on first `queue`.
 
 ## Status

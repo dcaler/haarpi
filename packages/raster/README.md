@@ -35,7 +35,7 @@ GitHub repo), a reachable trundlr API, and Ollama for the eventual build step.
 
 ## Machine setup
 
-First run writes `~/.config/raster/config.toml` with defaults — Ollama models,
+First run writes `~/.config/haarpi/config.toml` (the unified HAARPi config; a legacy per-tool file is still honored underneath it) with defaults — Ollama models,
 the trundlr API + resource ids (`human`, `claude`, gpu, cpu), and a **non-PII git
 identity** used for commits in built repos (`co_authorship = false`). Personal
 details live only here and never enter a project.
