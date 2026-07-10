@@ -1,0 +1,318 @@
+# {{PROJECT}} build spec — TWO-LEVEL, test-driven tasks for local LLM workers.
+# BUILD MACHINERY (git-ignored). Authored during `raster plan`; consumed by `raster build`.
+#
+# TWO LEVELS:
+#   * TASK   -> has a UNIT TEST. Scope = one deliverable file. "Does this file meet its spec?"
+#              Pass -> task done; fail -> block the next task.
+#   * MODULE -> has a GATE = an INTEGRATION TEST composing the module's tasks (and upstream
+#              modules). Runs only after ALL the module's tasks pass. Pass -> release next
+#              module; fail -> block next module.
+#
+# TEST STRATEGY = frozen-by-strong: a Phase-0 (P0.*) phase authors ALL tests into
+# code/tests/ FIRST, with hand-computed, internally-consistent golden values. The doer
+# then writes IMPLEMENTATION ONLY for M* tasks and never creates/edits anything under tests/.
+#
+# FREEZE-PHASE MECHANICS (handled by raster, not by you — but design the spec to fit them):
+#   * The product package does NOT exist at freeze time, yet frozen tests import it. raster
+#     STUBS the absent package during freeze collects (P0.* authoring + any `--collect-only`
+#     gate) so collection proceeds. A `--collect-only` gate therefore proves only COLLECTIBLE +
+#     SELF-CONSISTENT, NEVER correct — keep the freeze->impl `checkpoint:` for whether goldens
+#     are RIGHT, and lean on Layer-1 guards for oracle-checkable values.
+#   * A `--collect-only` freeze gate also auto-runs `raster lint` (a cross-reference linter:
+#     unresolvable golden keys, undefined fixtures, inconsistent call signatures, skip-on-ImportError
+#     of a product module, a test importing a module no task delivers, a half-matrix golden table
+#     looked up by free (a,b), a per-step monotonicity/dip-count gate on np.diff of a (stochastic)
+#     trend, a consumer holding a private COPY of a canonical constant ('based on <module>' / the
+#     same constant defined as a literal in 2+ product modules), a `len(CONSTANT) == int` where the
+#     int is also a run-parameter value (structural-size pinned to a knob), AND a static spec check —
+#     e.g. an IMPLEMENT task that lists a frozen tests/ path as a deliverable) — Layer-1 defects that pass a
+#     green collect but hard-block (or falsely red) impl.
+#     (`raster lint` runs by hand too.)
+#   * ORACLE-INTERNAL CONSISTENCY: a frozen test can hand-compute an expected value under ASSUMED
+#     properties of a helper it builds from a golden table, and the value + the helper silently
+#     disagree — both look authoritative, yet no correct impl satisfies the value (segregation_index
+#     == 0.0833 vs an expected 0.8: the value assumed a real metric, the adapter was a half-matrix
+#     that isn't one). Make fixtures ROUND-TRIP their goldens (a 3-line self-check asserting the
+#     adapter is reflexive + symmetric before any value trusts it); store symmetric relations as a
+#     FULL table with diagonal, not a de-duplicated half-matrix used as a runtime (a,b) function.
+#   * STOCHASTIC GATES ASSERT WHAT THE PROCESS GUARANTEES, NOT THE TRAJECTORY YOU PICTURED: a gate
+#     that asserts an observable improves at (almost) EVERY step (np.all(np.diff(trend) >= 0), or a
+#     hard dip-count cap np.sum(diff < -eps) <= N) is testing for a BEST-IMPROVING dynamic. If the
+#     frozen update rule is stochastic/non-greedy (faithful random Schelling relocation, ε-explore,
+#     annealing), the metric only DRIFTS upward — per-step dips are expected texture, so the gate
+#     false-REDs a correct impl (SchellingChords G5: `3 <= 1`). A small seed-average can't smooth a
+#     random walk into monotonicity, and a dip-count cap just makes the verdict flip with the seed
+#     list. Assert the guaranteed property: a NET rise with a domain margin PLUS up-steps outnumber
+#     down-steps (count-vs-count), or a final-state-vs-random-baseline distribution test; raster lint
+#     flags the per-step form. Separate "did the feature work" (assert it) from "is the path shaped
+#     how I imagined" (don't). The domain owner decides whether near-monotonicity is even supposed to
+#     hold — only they know if a dip is a model bug or stochastic noise.
+#   * DERIVE SHARED CONSTANTS, DON'T DUPLICATE THEM: a source-of-truth constant (chord->pitch map,
+#     rate table, status enum) lives in ONE canonical place and every consumer IMPORTS it. The moment
+#     a consumer holds a private copy "based on" the source, a gate asserting consumer(x)==GOLDEN[x]
+#     compares two transcriptions — it greens because they agree, not because the consumer follows the
+#     source, and stays green when the canonical value is corrected (the very edit it should catch;
+#     SchellingChords M6: sonify.py's private DIATONIC_CHORDS). Keep exactly ONE independent golden
+#     oracle and wire the gate as (canonical)-vs-(golden); raster lint flags 'based on <module>' copies
+#     and the same constant defined as a literal in 2+ product modules. Prove the net bites — perturb
+#     one canonical entry and confirm the gate goes RED. Same trap for magic numbers: an int literal
+#     equal to a config field's default is a dead knob off-default — read the config, don't hardcode it.
+#   * DON'T PIN A STRUCTURAL CONSTANT'S SIZE TO A RUN PARAMETER: a structural fact (how many chords the
+#     vocabulary DEFINES, 7) and a run knob (how many a run SELECTS, n_chord_types=3) are DIFFERENT
+#     LAYERS. `len(DIATONIC_CHORDS) == 3` is a category error, not a typo: no impl can make a constant's
+#     length equal a per-run knob, so it's UNSATISFIABLE and survives escalation (SchellingChords M7.T1:
+#     `7 == 3` burned all 4 attempts). For every `len(CONSTANT) == literal`, ask which layer the number
+#     lives in; if the literal also appears as a parameter value it's probably conflated. DERIVE the
+#     expected (`len(VOCAB) == len(diatonic_major())`), don't hand-type it; raster lint flags the
+#     pinned-to-a-knob form. And ISOLATE integrity/sanity guards from the acceptance test — a buggy
+#     decorative guard must not fail a deliverable that actually passed.
+#   * PLATEAU = ORACLE BUG, NOT A DUMB WORKER: when a worker fails on the byte-identical value across
+#     an escalation (a stronger rung reproduces it), raster ABORTS the task to a human oracle check
+#     instead of burning the budget — a stable wrong value is a correct computation against a wrong
+#     EXPECTATION. Design goldens so this can't happen; when it does, fix the frozen value, not the impl.
+#   * A CHANGING FAILURE IS THE OPPOSITE OF A PLATEAU — read the trend of the error STRING, not red/green.
+#     If the failure CHANGES each attempt (error N fixed, N+1 appears), the test is SOUND and the worker
+#     is climbing a real ladder — raster says so in the log and keeps escalating / spending turns (a
+#     reconcile here wrongly blames a correct test). Two traps it defends against: (a) runtime errors MASK
+#     each other (Python raises the first NameError only), so a stack of undefined names peels one per
+#     ~40-min cycle and exhausts a flat MAX_ATTEMPTS — raster runs a sub-second static undefined-name pass
+#     over the just-written code each attempt and feeds the WHOLE list back at once, collapsing the chain
+#     into one repair; on a moving chain that still runs out of turns it tells you to RE-QUEUE with more
+#     attempts (not reconcile). (b) A STRUCTURAL/comprehension miss (wrong output SHAPE) can hide behind
+#     the shallow chain and never be reached — so a sweep/exporter gate must assert the NUMBER and SHAPE
+#     of artifacts (exactly one summary file, one row per swept value), not only their values.
+#   * "DID THE ERROR MOVE?" IS NECESSARY BUT NOT SUFFICIENT — READ THE ASYMPTOTE, NOT THE SLOPE. A failure
+#     COUNT that falls but levels off ABOVE ZERO is a DECAYING PLATEAU, not progress: the worker fixed
+#     everything satisfiable and hit a floor of residual tests no impl can pass (M9.T1: 19->18->17 failed,
+#     then stuck — the 17 were three oracle bugs). raster tracks the failed-count trajectory: when a moving
+#     chain LEVELS OFF above zero it switches from "re-queue more turns" to RECONCILE; when it's still
+#     descending it re-queues but flags you to confirm it's heading to ZERO first (a chain ticking down by
+#     ones toward a nonzero floor looks like progress until it flattens). When a plateau is suspected — flat
+#     OR decaying — test each RESIDUAL failure for satisfiability (can ANY impl pass it given the rest of the
+#     frozen suite?); a 'no' is an oracle bug -> stop and reconcile, don't burn the strong tier on a floor.
+#   * RED-BEFORE-GREEN — A DELIVERABLE'S TEST MUST FAIL AT HEAD. A build task's frozen test that is
+#     already GREEN on the current tree (before anything is written) isn't testing its deliverable; it's
+#     testing something that already exists. The classic miss: a data/config/asset deliverable
+#     (configs/demo.yaml) whose test checks an INLINE kwargs dict + golden constants and never loads the
+#     file by path -> green at HEAD with the artifact absent. That's a false green AND a runaway-output
+#     cause — the frozen test is the worker's only gradient toward the deliverable, so with no pull
+#     toward it a weak local model emits large, drifting, format-breaking output (M8.T1: 51 passed at
+#     HEAD; attempt 1 ran 141 min to zero files). Load every deliverable through the REAL loader, by a
+#     path resolved from the test file, and validate RANGES; raster lint flags a build task whose frozen
+#     test never references its non-.py deliverable.
+#   * GREEN != VERIFIED. A test counts only if it RAN against the product. Don't author
+#     skip-on-ImportError for product modules (it turns a name schism into a permanent false-green
+#     that never runs); import product modules by their EXACT deliverable name. raster surfaces a
+#     loud warning when a gate/test PASSES with skipped tests — a nonzero skip count is a signal,
+#     not noise. The first task to CONSUME an upstream module is its real integration test; expect
+#     upstream false-greens to detonate there, not where the module was authored.
+#   * CALIBRATE STOCHASTIC THRESHOLDS — DON'T GUESS THEM. A gate that pins an ABSOLUTE target on a
+#     stochastic/producer-frontier observable ("the optimizer drives the metric below X", "emergence
+#     reaches level Y") is the M9.T1 trap one level up: the target is unknowable at authoring time, so
+#     a guessed value is either UNSATISFIABLE for any correct impl or trivially green. Prefer a
+#     DIFFERENTIAL — a seed-averaged margin against a baseline computed in the SAME gate run (emergent -
+#     baseline >= margin; intervened <= un-intervened - margin) — which holds regardless of the absolute
+#     level the producer reaches; keep any absolute floor as a SOFT sanity bound only. Where an absolute
+#     number is unavoidable, MEASURE it with a reference/pilot and derive the constant (freeze the
+#     measurement + tolerance, self-checked against the pilot), not a hand-guess. See the freeze-review
+#     step in PLANNING.md and run `raster freeze-review` before `queue`.
+#   * Emit deliverable PATHS RELATIVE TO code/ — NEVER prefixed with code/. The doer roots writes
+#     under code/, so a code/-prefixed path would double (code/code/...); it strips a spurious
+#     leading code/ defensively, but don't author the smell. (IMPLEMENT deliverables live under
+#     code/<package>/; only P0.* tasks own tests/ paths.)
+#   * SHARED frozen files are SINGLE-OWNER. Give conftest.py and any shared golden/constants
+#     module to ONE owning P0 task (the first task that lists it as a deliverable); raster
+#     refuses every other task's attempt to overwrite it (a re-emit otherwise wipes earlier
+#     fixtures, last-writer-wins). Don't list the same shared file as a deliverable on many tasks.
+#   * CANONICAL REGISTRY: pin in DESIGN, and reuse across tasks, ONE spelling per class/identifier,
+#     ONE label/key VOCABULARY (note-names vs Roman, "major" vs "maj"), and ONE call/constructor
+#     SIGNATURE per shared object. All drift invisibly past the stubbed collect yet break impl.
+#
+# Per-task contract:   {id, title, worker, depends_on, deliverables, spec, unit_test:{file,cmd}, budget?:<sec>}
+# Per-module contract: {id, name, worker, tasks:[...], gate:{id, integration_test:{file,cmd}, spec, budget?:<sec>},
+#                       checkpoint?: <review prompt>}
+#
+# budget?: optional per-task/gate timeout in SECONDS, overriding the global RASTER_TEST_TIMEOUT. Set it
+# for a LEGITIMATELY long test — a GA/optimizer gate over seeded simulation runs — so a slow-but-
+# progressing run isn't killed and misread as a failure. Leave it off for ordinary fast tests.
+#
+# worker = a task's STARTING tier on meta.ladder (mapped to a model via meta.workers).
+# Because escalation only climbs the ladder (never down), a task's start tier is also its
+# FLOOR. Assign it by COST-OF-ERROR, not difficulty: a wrong frozen golden value is silent
+# and irreversible -> floor it at `strong`; a loud/oracled/reversible mistake is cheap to
+# repair -> start it at `worker` and let failure escalate it. All Phase-0 (P0.*) authoring
+# is `strong` and always runs think-on regardless of the ladder (no oracle to repair against).
+#
+# TWO REVIEW BACKSTOPS for what the prompt + frozen tests can't catch (the worker authored
+# both the data AND its own tests, so it cannot be its own checker):
+#   * Layer 1 — automated impl-independent GUARD: a Claude-authored check co-located with the
+#     frozen tests (e.g. tests/golden/test_*_consistency.py) that asserts an EXTERNAL oracle the
+#     worker can't be trusted on (a conservation law, a type/dimension invariant, a domain rule).
+#     Author it in Phase 0; run it from a module GATE. Put it under a path NO task lists as a
+#     deliverable, so a freeze re-run can't clobber it. Insert one IFF all three hold: frozen +
+#     high fan-out, semantic latitude, AND an external oracle actually exists (no oracle -> the
+#     check is tautological; don't write it).
+#   * Layer 2 — manual review CHECKPOINT: `checkpoint:` on a module (below). `raster queue` turns
+#     it into a `command: null` trundlr task on the [human, claude] resources, on the dependency
+#     edge BEFORE that module — it stays `todo` (no runner claims those resources) and blocks
+#     everything downstream until a human signs off. The description IS the prompt: write the
+#     literal instruction you'll hand the reviewer ("review X; check 1/2/3; flag file:line; end
+#     with go/no-go"). Place checkpoints where the worker has latitude AND tests are blind to
+#     intent: the freeze->impl boundary (highest value), the conceptually-hard `strong` modules,
+#     and a final whole-system sign-off (top-level `final_checkpoint:`). NOT the boilerplate
+#     modules — impl there is self-protecting (a wrong impl fails its own frozen gate).
+#     CHECKPOINT PROTOCOL — a passing suite is not enough; tests can't see a disconnected
+#     subsystem. Make the review prompt explicitly: (1) GREP the consumer for the upstream symbols
+#     it's supposed to call (a metric/agent/policy imported by nothing means it was bypassed and
+#     reimplemented inline); (2) WIGGLE each headline parameter and confirm the output moves (a
+#     dead knob passes every invariant test); (3) judge DOMAIN FIDELITY — a green, plausible impl
+#     can still be wrong on domain grounds (relocating to the 'best' slot when the spec demands a
+#     random one); only the domain owner can sign that off, so state the intent in the task; (4) at
+#     the FREEZE checkpoint, ROUND-TRIP each hand-computed golden through the helper it's computed
+#     under — assert the metric/adapter actually has the assumed properties (reflexive m(x,x)==0,
+#     symmetric m(a,b)==m(b,a)) so the value and the helper can't silently disagree; (5) for any
+#     gate that asserts a TREND (a metric improving over a run), check it against the FROZEN update
+#     rule — if the rule is stochastic/non-greedy, a per-step monotonicity or dip-count assertion is
+#     the wrong contract (only net/majority/distributional claims hold), and seed-smoke-test it
+#     against a disjoint seed list so the verdict can't depend on which seeds were picked; (6) at a
+#     "this is where it would finally be wrong" gate, TRACE the asserted value back to its SOURCE, not
+#     a copy — grep the constant's name (>2 definitions = one source + one oracle is a smell; a
+#     product copy "based on" the canonical file is the bug), then PERTURB one canonical entry and
+#     confirm the gate goes red (a constant test that can't be made to fail by editing the source is
+#     not a test). Flag mod-12-irrelevant / octave-style choices the structural net leaves free; (7) for
+#     every `len(CONSTANT) == literal` integrity assertion, name the LAYER the number lives in
+#     (structure vs run knob) and confirm the literal isn't a parameter value in disguise — prefer the
+#     derived `len(VOCAB) == len(source())`; and confirm no buggy sanity-guard can sink a deliverable
+#     that actually passes (isolate guards or scrutinize them as hard as the contract beside them); (8)
+#     when a task fails on a CHANGING chain of shallow errors (imports, typos, undefined names), don't
+#     assume "one more fix and it's green" — hand-read the deliverable against the contract's INTENT for
+#     a comprehension miss hiding behind the trivia (a sweep emitting per-run trajectory dumps instead of
+#     one summary row per value passes a naive eye and fails the contract; assert artifact NUMBER + SHAPE);
+#     (9) RED-BEFORE-GREEN: for each build task, confirm its frozen test FAILS on the current tree with the
+#     deliverable absent and references that deliverable by path (loads a data/config/asset through the real
+#     loader, not an inline re-encoding). A test green at HEAD is blind to its deliverable — a false green,
+#     and since the test is the worker's gradient, a runaway-output cause (raster lint flags the non-.py case);
+#     (10) DECAYING PLATEAU = STILL A PLATEAU: a falling-but-leveling-off failure count (19->18->17, then stuck)
+#     is a floor of UNSATISFIABLE oracle bugs masquerading as progress. When a chain plateaus (flat OR decaying)
+#     test each residual failure for satisfiability and reconcile the unpassable ones. Audit the frozen suite for
+#     the three floor archetypes: a PARAMETRIZE giving a fresh function-scoped fixture per case while asserting
+#     ACCUMULATED state (k=0,1,2,… — use one LOOPING test instead); a hand-authored GOLDEN no seed/real producer
+#     generates (same summary stat, different actual values — derive expected from the real producer); a SPY on an
+#     attribute the production object never defines (getattr(obj,'_step_count',0) vs Mesa's self.steps — always-
+#     fail or vacuously-pass). Each is independently unpassable; together they look like "the worker is almost there.";
+#     (11) SWEEP EVERY RECONCILE FOR SIBLINGS: a frozen-test oracle bug is evidence about its AUTHOR, not just the one
+#     test — Phase-0 freezes a whole module's tests in one pass by one model, so a wrong belief ("the model exposes
+#     _step_count", "vacancies sit at these indices", "units are fractions") is replicated across every sibling test that
+#     touches the concept. The moment you confirm one oracle bug, grep the WHOLE tests/ tree (gate_*.py INCLUDED — the
+#     gate is a separate file the per-task green never runs, so it's the ambush) for the same fingerprint and reconcile
+#     every hit in this pass. Fixing the unit test clears the symptom; clear the BELIEF everywhere the suite relies on it.
+#     raster lint's phantom-attribute-spy check sweeps all of tests/ at once and catches the literal-token case (e.g. a
+#     getattr(obj,'_step_count',0) recurring in the gate) for free; the structural shapes (fresh-fixture-per-case, a
+#     hand-authored golden, a magic dimension) need your eye — but you now know the shape to grep for.
+
+orchestration:
+  task:    {advance_on: unit_test_pass, on_fail: block_next_task}
+  module:  {run_gate_when: all_tasks_pass, advance_on: gate_pass, on_fail: block_next_module}
+  notify:  email
+  git:     commit_and_push_on_pass
+
+meta:
+  project: {{PROJECT}}
+  package: {{PACKAGE}}
+  root: code/
+  trundlr_project_id: {{TRUNDLR_PROJECT_ID}}
+  # think: false                  # OPTIONAL global pin for ollama reasoning. Leave unset so
+                                  # the ladder governs `think` (think-off-first / think-on-retry).
+                                  # Set it to force reasoning off/on everywhere (escape hatch).
+  workers:
+    strong: {{STRONG_MODEL}}
+    worker: {{WORKER_MODEL}}
+  # Escalation ladder: ordered {worker, think} rungs that `raster build` climbs on repeated
+  # failure (RASTER_ESCALATE_AFTER attempts per rung). A task starts on the rung matching its
+  # `worker` and climbs upward only. Climbing flips BOTH the model and reasoning, so `think` is
+  # spent only after the cheap rungs have failed the frozen test. Omit to use this default:
+  ladder:
+    - {worker: worker, think: false}   # cheapest: boilerplate against a correct oracle
+    - {worker: strong, think: false}   # strong model, reasoning off (think-off first)
+    - {worker: strong, think: true}    # strong + reasoning (think-on on retry, CoT's payoff)
+  python: "{{PYTHON_VERSION}}"
+  runtime_deps: []                # FILL during plan — runtime imports the build needs
+  test_deps: [pytest]
+
+execution:
+  trundlr_api: {{TRUNDLR_API}}
+  project_id: {{TRUNDLR_PROJECT_ID}}
+  resources: {gpu: {{GPU}}, cpu: {{CPU}}}
+  ollama_host: {{OLLAMA_HOST}}
+  test_strategy: frozen-by-strong
+
+# ===========================================================================
+# modules: authored during `raster plan`. Leave [] until the design is settled.
+# A worked EXAMPLE of the schema is in the comment block below — copy & adapt.
+# ===========================================================================
+modules: []
+
+# --- EXAMPLE (delete the leading '#'s and adapt; remove `modules: []` above) ---
+#
+#   # PHASE 0 — freeze the tests first (strong model authors code/tests/).
+#   - id: P0
+#     name: test-infra
+#     worker: strong
+#     tasks:
+#       - id: P0.T0
+#         title: Harness, shared fixtures, golden values
+#         worker: strong
+#         depends_on: []
+#         deliverables: [tests/conftest.py, tests/golden/]
+#         spec: >
+#           Author pytest scaffolding shared by all modules: fixtures and hand-computed
+#           golden values. Internally consistent (counts equal what they count, etc.).
+#         unit_test: {file: tests/, cmd: pytest --collect-only -q tests/}
+#       - id: P0.M0
+#         title: Freeze M0 tests
+#         worker: strong
+#         depends_on: [P0.T0]
+#         deliverables: [tests/test_smoke.py, tests/gate_scaffold.py]
+#         spec: "Author frozen unit + gate tests for M0 per its specs (must collect, fail RED)."
+#         unit_test: {file: tests/gate_scaffold.py, cmd: pytest --collect-only -q tests/}
+#
+#   # IMPLEMENTATION modules — write impl only; satisfy the frozen tests.
+#   - id: M0
+#     name: scaffold
+#     worker: worker
+#     # The single highest-value checkpoint: review the WHOLE frozen suite once, before any
+#     # code builds on it (collection passing says nothing about whether the goldens are RIGHT).
+#     checkpoint: >
+#       Claude — review the entire frozen Phase-0 suite before any implementation starts.
+#       Check: (1) golden values are internally consistent and match design intent — for any value
+#       hand-computed under assumed properties of a helper built from a golden table, round-trip it
+#       (assert the metric/adapter is reflexive + symmetric; no half-matrix used as a runtime (a,b)
+#       function); (2) the model shape matches DESIGN.md (not a hallucinated alternative);
+#       (3) every downstream-consumed identifier/constant is named as the guards expect;
+#       (4) no `len(CONSTANT) == literal` integrity test pins a structural size to a run-parameter
+#       value (prefer the derived `== len(source())`), and no buggy sanity-guard can fail a passing
+#       deliverable. Flag issues as file:line; end with a go/no-go.
+#     tasks:
+#       - id: M0.T1
+#         title: Package scaffold + import smoke
+#         worker: worker
+#         depends_on: [P0.M0]
+#         deliverables: [{{PACKAGE}}/__init__.py, pyproject.toml]
+#         spec: "Create the package so it imports cleanly and the smoke test passes."
+#         unit_test: {file: tests/test_smoke.py, cmd: pytest -q tests/test_smoke.py}
+#     gate:
+#       id: G0
+#       spec: "Package imports and exposes its public surface."
+#       integration_test: {file: tests/gate_scaffold.py, cmd: pytest -q tests/gate_scaffold.py}
+#
+# # Optional whole-system sign-off after the last module (a [human, claude] null-command task):
+# final_checkpoint: >
+#   Claude — run the whole system end-to-end and confirm nothing drifted across modules.
+#   Spot-check that each module still honours its gate's intent (not just its letter).
+#   Run `raster lint` and resolve any ISLAND (a delivered module imported by nothing = a
+#   subsystem the consumer bypassed) and any COPIED CONSTANT (a consumer holding a private copy
+#   of a canonical value 'based on' another module — derive it instead). For each headline
+#   parameter, WIGGLE it and confirm the run output moves (a dead knob passes every invariant
+#   test); for each source-of-truth constant, PERTURB the canonical entry and confirm the gate
+#   guarding it goes red. Grep each consumer for the upstream symbols it should call. Confirm
+#   domain fidelity, not just green. Go/no-go.

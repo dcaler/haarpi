@@ -1,0 +1,387 @@
+# PLANNING PLAYBOOK — read this first (for the `raster plan` Claude session)
+
+You are running the **`raster plan`** step for **{{PROJECT}}**. Your job, working
+**interactively with the user**, is to turn this project's intent into two finished
+design documents in `code/designdocs/`:
+
+1. **`DESIGN.md`** — human-facing architecture (the why and the shape).
+2. **`tasks.yaml`** — the executable build spec the doer pipeline runs (the what and
+   the order). This is the real deliverable; DESIGN.md exists to make it correct.
+
+> `raster init` already created the project skeleton, git repo, and pre-filled the
+> `meta:` / `orchestration:` / `execution:` blocks of `tasks.yaml`. You are filling in
+> the *design* and the `modules:` list — not the boilerplate.
+
+## What the user asked to build (the brief, from `raster init`)
+
+> {{BRIEF}}
+
+This long-form brief is your **primary starting material** — it's the answer to "what do you want
+to build today?" captured at init and stored in `code/raster.yaml` (`brief:`). Read it closely;
+it states the intent the whole design must serve. Where it's thin or ambiguous, that's exactly
+what Step 2 (interactive design with the user) is for — pin it down, don't invent past it.
+
+(The one-line `description:` is a *separate*, GENERATED field — **you write it** in Step 4, distilled
+from this brief + the settled design. It's the single line of grounding every build LLM worker sees,
+so it must end up concrete and accurate in `code/raster.yaml`.)
+
+---
+
+## Step 1 — Get a head start before asking the user anything
+
+Read, in this order, to absorb as much context as possible **before** the interactive
+part. The point is to arrive with a concrete straw-man, not a blank page:
+
+- `code/raster.yaml` — project name, package (`{{PACKAGE}}`), language/python, models, remote.
+- This whole `code/designdocs/` folder — the skeletons you're completing.
+- **The project root (one level up from `code/`)** — this dir is shared with the other
+  ra* tools, so look for:
+  - `litReview/output/` — a **rabbitHole** literature review (.md/.docx). Read it: it
+    frames the problem space and prior art.
+  - `paper/` — a **raconteur** paper draft/outline. Read it: it often states the aim,
+    method, and contribution directly.
+  - any `README`, `notes`, `*.md`, or data files the user has dropped in.
+- Existing `code/{{PACKAGE}}/` and `code/tests/` if a previous pass started.
+
+From that, draft (in your head or scratch) a proposed Aim, the spine, the module
+decomposition (M0..Mn), and a first cut at Phase-0 + implementation tasks.
+
+## Step 2 — Interactive design with the user
+
+This step **is** interactive and will iterate. Lead with your straw-man and refine:
+
+- Confirm the **Aim** and the **spine** (the one organizing idea).
+- Nail the **module architecture** — each module is a coherent unit with a gate; each
+  task is one deliverable file with a unit test. Keep modules small and ordered so the
+  dependency chain is mostly linear.
+- Pin the **interfaces/contracts** precisely — these become the frozen Phase-0 tests, so
+  vagueness here makes a module unsatisfiable later.
+- Settle **dependencies**, **runtime**, and any **golden values / determinism** needs.
+
+Fill `DESIGN.md` as you converge. Don't let it get ahead of what the user has agreed to.
+
+## Step 3 — Derive `tasks.yaml`
+
+Translate the settled design into the spec. The schema and a worked example are inline
+in `tasks.yaml`. Rules that make a spec **valid** (get these right or the build stalls):
+
+- **Two levels.** Every task has `unit_test:{file,cmd}`; every module has a `gate` with an
+  `integration_test`. Task ids like `M2.T1`; gate ids like `G2`; Phase-0 ids like `P0.M2`.
+- **Phase 0 freezes ALL tests first** (`worker: strong`). Golden values must be
+  **internally consistent** (any count equals the thing it counts; every derived number
+  re-computed from one stated formula; parametrize name/value arity matches). Frozen tests
+  are never edited by implementation tasks.
+- **Implementation tasks write impl only** — deliverables under `code/{{PACKAGE}}/`, never
+  under `tests/`. The doer physically refuses to write `tests/` outside Phase 0, and `raster
+  lint` statically rejects any IMPLEMENT task that lists a `tests/` path as a deliverable
+  (it's that task's input, never its output — put it on the owning P0 task instead). Emit
+  deliverable paths **relative to `code/`** — never prefixed with `code/` (the doer strips a
+  spurious leading `code/`, but don't author the smell).
+- **Shared frozen infra is single-owner.** Give `conftest.py` and any shared golden/constants
+  module to **one** owning P0 task; don't list the same shared file as a deliverable on several
+  tasks. The doer refuses any non-owner that re-emits it (otherwise a later freeze run wipes an
+  earlier run's fixtures, last-writer-wins).
+- **Pin a canonical registry in DESIGN — names, vocabulary, AND signatures.** Not just class/
+  identifier names: also the label/key **vocabulary** (the enum-like strings and dict-key scheme —
+  note-names vs Roman, `"major"` vs `"maj"`, status strings) and the call/constructor **signature**
+  of every shared object. All three drift across independently-authored tasks and are invisible to
+  the freeze collect (the absent product is stubbed, so any name/key/call-shape resolves) yet are
+  fatal to impl. raster injects this registry into every authoring prompt.
+- **A freeze collect proves *collectible + self-consistent*, never *correct*.** raster stubs the
+  not-yet-built product so `--collect-only` passes; that says nothing about whether the goldens
+  are right. The generated **freeze gate** additionally runs `raster lint` (a cross-reference
+  linter: unresolvable golden keys, undefined fixtures, inconsistent call signatures, half-matrix
+  golden tables looked up by free `(a,b)`, per-step monotonicity/dip-count gates on `np.diff` of a
+  stochastic trend, a consumer holding a private copy of a canonical constant) — but value- and
+  intent-correctness still need the freeze→impl `checkpoint:` and Layer-1 guards (Step 3b).
+- **Green ≠ verified — design so every frozen test actually RUNS against the product.** Don't
+  author `try: import <product>; except ImportError: pytest.skip(...)`: the product is stubbed at
+  collect time, so that idiom only fires on a real name schism and converts it into a permanent
+  false-green (a whole module reporting green while never running once). Import product modules by
+  their **exact deliverable name**; `raster lint` now flags both the skip-on-import idiom and any
+  test importing a module no task delivers. raster also warns loudly when a gate/test passes with
+  skipped tests. Remember the **first task to *consume* an upstream module is its real integration
+  test** — order the DAG so consumption happens early, and don't read upstream false-greens
+  surfacing there as the consumer's bug.
+- **Pair every invariant test with a differential one; don't ship island modules.** Conservation /
+  determinism / "mutating knob K preserves invariant I" tests are *negative* — they green a no-op
+  (a dead feature preserves every invariant). For each parameter a module consumes, the freeze
+  suite needs *both* the invariant *and* a **differential** test (extremes of K change observable
+  output). And a delivered module that **no other module imports** is an island — dead code or a
+  subsystem the consumer reimplemented inline; `raster lint` flags it (a whole-system check), and
+  the checkpoint review should grep each consumer for the upstream symbols it must call and wiggle
+  each headline parameter to confirm it moves.
+- **Make fixtures round-trip their own goldens; a worker plateau means the oracle is wrong.** When a
+  frozen test hand-computes an expected value under *assumed properties* of a helper it builds from a
+  golden table, the value and the helper can silently disagree — classically a symmetric relation
+  stored as a half-matrix (one order per pair, no diagonal) then used as a runtime `(a,b)` lookup,
+  giving an asymmetric, non-reflexive pseudo-metric no correct impl can satisfy (`raster lint` flags
+  the lookup; the freeze checkpoint should assert the adapter is reflexive + symmetric, or store a
+  full table). And when a worker fails on the **byte-identical** value across an escalation, raster
+  aborts to a human oracle check — a stable wrong value is a correct computation against a wrong
+  *expectation*, so fix the frozen golden, not the impl.
+- **A trend gate must assert the property the dynamic actually guarantees.** A gate that asserts an
+  observable improves at (almost) *every* step (`np.all(np.diff(trend) >= 0)`, or a hard dip-count
+  cap `np.sum(diff < -eps) <= N`) encodes a *best-improving* dynamic. If the frozen update rule is
+  stochastic/non-greedy (faithful random Schelling relocation, ε-explore, annealing), the metric
+  only **drifts** upward — per-step dips are expected, so the gate *false-reds* a correct impl, and
+  a small seed-average can't smooth a random walk into monotonicity (a dip-count cap just makes the
+  verdict flip with the seed list). Assert the guaranteed property instead: a **net** rise with a
+  domain margin **plus** up-steps outnumbering down-steps (count-vs-count), or a
+  final-state-vs-random-baseline distribution test; `raster lint` flags the per-step form, and the
+  checkpoint should seed-smoke-test any stochastic gate against a disjoint seed list. Only the
+  domain owner can say whether near-monotonicity is even *supposed* to hold — state the intent.
+- **Derive shared constants; a gate over two copies tests nothing.** A source-of-truth constant (a
+  chord→pitch map, a rate table, a status enum) must live in **one** canonical place that every
+  consumer *imports* — never a private copy "based on" it. Two copies make a gate that asserts
+  `consumer(x) == GOLDEN[x]` compare two transcriptions: it greens because they agree, not because
+  the consumer follows the source, and stays green when the canonical value is corrected (the very
+  edit it must catch — SchellingChords M6's private `DIATONIC_CHORDS`). Keep exactly **one**
+  independent golden oracle and wire the gate as (canonical)-vs-(golden); `raster lint` flags
+  `based on <module>` copies and a constant defined as a literal in 2+ product modules. Prove the
+  net bites — perturb one canonical entry and confirm the gate reddens — and never hardcode a magic
+  number that equals a config field's default (a dead knob off-default; read the config).
+- **Don't pin a structural constant's size to a run parameter.** A structural fact (how many chords
+  the vocabulary *defines*, 7) and a run knob (how many a run *selects*, `n_chord_types=3`) are
+  **different layers**; a single assertion speaks to only one. `len(DIATONIC_CHORDS) == 3` — where 3
+  is the knob, not the vocabulary's size — is a category error, not a typo: no impl can make a
+  constant's length equal a per-run knob, so it is *unsatisfiable* and survives escalation to a
+  stronger model (the task is broken, not the worker — SchellingChords M7.T1 burned all four
+  attempts on `7 == 3`). For every `len(CONSTANT) == literal`, ask which layer the number lives in;
+  if the literal also appears as a parameter value, suspect a conflation. **Derive** the expected
+  (`len(VOCAB) == len(diatonic_major())`), don't hand-type it; `raster lint` flags the pinned-to-a-knob
+  form. And **isolate integrity/sanity guards** from the real acceptance test — a bug in a decorative
+  guard must not be able to fail a deliverable that actually passed.
+- **A *changing* failure each attempt is the mirror image of a plateau — escalate, don't reconcile.**
+  Read the trend of the error *string*, not just red/green. A **same** failure across attempts (the
+  byte-identical wrong value, surviving escalation) means the **oracle** is broken — raster aborts to a
+  human reconcile. A **changing** failure (error N fixed, N+1 appears) means the test is **sound** and
+  the worker is climbing a real ladder — the right lever is more turns / a higher tier, not a reconcile
+  (which wrongly blames a correct test). Two traps the doer defends against, worth designing for: (a)
+  runtime errors **mask each other** — Python raises only the first `NameError`, so a stack of undefined
+  names (`Path`→`datetime`→a missing helper) peels one per ~40-min cycle and exhausts a flat
+  `MAX_ATTEMPTS`; raster runs a sub-second static undefined-name pass each attempt and feeds the *whole*
+  list back at once, and on a moving chain that still runs out of turns it recommends a **re-queue with
+  more attempts** (pure waste on a plateau, the right call here). (b) A **structural/comprehension miss**
+  can hide *behind* the shallow chain and never be reached before the budget runs out — so any
+  sweep/exporter gate must assert the **number and shape** of artifacts (exactly one summary file, one
+  row per swept value), not only their values, and the freeze→impl checkpoint should hand-read the
+  deliverable against the contract's *intent*, not trust "one more import-fix and it's green."
+- **"Did the error move?" is necessary but not sufficient — read the *asymptote*, not the slope.** A
+  failure *count* that falls but levels off **above zero** is a **decaying plateau**, not progress: the
+  worker fixed everything satisfiable and hit a floor of residual tests no implementation can pass
+  (M9.T1: 19→18→17 failed, then stuck — the 17 were three oracle bugs). raster tracks the failed-count
+  trajectory and, when a moving chain **levels off above zero**, recommends a **reconcile** instead of
+  more turns; while it's still descending it re-queues but flags you to confirm it's heading to *zero*
+  (a chain ticking down by ones toward a nonzero floor is indistinguishable from real progress until it
+  flattens). When a plateau is suspected — flat *or* decaying — test each **residual** failure for
+  satisfiability: *can any impl pass it, given the rest of the frozen suite?* A "no" is an oracle bug →
+  stop and reconcile (a human freeze call), don't spend the strong tier on an unpassable floor. The
+  three floor archetypes to audit for: a parametrize handing a **fresh fixture per case** while
+  asserting **accumulated** state (use one *looping* test); a hand-authored **golden** no seed/real
+  producer generates (derive expected from the real producer); a **spy on a non-existent attribute**
+  (`getattr(obj, '_step_count', 0)` vs the framework's real `self.steps`).
+- **A found oracle bug is evidence about its *author* — sweep the frozen suite for siblings.** Phase-0
+  freezes a whole module's tests in one pass by one model, so a frozen-test bug is rarely a typo — it's a
+  **wrong belief** ("the model exposes `_step_count`", "vacancies sit at these indices") the author
+  applied to *every* sibling test that touches the concept. Fixing the one test that surfaced it leaves
+  clones behind — most dangerously in the module **gate** (`gate_*.py`), a separate file the per-task
+  green never runs, where it ambushes a downstream task hours later. So on **every** reconcile, grep the
+  whole `tests/` tree (gates included) for the same fingerprint and fix all instances pre-emptively —
+  one grep versus a fresh multi-hour plateau on a later gate. `raster lint` sweeps all of `tests/` for the
+  phantom-attribute-spy fingerprint (the literal-token case) automatically; the structural shapes need an
+  eye. Clear the *belief* across the suite, not just the symptom in the one test.
+- **Red-before-green — a build task's frozen test must FAIL at HEAD.** A test already green on the
+  current tree (before anything is built) isn't testing its deliverable. The classic miss is a
+  data/config/asset deliverable (`configs/demo.yaml`) whose test checks an inline kwargs dict + golden
+  constants and never loads the file by path — green at HEAD with the artifact absent. That's a false
+  green *and* a runaway-output cause: the frozen test is the worker's only gradient toward the
+  deliverable, so with no pull toward it a weak local model emits large, drifting, format-breaking text
+  (M8.T1: 51 passed at HEAD, attempt 1 ran 141 min to zero files). Every deliverable must be located by
+  path (resolved from the test file) and loaded through the **real loader**, not re-encoded inline;
+  `raster lint` flags a build task whose frozen test never references its non-`.py` deliverable, and the
+  freeze→impl checkpoint should confirm each deliverable's test fails at HEAD.
+- **`depends_on`** encodes the DAG; `raster queue` linearizes it into a single-parent
+  trundlr chain, so a failure auto-blocks everything downstream. Order tasks so each
+  depends on what it actually needs.
+- **worker** = each task's STARTING tier on `meta.ladder`. Assign it by **cost-of-error,
+  not difficulty** (see *Tiering* below).
+- Mirror `runtime_deps` into `meta.runtime_deps`.
+
+### Pin the spec — leave the worker no latitude
+
+A cheap local worker fills **every gap you leave** with its training prior, and turning thinking
+on makes it fill gaps *more confidently*, not more correctly (open latitude × thinking = a
+confident wrong invention; constrained latitude × thinking = a cleaner correct one). Prompt
+quality is just *how little latitude remains*. So when you write each `spec:`/`test_notes` and the
+frozen tests, pin — and assert on — the following (each maps to a real observed failure):
+
+1. **Structure — and what it is NOT.** "A 1D window of beats (a flat list of slots), **not** a 2D
+   grid." Naming the anti-pattern matters as much as naming the target; workers hallucinate the
+   familiar shape from their prior.
+2. **Types and exact field names.** "`Config` is a `@dataclass` with fields `a, b, c`" — never "a
+   config", which becomes a dict with invented fields every time.
+3. **Formulas by name AND definition, with a worked example.** "Jaccard distance `d = 1 − |a∩b|/|a∪b|`,
+   in `[0,1]`, identical→0, disjoint→1." A bare "distance" produces a different wrong metric each run.
+4. **The exact identifier names downstream consumers/guards import.** When names drift, an
+   introspecting guard finds nothing and **passes vacuously**.
+5. **Output shape.** Golden values as importable **module-level constants**, not pytest fixtures
+   (fixtures aren't importable, so they're not machine-checkable).
+6. **File locations.** Exact deliverable paths, or output lands where no downstream test can import it.
+7. **A worked example** wherever a value is independently computable — it gives the worker a self-check.
+
+This is also why Phase-0 authoring is always think-on and `strong`: reasoning helps *only once the
+spec is tight*. Spend the design effort here, at the top of the ladder, so the cheap rungs below
+implement against an oracle that already has no give.
+
+### Tiering — assign `worker` by cost-of-error floor
+
+The doer escalates cheap→expensive on failure (climbing `meta.ladder`: `worker` → `strong`
+−think → `strong` +think), with a failed top rung blocking downstream (escalate-on-fail, not
+block-on-fail). So you are choosing each task's **floor**, not its ceiling — failure raises the
+tier automatically. Three principles:
+
+1. **Floor by cost-of-error, not difficulty.** A wrong **frozen golden value** is *silent*
+   (no test can see wrong intent) and *irreversible* (impl tasks can't edit `tests/`) → it must
+   never start cheap: floor it at `strong`. A wrong **CLI flag** is *loud* (the test fails) and
+   *cheap* (the repair loop fixes it) → start it at `worker`. Difficulty barely matters when a
+   tight frozen oracle catches the error.
+2. **Spend the top tier UPSTREAM, on the frozen spec.** "Cheap workers implement against frozen
+   tests" only pays off if the tests are correct. All of **Phase 0** is `strong` — the golden
+   values *are* the design intent, and reasoning can't supply grounding the spec never pinned.
+   Get the oracle right once at the top of the ladder; then the cheap tiers implement against it.
+3. **Reasoning amplifies whatever latitude the spec gives.** Tight `spec:` + think → better
+   compliance; loose `spec:` + think → more elaborate *divergence* (it rationalises a
+   plausible-but-wrong invention). So pin interfaces precisely in `spec:`/`test_notes` — that is
+   what makes the think-on rung help rather than hurt. Phase-0 authoring is always think-on.
+
+Concretely: pure transcription / scaffold / argparse / demo config → start `worker`;
+multi-invariant logic (determinism, conservation, ordering) → start `strong` (think-on rung
+catches regressions the frozen test then verifies); every Phase-0 task and every gate → `strong`.
+
+Keep `PROGRESS.md` in sync with the modules/tasks you create (it's the human status board).
+
+## Step 3b — Add the two review backstops
+
+Pinning the spec lowers the error rate but can't drive it to zero. **The worker authored both the
+data and its own tests, so it cannot be its own checker** — that is exactly why a wrong frozen
+value sails through its own suite. Two residual error classes survive any prompt; each needs a
+*different* backstop, so don't conflate them:
+
+**Layer 1 — automated impl-independent guard** (catches *self-consistent-but-wrong-against-an-oracle*:
+a value the worker got consistently wrong in its own tables, yet wrong against the world). A small
+**Claude-authored** check, co-located with the frozen tests, asserting external ground truth the
+worker can't be trusted on and can't later edit; authored in Phase 0, run from a module **gate**.
+Insert one **iff all three** hold:
+1. **Frozen + high fan-out** — a Phase-0 contract many tasks consume; an error is unfixable by impl
+   (it can't edit a frozen test) and compounds downstream.
+2. **Semantic latitude** — the design left it unpinned, or it's a `worker: strong` task.
+3. **An external oracle exists** — a conservation law, metric axioms, a type/dimension invariant, a
+   domain rule. *No oracle → the check is tautological; don't write it.*
+
+Put the guard under a path **no task lists as a deliverable** (e.g. `tests/golden/test_*_consistency.py`),
+so a freeze re-run can't clobber it, and call it from the relevant gate's `integration_test`.
+
+**Layer 2 — manual review checkpoint** (catches *wrong-against-design-intent, with no mechanical
+oracle*: hacky-but-passing impls, design drift, "satisfies the test's letter, misses its point" —
+no test can encode this; it needs a human looking). Declare it as a module's `checkpoint:` field;
+`raster queue` turns it into a `command: null` trundlr task on the `[human, claude]` resources, on
+the dependency edge **before** that module — it stays `todo` (no runner claims those resources) and
+blocks everything downstream until a human signs off (failing-closed for free). **The description
+IS the prompt**: write the literal instruction you'll hand the reviewer when it surfaces. Place
+checkpoints where the worker has latitude AND tests are blind to intent:
+
+- **The freeze→impl boundary — the single highest-value checkpoint.** Frozen tests are the one
+  artifact impl can't repair; collection passing says nothing about whether the goldens are *right*.
+  Put a `checkpoint:` on the **first implementation module** to review the whole frozen suite once.
+- **The conceptually-hard `worker: strong` modules** — where "passes the test but is substantively
+  wrong" is most likely.
+- **A final whole-system sign-off** — set the top-level `final_checkpoint:` field.
+- **NOT the boilerplate modules** (scaffold, vocab, CLI). Impl there is self-protecting: a wrong impl
+  fails its own frozen gate and breaks the chain. Checkpointing everything just duplicates the gates
+  and throttles the autonomy that is the whole point of the cheap-worker pipeline.
+
+Both layers are **authored once and amortised** across every run/re-run — trigger them at the few
+high-value edges, don't gate every task. (Checkpoints need `human_resource` and `claude_resource`
+set in `~/.config/raster/config.toml`, else `raster queue` warns and queues them reviewer-less.)
+
+## Step 3c — Freeze-review: run `raster freeze-review` before `queue`
+
+raster concentrates correctness risk in ONE LLM-authored step — the Phase-0 freeze — then spends
+the expensive downstream compute (worker → strong → +think, often hours/task) *assuming the frozen
+layer is sound*. Across a whole project the **costly** failures are almost all frozen-layer defects,
+not implementation defects: a minute of freeze review outweighs an hour of doer retries. This whole
+guidance corpus is, in effect, a **freeze-review checklist** — run it BEFORE queuing, not after a
+build fails. `raster freeze-review` runs the mechanical half as a gate (it fails closed):
+
+1. **Static cross-reference** — the full `raster lint` suite.
+2. **Red-before-green, per deliverable** — it *executes* each implement task's frozen test against
+   the real tree at HEAD and blocks any that pass (green at HEAD ⇒ the test isn't testing its
+   deliverable: a false green and a runaway-output cause). A zero-cost early exerciser that pulls
+   discovery back to the freeze.
+3. **Gate red-before-green** — the same for every module gate. Gates are the structural blind spot:
+   authored with the unit tests but exercised only late, so they silently carry the same bugs (a
+   green unit task says nothing about its gate). Exercise them at freeze.
+
+Then complete, by hand (the command prints them — no linter can promote these):
+
+4. **Per-assertion satisfiability** — can ANY faithful impl pass each assertion, given the rest of
+   the suite? Watch for the floor archetypes: a fresh fixture per `parametrize` case asserting
+   accumulated state; a hand-authored golden no seed produces; a spy on a non-existent attribute.
+5. **Producer-correspondence** — is each expected value *derived from* the real producer, or
+   hand-encoded in parallel?
+6. **Assumption sweep** — when you reconcile any oracle bug, grep the whole `tests/` tree (gates
+   included) for the same fingerprint; one wrong belief recurs across siblings.
+
+**Calibrated (empirical) goldens — for targets only the producer can tell you.** A formula-derived
+or axiomatic golden you can hand-author. But a **stochastic/producer-frontier** target — "the GA
+drives Gini below X", "emergent inequality reaches level Y" — is *not knowable at authoring time*;
+pinning an absolute threshold before measuring the frontier is the M9.T1 trap (the target may be
+unsatisfiable for any correct impl, or trivially green). Two fixes, in order of preference:
+- **Pin a differential, not an absolute.** A seed-averaged margin against a *baseline computed in
+  the same run* (emergent − baseline ≥ margin; intervened ≤ un-intervened − margin) holds regardless
+  of the absolute level the producer happens to reach. Reserve absolute floors for soft sanity bounds.
+- **Calibrate, then freeze the measurement.** Where an absolute number is unavoidable, run a cheap
+  reference/pilot to *measure* the frontier and derive the constant from it (freeze the measured
+  value + tolerance, with a conftest self-check against the pilot) — "golden by construction", the
+  empirical analog of deriving a golden from a formula. (See postIneq's `calibration/` for a worked
+  example: a faithful Sugarscape-3 reference measured the emergent/undo frontier and the gate
+  thresholds were derived from it instead of guessed.)
+
+For a legitimately long gate (a GA/optimizer over seeded runs), set a per-task `budget:` (seconds)
+in tasks.yaml so the timeout doesn't kill a slow-but-progressing run.
+
+## Step 4 — Write the one-line build description
+
+Now that the design is settled, distil it into **one concrete sentence** and write it to the
+`description:` field of `code/raster.yaml`. This is NOT collected at init — you generate it here,
+*after* you understand the project, so it reflects the real aim rather than a first guess.
+
+It matters operationally: `raster build` injects this line into **every** worker prompt
+(*"You are building the {{PROJECT}} project (<this line>)"*), so it is the one piece of
+whole-project grounding each cheap local model sees on every task. Make it:
+
+- **concrete and domain-specific** — what it is + what it does (the noun and the verb), not a
+  vague mission statement; name the core artifact/output if there is one;
+- **one line** (~10–20 words); no markdown, no trailing period needed.
+
+Then verify it round-trips: `raster build <any task> --dry-run` should show your sentence in the
+prompt's first line.
+
+## Definition of done for `raster plan`
+
+- `DESIGN.md` complete, no skeleton comments left.
+- `tasks.yaml` has real `modules:` (Phase 0 + implementation), every task with a unit test,
+  every module with a gate, a clean dependency order, and consistent worker assignment.
+- `code/raster.yaml` `description:` holds the generated one-line build description (no longer the
+  `(to be generated during raster plan)` placeholder).
+- `PROGRESS.md` lists every gate and task.
+- the user has signed off. Then, **before** queuing, Phase-0 is authored and run through
+  **`raster freeze-review`** (Step 3c) — its mechanical checks clean and its reasoning checklist
+  walked. Only then is the project ready for **`raster queue`** — which submits the build chain to
+  trundlr (running `raster build` per task and `raster test` per gate). Tell the user the next step
+  is `raster freeze-review` then `raster queue` (preview it with `raster queue --dry-run`), not
+  `raster build` directly.
+
+---
+*This playbook was generated by `raster init`. It is safe to delete once planning is done.*
