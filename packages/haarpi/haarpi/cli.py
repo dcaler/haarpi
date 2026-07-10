@@ -38,6 +38,7 @@ usage:
         read the finished markup: mint a release, or classify + queue rework
         (runs automatically as the last task of every queued chain)
   haarpi status             stages: released / in flight / unlocked / waiting / stale
+  haarpi queue              register the trundlr project / queue the opening chain
   haarpi <tool> <args…>     run a stage tool (rabbithole | raconteur | raster | rayleigh)
   haarpi doctor             report which stack each binary on PATH resolves to
 
@@ -72,6 +73,8 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         return 2
     if cmd == "status":
         return planner.run_status(root)
+    if cmd == "queue":
+        return planner.run_queue(root)
     if cmd == "next":
         ap = argparse.ArgumentParser(prog="haarpi next")
         ap.add_argument("--stage")
@@ -127,12 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         return _dispatch(TOOLS[cmd], rest)
     if cmd == "doctor":
         return _doctor()
-    if cmd in ("init", "next", "status"):
+    if cmd in ("init", "next", "status", "queue"):
         return _pipeline_verb(cmd, rest)
-    if cmd == "queue":
-        print("haarpi queue: `haarpi init` queues the opening chain; standalone "
-              "re-queueing lands later.")
-        return 2
     print(f"haarpi: unknown command '{cmd}'\n\n{_USAGE}", end="", file=sys.stderr)
     return 2
 

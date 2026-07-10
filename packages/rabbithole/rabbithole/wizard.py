@@ -94,13 +94,15 @@ def run(directory: str = ".") -> int:
 
 def _first_run(root: Path) -> int:
     # Ask every question first; the LLM parse happens once, after the interview.
-    default_name = _default_name(root.name)
+    from haarpi.project import header_defaults
+    hdr = header_defaults(root)
+    default_name = hdr.get("name") or _default_name(root.name)
     name = _ask(f'Do you want to call this project "{default_name}" or something else?',
                 default_name)
     project_name = name.strip() or default_name
 
     print()
-    research = _ask("What do you want to research today?")
+    research = _ask("What do you want to research today?", hdr.get("brief", ""))
     while not research:
         print("  Tell me, in a sentence or two, what you want to look into.")
         research = _ask("What do you want to research today?")

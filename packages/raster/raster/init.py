@@ -153,12 +153,16 @@ def run_init(args) -> int:
             prior = {}
 
     log(f"project root: {root}")
-    name = ask("Project name", default=prior.get("project") or project_name_from_dir(root.name),
+    # inside a HAARPi project, identity was answered once at `haarpi init`
+    from haarpi.project import header_defaults
+    hdr = header_defaults(root)
+    name = ask("Project name", default=prior.get("project") or hdr.get("name")
+               or project_name_from_dir(root.name),
                preset=args.name)
     # long-form intent — the raw material `raster plan` designs from (stored in raster.yaml).
     brief = ask_longform("What do you want to build today?", preset=args.brief).strip()
     if not brief:
-        brief = (prior.get("brief") or "").strip()   # keep a prior brief on re-init
+        brief = (prior.get("brief") or hdr.get("brief") or "").strip()   # prior / manifest
     package = slugify(name)   # import name is always the slugified project name (not asked)
     # one-line description is NOT asked here — `raster plan` generates it from the detailed
     # design + planning session (it feeds the build LLM prompts), and writes it to raster.yaml.

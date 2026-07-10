@@ -85,6 +85,12 @@ name          = "rayleigh"   # stamped into .docx write-up metadata
 tool_initials = "ra"         # trailing suffix on tool-authored files (revision chain)
 user_initials = "DCR"        # the human reviewer's initials
 
+[planner]
+# Tiers that insert an "approve plan" human task at the head of the rework
+# chain (mark it done in trundlr to release the chain). Cheap tiers run
+# hands-free; a redirection re-aims the whole stage, so it asks first.
+confirm_tiers = ["redirection"]
+
 # Per-tool overrides of any section above, e.g.:
 # [tools.raster.ollama]
 # coordinator = "qwen3.6:27b-32k"

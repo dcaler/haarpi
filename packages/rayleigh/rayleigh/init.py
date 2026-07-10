@@ -176,8 +176,13 @@ def discover_priors(root: Path):
 
 
 def _derive_brief(root: Path) -> str:
-    """Fall back to the raster build brief/description when no rayleigh brief is given —
-    it's the closest statement of research intent already on disk."""
+    """Fall back to the HAARPi manifest brief (answered once at `haarpi init`),
+    then the raster build brief/description — the closest statements of research
+    intent already on disk."""
+    from haarpi.project import header_defaults
+    hdr_brief = (header_defaults(root).get("brief") or "").strip()
+    if hdr_brief:
+        return hdr_brief
     ry = root / "code" / "raster.yaml"
     if not ry.is_file():
         return ""

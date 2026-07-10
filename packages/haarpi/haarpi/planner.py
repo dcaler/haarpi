@@ -78,10 +78,17 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "process": Step("haarpi rayleigh process", 1.0,
                         "Re-reduce data to the preregistered outputs and write-up."),
         "comment": Step(None, 0.25, "Review the results write-up and annotate it."),
+        "review_session": Step(None, 1.0,
+                               "Deep review needed (new cells/seeds/experiments): run "
+                               "`haarpi rayleigh review` — the attended session designs "
+                               "and queues the follow-on chain itself."),
     },
 }
 
-# tier -> ordered step chain, per stage
+# tier -> ordered step chain, per stage. A "stage:step" element queues into
+# ANOTHER stage's registry — cross-stage escalation ("this claim needs
+# literature support" on the paper queues a litreview chain; the paper's own
+# refresh then arrives via staleness propagation when that gate passes).
 STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     "litreview": {
         "cosmetic":    ["revise", "comment"],
@@ -91,10 +98,19 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     "paper": {
         "cosmetic":   ["revise", "comment"],
         "structural": ["outline", "draft", "comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect",
+                                "litreview:report", "litreview:comment"],
     },
     "experiments": {
         "cosmetic": ["process", "comment"],
+        "extend":   ["review_session"],
     },
+}
+
+# what a stage re-runs when an INPUT releases anew while it sits idle with output
+STAGE_REFRESH: dict[str, list[str]] = {
+    "paper":       ["revise", "comment"],
+    "experiments": ["process", "comment"],
 }
 
 _SYS = ("You are a research-pipeline planner. You read a reviewer's unresolved "
@@ -132,18 +148,20 @@ Pick the ONE tier matching the MOST substantive work ANY annotation asks for:
   wording, clarity, tone, transitions, small factual fixes from existing material.
 - "structural": at least one annotation demands reorganization — sections added, removed,
   merged, or reordered; the argument restructured. The outline must change.
+- "upstream_literature": at least one annotation needs NEW SOURCES — a claim requiring
+  citation support the corpus lacks, "cite more recent work on X", a missing related-work
+  thread. The paper cannot satisfy it; the literature review must gather first.
 
-Respond: {{"tier": "...", "assessment": "<one sentence>"}}""",
+Respond: {{"tier": "...", "assessment": "<one sentence>", "gather_topics": ["..."]}}
+(gather_topics only for upstream_literature: specific, searchable topics.)""",
     "experiments": """\
 A reviewer left unresolved annotations on an experiment results write-up:
 {annotations}
 
 - "cosmetic": every annotation is about presentation — figure choices, table layout,
   narration of the preregistered findings. The data already answers them.
-
-Anything demanding new cells, new seeds, or a new experiment is beyond this planner's
-current chains — classify it "cosmetic" ONLY if presentation alone satisfies it;
-otherwise use tier "escalate" and say what is needed.
+- "extend": at least one annotation demands NEW DATA — more cells, more seeds, a wider
+  sweep, or a new experiment. Presentation cannot satisfy it.
 
 Respond: {{"tier": "...", "assessment": "<one sentence>"}}""",
 }
@@ -192,34 +210,50 @@ def next_cycle(titles: list[str], stage: str) -> int:
 # ── queueing ─────────────────────────────────────────────────────────────────
 
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
-                steps: list[str], tr_cfg: dict, description: str = "") -> dict:
+                steps: list[str], tr_cfg: dict, description: str = "",
+                approval: bool = False) -> dict:
     """Queue the steps as a dependency chain, always appending the next planner
-    invocation as a runner task — the loop feeds itself."""
-    registry = STAGE_STEPS[stage]
+    invocation as a runner task — the loop feeds itself.
+
+    A step may be "otherstage:step" (cross-stage escalation; it queues into
+    that stage's registry under that stage's title). approval=True prepends a
+    command-less human task that gates the whole chain (confirm_tiers)."""
     history = client.all_tasks()
-    titles = [t.get("title", "") for t in history
-              if t.get("project_id") in (project_id, None)]
     cycle = next_cycle([t.get("title", "") for t in client.tasks_for_project(project_id)],
                        stage)
 
-    plan_steps = [(name, registry[name]) for name in steps]
-    plan_steps.append(("next", Step("haarpi next", 0.1,
-                                    "Read the finished markup; mint a release or queue rework.")))
+    plan_steps: list[tuple[str, str, Step]] = []
+    if approval:
+        plan_steps.append((stage, "approve",
+                           Step(None, 0.1, "Approve this plan — marking done releases "
+                                           "the chain (confirm_tiers).")))
+    for name in steps:
+        st, _, sname = name.rpartition(":")
+        st = st or stage
+        plan_steps.append((st, sname, STAGE_STEPS[st][sname]))
+    plan_steps.append((stage, "next",
+                       Step("haarpi next", 0.1,
+                            "Read the finished markup; mint a release or queue rework.")))
     prev_id = None
     queued = []
-    for name, step in plan_steps:
+    first = True
+    for st, name, step in plan_steps:
         rid = _resource_id(tr_cfg, "human" if step.human else step.resource)
+        title = f"{st} {name} {cycle}"
+        desc = step.desc
+        if first and description:
+            desc = f"{description} — {step.desc}"    # the plan + the instructions
         task = client.create_task(
-            f"{stage} {name} {cycle}", project_id,
+            title, project_id,
             command=step.command,
             depends_on_id=prev_id,
-            description=(description if name == plan_steps[0][0] else "") or step.desc,
+            description=desc,
             resource_id=rid,
-            duration=estimate_hours(history, stage, name, step.hours),
+            duration=estimate_hours(history, st, name, step.hours),
         )
         prev_id = task["id"]
-        queued.append({"title": f"{stage} {name} {cycle}", "id": task["id"],
-                       "command": step.command})
+        first = False
+        queued.append({"title": title, "id": task["id"], "command": step.command})
     return {"cycle": cycle, "tasks": queued}
 
 
@@ -288,6 +322,44 @@ def _archive_chain(root: Path, m: project.Manifest, stage: str, release: Path) -
     return n
 
 
+def _current_bindings(root: Path, m: project.Manifest, stage: str) -> dict:
+    """Snapshot of the input releases a stage's queued work will bind — the
+    provenance record staleness detection compares against."""
+    out = {}
+    for s in m.stages[stage].get("inputs", []):
+        rel = project.latest_release(root, m, s)
+        if rel is not None:
+            out[s] = rel.name
+    return out
+
+
+def _refresh_stale(root: Path, m: project.Manifest, client, tr_cfg: dict,
+                   minted_stage: str, release: Path) -> list[str]:
+    """Staleness propagation: a fresh release re-fires idle downstream stages
+    that already produced output bound to the older one. Mid-flight stages are
+    left alone — their next cycle re-binds naturally."""
+    refreshed = []
+    for d, spec in m.stages.items():
+        if minted_stage not in spec.get("inputs", []) or d not in STAGE_REFRESH:
+            continue
+        if project.in_flight(root, m, d) or not project.latest_release(root, m, d):
+            continue
+        already = any(e.get("type") == "refresh" and e.get("stage") == d
+                      and e.get("source") == release.name
+                      for e in project.list_plans(root))
+        if already:
+            continue
+        queued = queue_chain(client, m.trundlr_project_id, d, STAGE_REFRESH[d],
+                             tr_cfg, description=f"Refresh: new {minted_stage} "
+                                                 f"release {release.name}.")
+        project.record_plan(root, {"type": "refresh", "stage": d,
+                                   "source": release.name,
+                                   "bindings": _current_bindings(root, m, d),
+                                   "cycle": queued["cycle"]})
+        refreshed.append(d)
+    return refreshed
+
+
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
     """After a mint: open any downstream stage that just became unlocked."""
     opened = []
@@ -310,7 +382,8 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             queue_chain(client, m.trundlr_project_id, stage,
                         ["draft", "comment"] if stage == "paper" else ["comment"],
                         tr_cfg, description="Stage opened: inputs released.")
-        project.record_plan(root, {"type": "opened", "stage": stage})
+        project.record_plan(root, {"type": "opened", "stage": stage,
+                                   "bindings": _current_bindings(root, m, stage)})
         opened.append(stage)
     return opened
 
@@ -354,15 +427,17 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         project.record_plan(root, {
             "type": "gate", "stage": stage, "annotation_hash": ahash,
             "markup": markup.name, "release": dst.name, "archived": archived})
-        opened = []
+        opened, refreshed = [], []
         if m.trundlr_project_id:
             try:
                 client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
                 opened = _advance(root, m, client, tr_cfg)
+                refreshed = _refresh_stale(root, m, client, tr_cfg, stage, dst)
             except trundlr.TrundlrError as e:
                 print(f"  [trundlr] advance skipped: {e}")
         msg = (f"{stage}: gate PASSED — released {dst.name}"
-               + (f"; opened {', '.join(opened)}" if opened else ""))
+               + (f"; opened {', '.join(opened)}" if opened else "")
+               + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else ""))
         print(f"haarpi next: {msg}")
         _email(cfg, f"haarpi: {m.name} — {stage} gate passed", msg)
         return 0
@@ -380,9 +455,15 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     if dry_run:
         print("\n".join(["[dry-run]"] + summary))
         return 0
+    confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or ["redirection"])
+    if confirm:
+        summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
+    if plan.get("gather_topics"):
+        summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
     entry = {"type": "plan", "stage": stage, "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,
-             "assessment": plan.get("assessment", "")}
+             "assessment": plan.get("assessment", ""),
+             "bindings": _current_bindings(root, m, stage)}
     if not m.trundlr_project_id:
         project.record_plan(root, entry)
         print("\n".join(summary + ["  [trundlr] no project id — run the chain manually:"]
@@ -390,8 +471,11 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         return 0
     try:
         client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
+        desc = plan.get("assessment", "")
+        if plan.get("gather_topics"):
+            desc += " | gather topics: " + ", ".join(plan["gather_topics"])
         queued = queue_chain(client, m.trundlr_project_id, stage, steps, tr_cfg,
-                             description=plan.get("assessment", ""))
+                             description=desc, approval=confirm)
         entry["cycle"] = queued["cycle"]
         entry["tasks"] = [t["title"] for t in queued["tasks"]]
         project.record_plan(root, entry)
@@ -411,6 +495,43 @@ def _email(cfg: dict, subject: str, body: str) -> None:
     to = nt.get("to") or cfg.get("contact_email", "")
     if to:
         notify.send_email(subject, body, to=to, mail_prog=nt.get("mail_prog", ""))
+
+
+def run_queue(root: Path) -> int:
+    """Register the trundlr project (if the manifest lacks an id) and queue the
+    lit-review opening chain if the stage has no tasks yet — for projects
+    initialised with --no-trundlr, or after standing trundlr up later."""
+    m = project.load_manifest(root)
+    cfg = pipeline_config()
+    tr_cfg = cfg.get("trundlr", {})
+    if not tr_cfg.get("url"):
+        print("haarpi queue: no [trundlr] url configured.")
+        return 2
+    try:
+        client = trundlr.TrundlrClient(tr_cfg["url"])
+        if not m.trundlr_project_id:
+            pid, created = trundlr.resolve_project_id(
+                tr_cfg["url"], m.name, folder=str(root.resolve()),
+                description="HAARPi research pipeline")
+            m.trundlr_project_id = pid
+            project.save_manifest(m, root)
+            print(f"  trundlr project '{m.name}' (id {pid}"
+                  + (", created)" if created else ")"))
+        titles = [t.get("title", "") for t in
+                  client.tasks_for_project(m.trundlr_project_id)]
+        if any(t.startswith("litreview ") for t in titles):
+            print(f"haarpi queue: litreview already has tasks "
+                  f"({len(titles)} total) — nothing to queue.")
+            return 0
+        queued = queue_chain(client, m.trundlr_project_id, "litreview",
+                             ["gather", "collect", "report", "comment"], tr_cfg,
+                             description=m.brief[:300])
+        print(f"haarpi queue: litreview cycle {queued['cycle']} queued "
+              f"({len(queued['tasks'])} tasks, ends in `haarpi next`).")
+        return 0
+    except trundlr.TrundlrError as e:
+        print(f"haarpi queue: trundlr unreachable — {e}")
+        return 1
 
 
 # ── init + status ────────────────────────────────────────────────────────────

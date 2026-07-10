@@ -173,3 +173,89 @@ def test_status_reports_stage_states(proj, capsys):
     outp = capsys.readouterr().out
     assert "litreview" in outp and "open" in outp
     assert "waiting" in outp                                     # downstream stages gated
+
+
+def test_redirection_inserts_approval_gate(proj, servers):
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "redirection", "assessment": "wrong direction",
+                           "gather_topics": ["Y"]})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert new[0]["title"].startswith("litreview approve")     # confirm_tiers head
+    assert "command" not in new[0]                             # human, command-less
+    assert new[1]["depends_on_id"] == new[0]["id"]             # chain gated behind it
+    assert "gather topics: Y" in new[0]["description"]         # the human reads the plan
+
+
+def test_paper_markup_escalates_upstream_literature(proj, servers):
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "upstream_literature",
+                           "assessment": "claims need citation support",
+                           "gather_topics": ["Schelling dynamics"]})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "paper") / "260710_myproj_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    steps = [t["title"].rsplit(" ", 1)[0] for t in tr.tasks[before:]]
+    assert steps == ["litreview gather", "litreview collect", "litreview report",
+                     "litreview comment", "paper next"]        # cross-stage chain
+    assert tr.tasks[before]["command"].startswith("haarpi rabbithole")
+
+
+def test_release_refreshes_idle_downstream_stage(proj, servers):
+    tr, _ = servers
+    m = project.load_manifest(proj)
+    # paper already produced a release earlier (idle, no in-flight work)
+    paper_rel = m.output_dir(proj, "paper") / "260709_myproj.docx"
+    _make_markup(paper_rel, resolved=True)
+    from haarpi import redline
+    redline.mint_release(paper_rel, paper_rel, md_sibling=False)  # normalize in place
+
+    markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"
+    _make_markup(markup, resolved=True)
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0                          # mints litreview release
+
+    titles = [t["title"] for t in tr.tasks[before:]]
+    assert any(t.startswith("paper revise") for t in titles)    # staleness re-fired paper
+    entry = [e for e in project.list_plans(proj) if e.get("type") == "refresh"][-1]
+    assert entry["stage"] == "paper" and entry["bindings"].get("litreview")
+
+
+def test_experiments_extend_escalates_to_attended_review(proj, servers):
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "extend", "assessment": "needs more seeds"})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "experiments") / "260710_myproj_results_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert new[0]["title"].startswith("experiments review_session")
+    assert "command" not in new[0]                              # attended session, yours
+    assert "rayleigh review" in new[0]["description"]
+
+
+def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
+    tr, _ = servers
+    root = tmp_path / "260813_other"
+    root.mkdir()
+    planner.run_init(root, name="other", short_title="other", brief="b",
+                     initials="DCR", no_trundlr=True)
+    assert project.load_manifest(root).trundlr_project_id is None
+    assert planner.run_queue(root) == 0
+    m = project.load_manifest(root)
+    assert m.trundlr_project_id is not None
+    titles = [t["title"] for t in tr.tasks if t.get("project_id") == m.trundlr_project_id]
+    assert titles[0].startswith("litreview gather")
+    assert planner.run_queue(root) == 0                         # idempotent: nothing doubled
+    assert len([t for t in tr.tasks
+                if t.get("project_id") == m.trundlr_project_id]) == 5

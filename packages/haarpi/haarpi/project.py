@@ -201,3 +201,15 @@ def stale_inputs(root: Path, m: Manifest, stage: str) -> list[str]:
         if bound.get(s) and bound[s] != rel.name:
             out.append(s)
     return out
+
+
+def header_defaults(start: Path | None = None) -> dict:
+    """The identity a stage tool's init should not re-ask: answered once at
+    `haarpi init`, read from the manifest found at or above `start`.
+    Returns {} outside a HAARPi project — tools stay fully standalone."""
+    root = find_root(start)
+    if root is None:
+        return {}
+    m = load_manifest(root)
+    return {"name": m.name, "short_title": m.short_title, "brief": m.brief,
+            "initials": m.initials, "root": root}

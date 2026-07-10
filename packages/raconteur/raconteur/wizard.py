@@ -95,7 +95,10 @@ def run(project_dir: Path) -> None:
     cfg = ProjectConfig.load(project_dir) if existing else ProjectConfig()
 
     if not cfg.short_title:
-        cfg.short_title = re.sub(r"^\d{6}_", "", project_dir.name)
+        # inside a HAARPi project, identity was answered once at `haarpi init`
+        from haarpi.project import header_defaults
+        cfg.short_title = (header_defaults(project_dir).get("short_title")
+                           or re.sub(r"^\d{6}_", "", project_dir.name))
 
     if existing:
         print(f"  short title : {cfg.short_title}")
