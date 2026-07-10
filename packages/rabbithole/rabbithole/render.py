@@ -6,10 +6,10 @@ A new datestamp marks a new major revision cycle (new research direction).
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from datetime import date
 from pathlib import Path
+
+from haarpi.render import pandoc_convert  # noqa: F401 — re-exported for callers
 
 
 def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
@@ -59,17 +59,3 @@ def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
     if pandoc_convert(out_md, out_docx):
         return out_md, out_docx
     return out_md, None
-
-
-def pandoc_convert(src: Path, dst: Path) -> bool:
-    if not shutil.which("pandoc"):
-        print("  [note] pandoc not found — skipping .docx (md written). "
-              "Install pandoc to get .docx output.")
-        return False
-    try:
-        subprocess.run(["pandoc", str(src), "-o", str(dst)],
-                       check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"  [warn] pandoc failed: {e.stderr.decode()[:200]}")
-        return False

@@ -1,17 +1,11 @@
-"""Timestamped, elapsed-stamped logging shared by the build/exec path — so a long
-local-model run is legible in trundlr logs (matches the doer's format)."""
+"""raster's run log — shared implementation in haarpi.runlog, stamped [raster]."""
 
-import time
-from datetime import datetime
-
-_T0 = time.monotonic()
+from haarpi import runlog as _core
+from haarpi.runlog import fmt_secs
 
 
 def log(msg: str) -> None:
-    elapsed = time.monotonic() - _T0
-    print(f"[raster {datetime.now():%H:%M:%S} +{elapsed:6.0f}s] {msg}", flush=True)
+    _core.log(msg, tool="raster")
 
 
-def fmt_secs(s: float) -> str:
-    m, sec = divmod(int(s), 60)
-    return f"{m}m{sec:02d}s" if m else f"{sec}s"
+__all__ = ["log", "fmt_secs"]

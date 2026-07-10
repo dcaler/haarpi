@@ -9,6 +9,7 @@ description = "Experiment designer & runner in the ra* family — designs, condu
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "haarpi",
     "PyYAML>=6",
     "pandas>=1.3",       # process_outputs: tidy cell table; reads R's CSV outputs for the report
     "python-docx>=0.8",  # process_outputs: the .docx write-up (degrades if absent)
@@ -31,3 +32,6 @@ include = ["rayleigh*"]
 
 [tool.setuptools.package-data]
 rayleigh = ["templates/*.tmpl"]
+
+[tool.uv.sources]
+haarpi = { workspace = true }
