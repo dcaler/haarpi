@@ -7,10 +7,10 @@ name = "rayleigh"
 version = "0.1.0"
 description = "Experiment designer & runner in the ra* family — designs, conducts, and writes up experiments against a codebase."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "haarpi",
-    "PyYAML>=6",
+    "PyYAML>=6.0.2",
     "pandas>=1.3",       # process_outputs: tidy cell table; reads R's CSV outputs for the report
     "python-docx>=0.8",  # process_outputs: the .docx write-up (degrades if absent)
 ]
