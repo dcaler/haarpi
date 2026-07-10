@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# macOS / sync litter
+.DS_Store
+._*
+
+# Word lock files
+~$*
+
+# local tool state
+.claude/
