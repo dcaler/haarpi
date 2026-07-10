@@ -184,14 +184,14 @@ def plan_chain(verdicts: dict, spec: dict, exec_cmd: str, resources: dict,
         chain.append({
             "id": f"conduct_exp {eid}", "title": f"rayleigh: conduct_exp {eid}",
             "description": f"re-conduct {eid} against the revised spec",
-            "command": f"{exec_cmd} conduct_exp {eid}",
+            "command": f"{exec_cmd} conduct {eid}",
             "resources": [resources[kind]], "resource_kind": kind,
             "duration": float(exp.get("budget_hours", 1.0)), "human": False})
     if needs_process:
         chain.append({
             "id": "process_outputs", "title": "rayleigh: process_outputs",
             "description": "regenerate the report from the revised spec",
-            "command": f"{exec_cmd} process_outputs",
+            "command": f"{exec_cmd} process",
             "resources": [cpu], "resource_kind": "cpu", "duration": 0.5, "human": False})
         if human_resource:
             chain.append({
@@ -276,7 +276,7 @@ def fold_forward(root: Path, cfg, args) -> int:
         # fall through: any non-re-init actionable verdicts still get queued below.
 
     api, resources, pid_raw = _trundlr_meta(results, root, cfg)
-    chain = plan_chain(verdicts, spec, args.exec_cmd or "rayleigh", resources, cfg.human_resource)
+    chain = plan_chain(verdicts, spec, args.exec_cmd or "haarpi rayleigh", resources, cfg.human_resource)
     if not chain:
         if all(v == "accept" for v in verdicts.values()):
             log("all experiments accepted — cycle closes. The report is the deliverable.")

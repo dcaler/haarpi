@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--no-launch", action="store_true",
                       help="scaffold only; print the playbook path instead of launching claude")
 
-    conduct = sub.add_parser("conduct_exp", help="run one experiment's cells against code/")
+    conduct = sub.add_parser("conduct", aliases=["conduct_exp"], help="run one experiment's cells against code/")
     _common(conduct)
     conduct.add_argument("experiment", help="experiment id, e.g. E1")
     conduct.add_argument("--dry-run", action="store_true",
@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="skip the pilot-measured RAM sizing + per-worker memory ceiling "
                               "(default: on). Only use if you have sized workers yourself.")
 
-    process = sub.add_parser("process_outputs",
+    process = sub.add_parser("process", aliases=["process_outputs"],
                              help="reduce data -> preregistered outputs -> the .docx write-up")
     _common(process)
     process.add_argument("--experiment", help="process only this experiment id (default: all)")
@@ -75,10 +75,10 @@ def main(argv=None) -> int:
     if args.cmd == "init":
         from rayleigh.init import run_init
         return run_init(args)
-    if args.cmd == "conduct_exp":
+    if args.cmd in ("conduct", "conduct_exp"):
         from rayleigh.conduct_exp import run_conduct_exp
         return run_conduct_exp(args)
-    if args.cmd == "process_outputs":
+    if args.cmd in ("process", "process_outputs"):
         from rayleigh.process_outputs import run_process_outputs
         return run_process_outputs(args)
     if args.cmd == "review":

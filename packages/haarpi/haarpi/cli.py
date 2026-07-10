@@ -28,19 +28,58 @@ TOOLS = {
     "rayleigh": "rayleigh",
 }
 
-_PLANNED = ("init", "next", "status", "queue")
-
 _USAGE = """\
 haarpi — Human Authored Agentic Research Pipeline
 
 usage:
+  haarpi init [--name N --short-title S --brief B --initials I --no-trundlr]
+        one interview -> haarpi.yaml, stage skeleton, trundlr project + first chain
+  haarpi next [--stage S] [--file F] [--dry-run]
+        read the finished markup: mint a release, or classify + queue rework
+        (runs automatically as the last task of every queued chain)
+  haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi <tool> <args…>     run a stage tool (rabbithole | raconteur | raster | rayleigh)
   haarpi doctor             report which stack each binary on PATH resolves to
-  haarpi init|next|status|queue    (pipeline verbs — land with the planner harness)
 
 example:
   haarpi rabbithole gather
 """
+
+
+def _pipeline_verb(cmd: str, rest: list[str]) -> int:
+    import argparse
+    from pathlib import Path
+
+    from . import planner, project
+
+    if cmd == "init":
+        ap = argparse.ArgumentParser(prog="haarpi init")
+        ap.add_argument("--name")
+        ap.add_argument("--short-title")
+        ap.add_argument("--brief")
+        ap.add_argument("--initials")
+        ap.add_argument("--no-trundlr", action="store_true")
+        ap.add_argument("--dir", default=".")
+        a = ap.parse_args(rest)
+        return planner.run_init(Path(a.dir).resolve(), name=a.name,
+                                short_title=a.short_title, brief=a.brief,
+                                initials=a.initials, no_trundlr=a.no_trundlr)
+
+    root = project.find_root()
+    if root is None:
+        print("haarpi: no haarpi.yaml found here or above — run `haarpi init` first.",
+              file=sys.stderr)
+        return 2
+    if cmd == "status":
+        return planner.run_status(root)
+    if cmd == "next":
+        ap = argparse.ArgumentParser(prog="haarpi next")
+        ap.add_argument("--stage")
+        ap.add_argument("--file", type=Path)
+        ap.add_argument("--dry-run", action="store_true")
+        a = ap.parse_args(rest)
+        return planner.run_next(root, stage=a.stage, file=a.file, dry_run=a.dry_run)
+    return 2
 
 
 def _dispatch(tool_pkg: str, args: list[str]) -> int:
@@ -88,9 +127,11 @@ def main(argv: list[str] | None = None) -> int:
         return _dispatch(TOOLS[cmd], rest)
     if cmd == "doctor":
         return _doctor()
-    if cmd in _PLANNED:
-        print(f"haarpi {cmd}: not built yet — this verb lands with the planner harness. "
-              "Stage tools work now: haarpi <tool> <args…>.")
+    if cmd in ("init", "next", "status"):
+        return _pipeline_verb(cmd, rest)
+    if cmd == "queue":
+        print("haarpi queue: `haarpi init` queues the opening chain; standalone "
+              "re-queueing lands later.")
         return 2
     print(f"haarpi: unknown command '{cmd}'\n\n{_USAGE}", end="", file=sys.stderr)
     return 2

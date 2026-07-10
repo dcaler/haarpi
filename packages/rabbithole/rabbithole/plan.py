@@ -352,8 +352,8 @@ def _build_command(step: str) -> str | None:
     if not verb:
         return None
     if step == "revise":
-        return "rabbitHole revise --no-queue"
-    return f"rabbitHole {verb}"
+        return "haarpi rabbithole revise --no-queue"
+    return f"haarpi rabbithole {verb}"
 
 
 def _next_cycle(titles: list[str]) -> int:

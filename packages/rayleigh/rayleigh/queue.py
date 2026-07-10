@@ -57,7 +57,7 @@ def linearize(spec: dict, exec_cmd: str, resources: dict) -> list:
             "id": eid,
             "title": f"rayleigh: conduct_exp {eid}",
             "description": exp.get("title", "") or f"conduct experiment {eid}",
-            "command": f"{exec_cmd} conduct_exp {eid}",
+            "command": f"{exec_cmd} conduct {eid}",
             "resources": [rid],
             "resource_kind": kind if kind in resources else "cpu",
             "duration": hours,
@@ -67,7 +67,7 @@ def linearize(spec: dict, exec_cmd: str, resources: dict) -> list:
             "id": "process_outputs",
             "title": "rayleigh: process_outputs",
             "description": "reduce cell data -> preregistered outputs + the .docx write-up",
-            "command": f"{exec_cmd} process_outputs",
+            "command": f"{exec_cmd} process",
             "resources": [cpu],
             "resource_kind": "cpu",
             "duration": DEFAULT_PROCESS_HOURS,
@@ -98,7 +98,7 @@ def run_queue(args) -> int:
                  "cpu": res.get("cpu", cfg.cpu_resource)}
     api = tr.get("api_url") or cfg.trundlr_api
 
-    exec_cmd = args.exec_cmd or os.environ.get("RAYLEIGH_EXEC_CMD", "rayleigh")
+    exec_cmd = args.exec_cmd or os.environ.get("RAYLEIGH_EXEC_CMD", "haarpi rayleigh")
     chain = linearize(spec, exec_cmd, resources)
 
     if getattr(args, "dry_run", False):

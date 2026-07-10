@@ -180,7 +180,7 @@ def linearize(project, exec_cmd: str) -> list:
 
 def run_queue(args) -> int:
     project = load_project(args.dir)
-    exec_cmd = args.exec_cmd or os.environ.get("RASTER_EXEC_CMD", "raster")
+    exec_cmd = args.exec_cmd or os.environ.get("RASTER_EXEC_CMD", "haarpi raster")
     chain = linearize(project, exec_cmd)
     if not chain:
         print("[raster queue] tasks.yaml has no modules yet — run `raster plan` first.")

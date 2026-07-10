@@ -59,9 +59,11 @@ def test_pasted_references_without_a_section_still_end_in_revise():
 def test_report_is_a_known_step_with_a_command():
     assert plan._STEP["report"]["verb"] == "report"
     assert plan._STEP["report"]["human"] is False
-    # report never queues, so unlike revise it needs no --no-queue guard
-    assert plan._build_command("report") == "rabbitHole report"
-    assert plan._build_command("revise") == "rabbitHole revise --no-queue"
+    # report never queues, so unlike revise it needs no --no-queue guard.
+    # Commands are queued in umbrella form: on the shared runner box the old
+    # standalone stack owns the bare names (oddjob coexistence).
+    assert plan._build_command("report") == "haarpi rabbithole report"
+    assert plan._build_command("revise") == "haarpi rabbithole revise --no-queue"
 
 
 # ── the reviewer's ask reaches `report` through the focus line ───────────────

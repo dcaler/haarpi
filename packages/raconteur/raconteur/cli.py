@@ -58,7 +58,7 @@ def main() -> None:
     sub.add_parser("onepager", help="draft the concise narrative one-pager (before outline)")
     sub.add_parser("venue", help="analyse and recommend publication venues")
     sub.add_parser("outline", help="generate a paper outline from the approved one-pager")
-    paper_p = sub.add_parser("paper", help="write a fresh draft or redline your revision")
+    paper_p = sub.add_parser("draft", aliases=["paper"], help="write a fresh draft or redline your revision")
     paper_p.add_argument(
         "--resynth",
         action="store_true",
@@ -75,7 +75,7 @@ def main() -> None:
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
-    if args.command in ("style", "venue", "onepager", "outline", "paper", "focus"):
+    if args.command in ("style", "venue", "onepager", "outline", "paper", "draft", "focus"):
         from .config import GlobalConfig
         gcfg = GlobalConfig.load()
         if not _check_ollama(gcfg.ollama_url):
@@ -101,7 +101,7 @@ def main() -> None:
         case "outline":
             from .outline import run
             run(project_dir)
-        case "paper":
+        case "paper" | "draft":
             from .paper import run
             run(project_dir, resynth=args.resynth)
         case "focus":

@@ -26,9 +26,10 @@ def test_unknown_command_errors(capsys):
     assert "unknown command" in capsys.readouterr().err
 
 
-def test_planned_verbs_signpost(capsys):
+def test_pipeline_verbs_need_a_manifest(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     assert cli.main(["next"]) == 2
-    assert "planner harness" in capsys.readouterr().out
+    assert "haarpi init" in capsys.readouterr().err
 
 
 def test_doctor_reports_path_state(capsys):
