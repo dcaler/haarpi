@@ -19,3 +19,6 @@ venv/
 
 # local tool state
 .claude/
+
+# workflow handoff — never committed (see GitHub rules)
+HANDOFF.md
