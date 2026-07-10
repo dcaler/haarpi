@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+.env
+
+# rabbitHole runtime artifacts (per-project, not part of the library)
+litReview/
+work/
+output/
+pdfs/
+*.chroma/
+
+# Developer/session files
+handoff/
+HANDOFF.md
+.claude/
+
+# OS
+.DS_Store

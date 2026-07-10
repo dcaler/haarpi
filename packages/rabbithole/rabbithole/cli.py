@@ -1,0 +1,177 @@
+"""rabbitHole command-line entry point.
+
+    rabbitHole init       interactive project setup -> litrev.yaml
+    rabbitHole gather     discover & curate sources missing from your Zotero collection
+    rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
+    rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
+    rabbitHole ingest     pull reviewer-supplied references (pasted into a _ra.docx) into the corpus
+    rabbitHole parseNplan read annotations, decide next steps, queue them in trundlr
+    rabbitHole style      train a style profile on the author's Zotero publications
+
+Global options:
+    -C / --dir PATH   run as if in PATH (default: current directory)
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+
+
+def _check_env(need_pandoc: bool = False) -> None:
+    """Warn early about missing external dependencies."""
+    import httpx
+    from . import config as _config
+
+    # Python version
+    if sys.version_info < (3, 11):
+        print(f"[warn] Python 3.11+ required; you have {sys.version.split()[0]}.",
+              file=sys.stderr)
+
+    # Ollama reachability
+    gc = _config.load_global()
+    try:
+        r = httpx.get(f"{gc.ollama_url}/api/tags", timeout=5)
+        r.raise_for_status()
+    except Exception:
+        print(f"[error] Cannot reach Ollama at {gc.ollama_url}.\n"
+              f"        Start Ollama or set OLLAMA_URL and try again.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # pandoc (only required for .docx output)
+    if need_pandoc and not shutil.which("pandoc"):
+        print("[warn] pandoc not found — .docx output will be skipped.\n"
+              "       Install pandoc to get Word output: https://pandoc.org/installing.html",
+              file=sys.stderr)
+
+
+def _line_buffer_output() -> None:
+    """Emit every line as it is printed, even when stdout is a file rather than a terminal.
+
+    Python block-buffers stdout (8 KB) when it is not a tty. Under trundlr, every rabbitHole
+    run redirects into logs/task-NNN.log — so an operator watching a multi-hour report saw an
+    empty file, with no way to tell a working run from a hung one. The prints that carry
+    progress already pass flush=True; the ones that carry structure (the banner, the section
+    headings, the polestar metrics) did not, and those are the ones you need when you are
+    deciding whether to kill the job.
+
+    A stream without a `reconfigure` (a pipe replaced in a test, say) is left alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    _line_buffer_output()
+    parser = argparse.ArgumentParser(
+        prog="rabbitHole",
+        description="Offline-first literature-review assistant.",
+    )
+    parser.add_argument("-C", "--dir", default=".", help="project directory (default: cwd)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init", help="interactive project setup")
+
+    g = sub.add_parser("gather",
+                       help="discover & curate sources missing from your Zotero collection")
+    g.add_argument("--no-zotero", action="store_true",
+                   help="do not create/read the Zotero collection (lists all candidates)")
+
+    rep = sub.add_parser("report",
+                         help="read the Zotero corpus and write the literature review")
+    rep.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run (for A/B comparison)")
+    rep.add_argument("--from-folder", action="store_true",
+                     help="ingest PDFs from the local pdfs/ folder instead of Zotero")
+    rep.add_argument("--no-refresh-notes", action="store_true",
+                     help="keep cached per-paper notes even when the extraction logic has "
+                          "changed since they were written (faster, but a prompt fix won't "
+                          "reach the existing corpus). Default re-reads stale notes")
+
+    rev = sub.add_parser("revise",
+                         help="apply reviewer annotations from a _ra.docx to re-draft")
+    rev.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    rev.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
+    rev.add_argument("--resynth", action="store_true",
+                     help="re-synthesise the whole narrative from scratch (clean rewrite — "
+                          "no tracked changes, reviewer comments dropped). Default is an "
+                          "in-place redline: rabbitHole-authored tracked changes with the "
+                          "reviewer's comments preserved")
+    rev.add_argument("--no-queue", action="store_true",
+                     help="do not queue follow-up corpus work (ingest/gather) for comments "
+                          "that ask for new sources; just do the in-place edits. Set "
+                          "automatically on runner-executed chain steps to avoid re-planning")
+
+    ing = sub.add_parser("ingest",
+                         help="pull reviewer-supplied references from a _ra.docx into the corpus")
+    ing.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    ing.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest non-_ra docx in output/)")
+
+    pnp = sub.add_parser("parseNplan",
+                         help="read annotations, decide next steps, queue them in trundlr")
+    pnp.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for the planning call")
+    pnp.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest non-_ra docx in output/)")
+    pnp.add_argument("--dry-run", action="store_true",
+                     help="print the plan and task chain without writing config or queuing tasks")
+    pnp.add_argument("--no-trundlr", action="store_true",
+                     help="skip trundlr; print the manual steps instead")
+
+    sub.add_parser("style",
+                   help="train a style profile on the author's Zotero publications")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "init":
+        from . import wizard
+        return wizard.run(args.dir)
+
+    if args.command == "gather":
+        _check_env(need_pandoc=True)
+        from . import discover
+        return discover.run(args.dir, use_zotero=not args.no_zotero)
+
+    if args.command == "report":
+        _check_env(need_pandoc=True)
+        from . import summarize
+        return summarize.run(args.dir, brain_override=args.brain,
+                             from_folder=args.from_folder,
+                             refresh_notes=not args.no_refresh_notes)
+
+    if args.command == "revise":
+        _check_env(need_pandoc=True)
+        from . import revise
+        return revise.run(args.dir, brain_override=args.brain, docx_path=args.file,
+                          redline=not args.resynth, queue=not args.no_queue)
+
+    if args.command == "ingest":
+        _check_env()
+        from . import ingest
+        return ingest.run(args.dir, brain_override=args.brain, docx_path=args.file)
+
+    if args.command == "parseNplan":
+        _check_env()
+        from . import plan
+        return plan.run(args.dir, brain_override=args.brain, docx_path=args.file,
+                        dry_run=args.dry_run, use_trundlr=not args.no_trundlr)
+
+    if args.command == "style":
+        from . import style
+        return style.run(args.dir)
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
