@@ -2,8 +2,16 @@
 
 **Human Authored Agentic Research Pipeline** — a monorepo bundling the `ra*`
 research tools, which take a research idea from literature review to submitted
-paper with a human reviewing at every gate. All heavy reasoning runs on local
-LLMs; scheduling runs on [trundlr](https://github.com/dcaler/trundlr).
+paper with a human reviewing at every gate. Scheduling runs on
+[trundlr](https://github.com/dcaler/trundlr).
+
+**Offline-first is a defining goal, not a feature.** The pipeline's working
+loops — gathering, synthesis, building, experiments, drafting, revision — run
+on local models via Ollama, on your own hardware; a research project never
+needs to leave the machine. Cloud models appear only as explicitly-optional,
+human-invoked deviations (an A/B coordinator swap in rabbitHole, the
+interactive design sessions in raster and rayleigh), never as shared plumbing
+and never on an automated path.
 
 | Stage | Tool | Works in | Produces |
 |---|---|---|---|
