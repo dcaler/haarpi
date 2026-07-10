@@ -31,8 +31,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dcaler/rabbithole"
-Repository = "https://github.com/dcaler/rabbithole"
+Homepage = "https://github.com/dcaler/haarpi"
+Repository = "https://github.com/dcaler/haarpi"
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.39"]

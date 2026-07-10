@@ -5,9 +5,9 @@ package under `code/`); rayleigh helps you *design preregistered experiments* ag
 *conduct* them, and *write up* the results with figures — delivered to `results/`.
 
 > The fourth member of the `ra*` family, alongside
-> [rabbitHole](https://github.com/dcaler/rabbithole) (literature review → `litReview/`),
-> [raconteur](https://github.com/dcaler/raconteur) (paper drafting → `paper/`), and
-> [raster](https://github.com/dcaler/raster) (test-driven code builder → `code/`).
+> [rabbitHole](../rabbithole) (literature review → `litReview/`),
+> [raconteur](../raconteur) (paper drafting → `paper/`), and
+> [raster](../raster) (test-driven code builder → `code/`).
 > rayleigh reads their output when designing a cycle, and its `results/` feed back into
 > raconteur's paper.
 
@@ -22,7 +22,7 @@ rayleigh queue            ▸ linearize experiments.yaml → a trundlr chain, fo
                             at scale off your laptop
 ```
 
-rayleigh lives at `github.com/dcaler/rayleigh`. Each project it works on has its own
+rayleigh lives in the [HAARPi monorepo](https://github.com/dcaler/haarpi) under `packages/rayleigh`. Each project it works on has its own
 `code/` (the codebase under test) and gets a `results/` working folder.
 
 ---
@@ -30,8 +30,8 @@ rayleigh lives at `github.com/dcaler/rayleigh`. Each project it works on has its
 ## Install
 
 ```bash
-git clone https://github.com/dcaler/rayleigh.git
-cd rayleigh
+git clone https://github.com/dcaler/haarpi.git
+cd haarpi/packages/rayleigh
 pip install -e .
 ```
 

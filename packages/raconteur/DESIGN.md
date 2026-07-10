@@ -163,9 +163,9 @@ tools to have run to completion before it does:
 
 | Tool | Output | Feeds |
 |---|---|---|
-| [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review (`output/*.md`, `refs.bib`) |
-| [raster](https://github.com/dcaler/raster) | `<date>_methods_<chain>.md` (project root) | methods writeup → methods |
-| [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results → results |
+| [rabbitHole](../rabbithole) | `litReview/` | literature review (`output/*.md`, `refs.bib`) |
+| [raster](../raster) | `<date>_methods_<chain>.md` (project root) | methods writeup → methods |
+| [rayleigh](../rayleigh) | `results/` | experiment results → results |
 
 raster writes a purpose-built **methods writeup** for raconteur at the project
 root — `<date>_methods_<initials_chain>.md`, chained like raconteur's own files.

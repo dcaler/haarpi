@@ -24,9 +24,9 @@ tools to have run first, and reads their output automatically:
 
 | Tool | Output | Informs |
 |---|---|---|
-| [rabbitHole](https://github.com/dcaler/rabbithole) | `litReview/` | literature review — all sections |
-| [raster](https://github.com/dcaler/raster) | `<date>_methods_<chain>.md` | methods writeup — methods |
-| [rayleigh](https://github.com/dcaler/rayleigh) | `results/` | experiment results — results |
+| [rabbitHole](../rabbithole) | `litReview/` | literature review — all sections |
+| [raster](../raster) | `<date>_methods_<chain>.md` | methods writeup — methods |
+| [rayleigh](../rayleigh) | `results/` | experiment results — results |
 
 If any of the three is missing, raconteur **warns loudly** (during `init` and at
 the start of `outline`) and proceeds with reduced context — nothing is silently
@@ -39,9 +39,9 @@ skipped.
 **Option A — symlink (no pip required)**
 
 ```bash
-git clone https://github.com/dcaler/raconteur.git
+git clone https://github.com/dcaler/haarpi.git
 pip install httpx PyYAML python-docx   # dependencies only
-ln -s /path/to/raconteur/bin/raconteur ~/.local/bin/raconteur
+ln -s /path/to/haarpi/packages/raconteur/bin/raconteur ~/.local/bin/raconteur
 ```
 
 Make sure `~/.local/bin` is in your `PATH`. After that, `raconteur` works from
@@ -50,8 +50,8 @@ anywhere.
 **Option B — pip editable install**
 
 ```bash
-git clone https://github.com/dcaler/raconteur.git
-cd raconteur
+git clone https://github.com/dcaler/haarpi.git
+cd haarpi/packages/raconteur
 pip install -e .
 ```
 

@@ -5,8 +5,8 @@ An **offline-first, test-driven code builder**. You write a design spec; raster
 using local LLM workers via Ollama, orchestrated by trundlr.
 
 > Part of the `ra*` family, alongside
-> [rabbitHole](https://github.com/dcaler/rabbithole) (literature review) and
-> [raconteur](https://github.com/dcaler/raconteur) (paper drafting). raster reads
+> [rabbitHole](../rabbithole) (literature review) and
+> [raconteur](../raconteur) (paper drafting). raster reads
 > their output (a `litReview/` review, a `paper/` draft) when planning a build.
 
 ```
@@ -17,7 +17,7 @@ raster build <id>     ▸ run one coding task (LLM implements/authors vs the fro
 raster test  <id>     ▸ run a gate or a unit-test assessment (no LLM)
 ```
 
-raster lives at `github.com/dcaler/raster`. The repos it *builds* each push to
+raster lives in the [HAARPi monorepo](https://github.com/dcaler/haarpi) under `packages/raster`. The repos it *builds* each push to
 their own remote (`github.com/dcaler/<project>`).
 
 ---
@@ -25,8 +25,8 @@ their own remote (`github.com/dcaler/<project>`).
 ## Install
 
 ```bash
-git clone https://github.com/dcaler/raster.git
-cd raster
+git clone https://github.com/dcaler/haarpi.git
+cd haarpi/packages/raster
 pip install -e .
 ```
 
