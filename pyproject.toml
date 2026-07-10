@@ -1,0 +1,4 @@
+# HAARPi — Human Authored Agentic Research Pipeline.
+# Virtual workspace root: the installable packages live under packages/.
+[tool.uv.workspace]
+members = ["packages/*"]

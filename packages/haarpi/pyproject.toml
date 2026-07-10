@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "haarpi"
+version = "0.1.0"
+description = "HAARPi core — shared library and umbrella CLI for the ra* research pipeline (rabbitHole, raster, rayleigh, raconteur)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "PyYAML>=6",
+]
+
+[project.scripts]
+haarpi = "haarpi.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["haarpi*"]
