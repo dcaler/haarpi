@@ -277,8 +277,10 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             else:
                 text = _condense(brain, text)
         try:
+            # think=False: extraction, not judgement. The paper says what it says; a
+            # scratchpad only re-narrates it at 3 tok/s before the JSON arrives.
             raw = brain.coordinator(_read_prompt(c, cfg.topic, cfg.focus, text),
-                                    READ_SYS)
+                                    READ_SYS, think=False)
             note = _parse_json_obj(raw)
             note["_paper"] = c.author_year()
             note["_v"] = _NOTES_VERSION
@@ -520,7 +522,9 @@ _MAX_SECTIONS = 12
 # appends every orphan's full digest line to an already-full candidate list — sent 15k-token
 # prompts into a 10.6k-token budget, and Ollama quietly ate the front of them.
 _REVISE_CANDIDATE_CHARS = 16_000
-_MAX_ORPHANS_PER_ROUND = 6    # more than a section can absorb in one revision anyway
+_MAX_ORPHANS_PER_OFFER = 4      # more than a paragraph can absorb without listing them
+_MAX_OFFERS_PER_SOURCE = 2      # nearest section, then one more. Never a tour of all of them.
+_REJECT_BATCH_CHARS = 6_000     # keep the rejection prompt inside the context budget
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -815,12 +819,14 @@ def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
 
         print(f"    {_stamp()}§{i + 1} revising (round {r}/{rounds})...", flush=True)
         try:
+            # think=False: the judgement already happened — the guards, the lint and the
+            # peer review decided what is wrong. This call applies a critique it was handed.
             text = brain.coordinator(
                 _SECTION_REVISE_PROMPT.format(
                     topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
                     claim=sec.claim, narrative=text, critique="\n\n".join(parts),
                     candidates=_candidate_block(sec, full, budget=_REVISE_CANDIDATE_CHARS)),
-                sys_prompt, num_ctx=16384).strip()
+                sys_prompt, num_ctx=16384, think=False).strip()
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] section revision failed ({e}); keeping current.", file=sys.stderr)
             break
@@ -838,6 +844,14 @@ def _assemble(sections: list[Section]) -> str:
 # do the work. Silence is how an 84-source corpus became a 15-source narrative without anyone
 # deciding to drop 69 sources. Placing runs BEFORE rejecting — the corpus is the foundation
 # the argument rests on, so dropping a source has to be argued for.
+#
+# An offer costs a paragraph, not a section. Re-emitting a whole section to insert two
+# citations spent ~12k generated tokens per call and, over two rounds, 14h37m to cite 16
+# sources — while the sections it rewrote lost two triangulated paragraphs on the way. So an
+# offer now returns ONE paragraph plus the citekeys it declined, and a decline is routed to
+# the next-nearest section instead of being re-offered to the section that just refused it.
+# Refusals accumulate a reason per source, which is what the rejection ledger reads at the end:
+# a source is only rejected once every section it resembles has said, in writing, why not.
 
 _REJECT_SYS = """\
 You decide which curated sources a literature review may legitimately leave uncited. Respond
@@ -852,8 +866,8 @@ Focus: {focus}
 The review's sections:
 {outline}
 
-These curated sources are cited in no section, after an attempt to weave each into the
-section closest to it:
+These curated sources are cited in no section. Each was offered to the sections it most
+resembles, and each of those sections declined it — their reasons are quoted beneath it:
 {unplaced}
 
 For each, decide: does it genuinely bear on none of these ideas? A source is NOT rejectable
@@ -867,67 +881,225 @@ support any claim. Give the reason in one sentence.
 Output only the JSON object: {{"citekey": "reason", ...}}"""
 
 
+_WEAVE_SYS = """\
+You add evidence to one section of a scholarly literature review. You never restate or
+re-emit the section: you write at most ONE new paragraph, and you say plainly which of the
+offered sources do not belong here. Follow the output shape exactly."""
+
+_WEAVE_PROMPT = """\
+Review topic: {topic}
+Focus: {focus}
+
+Section: {heading} — {claim}
+
+The section as it stands:
+{narrative}
+
+These curated sources are cited nowhere in the review, and of all its sections this one is
+the closest match:
+{offers}
+
+For each offered source, decide whether it genuinely supports, qualifies, or complicates a
+claim this section makes. A source belongs here only if you can say what it ADDS — never
+append a sentence that merely names it.
+
+Write ONE new paragraph, to stand as this section's last, weaving in every source that
+belongs. Connect them to what the section has already established; set them against the work
+it already cites. Cite with [@citekey]. If no offered source belongs here, write NONE in
+place of the paragraph.
+
+Then list the offered sources you left out, each with one sentence saying why it bears on
+nothing THIS section argues. Judge it against this section only — another section may yet
+take it.
+
+Output exactly this shape, both headers present:
+
+PARAGRAPH:
+<the paragraph, or NONE>
+
+DECLINED:
+{{"citekey": "why it bears on nothing this section argues", ...}}"""
+
+
+def _parse_weave(raw: str) -> tuple[str, dict[str, str]]:
+    """Split a weave reply into (paragraph, declined). Tolerant: a reply that is bare prose
+    with no headers is taken as the paragraph, declining nothing.
+
+    Strict `json.loads` on the DECLINED block, not `_parse_json_obj` — that helper salvages
+    non-JSON by wrapping it in a dict, which turns a prose apology into a citekey named
+    "argument" declining a source that was never offered.
+    """
+    body, declined = raw, {}
+    m = re.search(r"DECLINED:\s*(.*)$", raw, re.DOTALL | re.IGNORECASE)
+    if m:
+        body = raw[:m.start()]
+        obj = re.search(r"\{.*\}", m.group(1), re.DOTALL)
+        try:
+            declined = {str(k): str(v)
+                        for k, v in json.loads(obj.group(0)).items() if v} if obj else {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            declined = {}
+    body = re.sub(r"^.*?PARAGRAPH:\s*", "", body, flags=re.DOTALL | re.IGNORECASE)
+    body = re.sub(r"^\s*#+\s.*$", "", body, flags=re.MULTILINE).strip()
+    if body.strip().upper().startswith("NONE"):
+        body = ""
+    return body, declined
+
+
+def _weave_sys(sys_prompt: str) -> str:
+    """The weave role, carrying whatever style profile the synthesis system prompt carries.
+
+    The paragraph this call returns is appended to a section written in the author's voice.
+    Dropping the style block here would seam a stranger's prose onto the end of every section
+    that takes an orphan.
+    """
+    i = sys_prompt.find("WRITING STYLE")
+    return _WEAVE_SYS + (f"\n\n{sys_prompt[i:]}" if i >= 0 else "")
+
+
+def _weave_orphans(brain: Brain, cfg, sec: Section, orphans: list[str],
+                   full: dict[str, str], sys_prompt: str) -> tuple[str, dict[str, str]]:
+    """Offer `orphans` to one section. Returns (paragraph, declined).
+
+    The prompt carries the section's own text and the orphans' digest lines — and nothing
+    else. Withholding the shortlist halves the prompt and removes the only way this call can
+    cite a source it was not asked about.
+    """
+    offers = "\n".join(full.get(k, f"- [@{k}]") for k in orphans)
+    raw = brain.coordinator(
+        _WEAVE_PROMPT.format(topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
+                             claim=sec.claim, narrative=sec.text, offers=offers),
+        _weave_sys(sys_prompt), num_ctx=16384, think=False)
+    para, declined = _parse_weave(raw)
+    # A paragraph that cites none of the offered sources has not placed any of them; appending
+    # it would grow the section without earning it. Drop it and let the orphans route on.
+    if para and not (set(guards.all_citekeys(para)) & set(orphans)):
+        para = ""
+    return para, {k: v for k, v in declined.items() if k in orphans}
+
+
+def _reject_ledger(brain: Brain, cfg, sections: list[Section], unplaced: set[str],
+                   lines: dict[str, str], refusals: dict[str, list[str]]) -> dict[str, str]:
+    """Demand a reason for every still-uncited source, in batches that fit the context.
+
+    One call carrying all 32 orphans' full digest lines ran ~12.2k tokens into a 10.6k-token
+    budget: Ollama dropped the head of the prompt — the system message, the topic and the
+    outline — and the model rejected one source out of thirty-two, having lost the very
+    outline it was asked to judge against. Compact lines, and batched.
+    """
+    rejected: dict[str, str] = {}
+    outline = _outline(sections, -1)
+
+    def _flush(batch: list[str]) -> None:
+        if not batch:
+            return
+        try:
+            raw = brain.coordinator(
+                _REJECT_PROMPT.format(topic=cfg.topic, focus=cfg.focus or "",
+                                      outline=outline, unplaced="\n".join(batch)),
+                _REJECT_SYS, num_ctx=16384, think=False)
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            parsed = json.loads(m.group(0)) if m else {}
+            rejected.update({k: str(v) for k, v in parsed.items() if k in unplaced and v})
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] rejection ledger batch failed ({e}).", file=sys.stderr)
+
+    batch: list[str] = []
+    spent = 0
+    for k in sorted(unplaced):
+        entry = lines.get(k, f"- [@{k}]")
+        for why in refusals.get(k, [])[:2]:
+            entry += f"\n    declined: {_truncate(why, 160)}"
+        if batch and spent + len(entry) > _REJECT_BATCH_CHARS:
+            _flush(batch)
+            batch, spent = [], 0
+        batch.append(entry)
+        spent += len(entry)
+    _flush(batch)
+    return rejected
+
+
 def _place_orphans(brain: Brain, cfg, sections: list[Section], matrix: list[list[float]],
                    keys: list[str], full: dict[str, str], sys_prompt: str,
-                   corpus_keys: set[str], rounds: int = 2) -> dict[str, str]:
-    """Offer every uncited source to the section it is nearest, then demand a reason for
-    whatever is still uncited. Re-drafts only the sections that gain a source."""
+                   corpus_keys: set[str], compact: dict[str, str] | None = None,
+                   rounds: int = 4, max_offers: int = _MAX_OFFERS_PER_SOURCE) -> dict[str, str]:
+    """Offer every uncited source to the section it is nearest; if that section declines it,
+    offer it once more to the next-nearest. Then demand a reason for whatever no section took.
+
+    Each offer gains the section at most one paragraph, so a round costs one short generation
+    per section rather than one full re-emission. `tried` is what makes the rounds mean
+    something: without it, round 2 asks the same section to reconsider the same source it has
+    already refused, which is how 6h01m bought a single citation.
+
+    `max_offers` is the brake. Routing a refused source onward corrects for embedding noise —
+    "nearest section" is a cosine, not a judgement, and it puts a good source in front of the
+    wrong reader often enough to be worth a second look. Routing it through ALL the sections
+    is something else: it shops a weak source until one section is talked into it. The review
+    wants the right sources cited, not every source cited. Two hearings, then the ledger.
+    """
     rejected: dict[str, str] = {}
+    refusals: dict[str, list[str]] = {}
+    tried: dict[str, set[int]] = {}
     key_idx = {k: i for i, k in enumerate(keys)}
+    n_sec = len(sections)
+
+    def _sim(k: str, s: int) -> float:
+        return matrix[s][key_idx[k]]
+
     for r in range(1, rounds + 1):
         unplaced = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
-        if not unplaced:
+        pending = [k for k in unplaced if k in key_idx]
+        if not pending:
             break
-        # nearest section for each orphan, by the similarity we already computed
+        # Orphans nobody has looked at yet go first; among equals, the strongest affinity.
+        # Alphabetical order let the same 36 keys win every round while 12 were never offered.
+        pending.sort(key=lambda k: (len(tried.get(k, ())),
+                                    -max(_sim(k, s) for s in range(n_sec))))
+
         by_sec: dict[int, list[str]] = {}
-        for k in sorted(unplaced):
-            if k not in key_idx:
-                continue
-            best = max(range(len(sections)), key=lambda s: matrix[s][key_idx[k]])
-            # more than a handful cannot be absorbed in one revision, and their digest lines
-            # would push the prompt past the context budget. The rest wait for the next round.
-            if len(by_sec.setdefault(best, [])) < _MAX_ORPHANS_PER_ROUND:
-                by_sec[best].append(k)
+        for k in pending:
+            seen = tried.setdefault(k, set())
+            if len(seen) >= max_offers:
+                continue      # it has had its hearings; the ledger takes it from here
+            # nearest section that has not already refused it and still has room this round
+            for s in sorted((s for s in range(n_sec) if s not in seen),
+                            key=lambda s: _sim(k, s), reverse=True):
+                if len(by_sec.setdefault(s, [])) < _MAX_ORPHANS_PER_OFFER:
+                    by_sec[s].append(k)
+                    break
+        by_sec = {s: ks for s, ks in by_sec.items() if ks}
         if not by_sec:
             break
-        print(f"  {_stamp()}[breadth] {len(unplaced)} source(s) undecided — offering to "
+
+        print(f"  {_stamp()}[breadth] {len(pending)} source(s) undecided — offering to "
               f"{len(by_sec)} section(s) (round {r}/{rounds})...", flush=True)
+        placed = 0
         for si, orphans in sorted(by_sec.items()):
             sec = sections[si]
-            listing = "\n".join(f"- [@{k}]" for k in orphans)
-            critique = (f"These curated sources bear on this section's idea more than on any "
-                        f"other, and the review cites them nowhere. Weave in each one that "
-                        f"genuinely supports, qualifies, or complicates a claim here, saying "
-                        f"what it adds — do not append a sentence that merely names it. Add a "
-                        f"paragraph if the evidence needs one. Leave out only what bears on "
-                        f"nothing here:\n{listing}")
+            for k in orphans:
+                tried[k].add(si)
             try:
-                sec.text = brain.coordinator(
-                    _SECTION_REVISE_PROMPT.format(
-                        topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
-                        claim=sec.claim, narrative=sec.text, critique=critique,
-                        candidates=_candidate_block(sec, full, orphans,
-                                                    budget=_REVISE_CANDIDATE_CHARS)),
-                    sys_prompt, num_ctx=16384).strip()
+                para, declined = _weave_orphans(brain, cfg, sec, orphans, full, sys_prompt)
             except Exception as e:  # noqa: BLE001
                 print(f"  [warn] orphan placement in §{si + 1} failed ({e}).", file=sys.stderr)
+                continue
+            if para:
+                sec.text = f"{sec.text.rstrip()}\n\n{para}"
+            for k, why in declined.items():
+                refusals.setdefault(k, []).append(f"§{si + 1} ({sec.heading}): {why}")
+            took = [k for k in orphans if k not in declined and para
+                    and k in guards.all_citekeys(para)]
+            placed += len(took)
+            print(f"    §{si + 1} offered {len(orphans)} · wove {len(took)} · "
+                  f"declined {len(declined)}", flush=True)
+        print(f"  {_stamp()}[breadth] round {r}: {placed} source(s) placed", flush=True)
 
     unplaced = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
     if unplaced:
         print(f"  {_stamp()}[breadth] {len(unplaced)} source(s) still uncited — "
               f"requiring a reason for each...", flush=True)
-        try:
-            raw = brain.coordinator(
-                _REJECT_PROMPT.format(
-                    topic=cfg.topic, focus=cfg.focus or "",
-                    outline=_outline(sections, -1),
-                    unplaced="\n".join(full.get(k, f"- [@{k}]") for k in sorted(unplaced))),
-                _REJECT_SYS, num_ctx=16384)
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            parsed = json.loads(m.group(0)) if m else {}
-            rejected.update({k: str(v) for k, v in parsed.items() if k in unplaced and v})
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] rejection ledger failed ({e}).", file=sys.stderr)
+        rejected.update(_reject_ledger(brain, cfg, sections, unplaced,
+                                       compact or full, refusals))
 
     still = guards.disposition(_assemble(sections), corpus_keys, rejected).unplaced
     if still:
@@ -974,7 +1146,7 @@ def _repair_assembly(brain: Brain, cfg, sections: list[Section], full: dict[str,
                         critique=guards.as_critique(fs, "Fix every one:"),
                         candidates=_candidate_block(sec, full,
                                                     budget=_REVISE_CANDIDATE_CHARS)),
-                    sys_prompt, num_ctx=16384).strip()
+                    sys_prompt, num_ctx=16384, think=False).strip()
             except Exception as e:  # noqa: BLE001
                 print(f"  [warn] repair of §{si + 1} failed ({e}).", file=sys.stderr)
 
@@ -996,7 +1168,7 @@ def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
         try:
             narrative = brain.coordinator(
                 _GROUND_PROMPT.format(digest=digest, narrative=narrative, offenders=offenders),
-                SYNTH_SYS, num_ctx=16384)  # think on
+                SYNTH_SYS, num_ctx=16384, think=False)
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] citation enforcement failed ({e}); keeping current.",
                   file=sys.stderr)
@@ -1055,7 +1227,7 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     print(f"\n  {_stamp()}{guards.metrics(_assemble(sections), corpus_keys).line()}", flush=True)
 
     rejected = _place_orphans(brain, cfg, sections, matrix, keys, full,
-                              sys_prompt, corpus_keys)
+                              sys_prompt, corpus_keys, compact)
     _repair_assembly(brain, cfg, sections, full, sys_prompt, corpus_keys, rejected)
 
     narrative = _assemble(sections)
@@ -1157,7 +1329,8 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
             print(f"  {_stamp()}locating {label}  (LLM fallback)", flush=True)
             body = _paper_text(c)[:_LOCATE_FALLBACK_CHARS]
             try:
-                raw = brain.coordinator(_locate_prompt(c, statements, body), LOCATE_SYS)
+                raw = brain.coordinator(_locate_prompt(c, statements, body), LOCATE_SYS,
+                                        think=False)
                 items = _parse_json_list(raw)
             except Exception as e:  # noqa: BLE001
                 print(f"  [warn] locate failed for {c.first_author_last}: {e}",

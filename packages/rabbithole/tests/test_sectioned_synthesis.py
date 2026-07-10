@@ -36,7 +36,7 @@ class _FakeBrain:
     """Routes by system prompt. Embeddings are one-hot so cosine is exactly controllable."""
 
     def __init__(self, *, plan=None, draft=None, lint="OK", substance="OK",
-                 revise=None, reject="{}", vectors=None):
+                 revise=None, reject="{}", vectors=None, weave=None):
         self.cfg = _BrainCfg()
         self._plan = plan
         self._draft = list(draft or [])
@@ -44,9 +44,12 @@ class _FakeBrain:
         self._substance = substance
         self._revise = list(revise or [])
         self._reject = reject
+        self._weave = list(weave or [])
         self._vectors = vectors or {}
         self.calls: list[str] = []
         self.revise_prompts: list[str] = []
+        self.weave_prompts: list[str] = []
+        self.reject_prompts: list[str] = []
 
     def coordinator(self, prompt, sys_prompt, **kw):
         s = sys_prompt.lower()
@@ -55,7 +58,12 @@ class _FakeBrain:
             return self._plan
         if "json object mapping each citekey" in s:
             self.calls.append("reject")
+            self.reject_prompts.append(prompt)
             return self._reject
+        if "you add evidence to one section" in s:
+            self.calls.append("weave")
+            self.weave_prompts.append(prompt)
+            return self._weave.pop(0) if self._weave else "PARAGRAPH:\nNONE\n\nDECLINED:\n{}"
         if "copy-editor" in s:
             self.calls.append("lint")
             return self._lint
@@ -184,33 +192,78 @@ def _sections_citing(*keysets):
 
 
 def test_orphans_are_offered_to_their_nearest_section():
-    """Only the sections that gain a source are re-drafted, and each orphan goes to the
-    section it is closest to — using the similarity already computed for the shortlist."""
+    """Each orphan goes to the section it is closest to — using the similarity already
+    computed for the shortlist — and an offer costs one appended paragraph, never a re-draft
+    of the section."""
     sections = _sections_citing(["a1"], ["b2"])
     keys = ["a1", "b2", "c3", "d4", "e5"]
     # matrix[section][source]: c3, d4, e5 all sit closest to section 1
     matrix = [[1.0, 0.0, 0.0, 0.1, 0.0],
               [0.0, 1.0, 0.5, 0.9, 0.5]]
-    brain = _FakeBrain(revise=["claim [@b2]. and now [@d4] and [@c3] and [@e5]."],
+    brain = _FakeBrain(weave=["PARAGRAPH:\nand now [@d4] and [@c3] and [@e5].\n\nDECLINED:\n{}"],
                        reject="{}")
     rejected = summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
-                                        "SYS", CORPUS, rounds=1)
-    assert brain.calls.count("revise") == 1, "section 0 gained nothing; do not re-draft it"
+                                        "SYS", CORPUS, COMPACT, rounds=1)
+    assert brain.calls.count("weave") == 1, "section 0 is nearest to nothing; do not call it"
+    assert "revise" not in brain.calls, "an offer must not re-emit the whole section"
     assert sections[0].text == "claim [@a1]."     # untouched
+    assert sections[1].text.startswith("claim [@b2].")   # kept, with the paragraph appended
     assert "[@d4]" in sections[1].text
     assert rejected == {}
-    # the orphan's own digest line must reach the reviser
-    assert "[@d4]" in brain.revise_prompts[0]
+    # the orphan's own digest line must reach the model, and the shortlist must not
+    assert "[@d4] full digest" in brain.weave_prompts[0]
+    assert "[@a1]" not in brain.weave_prompts[0], "a weave may only cite what it was offered"
+
+
+def test_a_declined_orphan_is_offered_to_the_next_nearest_section_then_stops():
+    """A refusal routes the source onward once — embedding proximity is a cosine, not a
+    judgement. It does not shop the source through every section until one relents."""
+    sections = _sections_citing(["a1"], ["b2"], ["c3"])
+    keys = ["a1", "b2", "c3", "d4", "e5"]
+    matrix = [[1.0, 0.0, 0.0, 0.9, 0.0],    # d4: §0 nearest, then §1, then §2
+              [0.0, 1.0, 0.0, 0.5, 0.0],
+              [0.0, 0.0, 1.0, 0.1, 0.0]]
+    refuse = 'PARAGRAPH:\nNONE\n\nDECLINED:\n{"d4": "bears on nothing here", "e5": "ditto"}'
+    brain = _FakeBrain(weave=[refuse, refuse, refuse],
+                       reject='{"d4": "no section could use it", "e5": "off topic"}')
+    rejected = summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
+                                        "SYS", CORPUS, COMPACT, rounds=4)
+    assert brain.calls.count("weave") == 2, "two hearings for d4/e5, then the ledger"
+    assert set(rejected) == {"d4", "e5"}
+    # the ledger sees why each section refused it, not just that it is uncited
+    assert "bears on nothing here" in brain.reject_prompts[0]
+
+
+def test_a_woven_paragraph_is_written_in_the_authors_voice():
+    """The paragraph is appended to a section drafted under the style profile; it has to
+    carry the same profile or the seam shows."""
+    styled = "You synthesise.\n\nWRITING STYLE\nMatch the voice:\nlong sinuous clauses"
+    assert "long sinuous clauses" in summarize._weave_sys(styled)
+    assert "You add evidence to one section" in summarize._weave_sys(styled)
+    assert summarize._weave_sys("You synthesise.") == summarize._WEAVE_SYS
+
+
+def test_the_rejection_prompt_is_batched_under_the_context_budget():
+    """One call carrying every orphan's digest overran num_ctx and Ollama ate the head of the
+    prompt — outline included — so 31 of 32 sources came back neither cited nor justified."""
+    corpus = {f"k{i:02d}" for i in range(40)}
+    compact = {k: f"- [@{k}] " + "x" * 400 for k in corpus}
+    sections = [Section("S0", "c", candidates=[], text="claim [@k00].")]
+    brain = _FakeBrain(reject="{}")
+    summarize._reject_ledger(brain, _Cfg(), sections, corpus - {"k00"}, compact, {})
+    assert brain.calls.count("reject") > 1, "39 orphans must not go out in one prompt"
+    assert all(len(p) < summarize._REJECT_BATCH_CHARS + 2_000
+               for p in brain.reject_prompts), "a batch overran the budget"
 
 
 def test_survivors_must_be_rejected_by_name():
     sections = _sections_citing(["a1", "b2", "c3", "d4"])
     keys = ["a1", "b2", "c3", "d4", "e5"]
     matrix = [[1, 1, 1, 1, 1]]
-    brain = _FakeBrain(revise=["claim [@a1] [@b2] [@c3] [@d4]."],   # refuses to take e5
+    brain = _FakeBrain(weave=['PARAGRAPH:\nNONE\n\nDECLINED:\n{"e5": "different construct"}'],
                        reject='{"e5": "measures a different construct entirely"}')
     rejected = summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
-                                        "SYS", CORPUS, rounds=1)
+                                        "SYS", CORPUS, COMPACT, rounds=1)
     assert rejected == {"e5": "measures a different construct entirely"}
     assert brain.calls.count("reject") == 1
 
@@ -226,9 +279,9 @@ def test_a_cited_source_cannot_be_rejected():
 
 def test_unjustified_omission_is_reported_not_absorbed():
     sections = _sections_citing(["a1"])
-    brain = _FakeBrain(revise=["claim [@a1]."], reject="{}")
+    brain = _FakeBrain(reject="{}")     # every section declines; the ledger justifies nothing
     rejected = summarize._place_orphans(brain, _Cfg(), sections, [[1] * 5],
-                                        sorted(CORPUS), FULL, "SYS", CORPUS, rounds=1)
+                                        sorted(CORPUS), FULL, "SYS", CORPUS, COMPACT, rounds=1)
     assert rejected == {}
     d = guards.disposition(summarize._assemble(sections), CORPUS, rejected)
     assert d.unplaced == {"b2", "c3", "d4", "e5"}
