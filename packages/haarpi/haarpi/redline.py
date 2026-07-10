@@ -472,3 +472,177 @@ def _accepted_para_text(p_el) -> str:
         for t in r.iter(qn("w:t")):
             out.append(t.text or "")
     return "".join(out)
+
+
+# ── the gate mechanics: unresolved detection, accepting, minting ──────────────
+# `haarpi next` runs these when a markup task is marked done in trundlr: a clean
+# markup (nothing unresolved) mints a RELEASE — tracked changes accepted,
+# comment threads stripped, bare-chain filename (see haarpi.naming). The check
+# is deliberately mechanical: the gate needs no LLM.
+
+import zipfile
+
+from lxml import etree
+
+_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
+
+TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "haarpi", "the tool")
+
+
+def _zip_parts(path: Path) -> dict[str, bytes]:
+    with zipfile.ZipFile(path) as z:
+        return {n: z.read(n) for n in z.namelist()}
+
+
+def unresolved_comments(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
+    """Top-level, human-authored comments not marked done.
+
+    Replies (commentEx with a paraIdParent) are conversation, not asks — the ask
+    lives in the parent, and resolving the thread marks the parent done. Tool-
+    authored comments (the redline's replies) never block a gate."""
+    parts = _zip_parts(path)
+    if "word/comments.xml" not in parts:
+        return []
+    croot = etree.fromstring(parts["word/comments.xml"])
+
+    done_ids: set[str] = set()
+    reply_ids: set[str] = set()
+    if "word/commentsExtended.xml" in parts:
+        ce = etree.fromstring(parts["word/commentsExtended.xml"])
+        for cex in ce.iter(f"{{{_W15}}}commentEx"):
+            pid = cex.get(f"{{{_W15}}}paraId")
+            if cex.get(f"{{{_W15}}}done") == "1":
+                done_ids.add(pid)
+            if cex.get(f"{{{_W15}}}paraIdParent") is not None:
+                reply_ids.add(pid)
+
+    out = []
+    tool_lower = {a.lower() for a in tool_authors}
+    for c in croot.findall(qn("w:comment")):
+        author = c.get(qn("w:author")) or ""
+        if author.lower() in tool_lower:
+            continue
+        para_ids = [p.get(f"{{{_W14}}}paraId") for p in c.findall(qn("w:p"))]
+        para_ids = [p for p in para_ids if p]
+        if para_ids and all(p in reply_ids for p in para_ids):
+            continue                       # a reply, not a top-level ask
+        if para_ids and any(p in done_ids for p in para_ids):
+            continue                       # thread resolved
+        text = "".join(t.text or "" for t in c.iter(qn("w:t")))
+        out.append({"id": c.get(qn("w:id")), "author": author, "text": text})
+    return out
+
+
+def pending_reviewer_changes(path: Path, tool_authors=TOOL_AUTHORS) -> int:
+    """Tracked changes authored by someone other than the tool — a reviewer
+    insertion/deletion is a directive the tool hasn't processed yet."""
+    doc = Document(str(path))
+    tool_lower = {a.lower() for a in tool_authors}
+    n = 0
+    for tag in ("w:ins", "w:del"):
+        for el in doc.element.body.iter(qn(tag)):
+            if (el.get(qn("w:author")) or "").lower() not in tool_lower:
+                n += 1
+    return n
+
+
+def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
+    """The mechanical gate: clean ⟺ no unresolved asks of either kind."""
+    unresolved = unresolved_comments(path, tool_authors)
+    reviewer_changes = pending_reviewer_changes(path, tool_authors)
+    return {"unresolved": unresolved, "reviewer_changes": reviewer_changes,
+            "clean": not unresolved and reviewer_changes == 0}
+
+
+def accept_all_changes(doc) -> dict:
+    """Accept every tracked change: unwrap <w:ins>, drop <w:del>.
+
+    Paragraph-mark change markers (w:pPr/w:rPr/w:ins|w:del) are removed without
+    merging paragraphs — the redline never authors those, so this only defends
+    against an exotic reviewer edit, keeping the text correct if not the exact
+    paragraphation Word would produce."""
+    body = doc.element.body
+    counts = {"ins": 0, "del": 0}
+    for ins in list(body.iter(qn("w:ins"))):
+        parent = ins.getparent()
+        idx = list(parent).index(ins)
+        for child in list(ins):
+            parent.insert(idx, child)
+            idx += 1
+        parent.remove(ins)
+        counts["ins"] += 1
+    for d in list(body.iter(qn("w:del"))):
+        d.getparent().remove(d)
+        counts["del"] += 1
+    for rpr in list(body.iter(qn("w:rPr"))):
+        for tag in ("w:ins", "w:del"):
+            m = rpr.find(qn(tag))
+            if m is not None:
+                rpr.remove(m)
+    return counts
+
+
+def strip_comment_anchors(doc) -> int:
+    """Remove comment range markers and reference runs from the body."""
+    body = doc.element.body
+    n = 0
+    for tag in ("w:commentRangeStart", "w:commentRangeEnd"):
+        for el in list(body.iter(qn(tag))):
+            el.getparent().remove(el)
+            n += 1
+    for r in list(body.iter(qn("w:r"))):
+        if r.find(qn("w:commentReference")) is not None:
+            r.getparent().remove(r)
+    return n
+
+
+def _clear_comment_parts(path: Path) -> None:
+    """Empty the comments parts so no orphaned threads survive the mint."""
+    parts = _zip_parts(path)
+    changed = False
+    for name in list(parts):
+        if name.startswith("word/comments") and name.endswith(".xml"):
+            root = etree.fromstring(parts[name])
+            for child in list(root):
+                root.remove(child)
+            parts[name] = etree.tostring(root, xml_declaration=True,
+                                         encoding="UTF-8", standalone=True)
+            changed = True
+    if changed:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for n, b in parts.items():
+                z.writestr(n, b)
+
+
+def release_markdown(doc) -> str:
+    """A plain markdown rendering of the (already accepted) document body."""
+    lines: list[str] = []
+    for p in doc.paragraphs:
+        text = p.text.strip()
+        if not text:
+            continue
+        style = p.style.name if p.style is not None else ""
+        if is_heading_style(style):
+            level = "".join(ch for ch in style if ch.isdigit()) or "1"
+            lines.append("#" * int(level) + " " + text)
+        else:
+            lines.append(text)
+    return "\n\n".join(lines) + "\n"
+
+
+def mint_release(src: Path, dst: Path, md_sibling: bool = True) -> dict:
+    """Consolidate a gate-passed markup into a release: accept every tracked
+    change, strip the comment threads, write the bare-name docx (and its .md
+    sibling — what downstream LLM consumers actually read)."""
+    doc = Document(str(src))
+    counts = accept_all_changes(doc)
+    anchors = strip_comment_anchors(doc)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(dst))
+    _clear_comment_parts(dst)
+    md_path = None
+    if md_sibling:
+        md_path = dst.with_suffix(".md")
+        md_path.write_text(release_markdown(Document(str(dst))), encoding="utf-8")
+    return {**counts, "anchors": anchors, "docx": dst, "md": md_path}
