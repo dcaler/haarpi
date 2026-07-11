@@ -9,6 +9,7 @@ _RESULTS_SUFFIXES = {".py", ".R", ".jl", ".ipynb", ".txt", ".md", ".csv", ".tsv"
 _MAX_LITREV_CHARS = 12000
 _MAX_METHODS_CHARS = 20000
 _MAX_RESULTS_CHARS = 4000
+_MAX_RESULTS_DIGEST_CHARS = 20000
 _MAX_FILE_LINES = 200
 _MAX_BIB_CHARS = 4000
 
@@ -16,8 +17,12 @@ _MAX_BIB_CHARS = 4000
 DEFAULT_LITREV_DIR = "litReview"   # rabbitHole
 DEFAULT_RESULTS_DIR = "results"    # rayleigh
 # raster writes a purpose-built methods writeup at the project root:
-#   <date>_methods_<initials_chain>.md
-_METHODS_RE = re.compile(r"^(\d{6})_methods((?:_[A-Za-z]+)+)\.md$")
+#   <date>_<project>_methods_<initials_chain>.md
+_METHODS_RE = re.compile(r"^(\d{6})_(?:.+_)?methods((?:_[A-Za-z]+)+)\.md$")
+# rayleigh's counterpart digests live at the results root: a chained
+#   <date>_<project>_results[_<initials_chain>].md   (chain absent = a release)
+# or its working writeup RESULTS.md.
+_RESULTS_DIGEST_RE = re.compile(r"^(\d{6})_(?:.+_)?results((?:_[A-Za-z]+)*)\.md$")
 
 
 def _litrev_complete(d: Path) -> bool:
@@ -26,21 +31,27 @@ def _litrev_complete(d: Path) -> bool:
 
 
 def find_methods_file(project_dir: Path) -> Path | None:
-    """Latest raster methods writeup at the project root.
+    """Latest raster methods writeup.
 
-    Matches ``<date>_methods_<chain>.md`` (chained like paper files). Picks the
-    highest datestamp, breaking ties by most-recent mtime, so the newest state
-    of the writeup wins regardless of who last touched the chain.
+    Matches ``<date>_<project>_methods_<chain>.md`` (chained like paper files).
+    Picks the highest datestamp, breaking ties by most-recent mtime, so the
+    newest state of the writeup wins regardless of who last touched the chain.
+    Searched tiered like haarpi's release lookup: the build stage's output dir
+    first (`code/output/`, where raster handoff writes), then `code/`, then the
+    project root (where legacy handoffs landed).
     """
-    candidates = []
-    for p in project_dir.glob("*_methods_*.md"):
-        m = _METHODS_RE.match(p.name)
-        if m:
-            candidates.append((m.group(1), p.stat().st_mtime, p))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda t: (t[0], t[1]))
-    return candidates[-1][2]
+    for d in (project_dir / "code" / "output", project_dir / "code", project_dir):
+        if not d.is_dir():
+            continue
+        candidates = []
+        for p in d.glob("*_methods_*.md"):
+            m = _METHODS_RE.match(p.name)
+            if m:
+                candidates.append((m.group(1), p.stat().st_mtime, p))
+        if candidates:
+            candidates.sort(key=lambda t: (t[0], t[1]))
+            return candidates[-1][2]
+    return None
 
 
 def _results_complete(d: Path) -> bool:
@@ -113,11 +124,41 @@ def load_methods(project_dir: Path) -> str:
     return text
 
 
+def find_results_file(results_dir: Path) -> Path | None:
+    """rayleigh's purpose-built results writeup at the results root.
+
+    Prefers the chained deliverable (highest datestamp, mtime tie-break, like
+    find_methods_file); falls back to the working RESULTS.md. None if neither
+    exists — the caller then crawls the directory instead.
+    """
+    candidates = []
+    for p in results_dir.glob("*_results*.md"):
+        m = _RESULTS_DIGEST_RE.match(p.name)
+        if m:
+            candidates.append((m.group(1), p.stat().st_mtime, p))
+    if candidates:
+        candidates.sort(key=lambda t: (t[0], t[1]))
+        return candidates[-1][2]
+    working = results_dir / "RESULTS.md"
+    return working if working.is_file() else None
+
+
 def load_results(project_dir: Path, subdir: str = "results") -> str:
-    """Read results files from results directory."""
+    """Read the results writeup, or failing that sample the results directory.
+
+    rayleigh writes a digest for exactly this purpose — read it whole (methods
+    treatment) rather than trawling raw run outputs past it.
+    """
     results_dir = project_dir / subdir
     if not results_dir.is_dir():
         return ""
+    digest = find_results_file(results_dir)
+    if digest is not None:
+        text = digest.read_text(encoding="utf-8", errors="replace")
+        if len(text) > _MAX_RESULTS_DIGEST_CHARS:
+            text = text[:_MAX_RESULTS_DIGEST_CHARS] + "\n\n[truncated]"
+        log(f"[raconteur] reading results digest: {digest.name}")
+        return text
     parts = []
     total = 0
     for p in sorted(results_dir.rglob("*")):
@@ -127,8 +168,13 @@ def load_results(project_dir: Path, subdir: str = "results") -> str:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
             snippet = "\n".join(lines[:_MAX_FILE_LINES])
             chunk = f"### {p.relative_to(results_dir)}\n```\n{snippet}\n```\n"
-            if total + len(chunk) > _MAX_RESULTS_CHARS:
-                break
+            remaining = _MAX_RESULTS_CHARS - total
+            if len(chunk) > remaining:
+                if parts:
+                    break
+                # the first candidate alone overflows the budget: keep what fits
+                # rather than returning nothing
+                chunk = chunk[:remaining] + "\n[truncated]\n"
             parts.append(chunk)
             total += len(chunk)
         except Exception:
@@ -242,6 +288,9 @@ def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[str
     paths = sorted(
         p for p in search.rglob("*")
         if p.is_file() and p.suffix.lower() in _FIGURE_SUFFIXES
+        # skip NAS/OS metadata litter (Synology @eaDir thumbnails, dotfiles)
+        and not any(part.startswith((".", "@"))
+                    for part in p.relative_to(search).parts)
     )
     rel = [str(p.relative_to(project_dir)) for p in paths[:_MAX_FIGURES_LISTED]]
     if rel:
