@@ -185,6 +185,9 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     out_path.write_text(output, encoding="utf-8")
     print(f"[raconteur] wrote {out_path.relative_to(project_dir)}", file=sys.stderr)
 
-    docx = to_docx(out_path)
+    # Resolve citations at draft time (legacy paper.py behavior): without the
+    # bibliography, pandoc leaves raw [@citekeys] and renders no References list.
+    bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
+    docx = to_docx(out_path, bib_path=bib_path)
     if docx:
         print(f"[raconteur] wrote {docx.relative_to(project_dir)}", file=sys.stderr)
