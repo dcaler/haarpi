@@ -235,10 +235,12 @@ def build_report(project, today=None) -> str:
 
 
 def default_report_path(project, today=None) -> Path:
-    """The shared ra* workspace (project ROOT), revision-chain name `{YYMMDD}_{slug}_methods_ra.md`."""
+    """The build stage's output dir (`code/output/`), revision-chain name
+    `{YYMMDD}_{slug}_methods_ra.md` — the stage-contract home every other ra*
+    deliverable already uses. (raconteur still finds legacy root copies.)"""
     today = today or _date.today()
     slug = slugify(project.name)
-    return project.root / f"{today:%y%m%d}_{slug}_methods_ra.md"
+    return project.code / "output" / f"{today:%y%m%d}_{slug}_methods_ra.md"
 
 
 def run_report(args) -> int:
@@ -248,7 +250,8 @@ def run_report(args) -> int:
     if getattr(args, "dry_run", False):
         print(text)
         return 0
+    out.parent.mkdir(parents=True, exist_ok=True)   # code/output/ predates only haarpi-scaffolded projects
     out.write_text(text)
     log(f"report: wrote Methods Digest -> {out}")
-    log(f"  {len(text)} chars; hand to raconteur (it scans the project root for ra* docs).")
+    log(f"  {len(text)} chars; hand to raconteur (it reads the newest ra* methods digest).")
     return 0

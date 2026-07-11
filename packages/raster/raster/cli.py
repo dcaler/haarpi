@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     handoff = sub.add_parser("handoff",
                              help="emit a Methods Digest (for raconteur) from DESIGN.md + tasks.yaml + frozen tests")
     _common(handoff)
-    handoff.add_argument("--out", "-o", help="output path (default: {root}/{YYMMDD}_{slug}_methods_ra.md)")
+    handoff.add_argument("--out", "-o", help="output path (default: {root}/code/output/{YYMMDD}_{slug}_methods_ra.md)")
     handoff.add_argument("--dry-run", action="store_true", help="print the digest to stdout, write nothing")
 
     return ap

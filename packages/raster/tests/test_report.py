@@ -113,24 +113,24 @@ def test_build_report_assembles_all_sections(tmp_path):
     assert "build a redistribution ABM" in md          # original brief
 
 
-def test_default_report_path_is_root_ra_chain(tmp_path):
+def test_default_report_path_is_code_output_ra_chain(tmp_path):
     project = make_project(tmp_path)
     p = default_report_path(project, today=date(2026, 7, 7))
-    assert p == tmp_path / "260707_postineq_methods_ra.md"
-    assert p.parent == project.root                     # ROOT, not code/
+    assert p == project.code / "output" / "260707_postineq_methods_ra.md"
+    assert p.parent == project.code / "output"          # the build stage's output dir
 
 
-def test_run_report_writes_to_root(tmp_path, monkeypatch, capsys):
+def test_run_report_writes_to_code_output(tmp_path, monkeypatch, capsys):
     project = make_project(tmp_path)
     monkeypatch.setattr("raster.report.load_project", lambda d: project)
     args = SimpleNamespace(dir=str(tmp_path), out=None, dry_run=False)
     rc = run_report(args)
     assert rc == 0
-    written = list(tmp_path.glob("*_methods_ra.md"))
+    written = list((project.code / "output").glob("*_methods_ra.md"))
     assert len(written) == 1
     assert "Methods Digest" in written[0].read_text()
-    # never lands inside the published code/ repo
-    assert not list((project.code).rglob("*_methods_ra.md"))
+    # the workspace root stays clean — the digest is a stage deliverable
+    assert not list(tmp_path.glob("*_methods_ra.md"))
 
 
 def test_run_report_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
