@@ -16,6 +16,7 @@ The pipeline verbs (init, next, status, queue) land with the planner harness.
 from __future__ import annotations
 
 import importlib
+import os
 import shutil
 import sys
 
@@ -108,7 +109,9 @@ def _doctor() -> int:
         if not found:
             print(f"  {name:<11}: not on PATH")
             continue
-        ours = found.startswith(prefix)
+        # Resolve the symlink: the single exposed `haarpi` binary is a shim in
+        # ~/.local/bin pointing into this venv, so classify by its real target.
+        ours = os.path.realpath(found).startswith(prefix)
         tag = "this stack" if ours else "OTHER stack (legacy standalone?)"
         if not ours and name != "haarpi":
             shadows += 1
