@@ -334,6 +334,19 @@ def _out_path(paper_dir: Path, short_title: str, user_rev: Path) -> Path:
     return paper_dir / minor_name(short_title, chain, "docx", datestamp)
 
 
+def _write_md_sibling(project_dir: Path, out: Path) -> None:
+    """The accepted-text .md next to the markup .docx.
+
+    The docx is the reviewer's redline; the md is what downstream LLM consumers
+    bind (load_onepager, the outline the draft reads). Without it they would
+    silently pick up the previous cycle's pre-annotation md.
+    """
+    from docx import Document
+    md_path = out.with_suffix(".md")
+    md_path.write_text(redline.accepted_markdown(Document(str(out))), encoding="utf-8")
+    log(f"[raconteur] wrote {md_path.relative_to(project_dir)} (accepted text)")
+
+
 def redline_revise(
     project_dir: Path,
     cfg: ProjectConfig,
@@ -345,12 +358,18 @@ def redline_revise(
     results: str,
     bib_section: str,
     known: set[str],
+    context_fn=None,
+    md_sibling: bool = False,
 ) -> tuple[Path, dict[str, str]]:
     """Edit a COPY of the reviewer's .docx in place, one anchored comment at a time.
 
     Returns (output_path, dispositions) where dispositions maps comment id -> outcome.
     Silence is not a decision: every comment gets a disposition, and every one that could not
     be answered by a tracked change is reported with the reason it could not.
+
+    `context_fn(heading, paragraph_text) -> str` overrides the paper's heading-keyed
+    evidence routing — a deliverable whose structure lives in the paragraph rather than
+    the heading (the one-pager's beats) routes on the paragraph text instead.
     """
     from docx import Document
     from .paper import _context_for_section
@@ -364,6 +383,10 @@ def redline_revise(
 
     if not anchors and not headings:
         log("[warn] no comment anchors found in the revision — nothing to redline")
+        # The reviewer may still have left tracked changes; the accepted md is
+        # how those reach the next stage.
+        if md_sibling:
+            _write_md_sibling(project_dir, out)
         return out, {}
 
     doc = Document(str(out))
@@ -380,7 +403,10 @@ def redline_revise(
         if not comments:
             continue
         heading = anchor["heading"] or "Abstract"
-        ctx = _context_for_section(anchor["heading"], litrev, code, results)
+        if context_fn is not None:
+            ctx = context_fn(anchor["heading"] or "", anchor["text"])
+        else:
+            ctx = _context_for_section(anchor["heading"], litrev, code, results)
         context_section = f"\n{ctx}" if ctx else ""
 
         log(f"[raconteur] redlining '{heading}' para {anchor['index']} "
@@ -420,6 +446,8 @@ def redline_revise(
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
         f"({edited} paragraph(s) redlined)")
     _report(dispositions, cmap, known, out)
+    if md_sibling:
+        _write_md_sibling(project_dir, out)
     return out, dispositions
 
 

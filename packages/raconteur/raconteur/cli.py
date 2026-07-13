@@ -55,7 +55,13 @@ def main() -> None:
 
     sub.add_parser("init", help="initialise a new paper project")
     sub.add_parser("style", help="train on author's publications from Zotero")
-    sub.add_parser("onepager", help="draft the concise narrative one-pager (before outline)")
+    onepager_p = sub.add_parser("onepager", help="draft the concise narrative one-pager (before outline)")
+    onepager_p.add_argument(
+        "--resynth",
+        action="store_true",
+        help="re-cut the narrative from scratch with your annotations as the brief "
+             "(major version — for narrative-level rejections, not line edits)",
+    )
     sub.add_parser("venue", help="analyse and recommend publication venues")
     sub.add_parser("outline", help="generate a paper outline from the approved one-pager")
     paper_p = sub.add_parser("draft", aliases=["paper"], help="write a fresh draft or redline your revision")
@@ -94,7 +100,7 @@ def main() -> None:
             run(project_dir)
         case "onepager":
             from .onepager import run
-            run(project_dir)
+            run(project_dir, resynth=args.resynth)
         case "venue":
             from .venue import run
             run(project_dir)
