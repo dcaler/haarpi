@@ -6,7 +6,6 @@ from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_methods, load_results, load_venue_analysis
 from .naming import major_name, find_latest, find_user_revision
 from .render import to_docx
-from .revise import read_text, build_revision_context
 
 _SYSTEM = (
     "You are an expert academic writing assistant. "
@@ -31,29 +30,6 @@ by the literature where available. Use [REF] as a placeholder wherever a citatio
 belongs. Do not include a references section. Calibrate depth, length, and breadth \
 of coverage to the scope and venue constraints above. Output only the paper draft.
 """
-
-_REVISE_PROMPT = """\
-Revise the following academic paper draft based on the reviewer's annotations.
-
-Title: {title}
-{venue_scope}
-Previous draft:
-{draft}
-
-Revision annotations:
-{revisions}
-
-Instructions:
-- Incorporate all tracked insertions into the text
-- Remove all tracked deletions
-- Address each reviewer comment with substantive changes to the relevant passage
-- Maintain consistent tone and flow throughout
-- Respect the scope and venue constraints above
-- Do not add a references section
-
-Output only the revised draft in markdown.
-"""
-
 
 def _venue_specs_block(cfg: ProjectConfig) -> str:
     lines = []
@@ -98,7 +74,8 @@ def run(project_dir: Path) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
-    user_rev = find_user_revision(paper_dir, cfg.short_title)
+    user_rev = find_user_revision(paper_dir, cfg.short_title,
+                                  chain_excludes=["outline", "venue", "onepager"])
     if user_rev:
         print(f"[raconteur] found revision: {user_rev.name}", file=sys.stderr)
         _revise(project_dir, cfg, brain, paper_dir, user_rev)
@@ -116,7 +93,11 @@ def run(project_dir: Path) -> None:
 def _draft_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path
 ) -> None:
-    outline_path = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra")
+    from haarpi.naming import find_latest_release
+    outline_path = find_latest_release(
+        paper_dir / "output", cfg.short_title, "md", chain_includes="outline",
+    ) or find_latest(paper_dir, cfg.short_title, "md",
+                     last_initials="ra", chain_includes="outline")
     if not outline_path:
         print("[error] no outline found — run 'raconteur outline' first", file=sys.stderr)
         raise SystemExit(1)
@@ -154,29 +135,25 @@ def _revise(
     paper_dir: Path,
     user_rev: Path,
 ) -> None:
-    draft_text = read_text(user_rev)
-    revision_notes = build_revision_context(user_rev)
+    """Answer each anchored comment with an in-place tracked change (paper parity).
 
-    if not revision_notes:
-        print(
-            "[warn] no comments or track changes found in revision — drafting fresh instead",
-            file=sys.stderr,
-        )
-        _draft_fresh(project_dir, cfg, brain, paper_dir)
-        return
+    Edits a copy of the reviewer's .docx — comments stay anchored and get
+    dispositions, the reviewer's own tracked changes survive, and every
+    un-flagged paragraph is byte-for-byte untouched.
+    """
+    from .paper import _bib_block
+    from .context import load_bib_summary, load_bib_keys
+    from .redline_revise import redline_revise
 
-    venue_scope = _venue_section(cfg, project_dir)
+    litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    code = load_methods(project_dir) if cfg.use_methods else ""
+    results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
-    prompt = _REVISE_PROMPT.format(
-        title=cfg.title,
-        venue_scope=venue_scope,
-        draft=draft_text,
-        revisions=revision_notes,
-    )
-
-    print("[raconteur] incorporating revisions…", file=sys.stderr)
-    revised_text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=32768)
-    _write(project_dir, cfg, paper_dir, revised_text)
+    redline_revise(project_dir, cfg, brain, paper_dir, user_rev,
+                   litrev, code, results, _bib_block(bib_summary), bib_keys,
+                   md_sibling=True)
 
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> None:

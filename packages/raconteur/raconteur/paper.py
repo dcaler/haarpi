@@ -9,6 +9,8 @@ from .guards import (
     CODE_KW as _CODE_KW,
     RESULTS_KW as _RESULTS_KW,
     is_references as _is_references,
+    is_abstract as _is_abstract,
+    is_acknowledgements as _is_acknowledgements,
 )
 from .context import (
     load_litreview, load_methods, load_results, load_bib_summary,
@@ -370,6 +372,22 @@ def _draft_abstract(
     )
 
 
+def _ack_passthrough(section_outline: str) -> str:
+    """The outline's CRediT reference list, verbatim; canonical list if bare."""
+    text = section_outline.strip()
+    if text:
+        return text
+    from .outline import _CREDIT_ROLES
+    return "\n".join(f"- {r}" for r in _CREDIT_ROLES)
+
+
+def _ensure_acknowledgements(sections: list[tuple[str, str]]) -> None:
+    """Outlines minted before the Acknowledgements rule lack the section; the
+    paper must still carry the CRediT reference list for the author."""
+    if not any(_is_acknowledgements(h) for h, _ in sections):
+        sections.append(("Acknowledgements", _ack_passthrough("")))
+
+
 def _assemble(title: str, abstract: str, sections: list[tuple[str, str]]) -> str:
     parts = [f"# {title}", "", "**Abstract**", "", abstract.strip(), ""]
     for heading, text in sections:
@@ -427,7 +445,15 @@ def _draft_paper(
     drafted: list[tuple[str, str]] = []
 
     for heading, section_outline in _parse_sections(outline_text):
-        if _is_references(heading):
+        if _is_references(heading) or _is_abstract(heading):
+            # References render at write time; the abstract is drafted last,
+            # from the finished paper — the outline's Abstract states its brief.
+            continue
+        if _is_acknowledgements(heading):
+            # Human-owned: the outline's CRediT role list passes through
+            # verbatim for the author to assign. Never drafted — the tool
+            # cannot know who contributed what.
+            drafted.append((heading, _ack_passthrough(section_outline)))
             continue
         ctx = _context_for_section(heading, litrev, code, results)
         log(f"[raconteur] drafting '{heading}'…")
@@ -454,6 +480,7 @@ def _draft_paper(
         drafted.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
+    _ensure_acknowledgements(drafted)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
     assembled = _assemble(cfg.title, abstract, drafted)
     _write(project_dir, cfg, paper_dir, assembled)
@@ -494,7 +521,13 @@ def _revise_paper(
     revised: list[tuple[str, str]] = []
 
     for heading, section_outline in _parse_sections(outline_text):
-        if _is_references(heading):
+        if _is_references(heading) or _is_abstract(heading):
+            continue
+        if _is_acknowledgements(heading):
+            # Keep whatever the author has filled in; fall back to the
+            # outline's CRediT reference list if the section is still bare.
+            revised.append((heading, existing_map.get(heading, "").strip()
+                            or _ack_passthrough(section_outline)))
             continue
         existing = existing_map.get(heading, "")
         ctx = _context_for_section(heading, litrev, code, results)
@@ -517,6 +550,7 @@ def _revise_paper(
         revised.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
+    _ensure_acknowledgements(revised)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
     _write(project_dir, cfg, paper_dir,
            _assemble(cfg.title, abstract, revised))
@@ -565,8 +599,11 @@ def run(project_dir: Path, resynth: bool = False) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
-    outline_path = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
-                               chain_includes="outline")
+    from haarpi.naming import find_latest_release
+    outline_path = find_latest_release(
+        paper_dir / "output", cfg.short_title, "md", chain_includes="outline",
+    ) or find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
+                     chain_includes="outline")
     if outline_path is None:
         log("[error] no outline found in paper/ — run 'raconteur outline' first")
         raise SystemExit(1)

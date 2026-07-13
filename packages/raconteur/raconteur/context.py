@@ -299,10 +299,17 @@ def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[str
 
 
 def load_onepager(project_dir: Path, short_title: str) -> str:
-    """Return the latest tool-generated one-pager narrative (paper/*_onepager_ra.md)."""
+    """Return the approved one-pager narrative.
+
+    A gate-minted release (paper/output/*_onepager.md) is the author-approved
+    text and outranks the working chain; the newest paper/*_onepager_*ra.md is
+    the fallback for projects that haven't gated the one-pager."""
     from .naming import find_latest
+    from haarpi.naming import find_latest_release
     paper_dir = project_dir / "paper"
-    path = find_latest(
+    path = find_latest_release(
+        paper_dir / "output", short_title, "md", chain_includes="onepager",
+    ) or find_latest(
         paper_dir, short_title, "md",
         last_initials="ra", chain_includes="onepager",
     )
