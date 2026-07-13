@@ -66,13 +66,19 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "comment": Step(None, 0.15, "Review the new draft and annotate it."),
     },
     "paper": {
-        "revise":  Step("haarpi raconteur draft", 2.0,
-                        "Answer each comment in place with tracked changes."),
-        "outline": Step("haarpi raconteur outline", 1.0,
-                        "Re-design the paper's structure from the approved one-pager."),
-        "draft":   Step("haarpi raconteur draft", 3.0,
-                        "Write the full paper from the outline and upstream releases."),
-        "comment": Step(None, 0.25, "Review the new draft and annotate it."),
+        "revise":   Step("haarpi raconteur draft", 2.0,
+                         "Answer each comment in place with tracked changes."),
+        "onepager": Step("haarpi raconteur onepager", 1.0,
+                         "Answer the one-pager annotations with tracked changes."),
+        "recut":    Step("haarpi raconteur onepager --resynth", 1.0,
+                         "Re-cut the narrative from scratch; the annotations are the brief."),
+        "venue":    Step("haarpi raconteur venue", 1.0,
+                         "Analyse candidate venues from the narrative."),
+        "outline":  Step("haarpi raconteur outline", 1.0,
+                         "Re-design the paper's structure from the approved one-pager."),
+        "draft":    Step("haarpi raconteur draft", 3.0,
+                         "Write the full paper from the outline and upstream releases."),
+        "comment":  Step(None, 0.25, "Review the new draft and annotate it."),
     },
     "experiments": {
         "process": Step("haarpi rayleigh process", 1.0,
@@ -98,6 +104,10 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     "paper": {
         "cosmetic":   ["revise", "comment"],
         "structural": ["outline", "draft", "comment"],
+        # The narrative is re-cut and handed straight back for approval: the
+        # one-pager is a human gate, so the outline must not be rebuilt from a
+        # through-line the author has not signed off on.
+        "narrative":  ["recut", "comment"],
         "upstream_literature": ["litreview:gather", "litreview:collect",
                                 "litreview:report", "litreview:comment"],
     },
@@ -112,6 +122,64 @@ STAGE_REFRESH: dict[str, list[str]] = {
     "paper":       ["revise", "comment"],
     "experiments": ["process", "comment"],
 }
+
+# ── the paper stage's internal ladder ─────────────────────────────────────────
+# The paper stage produces a succession of deliverables (onepager → venue →
+# outline → draft), each human-gated. `haarpi next` tells them apart by the
+# deliverable word in the markup's chain. A clean markup on one rung mints THAT
+# deliverable's release and queues the next rung; only the bare manuscript (no
+# deliverable word) mints the stage release and advances downstream stages.
+
+_PAPER_DELIVERABLE_WORDS = ("onepager", "outline", "venue")
+
+_DELIVERABLE_LABEL = {
+    "":         "full manuscript draft",
+    "onepager": "one-pager (the narrative through-line)",
+    "venue":    "venue analysis",
+    "outline":  "outline",
+}
+
+# next rung after a deliverable's gate passes
+PAPER_LADDER: dict[str, list[str]] = {
+    "onepager": ["outline", "comment"],
+    "venue":    ["outline", "comment"],
+    "outline":  ["draft", "comment"],
+}
+
+# tier -> chain, per deliverable; STAGE_TIERS["paper"] covers the manuscript.
+# Cosmetic asks are answered in place with tracked changes; anything heavier on
+# a one-pager IS a narrative complaint — a structure objection to a five-beat
+# narrative means the through-line is wrong — so structural and narrative both
+# re-cut it from scratch with the annotations as the brief.
+PAPER_DELIVERABLE_TIERS: dict[str, dict[str, list[str]]] = {
+    "onepager": {
+        "cosmetic":   ["onepager", "comment"],
+        "structural": ["recut", "comment"],
+        "narrative":  ["recut", "comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect",
+                                "litreview:report", "litreview:comment"],
+    },
+    "outline": {
+        "cosmetic":   ["outline", "comment"],
+        "structural": ["outline", "comment"],
+        "narrative":  ["recut", "comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect",
+                                "litreview:report", "litreview:comment"],
+    },
+}
+PAPER_DELIVERABLE_TIERS["venue"] = PAPER_DELIVERABLE_TIERS["outline"]
+
+
+def _deliverable_of(markup: Path, short_title: str) -> str:
+    """The paper-stage deliverable a markup belongs to; '' = the manuscript."""
+    parsed = naming.parse(markup, short_title)
+    if not parsed:
+        return ""
+    chain = [c.lower() for c in parsed[1]]
+    for w in _PAPER_DELIVERABLE_WORDS:
+        if w in chain:
+            return w
+    return ""
 
 _SYS = ("You are a research-pipeline planner. You read a reviewer's unresolved "
         "annotations on a draft and decide what work is needed next. Respond "
@@ -139,15 +207,24 @@ cannot perform the heavier work.
 Respond: {{"tier": "...", "assessment": "<one sentence>", "gather_topics": ["..."]}}
 (gather_topics only for gap_fill/redirection: specific, searchable topics.)""",
     "paper": """\
-A reviewer left unresolved annotations on a paper draft:
+A reviewer left unresolved annotations on a paper-stage deliverable — specifically
+the {deliverable}:
 {annotations}
 
-Pick the ONE tier matching the MOST substantive work ANY annotation asks for:
+Pick the ONE tier matching the MOST substantive work ANY annotation asks for. The
+tiers below run from lightest to heaviest; a single heavier request outranks a pile
+of lighter ones, because a lighter pipeline cannot perform the heavier work.
 
 - "cosmetic": every annotation is satisfiable by rewriting the flagged passages in place —
   wording, clarity, tone, transitions, small factual fixes from existing material.
 - "structural": at least one annotation demands reorganization — sections added, removed,
-  merged, or reordered; the argument restructured. The outline must change.
+  merged, or reordered; the argument restructured. The outline must change, but the story
+  the paper tells is still the right one.
+- "narrative": at least one annotation rejects the through-line itself — the motivation,
+  the framing, what the paper claims to contribute, or which results carry it. Not "move
+  this section" but "this is not the argument". The one-pager must be re-cut and re-approved
+  before any outline or draft is rebuilt on top of it. Annotations ON a one-pager are
+  usually this tier or cosmetic; they are never "structural".
 - "upstream_literature": at least one annotation needs NEW SOURCES — a claim requiring
   citation support the corpus lacks, "cite more recent work on X", a missing related-work
   thread. The paper cannot satisfy it; the literature review must gather first.
@@ -259,6 +336,12 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
 
 # ── classification ───────────────────────────────────────────────────────────
 
+def _step_of(stage: str, name: str) -> Step:
+    """Resolve a chain element, honouring the 'otherstage:step' form."""
+    st, _, sname = name.rpartition(":")
+    return STAGE_STEPS[st or stage][sname]
+
+
 def _parse_json_obj(raw: str) -> dict:
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
@@ -266,8 +349,13 @@ def _parse_json_obj(raw: str) -> dict:
     return json.loads(m.group(0))
 
 
-def classify(stage: str, check: dict, cfg: dict) -> dict:
-    """Local-brain tier classification of the unresolved asks."""
+def classify(stage: str, check: dict, cfg: dict,
+             tiers: dict[str, list[str]] | None = None,
+             deliverable: str = "") -> dict:
+    """Local-brain tier classification of the unresolved asks.
+
+    `tiers` overrides the stage's registry (a paper deliverable's own tier
+    table); `deliverable` names what was annotated, for the prompt."""
     from .brain import Brain
     o = cfg.get("ollama", {})
     b = Brain(o.get("url", "http://localhost:11434"),
@@ -276,9 +364,12 @@ def classify(stage: str, check: dict, cfg: dict) -> dict:
     lines = [f'- ({c["author"]}) {c["text"]}' for c in check["unresolved"]]
     if check["reviewer_changes"]:
         lines.append(f"- ({check['reviewer_changes']} direct tracked-change edits by the reviewer)")
-    prompt = STAGE_PROMPTS[stage].format(annotations="\n".join(lines))
+    prompt = STAGE_PROMPTS[stage].format(
+        annotations="\n".join(lines),
+        deliverable=_DELIVERABLE_LABEL.get(deliverable, deliverable or "draft"),
+    )
     plan = _parse_json_obj(b.coordinator(prompt, _SYS, think=False))
-    tiers = STAGE_TIERS[stage]
+    tiers = tiers or STAGE_TIERS[stage]
     if plan.get("tier") not in tiers:
         plan["escalate"] = plan.get("tier")
         # unknown/escalate tier -> the heaviest chain this stage has
@@ -290,21 +381,24 @@ def classify(stage: str, check: dict, cfg: dict) -> dict:
 
 def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | None:
     """Newest in-flight file whose chain ends in the human's initials — the
-    markup whose gate task was just marked done."""
+    markup whose gate task was just marked done.
+
+    Scans the stage root alongside output/: raconteur's working chain lives at
+    paper/ root (same convention latest_release's root-scan tier serves)."""
     best: tuple[float, str, Path] | None = None
     for stage in m.stages:
-        d = m.output_dir(root, stage)
-        if not d.is_dir():
-            continue
-        for p in d.glob("*.docx"):
-            parsed = naming.parse(p, m.short_title)
-            if not parsed:
+        for d in {m.output_dir(root, stage), m.stage_dir(root, stage)}:
+            if not d.is_dir():
                 continue
-            _, chain, _ = parsed
-            if chain and chain[-1].lower() == m.initials.lower():
-                t = p.stat().st_mtime
-                if best is None or t > best[0]:
-                    best = (t, stage, p)
+            for p in d.glob("*.docx"):
+                parsed = naming.parse(p, m.short_title)
+                if not parsed:
+                    continue
+                _, chain, _ = parsed
+                if chain and chain[-1].lower() == m.initials.lower():
+                    t = p.stat().st_mtime
+                    if best is None or t > best[0]:
+                        best = (t, stage, p)
     return (best[1], best[2]) if best else None
 
 
@@ -379,8 +473,11 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
                 description=f"Interactive design session — run: haarpi {tool} {verb}",
                 resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
         else:
+            # The paper stage opens at the top of its ladder — narrative first,
+            # then venue analysis, then the human gate; outline and draft are
+            # queued by their own gates as each rung passes.
             queue_chain(client, m.trundlr_project_id, stage,
-                        ["draft", "comment"] if stage == "paper" else ["comment"],
+                        ["onepager", "venue", "comment"] if stage == "paper" else ["comment"],
                         tr_cfg, description="Stage opened: inputs released.")
         project.record_plan(root, {"type": "opened", "stage": stage,
                                    "bindings": _current_bindings(root, m, stage)})
@@ -415,14 +512,43 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
               "loop guard, refusing to plan it twice.")
         return 0
 
-    infix = m.stages[stage].get("infix") or ""
+    deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
+    infix = deliverable or (m.stages[stage].get("infix") or "")
     if check["clean"]:
         rel_name = naming.release_name(m.short_title, "docx", infix=infix)
         dst = m.output_dir(root, stage) / rel_name
         if dry_run:
-            print(f"[dry-run] clean markup -> would mint {dst.name}")
+            rung = f" ({deliverable} rung)" if deliverable else ""
+            print(f"[dry-run] clean markup{rung} -> would mint {dst.name}")
             return 0
         result = redline.mint_release(markup, dst)
+
+        if deliverable:
+            # A ladder rung, not the stage: mint this deliverable's release and
+            # queue the next rung. The working chain stays put (no archive) and
+            # downstream STAGES neither advance nor refresh — only the bare
+            # manuscript's gate speaks for the paper stage.
+            project.record_plan(root, {
+                "type": "gate", "stage": stage, "deliverable": deliverable,
+                "annotation_hash": ahash, "markup": markup.name,
+                "release": dst.name})
+            queued_note = ""
+            if m.trundlr_project_id:
+                try:
+                    client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
+                    queued = queue_chain(
+                        client, m.trundlr_project_id, stage,
+                        PAPER_LADDER[deliverable], tr_cfg,
+                        description=f"{deliverable} gate passed: {dst.name}.")
+                    queued_note = (f"; queued cycle {queued['cycle']} "
+                                   f"({' -> '.join(PAPER_LADDER[deliverable])} -> next)")
+                except trundlr.TrundlrError as e:
+                    queued_note = f"; [trundlr] queueing failed ({e}) — queue the next rung manually"
+            msg = f"{stage}: {deliverable} gate PASSED — released {dst.name}{queued_note}"
+            print(f"haarpi next: {msg}")
+            _email(cfg, f"haarpi: {m.name} — {deliverable} gate passed", msg)
+            return 0
+
         archived = _archive_chain(root, m, stage, dst)
         project.record_plan(root, {
             "type": "gate", "stage": stage, "annotation_hash": ahash,
@@ -443,10 +569,12 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         return 0
 
     # unresolved asks -> classify + queue rework
-    plan = classify(stage, check, cfg)
+    dtiers = PAPER_DELIVERABLE_TIERS.get(deliverable) if deliverable else None
+    plan = classify(stage, check, cfg, tiers=dtiers, deliverable=deliverable)
     tier = plan["tier"]
-    steps = STAGE_TIERS[stage][tier]
-    summary = [f"{stage}: {len(check['unresolved'])} unresolved ask(s) -> tier {tier}",
+    steps = (dtiers or STAGE_TIERS[stage])[tier]
+    what = f"{stage} [{deliverable}]" if deliverable else stage
+    summary = [f"{what}: {len(check['unresolved'])} unresolved ask(s) -> tier {tier}",
                f"  assessment: {plan.get('assessment', '')}",
                f"  chain: {' -> '.join(steps)} -> next"]
     if plan.get("escalate"):
@@ -460,14 +588,15 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
     if plan.get("gather_topics"):
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
-    entry = {"type": "plan", "stage": stage, "annotation_hash": ahash,
+    entry = {"type": "plan", "stage": stage, "deliverable": deliverable,
+             "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
              "bindings": _current_bindings(root, m, stage)}
     if not m.trundlr_project_id:
         project.record_plan(root, entry)
         print("\n".join(summary + ["  [trundlr] no project id — run the chain manually:"]
-                        + [f"    {STAGE_STEPS[stage][s].command or '(you) ' + s}" for s in steps]))
+                        + [f"    {_step_of(stage, s).command or '(you) ' + s}" for s in steps]))
         return 0
     try:
         client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
@@ -484,7 +613,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     except trundlr.TrundlrError as e:
         project.record_plan(root, entry)
         summary.append(f"  [trundlr] queueing failed ({e}) — run the chain manually:")
-        summary += [f"    {STAGE_STEPS[stage][s].command or '(you) ' + s}" for s in steps]
+        summary += [f"    {_step_of(stage, s).command or '(you) ' + s}" for s in steps]
     print("\n".join(summary))
     _email(cfg, f"haarpi: {m.name} — {stage} plan ({tier})", "\n".join(summary))
     return 0
@@ -549,7 +678,17 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
     the lit-review opening chain. Identity is answered once, here; the stage
     tools' own inits go straight to their substance."""
     if (root / project.MANIFEST).exists():
-        print(f"haarpi init: {project.MANIFEST} already exists here.")
+        # Repair mode: fill anything the original init (or an older haarpi)
+        # didn't materialise, and touch nothing that exists.
+        m = project.load_manifest(root)
+        project.scaffold(root, m)
+        seeded = project.seed_tool_configs(root, m)
+        if seeded:
+            print(f"haarpi init: {project.MANIFEST} already exists — seeded "
+                  "missing stage config(s): " + ", ".join(seeded))
+            return 0
+        print(f"haarpi init: {project.MANIFEST} already exists here; "
+              "nothing missing to seed.")
         return 2
     default_name = re.sub(r"^\d{6}_", "", root.name)
     m = project.Manifest(
@@ -583,6 +722,9 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
         lines.append("[trundlr] not configured/disabled — queue later with `haarpi queue`")
     project.save_manifest(m, root)
     project.scaffold(root, m)
+    seeded = project.seed_tool_configs(root, m)
+    if seeded:
+        lines.append("seeded stage config(s): " + ", ".join(seeded))
     project.record_plan(root, {"type": "opened", "stage": "litreview"})
     print(f"haarpi init: {m.name} ({m.short_title}) — stages: "
           + ", ".join(m.stages) + "\n  " + "\n  ".join(lines))

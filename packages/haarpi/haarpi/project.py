@@ -109,6 +109,42 @@ def scaffold(root: Path, m: Manifest) -> list[Path]:
     return made
 
 
+def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
+    """Materialise the UNATTENDED stages' tool configs from the one interview.
+
+    Attended stages (raster, rayleigh) init inside their own design sessions,
+    but nothing ever attends litreview or paper — and their tools hard-require
+    a project file before the first queued task can run. rabbithole's gather
+    extracts topic/focus from the research prompt itself, and raconteur's
+    onepager extracts title/topic/focus from the description, so the manifest
+    brief is a sufficient seed for both. Existing files are never touched;
+    re-running `haarpi init` repairs a project that predates this seeding."""
+    seeded = []
+
+    from rabbithole import config as rh
+    lit_dir = root / m.stages["litreview"]["dir"]
+    if rh.latest_project_file(root) is None:
+        cfg = rh.ProjectConfig(project_name=m.name, research_prompt=m.brief,
+                               trundlr_project_id=m.trundlr_project_id)
+        lit_dir.mkdir(parents=True, exist_ok=True)
+        fp = rh.save_project_to(cfg, lit_dir / rh.PROJECT_FILE)
+        seeded.append(str(fp.relative_to(root)))
+
+    from raconteur.config import ProjectConfig as RaconteurConfig
+    if not RaconteurConfig.exists(root):
+        rcfg = RaconteurConfig(
+            short_title=m.short_title,
+            description=m.brief,
+            litrev_dir=m.stages["litreview"]["dir"],
+            use_methods=True,
+            results_dir=m.stages["experiments"]["dir"],
+        )
+        rcfg.save(root)
+        seeded.append(str((root / "paper" / "raconteur.yaml").relative_to(root)))
+
+    return seeded
+
+
 # ── releases and in-flight work ──────────────────────────────────────────────
 
 def latest_release(root: Path, m: Manifest, stage: str) -> Path | None:
