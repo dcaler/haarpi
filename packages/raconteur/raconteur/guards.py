@@ -94,14 +94,24 @@ RESULTS_KW = {"result", "evaluation", "experiment", "finding",
 
 _REFERENCES_RE = re.compile(r"^\d*\.?\s*references?\b", re.IGNORECASE)
 _ABSTRACT_RE = re.compile(r"^\d*\.?\s*abstract\b", re.IGNORECASE)
+_ACKNOWLEDGEMENTS_RE = re.compile(r"^\d*\.?\s*acknowledge?ments?\b", re.IGNORECASE)
 
 
 def is_references(heading: str) -> bool:
     return bool(_REFERENCES_RE.match(heading))
 
 
+def is_abstract(heading: str) -> bool:
+    return bool(_ABSTRACT_RE.match(heading))
+
+
+def is_acknowledgements(heading: str) -> bool:
+    return bool(_ACKNOWLEDGEMENTS_RE.match(heading))
+
+
 def section_kind(heading: str) -> str:
-    """Classify a heading → 'abstract' | 'litrev' | 'methods' | 'results' | 'references' | 'other'.
+    """Classify a heading → 'abstract' | 'acknowledgements' | 'litrev' | 'methods' |
+    'results' | 'references' | 'other'.
 
     Order matters: results before methods, because "experimental design" and "model
     evaluation" each hit both keyword sets and the later-stage kind should win.
@@ -110,6 +120,8 @@ def section_kind(heading: str) -> str:
         return "references"
     if _ABSTRACT_RE.match(heading):
         return "abstract"
+    if _ACKNOWLEDGEMENTS_RE.match(heading):
+        return "acknowledgements"
     h = heading.lower()
     if any(kw in h for kw in RESULTS_KW):
         return "results"
@@ -125,7 +137,7 @@ def expects_citations(kind: str) -> bool:
 
     Methods and Results are grounded in the writeup and the results files. Demanding a
     citation floor there is a category error. An abstract summarises rather than cites,
-    and References are not prose at all.
+    References are not prose at all, and Acknowledgements credit people, not literature.
     """
     return kind in ("litrev", "other")
 

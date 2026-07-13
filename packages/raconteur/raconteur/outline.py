@@ -6,9 +6,10 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_methods, load_results, load_venue_analysis, check_prerequisites, load_onepager
-from .naming import major_name, major_outline_name, find_latest, find_user_revision
+from .naming import (
+    major_name, major_outline_name, find_latest, find_user_revision,
+)
 from .render import to_docx
-from .revise import read_text, build_revision_context
 
 # ── description → title/topic/focus (worker) ─────────────────────────────────
 
@@ -92,6 +93,28 @@ Return ONLY a JSON array. Return [] if no concrete findings are present.
 Results content:
 {results}"""
 
+# ── design extraction (worker) ────────────────────────────────────────────────
+
+# rayleigh's digest interleaves how the experiments were set up with what they
+# found. The one-pager's Approach beat needs the former and must not see the
+# latter, so the two are pulled apart here rather than left to a prompt to
+# self-censor.
+_EXTRACT_DESIGN_PROMPT = """\
+Extract the EXPERIMENTAL DESIGN from this results content — how the experiments \
+were set up, not what they found.
+
+For each experiment return:
+{{"experiment": "short name", "setup": "what was run, and on what", \
+"conditions": "the conditions, arms, or comparisons", \
+"parameters": "the parameters swept or held fixed, with values if given"}}
+
+Report no outcomes, findings, or result values of any kind — only the design.
+
+Return ONLY a JSON array. Return [] if no experimental design is described.
+
+Results content:
+{results}"""
+
 # ── shared system ─────────────────────────────────────────────────────────────
 
 _SYSTEM = (
@@ -100,6 +123,26 @@ _SYSTEM = (
 )
 
 # ── draft outline (coordinator) ───────────────────────────────────────────────
+
+# CRediT contributor-role taxonomy (credit.niso.org) — reproduced in the
+# outline's Acknowledgements section verbatim, as the reference list the author
+# assigns from. The tool never assigns roles itself.
+_CREDIT_ROLES = [
+    "Conceptualization",
+    "Data curation",
+    "Formal analysis",
+    "Funding acquisition",
+    "Investigation",
+    "Methodology",
+    "Project administration",
+    "Resources",
+    "Software",
+    "Supervision",
+    "Validation",
+    "Visualization",
+    "Writing – original draft",
+    "Writing – review & editing",
+]
 
 _DRAFT_PROMPT = """\
 Create a detailed outline for an academic paper. Use the structural analysis \
@@ -150,6 +193,18 @@ Discussion and Conclusion must not claim specific empirical outcomes not support
 by the available content
 - Include 3–5 bullet points per subsection describing what that subsection \
 specifically argues, shows, or demonstrates for this paper
+- Open the outline with an unnumbered "## Abstract" section: 2–3 bullets naming \
+what the abstract must distil (the contribution, the key result, the implication). \
+The abstract text itself is drafted last, from the finished paper, and is expected \
+to be redrafted across editing rounds — the bullets state its brief, not its prose
+- After the Conclusion, add an unnumbered "## Acknowledgements" section whose \
+bullets reproduce EXACTLY the following CRediT contributor-role taxonomy, one \
+role per bullet, as the author's reference for assigning contributions. Do not \
+invent contributor names, do not assign any role, do not omit or reword a role:
+{credit_roles}
+- End with an unnumbered "## References" heading with no bullets (the \
+bibliography is rendered at draft time)
+- Do not include appendices
 - Output only the outline — no preamble or closing remarks
 """
 
@@ -188,6 +243,12 @@ results content was provided)
 are introduced or derived there (only applies when key_equations is non-empty)
 11. Results subsections that do not cite specific findings from key_findings \
 (only applies when key_findings is non-empty)
+12. A missing unnumbered Abstract section at the top, or one whose bullets \
+write abstract prose instead of naming what the abstract must distil
+13. A missing Acknowledgements section between the Conclusion and References, \
+or one whose bullets do not reproduce all 14 CRediT contributor roles exactly, \
+or that assigns roles or names contributors
+14. Any appendix sections (none belong in this outline)
 
 Output: a numbered list of specific, actionable problems. One line each. \
 Skip checks with no issues found. No preamble."""
@@ -245,43 +306,6 @@ facts directly from the results content above)
 - Output only the complete outline — no preamble or closing remarks
 """
 
-# ── user-annotation revision (coordinator) ────────────────────────────────────
-
-_USER_REVISE_PROMPT = """\
-Revise this paper outline. Replace Methods and/or Results sections if new content \
-is provided. Apply all reviewer annotations to all other sections.
-
-Title: {title}
-Topic: {topic}
-Focus: {focus}
-{venue_section}
-Structural analysis:
-{analysis}
-
-{code_section}{results_section}
-Current outline:
-{outline}
-
-Revision annotations:
-{revisions}
-
-Instructions:
-- If methods source code is provided above: rewrite the Methods section grounded \
-in the actual code — reference specific algorithms, functions, parameters, and \
-implementation choices; method_steps gives structural order; each subsection must \
-specify which equations from key_equations are introduced there (if key_equations \
-is empty, extract equations directly from the source code above)
-- If results content is provided above: rewrite the Results section grounded in \
-the actual results — cite specific values, outcomes, and patterns; results_structure \
-gives structural order; each Results subsection must cite specific findings from \
-key_findings with values where present (if key_findings is empty, extract concrete \
-facts directly from the results content above)
-- For all other sections: incorporate all tracked insertions, remove all tracked \
-deletions, address each reviewer comment with substantive changes
-- Maintain numbered section format (## 1. Introduction, etc.) with ### \
-subsections and 3–5 bullet points per subsection
-- Output only the revised outline — no preamble or closing remarks.
-"""
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -351,6 +375,38 @@ def _extract_findings(brain: Brain, results: str) -> list[dict]:
         return []
 
 
+def _extract_design(brain: Brain, results: str) -> list[dict]:
+    """Worker call: extract experimental design (not findings) from results."""
+    raw = brain.worker(
+        _EXTRACT_DESIGN_PROMPT.format(results=results[:8000]),
+        num_ctx=8192,
+    )
+    try:
+        result = json.loads(_strip_fence(raw))
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def analysis_view(analysis: str, drop: tuple[str, ...] = ()) -> str:
+    """Re-serialise the structural analysis with some keys withheld.
+
+    ``_analyze_structure`` returns "<status>\\n\\n<json>". A caller that must not
+    show a beat some part of the analysis — Approach may not see key_findings —
+    takes a filtered copy. Falls back to the whole thing if the body is not JSON,
+    which is what _analyze_structure emits when the model's output would not parse.
+    """
+    status, sep, body = analysis.partition("\n\n")
+    if not sep:
+        return analysis
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return analysis
+    kept = {k: v for k, v in parsed.items() if k not in drop}
+    return f"{status}\n\n{json.dumps(kept, indent=2)}"
+
+
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str,
     narrative: str = "",
@@ -393,6 +449,8 @@ def _analyze_structure(
     if results:
         log("[raconteur] extracting findings from results…")
         parsed["key_findings"] = _extract_findings(brain, results)
+        log("[raconteur] extracting experimental design from results…")
+        parsed["key_design"] = _extract_design(brain, results)
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
@@ -551,6 +609,7 @@ def _outline_fresh(
             litrev_section=litrev_section,
             code_section=code_section,
             results_section=results_section,
+            credit_roles="\n".join(f"  - {r}" for r in _CREDIT_ROLES),
         ),
         system=_SYSTEM,
         num_ctx=16384,
@@ -625,44 +684,25 @@ def _revise(
     paper_dir: Path,
     user_rev: Path,
 ) -> None:
+    """Answer each anchored comment with an in-place tracked change (paper parity).
+
+    New upstream content is _refresh_content's job, not this path's — here the
+    reviewer's annotations are the whole brief. The accepted-text .md sibling is
+    what 'draft' binds.
+    """
+    from .paper import _bib_block
+    from .context import load_bib_summary, load_bib_keys
+    from .redline_revise import redline_revise
+
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
-    narrative = load_onepager(project_dir, cfg.short_title)
-    outline_text = read_text(user_rev)
-    revision_notes = build_revision_context(user_rev)
-
-    if not revision_notes and not code and not results:
-        log("[warn] no annotations, no code, and no results — nothing to revise")
-        return
-
-    log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
-
-    venue_section = _build_venue_section(cfg, project_dir)
-    code_section = f"Methods (raster writeup):\n{code}\n\n" if code else ""
-    results_section = f"Results Content:\n{results}\n\n" if results else ""
-
-    log("[raconteur] revising outline…")
-    revised_text = brain.coordinator(
-        _USER_REVISE_PROMPT.format(
-            title=cfg.title,
-            topic=cfg.topic,
-            focus=cfg.focus,
-            venue_section=venue_section,
-            analysis=analysis,
-            code_section=code_section,
-            results_section=results_section,
-            outline=outline_text,
-            revisions=revision_notes or "(no annotations provided)",
-        ),
-        system=_SYSTEM,
-        num_ctx=16384,
-    )
-    revised_text = _critique_revise(brain, revised_text, analysis, n=1)
-    revised_text = _critique_revise(brain, revised_text, analysis, n=2)
-    _write(project_dir, cfg, paper_dir, revised_text)
+    redline_revise(project_dir, cfg, brain, paper_dir, user_rev,
+                   litrev, code, results, _bib_block(bib_summary), bib_keys,
+                   md_sibling=True)
 
 
 # ── write output ──────────────────────────────────────────────────────────────
