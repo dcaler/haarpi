@@ -555,6 +555,136 @@ def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
             "clean": not unresolved and reviewer_changes == 0}
 
 
+_CE_CTYPE = ("application/vnd.openxmlformats-officedocument.wordprocessingml"
+             ".commentsExtended+xml")
+_CE_RELTYPE = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+
+
+def _fresh_para_id() -> str:
+    import random
+    return f"{random.getrandbits(31) | 0x10000000:08X}"
+
+
+def add_replies(path: Path, replies: dict[str, str],
+                author: str = "raconteur", initials: str = "ra") -> int:
+    """Append a threaded reply to each comment id in `replies`, in place.
+
+    Word models a reply as a full <w:comment> whose commentsExtended entry
+    carries w15:paraIdParent = the parent's paragraph id, with range markers
+    shadowing the parent's anchor. `unresolved_comments` already treats
+    paraIdParent entries as conversation, so a tool reply never blocks a gate —
+    this is the writer that half of the machinery was waiting for.
+    """
+    if not replies:
+        return 0
+    parts = _zip_parts(path)
+    if "word/comments.xml" not in parts:
+        return 0
+    croot = etree.fromstring(parts["word/comments.xml"])
+    docroot = etree.fromstring(parts["word/document.xml"])
+
+    comments = {c.get(qn("w:id")): c for c in croot.findall(qn("w:comment"))}
+    next_id = max([int(i) for i in comments if i and i.isdigit()] + [0]) + 1
+
+    ce_name = "word/commentsExtended.xml"
+    created_ce = ce_name not in parts
+    ceroot = (etree.fromstring(parts[ce_name]) if not created_ce
+              else etree.fromstring(f'<w15:commentsEx xmlns:w15="{_W15}"/>'.encode()))
+    known_ex = {ex.get(f"{{{_W15}}}paraId")
+                for ex in ceroot.iter(f"{{{_W15}}}commentEx")}
+
+    def _ensure_para_id(comment_el) -> str | None:
+        ps = comment_el.findall(qn("w:p"))
+        if not ps:
+            return None
+        pid = ps[-1].get(f"{{{_W14}}}paraId")
+        if pid is None:
+            pid = _fresh_para_id()
+            ps[-1].set(f"{{{_W14}}}paraId", pid)
+        return pid
+
+    added = 0
+    for parent_id, text in replies.items():
+        parent = comments.get(str(parent_id))
+        if parent is None or not (text or "").strip():
+            continue
+        pend = docroot.find(f".//{qn('w:commentRangeEnd')}[@{qn('w:id')}='{parent_id}']")
+        pref = docroot.find(f".//{qn('w:commentReference')}[@{qn('w:id')}='{parent_id}']")
+        if pend is None or pref is None:
+            continue                        # no anchor in the body — nothing to thread onto
+
+        parent_para = _ensure_para_id(parent)
+        if parent_para and parent_para not in known_ex:
+            ex = etree.SubElement(ceroot, f"{{{_W15}}}commentEx")
+            ex.set(f"{{{_W15}}}paraId", parent_para)
+            ex.set(f"{{{_W15}}}done", "0")
+            known_ex.add(parent_para)
+
+        nid = str(next_id)
+        next_id += 1
+        reply_para = _fresh_para_id()
+
+        c = etree.SubElement(croot, qn("w:comment"))
+        c.set(qn("w:id"), nid)
+        c.set(qn("w:author"), author)
+        c.set(qn("w:initials"), initials)
+        c.set(qn("w:date"), _now())
+        p = etree.SubElement(c, qn("w:p"))
+        p.set(f"{{{_W14}}}paraId", reply_para)
+        r = etree.SubElement(p, qn("w:r"))
+        t = etree.SubElement(r, qn("w:t"))
+        t.set(_XML_SPACE, "preserve")
+        t.text = text.strip()
+
+        s_el = etree.Element(qn("w:commentRangeStart")); s_el.set(qn("w:id"), nid)
+        e_el = etree.Element(qn("w:commentRangeEnd"));   e_el.set(qn("w:id"), nid)
+        pend.addprevious(s_el)
+        pend.addnext(e_el)
+        ref_run = etree.Element(qn("w:r"))
+        ref = etree.SubElement(ref_run, qn("w:commentReference"))
+        ref.set(qn("w:id"), nid)
+        pref.getparent().addnext(ref_run)
+
+        ex = etree.SubElement(ceroot, f"{{{_W15}}}commentEx")
+        ex.set(f"{{{_W15}}}paraId", reply_para)
+        if parent_para:
+            ex.set(f"{{{_W15}}}paraIdParent", parent_para)
+        ex.set(f"{{{_W15}}}done", "0")
+        added += 1
+
+    if not added:
+        return 0
+
+    def _ser(root):
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8",
+                              standalone=True)
+    parts["word/comments.xml"] = _ser(croot)
+    parts["word/document.xml"] = _ser(docroot)
+    parts[ce_name] = _ser(ceroot)
+    if created_ce:
+        ct = etree.fromstring(parts["[Content_Types].xml"])
+        ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        ov = etree.SubElement(ct, f"{{{ns}}}Override")
+        ov.set("PartName", "/word/commentsExtended.xml")
+        ov.set("ContentType", _CE_CTYPE)
+        parts["[Content_Types].xml"] = _ser(ct)
+        rels_name = "word/_rels/document.xml.rels"
+        rr = etree.fromstring(parts[rels_name])
+        rns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        nums = [int(rel.get("Id")[3:]) for rel in rr
+                if (rel.get("Id") or "").startswith("rId") and rel.get("Id")[3:].isdigit()]
+        rel = etree.SubElement(rr, f"{{{rns}}}Relationship")
+        rel.set("Id", f"rId{max(nums, default=0) + 1}")
+        rel.set("Type", _CE_RELTYPE)
+        rel.set("Target", "commentsExtended.xml")
+        parts[rels_name] = _ser(rr)
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in parts.items():
+            z.writestr(n, b)
+    return added
+
+
 def accept_all_changes(doc) -> dict:
     """Accept every tracked change: unwrap <w:ins>, drop <w:del>.
 

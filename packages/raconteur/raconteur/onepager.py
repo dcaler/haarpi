@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import shutil
 from typing import NamedTuple
 from .log import log
 from pathlib import Path
@@ -290,12 +291,134 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
 
+_REPLIES_PROMPT = """\
+A one-pager was RE-CUT from scratch in response to a reviewer's annotations. \
+For each reviewer comment below, write a 1-2 sentence reply saying specifically \
+how the re-cut addresses it — or, if it does not, why.
+
+Reviewer comments (id: text):
+{comments}
+
+The re-cut one-pager:
+{onepager}
+
+Return ONLY a JSON object mapping each comment id to its reply string."""
+
+_FALLBACK_REPLY = ("Re-cut: the narrative was re-derived from the evidence with this "
+                   "annotation in the brief — see the tracked replacement in this beat.")
+
+
+def _draft_replies(brain: Brain, text: str, user_rev: Path) -> dict[str, str]:
+    """One reply per reviewer comment; fail soft to a mechanical reply."""
+    import json
+    from . import redline
+    from haarpi.redline import TOOL_AUTHORS
+
+    tool_lower = {a.lower() for a in TOOL_AUTHORS}
+    cmap = {cid: c for cid, c in redline.comments_by_id(user_rev).items()
+            if (c.get("author") or "").lower() not in tool_lower}
+    if not cmap:
+        return {}
+    listing = "\n".join(f"- {cid}: {c['text']}" for cid, c in cmap.items())
+    raw = brain.coordinator(
+        _REPLIES_PROMPT.format(comments=listing, onepager=text),
+        system=_SYSTEM,
+        num_ctx=8192,
+    )
+    try:
+        m = re.search(r"\{.*\}", raw, re.S)
+        parsed = json.loads(m.group(0)) if m else {}
+    except Exception:
+        parsed = {}
+    return {cid: str(parsed.get(cid) or parsed.get(str(cid)) or _FALLBACK_REPLY)
+            for cid in cmap}
+
+
+def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
+                 brain: Brain, text: str, beats: list[tuple[str, str]],
+                 user_rev: Path) -> None:
+    """Deliver the re-cut as a redline on the reviewer's own document.
+
+    A re-cut replaces the narrative, but it must not replace the CONVERSATION:
+    the output is a copy of the reviewer's docx with their tracked edits
+    accepted into the base (they persist by construction), each beat replaced
+    as a tracked change, and every comment answered with a threaded reply.
+    Major version — new datestamp, chain reset to onepager_ra — but the
+    threads ride along into the new cycle.
+    """
+    from docx import Document
+    from . import redline as rl
+    from haarpi import redline as hrl
+
+    out = paper_dir / major_onepager_name(cfg.short_title, "docx")
+    shutil.copy2(user_rev, out)
+
+    doc = Document(str(out))
+    counts = hrl.accept_all_changes(doc)   # reviewer's edits become the base text
+    ids = rl.ids_for(doc)
+
+    final = _beats_from_md(text)
+    replaced = 0
+    for rec in rl.body_paragraphs(doc):
+        beat = _beat_of((rec["para"].text or "").strip())
+        if beat is None:
+            continue
+        new = final.get(beat) or next(
+            (f"**{n}** — {t}" for n, t in beats if n == beat), None)
+        if new and rl.tracked_replace_sentencewise(
+                rec["para"]._p, new.replace("**", ""), rl.AUTHOR, ids):
+            replaced += 1
+    doc.save(str(out))
+    log(f"[raconteur] wrote {out.relative_to(project_dir)} "
+        f"(re-cut: {replaced} beat(s) replaced as tracked changes; "
+        f"{counts.get('ins', 0)} reviewer insertion(s) accepted)")
+
+    log("[raconteur] drafting replies to the reviewer's comments…")
+    replies = _draft_replies(brain, text, user_rev)
+    n = hrl.add_replies(out, replies, author=rl.AUTHOR)
+    log(f"[raconteur] {n} threaded repl{'y' if n == 1 else 'ies'} written")
+
+    md_path = paper_dir / major_onepager_name(cfg.short_title, "md")
+    md_path.write_text(f"# {cfg.title} — one-pager\n\n{text.strip()}\n",
+                       encoding="utf-8")
+    log(f"[raconteur] wrote {md_path.relative_to(project_dir)}")
+
+
 def _beat_of(text: str) -> str | None:
     t = text.lstrip("*-–—• ").lower()
     for beat in _BEATS:
         if t.startswith(beat.name.lower()):
             return beat.name
     return None
+
+
+def _beats_from_md(md: str) -> dict[str, str]:
+    """Beat-name -> full paragraph text, from any beat-labelled markdown."""
+    out: dict[str, str] = {}
+    for para in md.split("\n\n"):
+        beat = _beat_of(para.strip())
+        if beat and beat not in out:
+            out[beat] = para.strip()
+    return out
+
+
+def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
+    """If the reviewer retitled the document, the config follows.
+
+    The title is config-owned (every _write emits `# {cfg.title}`), so a tracked
+    change to the heading can only persist by updating cfg.title itself.
+    """
+    from docx import Document
+    from . import redline
+    md = redline.accepted_markdown(Document(str(user_rev)))
+    for line in md.splitlines():
+        if line.startswith("#"):
+            title = re.sub(r"\s*[—–-]+\s*one-pager\s*$", "", line.lstrip("# ").strip())
+            if title and title != cfg.title:
+                log(f"[raconteur] adopting reviewer's title: {title!r}")
+                cfg.title = title
+                cfg.save(project_dir)
+            return
 
 
 def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], str]:
@@ -309,12 +432,7 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
     from docx import Document
     from . import redline
 
-    prior: dict[str, str] = {}
-    md = redline.accepted_markdown(Document(str(user_rev)))
-    for para in md.split("\n\n"):
-        beat = _beat_of(para.strip())
-        if beat and beat not in prior:
-            prior[beat] = para.strip()
+    prior = _beats_from_md(redline.accepted_markdown(Document(str(user_rev))))
 
     notes: dict[str, str] = {}
     general: list[str] = []
@@ -341,6 +459,7 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
 def _onepager_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path,
     brief: tuple[dict[str, str], dict[str, str], str] | None = None,
+    user_rev: Path | None = None,
 ) -> None:
     from .outline import _analyze_structure, _build_venue_section, analysis_view
 
@@ -411,7 +530,10 @@ def _onepager_fresh(
         system=_SYSTEM,
         num_ctx=8192,
     )
-    _write(project_dir, cfg, paper_dir, tightened)
+    if user_rev is not None:
+        _write_recut(project_dir, cfg, paper_dir, brain, tightened, beats, user_rev)
+    else:
+        _write(project_dir, cfg, paper_dir, tightened)
 
 
 # ── user-annotation revision ──────────────────────────────────────────────────
@@ -501,10 +623,13 @@ def run(project_dir: Path, resynth: bool = False) -> None:
         log(f"[raconteur] found revision: {user_rev.name}")
         if resynth:
             # Narrative-level rejection: the annotations are a brief for a fresh
-            # cut, not line edits. Major version — new datestamp, chain reset.
+            # cut, not line edits. Major version — new datestamp, chain reset —
+            # but delivered as a redline on the reviewer's file: their edits
+            # persist, their comment threads ride along and get replies.
             log("[raconteur] --resynth: re-cutting the narrative from the annotations")
+            _adopt_title(project_dir, cfg, user_rev)
             _onepager_fresh(project_dir, cfg, brain, paper_dir,
-                            brief=_annotation_brief(user_rev))
+                            brief=_annotation_brief(user_rev), user_rev=user_rev)
         else:
             _revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
