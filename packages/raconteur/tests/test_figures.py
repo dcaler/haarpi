@@ -64,3 +64,35 @@ def test_figures_must_be_numbered_in_order():
 ])
 def test_the_introduction_may_be_phrased_naturally(intro):
     assert "unintroduced-figure" not in _kinds(f"{intro}\n\n![{GOOD_CAPTION}](f/a.png)")
+
+
+# ── the figures the DOCUMENT has, not the ones the prose declares ─────────────
+
+def test_a_recut_that_writes_no_figures_at_all_is_caught():
+    """The hole this guard could not see through.
+
+    On a re-cut the images are ALREADY embedded in the .docx. The writer, told it "may omit
+    figures entirely if none is essential", omitted them — so the two figures in the
+    delivered one-pager went unnumbered, uncaptioned and unmentioned, and this guard returned
+    [] because there was no figure markdown to inspect. It was policing figures the prose
+    DECLARED and never once the figures the document HAD.
+    """
+    text = "The simulation reveals a non-monotonic recovery landscape."
+    assert guards.figure_findings(text) == [], "on a blank page, no figures is a choice"
+    findings = guards.figure_findings(text, expect=2)
+    assert [f.kind for f in findings] == ["figure-count"]
+    assert "declares 0" in findings[0].imperative
+
+
+def test_a_recut_may_not_drop_one_of_the_documents_figures():
+    text = f"Figure 1 shows the landscape.\n\n![{GOOD_CAPTION}](f/a.png)"
+    assert guards.figure_findings(text) == []
+    assert guards.figure_findings(text, expect=2), "the document holds two; this writes one"
+
+
+def test_the_expected_count_met_still_checks_the_captions():
+    """Meeting the count is not meeting the requirement."""
+    text = "The landscape settles.\n\n![Recovery landscape](f/a.png)"
+    kinds = {f.kind for f in guards.figure_findings(text, expect=1)}
+    assert "figure-count" not in kinds
+    assert {"unnumbered-figure"} <= kinds

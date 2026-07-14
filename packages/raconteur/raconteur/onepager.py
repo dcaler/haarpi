@@ -88,6 +88,11 @@ _BEATS: list[_Beat] = [
         "support them",
         ("results",),
         ("key_design", "key_equations"),
+        "- Report every value the way the results report it. If you quote a BEST case — a "
+        "maximum, a peak, the band where the effect appears — say what it was best OUT OF: "
+        "the mean, the range, the sweep it came from. A maximum stated alone is a maximum "
+        "hiding its distribution, and the first reviewer to open the results file will see "
+        "that it was doing so.",
     ),
     _Beat(
         "Implication",
@@ -131,6 +136,28 @@ _FIGURE_RULE = (
     "invent axes, units, or colours it does not mention."
 )
 _NO_FIGURE_RULE = "- Do not embed a figure in this beat."
+
+# On a RE-CUT the images are already in the .docx and the count is not the writer's to
+# choose. The permissive rule above ("omit figures entirely if none is essential") is right
+# for a blank page and wrong here: taken up, it leaves two embedded figures unnumbered,
+# uncaptioned and unmentioned, and the beat still passes every check.
+_RECUT_FIGURE_RULE = """\
+- This document ALREADY CONTAINS EXACTLY {n} figure(s), embedded in this order. You are \
+RE-CAPTIONING what is already there. You may not add one and you may not drop one. Their \
+captions currently read:
+{current}
+- Write EXACTLY {n} caption line(s), in that order, each on its own line, in this exact \
+markdown form:
+  ![Figure 1: what it plots, on what axes, and what the colours mean](figure/path)
+  Take the path from the figure list above — match each figure by what its current caption \
+says it shows. Do not invent a path.
+- INTRODUCE each figure in the prose BEFORE its caption line: a sentence saying what the \
+reader should see in it ("Figure 1 shows …", "…, as Figure 2 makes plain"). A figure the \
+prose never mentions is a figure the reader is never told to look at.
+- Each caption must be INFORMATIVE enough to read the figure by WITHOUT the surrounding \
+text: what is plotted, on which axes, what the colour encoding means, and what to look for. \
+Build it from the description given with that figure above — do not invent axes, units, or \
+colours it does not mention."""
 
 _BEAT_PROMPT = """\
 Write the **{beat}** beat of a one-pager: the most concise path through this paper's \
@@ -373,6 +400,9 @@ _VERIFY_PROMPT = """\
 The reviewer's ask, on the "{beat}" beat:
 {ask}
 
+The words their comment was anchored to — this is what "this", "it" and "that" refer to:
+{on}
+{deleted}
 The beat as it read BEFORE:
 {before}
 
@@ -380,6 +410,10 @@ The beat as DELIVERED now:
 {after}
 
 Was the ask satisfied?"""
+
+_DELETED_NOTE = ("\nNOTE: the re-cut DELETED the text the comment was anchored to. Deleting "
+                 "the words a question was asked about does not answer the question, unless "
+                 "the reviewer asked for the deletion.\n")
 
 _OUTCOME_NOTE = {
     "rewritten": "",
@@ -392,7 +426,8 @@ _OUTCOME_NOTE = {
 
 def _verify_replies(brain: Brain, asks: dict[str, dict], beat_of: dict[str, str],
                     before: dict[str, str], after: dict[str, str],
-                    outcomes: dict[str, str]) -> dict[str, str]:
+                    outcomes: dict[str, str], on: dict[str, str] | None = None,
+                    deleted: set[str] | None = None) -> dict[str, str]:
     """One reply per open ask, and every reply is CHECKED against what was delivered.
 
     Nothing here is taken on trust. The tool once replied "We explicitly added the recovery
@@ -403,7 +438,13 @@ def _verify_replies(brain: Brain, asks: dict[str, dict], beat_of: dict[str, str]
 
     A reply that says "not addressed" is worth more than a reply that says "addressed" and
     is wrong: the reviewer can act on the first.
+
+    The verdict is SAID, either way. A satisfied verdict used to arrive with the word
+    SATISFIED stripped off it, leaving a bare quotation of the delivered text — the one ask
+    the tool believed it had met read, to the reviewer, as the tool saying nothing at all.
     """
+    on = on or {}
+    deleted = deleted or set()
     out: dict[str, str] = {}
     for cid, ask in asks.items():
         beat = beat_of.get(cid, "")
@@ -416,8 +457,11 @@ def _verify_replies(brain: Brain, asks: dict[str, dict], beat_of: dict[str, str]
             continue
         try:
             verdict = brain.coordinator(
-                _VERIFY_PROMPT.format(beat=beat, ask=ask["text"].strip(),
-                                      before=b or "(this beat did not exist)", after=a),
+                _VERIFY_PROMPT.format(
+                    beat=beat, ask=ask["text"].strip(),
+                    on=on.get(cid) or "(the comment covers the whole paragraph)",
+                    deleted=_DELETED_NOTE if cid in deleted else "",
+                    before=b or "(this beat did not exist)", after=a),
                 system=_VERIFY_SYS, num_ctx=8192).strip()
         except Exception as e:  # noqa: BLE001
             log(f"[warn] reply verification failed for comment {cid} ({e})")
@@ -425,12 +469,12 @@ def _verify_replies(brain: Brain, asks: dict[str, dict], beat_of: dict[str, str]
                         "changes against your comment — this reply could not be verified.")
             continue
         line = verdict.splitlines()[0].strip() if verdict else ""
+        said = line.split(":", 1)[-1].strip() if ":" in line else line
         if line.upper().startswith("SATISFIED"):
-            out[cid] = prefix + line.split(":", 1)[-1].strip()
+            out[cid] = (prefix + "Addressed — " + said).strip()
         else:
-            reason = line.split(":", 1)[-1].strip() if ":" in line else line
-            out[cid] = (prefix + "NOT addressed. " + reason).strip()
-            log(f"[warn] comment {cid} on '{beat}' is NOT satisfied by the re-cut: {reason}")
+            out[cid] = (prefix + "NOT addressed — " + said).strip()
+            log(f"[warn] comment {cid} on '{beat}' is NOT satisfied by the re-cut: {said}")
     return out
 
 
@@ -482,8 +526,9 @@ You are NOT an editor. Style, word choice, emphasis, hedging, length, and opinio
 author's own — disagreeing with them is not an error in them. If a sentence is merely one
 you would have written differently, it has no error.
 
-OUTPUT — a single JSON object mapping the placeholder to the corrected sentence, containing
-ONLY the sentences that carry a real error. Return {} if there are none. No other output."""
+OUTPUT — a single JSON object mapping the label (S1, S2, …) to the corrected sentence,
+containing ONLY the sentences that carry a real error. Return {} if there are none. No other
+output."""
 
 _COPYEDIT_PROMPT = """\
 The author's sentences:
@@ -499,13 +544,25 @@ def _copyedit_notes(brain: Brain, authored: dict[str, dict[str, str]]
     Their text is frozen against the tool's pen, which would otherwise leave an obvious
     misspelling standing forever with no way to raise it. So the tool raises it: it says
     so, and the author decides. The correction is never applied.
+
+    The pass is keyed on labels of its OWN (S1, S2, …), not on the sentinels. Sentinels are
+    numbered per PARAGRAPH — every beat has its own ⟦a:1⟧ — so a legend flattened across
+    beats collides, and the last beat silently wins: the model dutifully corrects the typo in
+    Motivation's ⟦a:1⟧, the lookup hands back Key result(s)'s ⟦a:1⟧, and the diff between two
+    unrelated sentences arrives as a blob anchored on the wrong paragraph. Which is exactly
+    what the author got.
     """
-    legend = "\n".join(f'  {k} = "{v.strip()}"'
-                       for spans in authored.values() for k, v in spans.items())
-    if not legend.strip():
+    words: dict[str, str] = {}
+    lines: list[str] = []
+    for beat, spans in authored.items():
+        for v in spans.values():
+            tag = f"S{len(words) + 1}"
+            words[tag] = v.strip()
+            lines.append(f'  {tag} ({beat}) = "{v.strip()}"')
+    if not words:
         return []
     try:
-        raw = brain.coordinator(_COPYEDIT_PROMPT.format(legend=legend),
+        raw = brain.coordinator(_COPYEDIT_PROMPT.format(legend="\n".join(lines)),
                                 system=_COPYEDIT_SYS, num_ctx=8192)
     except Exception as e:  # noqa: BLE001
         log(f"[warn] copyedit pass failed ({e}); no suggestions offered.")
@@ -520,18 +577,20 @@ def _copyedit_notes(brain: Brain, authored: dict[str, dict[str, str]]
     if not isinstance(obj, dict):
         return []
 
-    words = {k: v for spans in authored.values() for k, v in spans.items()}
     notes: list[tuple[str, str]] = []
     for key, fix in obj.items():
-        key = f"⟦{str(key).strip().strip('⟦⟧')}⟧"
-        original = words.get(key, "").strip()
+        original = words.get(str(key).strip().strip("⟦⟧"), "")
         if not original or not isinstance(fix, str) or not fix.strip():
             continue
         # Word by word, anchored on the offending words, saying only the correction. The
         # whole sentence restated — with a missing "t" or a stray apostrophe buried
         # somewhere inside it — is the tool handing the author their own prose back and
         # making them find the difference.
-        notes.extend(htext.copyedit_notes(original, fix.strip()))
+        got = htext.copyedit_notes(original, fix.strip())
+        if not got:
+            log(f'[raconteur] copyedit suggestion for {key} rewrote the sentence rather than '
+                f'correcting it — dropped. The author\'s prose is his own.')
+        notes.extend(got)
     return notes
 
 
@@ -547,6 +606,21 @@ def _caption_paragraphs(doc) -> list:
     """
     return [p for p in doc.paragraphs
             if (p.style.name or "").strip().lower() in _CAPTION_STYLES]
+
+
+def _document_figures(user_rev: Path) -> list[str]:
+    """The captions of the figures ALREADY embedded in the reviewer's document, in order.
+
+    What the re-cut is re-captioning. The writer is shown these so it can tell which figure
+    is which — the manifest lists four and the one-pager carries two, and only the caption
+    says which two.
+    """
+    from docx import Document
+
+    from . import redline as rl
+
+    return [t for p in _caption_paragraphs(Document(str(user_rev)))
+            if (t := rl._accepted_para_text(p._p).strip())]
 
 
 def _recaption(doc, beat_text: str, ids, author: str) -> tuple[str, int]:
@@ -583,17 +657,24 @@ def _recaption(doc, beat_text: str, ids, author: str) -> tuple[str, int]:
     return prose, n
 
 
-def _recut_guard_findings(old: str, new: str, known: set[str]) -> list[guards.Finding]:
+def _recut_guard_findings(old: str, new: str, known: set[str],
+                          spans: dict[str, str] | None = None) -> list[guards.Finding]:
     """What a re-cut of one beat may not do, decided in code.
 
     The re-cut path used to run NO guards at all — it inherited the redline machinery's
     rendering half and not its checking half — which is exactly how a beat was rewritten
     whole and silently dropped its only citation.
+
+    ``spans`` are the author's sentences in this beat. Passed on the WRITE path, where the
+    text may be the tightened one-pager rather than the per-beat draft the guards already
+    cleared: the tightener reads his sentences as ordinary prose and is quite capable of
+    working a copy of one into the paragraph around it.
     """
     findings = (guards.author_year_prose(new)
                 + guards.dropped_citekeys(old, new)
                 + guards.dropped_sentinels(old, new)
-                + guards.invented_sentinels(old, new))
+                + guards.invented_sentinels(old, new)
+                + guards.echoed_spans(new, spans or {}))
     if known:
         findings += guards.unresolved_keys(new, known)
     return findings
@@ -691,7 +772,7 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
             recaptioned += n_caps
 
         old = hrl.paragraph_text(p_el, protect_authored=True)
-        findings = _recut_guard_findings(old, new, known)
+        findings = _recut_guard_findings(old, new, known, spans)
         if findings:
             refused += 1
             outcomes[beat] = "refused"
@@ -727,7 +808,16 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
         for cid in anchor["ids"]:
             if b:
                 beat_of[cid] = b
-    replies = _verify_replies(brain, asks, beat_of, before, after, outcomes)
+    # What each ask POINTS AT, and whether the re-cut struck it out from under them. An ask
+    # whose anchor now lies wholly inside a w:del was asked about text that no longer exists,
+    # and the adversary has to be told — deleting the sentence someone asked you to explain
+    # is not an explanation.
+    on = anchor_words(user_rev, only=set(asks))
+    struck: set[str] = set()
+    for rec in rl.body_paragraphs(doc):
+        struck |= hrl.anchors_in_deleted_text(rec["para"]._p)
+    replies = _verify_replies(brain, asks, beat_of, before, after, outcomes,
+                              on=on, deleted=struck & set(asks))
     n = hrl.add_replies(out, replies, author=rl.AUTHOR)
     log(f"[raconteur] {n} threaded repl{'y' if n == 1 else 'ies'} written")
 
@@ -843,14 +933,17 @@ def _prior_serialized(user_rev: Path) -> dict[str, str]:
 
 
 def _beat_problems(draft: str, spans: dict[str, str], was: str,
-                   known: set[str], signature: dict | None = None) -> list[str]:
+                   known: set[str], signature: dict | None = None,
+                   expect_figures: int | None = None) -> list[str]:
     """Why a generated beat may not be written — checked BEFORE it reaches the document.
 
     ``was`` must be the SERIALIZED previous paragraph (see ``_prior_serialized``), never the
-    accepted prose.
+    accepted prose. ``expect_figures`` is how many figures the document already holds; see
+    ``guards.figure_findings``.
     """
     errs = _sentinel_errors(draft, spans)
-    errs += [f.imperative for f in guards.figure_findings(draft)]
+    errs += [f.imperative for f in guards.echoed_spans(draft, spans)]
+    errs += [f.imperative for f in guards.figure_findings(draft, expect=expect_figures)]
     errs += [f.imperative for f in guards.style_findings(draft, signature or {})]
     if was:
         errs += [f.imperative for f in _recut_guard_findings(was, draft, known)]
@@ -934,8 +1027,46 @@ def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
             return
 
 
-def _ask_block(ask: dict) -> str:
-    """One reviewer ask, rendered for the brief — with its thread, and its history.
+_ANCHOR_CAP = 180
+_WHOLE_PARA = 0.9      # an anchor this much of the paragraph is not pointing at anything
+
+
+def anchor_words(path: Path, only: set[str] | None = None) -> dict[str, str]:
+    """comment id -> the exact words the reviewer's comment is anchored to.
+
+    Half of a comment is WHERE it points. "define this" is not an instruction; "define this",
+    pinned to *anchored distance*, is. Rendered without its anchor the reviewer's three-word
+    ask reached the writer as a riddle — and reached the adversary that checks the answer as
+    one too, which is how it came to complain that the text "fails to define the term Key
+    result(s)". It was reading the heading, for want of anything else to read.
+
+    A comment covering the WHOLE paragraph is omitted: it is not pointing at anything, and
+    quoting the paragraph back into a brief that already carries the paragraph is the same
+    noise, from the other direction.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+
+    from . import redline as rl
+
+    out: dict[str, str] = {}
+    for rec in rl.body_paragraphs(Document(str(path))):
+        p_el = rec["para"]._p
+        # The same serialization comment_spans measures its offsets against, or the words
+        # come back shifted.
+        text = hrl.paragraph_text(p_el, protect_authored=True)
+        for cid, (start, end) in hrl.comment_spans(p_el, protect_authored=True).items():
+            if only is not None and cid not in only:
+                continue
+            frag = text[start:end].strip()
+            if not frag or len(frag) >= _WHOLE_PARA * len(text.strip()):
+                continue
+            out[cid] = frag if len(frag) <= _ANCHOR_CAP else frag[:_ANCHOR_CAP] + "…"
+    return out
+
+
+def _ask_block(ask: dict, on: str = "") -> str:
+    """One reviewer ask, rendered for the brief — with its anchor, its thread, its history.
 
     A thread is part of the ask. New information about an unmet ask arrives as a REPLY
     (that is the protocol), so a brief that carries only the top comment carries only
@@ -943,7 +1074,7 @@ def _ask_block(ask: dict) -> str:
     open, is not a fresh task: it is a task the tool got wrong. Saying so is what stops
     the next pass from confidently repeating the last one's mistake.
     """
-    lines = [f"- {ask['text'].strip()}"]
+    lines = [f'- on "{on}" — {ask["text"].strip()}' if on else f"- {ask['text'].strip()}"]
     for f in ask.get("followups", []):
         lines.append(f"  (reviewer, in the same thread) {f.strip()}")
     if ask.get("repeat"):
@@ -975,6 +1106,7 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
 
     asks = {a["id"]: a for a in hredline.open_asks(user_rev)}
     live = set(asks)
+    on = anchor_words(user_rev, only=live)
 
     notes: dict[str, str] = {}
     general: list[str] = []
@@ -988,7 +1120,8 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
             notes[beat] = f"{notes[beat]}\n{block}" if beat in notes else block
 
     for anchor in redline.comment_anchors(user_rev, only=live):
-        block = "\n".join(_ask_block(asks[c]) for c in anchor["ids"] if c in asks)
+        block = "\n".join(_ask_block(asks[c], on.get(c, ""))
+                          for c in anchor["ids"] if c in asks)
         _add(_beat_of_para(anchor.get("heading") or "", anchor["text"]), block)
     for h in redline.heading_comments(user_rev, only=live):
         block = "\n".join(_ask_block(asks[c]) for c in h["ids"] if c in asks)
@@ -1018,6 +1151,13 @@ def _onepager_fresh(
     venue_section = _build_venue_section(cfg, project_dir)
     figure_list = _figure_section(figures)
 
+    # On a re-cut the figures are already embedded in the reviewer's .docx, so their number
+    # is settled and the writer's job is to caption and introduce the ones that are there —
+    # not to decide whether to have any. Without a path list it cannot write a caption line
+    # at all, so an absent manifest falls back to leaving the captions alone.
+    doc_figures = _document_figures(user_rev) if user_rev is not None else []
+    fig_expect = len(doc_figures) if (doc_figures and figure_list) else None
+
     prior, beat_notes, general = brief if brief else ({}, {}, "")
     general_block = _RECUT_GENERAL.format(notes=general) if general else ""
 
@@ -1037,6 +1177,15 @@ def _onepager_fresh(
     skipped: set[str] = set()          # beats the re-cut could not safely touch
     for beat in _BEATS:
         can_embed = bool(figure_list) and beat.name == _FIGURE_BEAT
+        # The figure beat of a re-cut is re-captioning a document that already holds N.
+        expect = fig_expect if beat.name == _FIGURE_BEAT else None
+        if expect:
+            figure_rule = _RECUT_FIGURE_RULE.format(
+                n=expect,
+                current="\n".join(f'  {i}. "{c}"'
+                                  for i, c in enumerate(doc_figures, start=1)))
+        else:
+            figure_rule = _FIGURE_RULE if can_embed else _NO_FIGURE_RULE
         spans = authored.get(beat.name, {})
         # a beat is a kind of prose, and his Results voice is not his Discussion voice
         style_section = _style_block(
@@ -1071,7 +1220,7 @@ def _onepager_fresh(
             authored_section=_AUTHORED_BLOCK.format(legend=legend) if spans else "",
             preceding_section=_preceding_block(beats, set(authored)),
             figure_section=figure_list if can_embed else "",
-            figure_rule=_FIGURE_RULE if can_embed else _NO_FIGURE_RULE,
+            figure_rule=figure_rule,
             extra_rules=f"\n{beat.rules}" if beat.rules else "",
         )
         log(f"[raconteur] drafting beat '{beat.name}'…"
@@ -1084,8 +1233,9 @@ def _onepager_fresh(
         # it broke. The "previous text" is the SERIALIZED paragraph — the author's spans as
         # ⟦a:N⟧, not spelled out. Against the accepted prose, every placeholder the draft was
         # ordered to carry reads as one it invented, and the beat is rejected for obeying.
-        def _problems(draft: str, was: str = prior_ser.get(beat.name, "")) -> list[str]:
-            return _beat_problems(draft, spans, was, known, signature)
+        def _problems(draft: str, was: str = prior_ser.get(beat.name, ""),
+                      figs: int | None = expect) -> list[str]:
+            return _beat_problems(draft, spans, was, known, signature, expect_figures=figs)
 
         problems = _problems(text)
         if problems:
@@ -1133,8 +1283,8 @@ def _onepager_fresh(
     # The tightener can quietly undo what the beats got right — dropping the sentence that
     # introduced a figure, or a caption's number. The per-beat drafts already passed those
     # checks, so a tightened version that fails them is not an improvement.
-    broke = guards.figure_findings(tightened)
-    if broke and not guards.figure_findings(draft):
+    broke = guards.figure_findings(tightened, expect=fig_expect)
+    if broke and not guards.figure_findings(draft, expect=fig_expect):
         log("[warn] the tightening pass broke a figure ("
             + "; ".join(f.kind for f in broke) + ") — keeping the drafted beats instead")
         tightened = draft

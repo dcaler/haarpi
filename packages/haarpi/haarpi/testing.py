@@ -52,16 +52,27 @@ def write_commented_docx(path: Path, paragraphs: list[str],
                          comments: list[dict]) -> Path:
     """Build a .docx whose comments are real: threaded, resolvable, anchored.
 
-    ``comments`` entries: ``{cid, author, text, anchor=0, done=False, parent=None}``
+    ``comments`` entries: ``{cid, author, text, anchor=0, on=None, done=False, parent=None}``
     where ``anchor`` is a paragraph index and ``parent`` is another comment's ``cid``
     (making this one a reply in that thread).
+
+    ``on`` is a SUBSTRING of that paragraph, and it matters more than it looks: half of a
+    reviewer's comment is where they put it. "define this" pinned to two words is an
+    instruction; the same three words pinned to nothing are a riddle. A fixture that can only
+    anchor whole paragraphs cannot tell those apart, and neither could the tool.
     """
+    from .redline import anchor_fragment
+
     path = Path(path)
     doc = Document()
     paras = [doc.add_paragraph(t) for t in paragraphs]
     for c in comments:
         p_el = paras[c.get("anchor", 0)]._p
         cid = str(c["cid"])
+        if c.get("on"):
+            if not anchor_fragment(p_el, c["on"], cid):
+                raise ValueError(f"comment {cid}: {c['on']!r} is not in that paragraph")
+            continue
         p_el.insert(0, p_el.makeelement(qn("w:commentRangeStart"), {qn("w:id"): cid}))
         p_el.append(p_el.makeelement(qn("w:commentRangeEnd"), {qn("w:id"): cid}))
     doc.save(str(path))

@@ -120,3 +120,116 @@ def test_a_draft_that_drops_a_citation_is_still_refused():
     problems = op._beat_problems("Rewritten with no source.", {},
                                  "Old prose [@setzler2022].", {"setzler2022"})
     assert problems and "setzler2022" in problems[0]
+
+
+# ── the span kept AND retyped: every sentinel guard passes, the beat is ruined ─
+
+ECHOED = {"⟦a:1⟧": "However, by re-expressing its visual output in audio we can uncover "
+                   "new applications of generative segregation."}
+
+
+def test_keeping_the_span_and_retyping_it_is_caught():
+    """The 2026-07-14 21:41 re-cut: the author read his own sentences twice, back to back.
+
+    The draft keeps ⟦a:1⟧ exactly once — dropped, duplicated and invented all pass — and
+    ALSO writes out what it contains, in the prose beside it. Expanded, the sentence prints
+    twice. Nothing in the sentinel guards can see this: they count placeholders.
+    """
+    draft = ("However, by re-expressing its visual output in audio we can uncover new "
+             "applications of generative segregation. ⟦a:1⟧ And so we sonify it.")
+    assert guards.dropped_sentinels("Old. ⟦a:1⟧", draft) == []
+    assert guards.invented_sentinels("Old. ⟦a:1⟧", draft) == []
+    findings = guards.echoed_spans(draft, ECHOED)
+    assert findings, "the author's own sentence, retyped beside itself, must be caught"
+    assert "retyped" in findings[0].imperative
+
+
+def test_the_echo_guard_survives_repunctuation_and_case():
+    """It is the WORDS that were stolen. A capital and a comma do not launder them."""
+    draft = "however by RE-EXPRESSING its visual output in audio — we can uncover new. ⟦a:1⟧"
+    assert guards.echoed_spans(draft, ECHOED)
+
+
+def test_writing_around_the_span_is_not_an_echo():
+    """The whole point of span deference: the prose beside the sentence stays fair game."""
+    draft = ("Segregation is shown visually and almost never heard. ⟦a:1⟧ We then aggregate "
+             "the audio over many runs.")
+    assert guards.echoed_spans(draft, ECHOED) == []
+
+
+def test_sharing_the_topics_vocabulary_is_not_an_echo():
+    """Author and tool write about the same paper in the same words. That is the topic
+    talking, not the pen — and a guard that cannot tell the difference is unusable."""
+    draft = "Generative segregation in audio is our subject. ⟦a:1⟧ The output is sonic."
+    assert guards.echoed_spans(draft, ECHOED) == []
+
+
+def test_a_short_span_is_never_echo_checked():
+    """Below five words a repeat proves nothing, and a false refusal costs a whole beat."""
+    assert guards.echoed_spans("The model settles here. ⟦a:1⟧", {"⟦a:1⟧": "in C-minor"}) == []
+
+
+def test_the_echo_is_refused_at_the_beat():
+    from raconteur import onepager as op
+
+    draft = ("However, by re-expressing its visual output in audio we can uncover new "
+             "applications of generative segregation. ⟦a:1⟧")
+    problems = op._beat_problems(draft, ECHOED, "Old prose. ⟦a:1⟧", set())
+    assert problems and any("retyped" in p for p in problems)
+
+
+# ── the copyedit pass: every beat has its own ⟦a:1⟧ ──────────────────────────
+
+class _Echo:
+    """A brain that returns whatever it was primed with."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.seen = ""
+
+    def coordinator(self, prompt, **_):
+        self.seen = prompt
+        return self.payload
+
+
+def test_the_copyedit_legend_does_not_collide_across_beats():
+    """Sentinels are numbered per PARAGRAPH: Motivation, Gap and Key result(s) each have an
+    ⟦a:1⟧. Flattened into one legend they collapsed, the last beat silently won, and the
+    correction to Motivation's typo was diffed against the Beethoven span from Key
+    result(s) — two unrelated sentences — and anchored, as a blob, on the wrong paragraph.
+    That is comments 50, 51 and 52 of the delivered one-pager.
+    """
+    from raconteur import onepager as op
+
+    authored = {
+        "Motivation": {"⟦a:1⟧": "The Schelling model has dates to 1971 and predates CSS."},
+        "Key result(s)": {"⟦a:1⟧": " – the opening bars of Beethoven's 5th in C-minor –"},
+    }
+    brain = _Echo(json.dumps({"S1": "The Schelling model dates to 1971 and predates CSS."}))
+    notes = op._copyedit_notes(brain, authored)
+
+    assert "S1" in brain.seen and "S2" in brain.seen, "each span needs a label of its own"
+    assert notes == [("has", "(cut)")], notes    # "has dates" → "dates": one stray word
+    assert not any("Beethoven" in old for old, _ in notes), \
+        "the correction must not land on another beat's span"
+
+
+def test_a_copyedit_that_rewrites_rather_than_corrects_is_dropped():
+    """A proofreader that has started editing is stopped, not reported. His prose is his."""
+    from raconteur import onepager as op
+
+    authored = {"Gap": {"⟦a:1⟧": "Communicating segregation outcomes is dominated by "
+                                 "visual media."}}
+    brain = _Echo(json.dumps({"S1": "Visual media overwhelmingly dominate how the outcomes "
+                                    "of segregation are communicated to audiences."}))
+    assert op._copyedit_notes(brain, authored) == []
+
+
+def test_a_real_typo_still_gets_through():
+    from raconteur import onepager as op
+
+    authored = {"Motivation": {"⟦a:1⟧": "This can encourage new though patterns and engage "
+                                        "new audiences."}}
+    brain = _Echo(json.dumps({"S1": "This can encourage new thought patterns and engage "
+                                    "new audiences."}))
+    assert op._copyedit_notes(brain, authored) == [("though", "thought")]

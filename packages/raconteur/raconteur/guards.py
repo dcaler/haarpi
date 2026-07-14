@@ -320,6 +320,61 @@ def unnumbered_results_paragraphs(paras: list[Paragraph]) -> list[Finding]:
     ]
 
 
+# ── THE AUTHOR'S OWN SENTENCES ────────────────────────────────────────────────
+
+# Eight consecutive words, reproduced exactly, are not a coincidence. Below five, a match
+# says nothing — the author and the tool are writing about the same paper, in the same
+# terms, and a shared four-word phrase is the topic talking, not the pen.
+_ECHO_SHINGLE = 8
+_ECHO_MIN = 5
+
+_WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
+
+
+def _words(text: str) -> list[str]:
+    return [w.casefold() for w in _WORD_RE.findall(text)]
+
+
+def echoed_spans(text: str, spans: dict[str, str]) -> list[Finding]:
+    """The author's own sentence, retyped into the tool's prose beside itself.
+
+    ``dropped_sentinels`` catches a span that vanished and ``invented_sentinels`` catches one
+    conjured from nothing — and a draft can satisfy both, and the once-each count as well,
+    and still ruin the paragraph: keep ⟦a:1⟧ exactly where it was told to, and ALSO retype
+    what it contains into the prose around it. Expanded, the author reads his own sentence
+    twice, back to back. He did not write it twice.
+
+    The instruction not to is already in the prompt ("read them, never retype them"), which
+    is precisely why this is a guard: the prompt asked, and the draft did it anyway.
+
+    PHASE: redline. Fails the beat closed.
+    """
+    if not spans:
+        return []
+    prose = _words(SENTINEL_RE.sub(" ", text))
+    if not prose:
+        return []
+    haystack = f" {' '.join(prose)} "
+    out: list[Finding] = []
+    for key, words in spans.items():
+        ws = _words(words)
+        n = min(_ECHO_SHINGLE, len(ws))
+        if n < _ECHO_MIN:
+            continue
+        for i in range(len(ws) - n + 1):
+            shingle = " ".join(ws[i:i + n])
+            if f" {shingle} " in haystack:
+                out.append(Finding(
+                    "echoed-span", key,
+                    f'You retyped the author\'s own words into your own prose: '
+                    f'"…{shingle}…". {key} already carries that sentence, in its place. '
+                    f'Write AROUND it — cut every word of it from your text and let the '
+                    f'placeholder speak. The author does not want to read his sentence '
+                    f'twice.'))
+                break
+    return out
+
+
 # ── FIGURES ───────────────────────────────────────────────────────────────────
 
 FIGURE_MD_RE = re.compile(r"!\[(?P<caption>[^\]]*)\]\((?P<path>[^)\s]+)[^)]*\)")
@@ -329,7 +384,7 @@ FIGURE_REF_RE = re.compile(r"\bFig(?:ure)?\.?\s*(\d+)", re.IGNORECASE)
 _MIN_CAPTION_WORDS = 8
 
 
-def figure_findings(text: str) -> list[Finding]:
+def figure_findings(text: str, expect: int | None = None) -> list[Finding]:
     """A figure the prose never introduces is a figure the reader is never told to look at.
 
     Three things a figure owes its reader, all checkable:
@@ -339,8 +394,23 @@ def figure_findings(text: str) -> list[Finding]:
       * a caption INFORMATIVE enough to interpret the figure: the axes, the encoding, what
         to look for. "Recovery landscape showing optimal distance" names no axis and no
         colour, and a reader cannot read the plot from it.
+
+    ``expect`` is how many figures the DOCUMENT already holds. On a fresh draft nobody knows
+    yet — the writer chooses, and ``None`` says so. On a re-cut the images are already
+    embedded in the .docx and the count is not the writer's to choose: a re-cut that writes
+    no figure markdown leaves them unnumbered, uncaptioned and unintroduced. Without
+    ``expect`` this guard would call that clean, because it only ever inspected figures the
+    prose DECLARED — never the ones the document HAD.
     """
     figs = list(FIGURE_MD_RE.finditer(text))
+    if expect is not None and len(figs) != expect:
+        return [Finding(
+            "figure-count", "figures",
+            f"This document already contains {expect} embedded figure(s), but your text "
+            f"declares {len(figs)}. Write exactly {expect} caption line(s) — "
+            f"![Figure N: what it plots, on what axes, what the colours mean](path) — in the "
+            f"order the figures appear, and introduce each in the prose before it. Adding or "
+            f"removing a figure is not something a re-cut can do.")]
     if not figs:
         return []
     prose = FIGURE_MD_RE.sub(" ", text)          # the text WITHOUT the caption lines
