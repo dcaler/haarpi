@@ -969,7 +969,11 @@ def run(directory: str = ".", brain_override: str | None = None,
     md_text = build_markdown(cfg, brain.backend, narrative, biblio, corpus, unmatched,
                              metrics_line)
     out_md.write_text(md_text, encoding="utf-8")
-    pandoc_convert(out_md, out_docx)
+    # citeproc, or the reader gets literal [@citekeys]. The annotated bibliography is
+    # ours; citeproc must not append a second reference list.
+    refs = paths.output / "refs.bib"
+    pandoc_convert(out_md, out_docx, bib_path=refs if refs.exists() else None,
+                   suppress_bibliography=True)
 
     print()
     print("=" * 60)
