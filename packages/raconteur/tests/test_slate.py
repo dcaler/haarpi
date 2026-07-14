@@ -261,3 +261,48 @@ def test_a_row_the_author_added_names_a_venue_we_never_proposed(tmp_path):
     merged = slate.merge({"ismir": VenueConfig(name="ISMIR")}, slate.parse_docx(doc))
     assert merged["nime"].by_author and merged["nime"].status == "selected"
     assert merged["nime"].url == "https://nime.org/2027/cfp"
+
+
+# ── a call for papers is very often a PDF ────────────────────────────────────
+
+def test_a_pdf_cfp_is_read_as_a_pdf(monkeypatch):
+    """`…/CSS2026_CFP_Draft.docx-2.pdf` is a real CFP URL. Handed a PDF, an HTML stripper
+    returns the mangled remains of a binary stream — from which a model will confidently
+    extract a page limit that is not in the document."""
+    from raconteur import web
+
+    class _R:
+        status_code = 200
+        headers = {"content-type": "application/pdf"}
+        content = b"%PDF-1.4 ..."
+        text = "\x00\x01garbage"
+
+    class _C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, timeout=None): return _R()
+
+    monkeypatch.setattr(web, "_client", lambda email: _C())
+    monkeypatch.setattr(web, "_pdf_text",
+                        lambda data, mx: "Papers should be 3,000 to 5,000 words.")
+
+    assert "5,000 words" in web.fetch_page_text("https://x/cfp.pdf", "")
+
+
+def test_a_pdf_is_detected_by_its_bytes_not_its_extension(monkeypatch):
+    from raconteur import web
+
+    class _R:
+        status_code = 200
+        headers = {"content-type": "application/octet-stream"}   # server lies
+        content = b"%PDF-1.7 ..."
+        text = "junk"
+
+    class _C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, timeout=None): return _R()
+
+    monkeypatch.setattr(web, "_client", lambda email: _C())
+    monkeypatch.setattr(web, "_pdf_text", lambda data, mx: "read as pdf")
+    assert web.fetch_page_text("https://x/whatever", "") == "read as pdf"

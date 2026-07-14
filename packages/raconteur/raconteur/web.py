@@ -51,14 +51,41 @@ def _parse_date(s: str) -> date | None:
     return None
 
 
+def _pdf_text(data: bytes, max_chars: int) -> str:
+    """The text of a PDF. A call for papers is very often a PDF, not a web page."""
+    try:
+        import fitz                                     # PyMuPDF
+    except ImportError:
+        print("[web] the page is a PDF and PyMuPDF is not installed", file=sys.stderr)
+        return ""
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            text = "\n".join(page.get_text() for page in doc)
+    except Exception as e:  # noqa: BLE001
+        print(f"[web] could not read the PDF: {e}", file=sys.stderr)
+        return ""
+    return re.sub(r"[ \t]+", " ", text).strip()[:max_chars]
+
+
 def fetch_page_text(url: str, email: str, max_chars: int = 3000) -> str:
-    """Fetch a URL and return stripped text content."""
+    """Fetch a URL and return its text — from HTML or from a PDF.
+
+    Read the bytes, not the extension: a CFP is served from every kind of URL, and
+    `…/CSS2026_CFP_Draft.docx-2.pdf` is a real one. Handed a PDF, an HTML stripper returns
+    the mangled remains of a binary stream — from which a model will confidently extract a
+    page limit that is not in the document.
+    """
     try:
         with _client(email) as client:
-            r = client.get(url, timeout=20)
-            if r.status_code == 200:
-                return _strip_html(r.text, max_chars)
-    except Exception as e:
+            r = client.get(url, timeout=30)
+            if r.status_code != 200:
+                print(f"[web] {url} -> HTTP {r.status_code}", file=sys.stderr)
+                return ""
+            ctype = (r.headers.get("content-type") or "").lower()
+            if "pdf" in ctype or r.content[:5] == b"%PDF-":
+                return _pdf_text(r.content, max_chars)
+            return _strip_html(r.text, max_chars)
+    except Exception as e:  # noqa: BLE001
         print(f"[web] fetch failed for {url}: {e}", file=sys.stderr)
     return ""
 

@@ -51,3 +51,27 @@ def test_existing_chain_helpers_unchanged(tmp_path):
     assert got == ("260710", ["litreview", "ra", "DCR"], "docx")
     assert naming.minor_name("myproj", ["ra", "DCR"], "docx", "260710") \
         == "260710_myproj_ra_DCR_ra.docx"
+
+
+def test_a_venue_slug_may_carry_a_year():
+    """A slug names the INSTANCE — next year's CSS is a different conference, with a
+    different deadline and a different committee. Letters only, and
+    `260714_Chords_css2026_outline_ra.docx` fails to parse: which does not merely lose the
+    venue, it makes the file invisible to the gate, the redline and the release, in silence.
+    """
+    from pathlib import Path
+
+    from haarpi import naming
+
+    p = Path("260714_Chords_css2026_outline_ra_DCR.docx")
+    assert naming.parse(p, "Chords") == ("260714", ["css2026", "outline", "ra", "DCR"], "docx")
+    assert naming.venue_of(p, "Chords") == "css2026"
+
+
+def test_a_chain_token_still_cannot_start_with_a_digit():
+    """The datestamp is the only all-numeric field; a bare number in the chain is a typo,
+    not a venue."""
+    from pathlib import Path
+
+    from haarpi import naming
+    assert naming.parse(Path("260714_Chords_2026_ra.docx"), "Chords") is None

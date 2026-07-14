@@ -64,9 +64,14 @@ def venue_of(path: Path, short_title: str, known: list[str] | None = None) -> st
 
 
 def _pattern(short_title: str) -> re.Pattern:
-    # chain is * not + : a fully bare release (`260715_title.docx`) has no chain at all
+    # chain is * not + : a fully bare release (`260715_title.docx`) has no chain at all.
+    # Tokens may carry digits: a venue slug names the INSTANCE ("css2026"), because next
+    # year's conference is a different conference with a different deadline and a different
+    # committee. Letters only, and `260714_Chords_css2026_outline_ra.docx` fails to parse —
+    # which does not merely lose the venue, it makes the file invisible to the gate, the
+    # redline and the release, in silence.
     return re.compile(
-        rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z]+)*)\.(md|docx)$"
+        rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z][A-Za-z0-9]*)*)\.(md|docx)$"
     )
 
 
