@@ -184,12 +184,18 @@ def comment_anchors(path: Path, only: set[str] | None = None) -> list[dict]:
         ids = _anchor_ids(p_el, only)
         if not ids:
             continue
-        text = paragraph_text(p_el)
+        # The reviewer's own tracked insertions are served to the reviser as atoms
+        # (⟦a:1⟧), with a legend. They can be read and written around; they cannot be
+        # touched. Their prose beside them stays fair game.
+        text = paragraph_text(p_el, protect_authored=True)
+        authored = _engine.authored_atoms(p_el)
         anchored: set[int] = set()
-        for cid, span in comment_spans(p_el).items():
+        # same serialization, or the offsets are measured against a different string
+        for cid, span in comment_spans(p_el, protect_authored=True).items():
             if only is None or cid in only:
                 anchored |= anchored_sentences(text, span)
-        out.append({**rec, "ids": ids, "text": text, "anchored": sorted(anchored)})
+        out.append({**rec, "ids": ids, "text": text, "authored": authored,
+                    "anchored": sorted(anchored)})
     return out
 
 
@@ -238,13 +244,16 @@ def accepted_markdown(doc) -> str:
     return "\n\n".join(parts)
 
 
-def tracked_replace(p_el, new_text: str, author: str = AUTHOR, ids: _Ids | None = None) -> bool:
-    return _engine.tracked_replace(p_el, new_text, author, ids)
+def tracked_replace(p_el, new_text: str, author: str = AUTHOR, ids: _Ids | None = None,
+                    protect_authored: bool = False) -> bool:
+    return _engine.tracked_replace(p_el, new_text, author, ids, protect_authored)
 
 
 def tracked_replace_sentencewise(p_el, new_text: str, author: str = AUTHOR,
-                                 ids: _Ids | None = None) -> bool:
-    return _engine.tracked_replace_sentencewise(p_el, new_text, author, ids)
+                                 ids: _Ids | None = None,
+                                 protect_authored: bool = False) -> bool:
+    return _engine.tracked_replace_sentencewise(p_el, new_text, author, ids,
+                                                protect_authored)
 
 
 def tracked_insert_after(p_el, text: str, author: str = AUTHOR, ids: _Ids | None = None):

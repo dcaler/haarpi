@@ -48,6 +48,25 @@ _MATH = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 # would KeyError — use the literal namespaced attribute name.
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 
+# Everyone else is a human. The tools sign their tracked changes and their comments, and
+# that signature is the only thing separating what the machine wrote from what the author
+# did. It decides which spans are editable and which are not.
+TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "haarpi", "the tool")
+
+
+def is_tool_author(author: str | None, tool_authors=TOOL_AUTHORS) -> bool:
+    return (author or "").lower() in {a.lower() for a in tool_authors}
+
+
+def _is_authored_span(el, tool_authors=TOOL_AUTHORS) -> bool:
+    """A live tracked insertion by a human — text the author put there by hand.
+
+    The most expensive text in the document. The tool preserves it and never authors it,
+    which is exactly the contract it already honours for an equation.
+    """
+    return (el.tag == qn("w:ins")
+            and not is_tool_author(el.get(qn("w:author")), tool_authors))
+
 
 def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -187,23 +206,52 @@ def _sentinel_kind(el) -> str:
     return "x"
 
 
-def serialize_paragraph(p_el) -> tuple[str, dict[str, object], list]:
-    """Render a paragraph as (text_with_sentinels, sentinel -> element, consumed children).
+def serialize_paragraph(p_el, protect_authored: bool = False,
+                        tool_authors=TOOL_AUTHORS) -> tuple[str, dict[str, object], list]:
+    """Render a paragraph as (text_with_sentinels, sentinel -> element(s), consumed children).
 
     Comment plumbing and ``w:pPr`` are left alone — they are re-attached around the rebuilt
     body. Prior tracked deletions are dropped (the paragraph reads as it currently stands);
     prior insertions read as accepted text.
+
+    ``protect_authored`` makes a HUMAN's live tracked insertion an atom instead of anonymous
+    prose. This is the whole of span-level deference. Without it, provenance is erased right
+    here — by the time the differ and the model see the paragraph, the author's sentences are
+    indistinguishable from the tool's, and the only way to defend them is to freeze the entire
+    paragraph, which also freezes the tool's own prose sitting beside them. As an atom, the
+    author's span is content the tool preserves but never authors — the identical contract an
+    equation already has, guards and all — and the re-cut writes AROUND it.
+
+    Word splits one typed sentence across several ``w:ins`` elements, so ADJACENT authored
+    insertions coalesce into a single atom: what the author wrote is one span, not five.
     """
     parts: list[str] = []
     smap: dict[str, object] = {}
     consumed: list = []
     n = 0
+    pending: list = []          # a run of adjacent authored insertions
+
+    def _flush_authored() -> None:
+        nonlocal n
+        if not pending:
+            return
+        n += 1
+        key = f"⟦a:{n}⟧"
+        smap[key] = list(pending)
+        parts.append(key)
+        consumed.extend(pending)
+        pending.clear()
+
     for child in list(p_el):
         tag = child.tag
         if tag == qn("w:pPr") or tag in (qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
             continue
         if _is_ref_run(child) or tag == qn("w:del"):
             continue
+        if protect_authored and _is_authored_span(child, tool_authors):
+            pending.append(child)
+            continue
+        _flush_authored()
         if _is_opaque(child):
             n += 1
             key = f"⟦{_sentinel_kind(child)}:{n}⟧"
@@ -216,16 +264,33 @@ def serialize_paragraph(p_el) -> tuple[str, dict[str, object], list]:
         elif tag == qn("w:r") and child.findall(qn("w:t")):
             parts.append("".join(t.text or "" for t in child.findall(qn("w:t"))))
             consumed.append(child)
+    _flush_authored()
     return "".join(parts), smap, consumed
 
 
-def paragraph_text(p_el) -> str:
+def authored_atoms(p_el, tool_authors=TOOL_AUTHORS) -> dict[str, str]:
+    """``{sentinel: the author's exact words}`` for every protected span in a paragraph.
+
+    The model must READ the author's text to write around it coherently — to pick up its
+    thread, and not to repeat it — while being unable to change a character of it. So the
+    sentinel travels with a legend, and the guards enforce that every one comes back.
+    """
+    _, smap, _ = serialize_paragraph(p_el, protect_authored=True, tool_authors=tool_authors)
+    return {k: atom_text(v) for k, v in smap.items() if k.startswith("⟦a:")}
+
+
+def paragraph_text(p_el, protect_authored: bool = False) -> str:
     """The paragraph as the reviser and the differ see it: prose with sentinels for atoms."""
-    return serialize_paragraph(p_el)[0]
+    return serialize_paragraph(p_el, protect_authored)[0]
 
 
-def atom_text(el) -> str:
-    """The visible text inside an opaque atom.
+def _atom_els(value) -> list:
+    """An atom is one element, or several — an authored span Word split across runs."""
+    return list(value) if isinstance(value, list) else [value]
+
+
+def atom_text(value) -> str:
+    """The visible text inside an atom (an equation, a figure, an authored span).
 
     An equation's characters live in ``m:t``, not ``w:t``, so anything reading only ``w:t``
     sees a paragraph with holes where every number was. Used to flatten a paragraph for
@@ -235,7 +300,9 @@ def atom_text(el) -> str:
     atom that ever did — a hyperlink inside an equation — would reorder the prose under a
     tag-at-a-time read, and the damage would look like a model error rather than a reader bug.
     """
-    return "".join(t.text or "" for t in el.iter(f"{{{_MATH}}}t", qn("w:t")))
+    return "".join(t.text or ""
+                   for el in _atom_els(value)
+                   for t in el.iter(f"{{{_MATH}}}t", qn("w:t")))
 
 
 def flatten_paragraph(p_el) -> str:
@@ -265,7 +332,7 @@ def _render(text: str, smap: dict, rpr) -> list:
         if _SENTINEL_SPLIT.fullmatch(piece):
             el = smap.get(piece)
             if el is not None:
-                out.append(copy.deepcopy(el))
+                out.extend(copy.deepcopy(e) for e in _atom_els(el))
         else:
             out.append(_text_run(piece, rpr))
     return out
@@ -299,7 +366,9 @@ def _redline_chunk(old_chunk: str, new_chunk: str, smap: dict,
             body.append(_del(o_all, author, ids.next(), rpr))
         if n_all:
             body.append(_ins(n_all, author, ids.next(), rpr))
-        body.extend(copy.deepcopy(smap[s]) for s in o_sents if s in smap)
+        for s in o_sents:
+            if s in smap:
+                body.extend(copy.deepcopy(e) for e in _atom_els(smap[s]))
         return body
 
     for k in range(len(o_sents) + 1):
@@ -315,36 +384,71 @@ def _redline_chunk(old_chunk: str, new_chunk: str, smap: dict,
         if k < len(o_sents):
             el = smap.get(o_sents[k])
             if el is not None:
-                body.append(copy.deepcopy(el))  # the atom itself: accepted, in place
+                # the atom itself: accepted, in place, never inside a w:ins/w:del. For an
+                # authored span this is what keeps the reviewer's tracked insertion intact,
+                # still pending, still theirs to accept.
+                body.extend(copy.deepcopy(e) for e in _atom_els(el))
     return body
 
 
 def _relay(p_el, body: list, consumed: list) -> None:
-    """Detach what we consumed and re-lay [starts] <body> [ends] [reference runs]."""
+    """Detach what we consumed and re-lay [starts] <body> [ends] [reference runs].
+
+    Whatever we did NOT consume keeps its place. A tracked deletion from an earlier cycle
+    is the case that matters: it is not part of the text being revised (deleted text reads
+    as gone), but it is still in the paragraph, and a rebuild that re-laid the new body at
+    the top swept every old deletion to the paragraph's tail — severing the struck-through
+    text from the prose it was struck from, which is most of what makes a redline readable.
+    """
     starts = p_el.findall(qn("w:commentRangeStart"))
     ends = p_el.findall(qn("w:commentRangeEnd"))
     ref_runs = [r for r in p_el.findall(qn("w:r")) if _is_ref_run(r)]
-    for el in consumed + starts + ends + ref_runs:
-        p_el.remove(el)
     ppr = p_el.find(qn("w:pPr"))
-    insert_at = list(p_el).index(ppr) + 1 if ppr is not None else 0
-    for offset, el in enumerate(list(starts) + body + list(ends) + list(ref_runs)):
+
+    moved = {id(e) for e in (*starts, *ends, *ref_runs)}
+    eaten = {id(e) for e in consumed}
+    if ppr is not None:
+        moved.add(id(ppr))
+
+    middle: list = []
+    placed = False
+    for child in list(p_el):
+        if id(child) in moved:
+            continue
+        if id(child) in eaten:
+            if not placed:          # the body lands where its text came from
+                middle.extend(body)
+                placed = True
+            continue
+        middle.append(child)        # a prior cycle's w:del, a bookmark: keep it in place
+    if not placed:
+        middle.extend(body)
+
+    for child in list(p_el):
+        if child is not ppr:
+            p_el.remove(child)
+    insert_at = 1 if ppr is not None else 0
+    for offset, el in enumerate([*starts, *middle, *ends, *ref_runs]):
         p_el.insert(insert_at + offset, el)
 
 
 # ── tracked edits ─────────────────────────────────────────────────────────────
 
-def tracked_replace(p_el, new_text: str, author: str, ids: _Ids | None = None) -> bool:
+def tracked_replace(p_el, new_text: str, author: str, ids: _Ids | None = None,
+                    protect_authored: bool = False) -> bool:
     """Replace a paragraph's text with one tracked deletion of the old + insertion of the new,
     preserving comment anchors and every opaque atom.
 
     Coarse: the whole paragraph is redlined. ``tracked_replace_sentencewise`` is what the
     redline path uses; this remains for callers that genuinely mean to replace wholesale.
 
+    ``protect_authored`` holds the reviewer's own tracked insertions as atoms — the tool
+    rewrites around them and cannot touch them.
+
     Returns False (a no-op) when there is no text to replace or the text is unchanged.
     """
     ids = ids or _Ids(1000)
-    old_text, smap, consumed = serialize_paragraph(p_el)
+    old_text, smap, consumed = serialize_paragraph(p_el, protect_authored)
     if not consumed or new_text.strip() == old_text.strip():
         return False
     rpr = _dominant_rpr(consumed)
@@ -353,7 +457,8 @@ def tracked_replace(p_el, new_text: str, author: str, ids: _Ids | None = None) -
 
 
 def tracked_replace_sentencewise(p_el, new_text: str, author: str,
-                                 ids: _Ids | None = None) -> bool:
+                                 ids: _Ids | None = None,
+                                 protect_authored: bool = False) -> bool:
     """Replace a paragraph's text with SENTENCE-level tracked changes.
 
     Diffs old against new at sentence granularity and redlines only the sentences that
@@ -361,10 +466,15 @@ def tracked_replace_sentencewise(p_el, new_text: str, author: str,
     byte-for-byte, so its [@citekey] tags, its grounding, and its equations survive the
     revision untouched. Opaque atoms are never deleted or inserted — see ``_redline_chunk``.
 
+    ``protect_authored`` holds the reviewer's own tracked insertions as atoms: a sentence
+    the author wrote by hand cannot be edited, only written around. The tool's prose beside
+    it stays fair game — which is the whole difference between deferring to the author and
+    freezing the paragraph they happened to touch.
+
     Returns False (a no-op) when there is no text to replace or the text is unchanged.
     """
     ids = ids or _Ids(1000)
-    old_text, smap, consumed = serialize_paragraph(p_el)
+    old_text, smap, consumed = serialize_paragraph(p_el, protect_authored)
     if not consumed or new_text.strip() == old_text.strip():
         return False
     rpr = _dominant_rpr(consumed)
@@ -437,18 +547,25 @@ def comments_by_id(path: Path) -> dict[str, dict]:
     return out
 
 
-def comment_spans(p_el) -> dict[str, tuple[int, int]]:
+def comment_spans(p_el, protect_authored: bool = False,
+                  tool_authors=TOOL_AUTHORS) -> dict[str, tuple[int, int]]:
     """Character offsets ``[start, end)`` of each comment's anchored range, measured over the
     same serialized text ``paragraph_text`` returns.
 
     The reviewer highlights the phrase their comment is about, so this recovers WHICH
     SENTENCES a comment actually bears on. This is what lets the minimal-edit guard know that
     a comment on sentence 2 does not license rewriting sentences 1 and 3-7.
+
+    ``protect_authored`` MUST match what the caller passed to ``serialize_paragraph``: these
+    offsets are measured over that string, and an authored span is six characters as a
+    sentinel and two hundred as prose. Disagree, and every comment after the first authored
+    span anchors to the wrong sentence.
     """
     offset = 0
     n = 0
     opens: dict[str, int] = {}
     spans: dict[str, tuple[int, int]] = {}
+    pending = False              # mid-run of adjacent authored insertions
 
     def _open(cid):
         if cid:
@@ -458,6 +575,14 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
         if cid in opens:
             spans[cid] = (opens.pop(cid), offset)
 
+    def _flush_authored():
+        """Mirror serialize_paragraph: one sentinel for a coalesced authored span."""
+        nonlocal n, offset, pending
+        if pending:
+            n += 1
+            offset += len(f"⟦a:{n}⟧")
+            pending = False
+
     for child in list(p_el):
         tag = child.tag
         if tag == qn("w:commentRangeStart"):
@@ -466,15 +591,25 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
             _close(child.get(qn("w:id")))
         elif tag == qn("w:pPr") or _is_ref_run(child):
             continue
+        elif protect_authored and _is_authored_span(child, tool_authors):
+            # The author's span is a sentinel in the serialized text, so it advances the
+            # offset by the sentinel's width, not by its prose. A comment anchored inside
+            # it (the author commenting on their own sentence) collapses onto the sentinel.
+            for el in child.iter(qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
+                (_open if el.tag == qn("w:commentRangeStart") else _close)(el.get(qn("w:id")))
+            pending = True
         elif tag == qn("w:del"):
             # Deleted text is not in the serialized paragraph, so it advances no offset —
-            # but an anchor nested INSIDE it must still be seen. A reviewer who comments on
-            # a phrase and then deletes it leaves the anchor there, and a search of direct
-            # children alone loses the comment entirely. It collapses to a point: the place
-            # where the text they were talking about used to be.
+            # and it does NOT interrupt a run of authored insertions, exactly as
+            # serialize_paragraph does not. (A reviewer typically deletes a sentence and
+            # types its replacement around the corpse; those insertions are ONE span.)
+            # An anchor nested INSIDE the deletion must still be seen: a search of direct
+            # children alone loses the comment entirely. It collapses to a point — the
+            # place where the text they were talking about used to be.
             for el in child.iter(qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
                 (_open if el.tag == qn("w:commentRangeStart") else _close)(el.get(qn("w:id")))
         elif _is_opaque(child):
+            _flush_authored()
             # Must mirror serialize_paragraph's numbering exactly. Hardcoding the width as
             # len("⟦m:0⟧") drifts one char per atom from the tenth atom onward, which
             # silently mis-anchors every comment after it in a paragraph with many atoms —
@@ -482,6 +617,7 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
             n += 1
             offset += len(f"⟦{_sentinel_kind(child)}:{n}⟧")
         elif tag == qn("w:ins"):
+            _flush_authored()
             # Insertions read as accepted text; anchors nested inside one are real anchors
             # (a reviewer commenting on their own inserted sentence).
             for el in child.iter():
@@ -492,10 +628,32 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
                 elif el.tag == qn("w:t"):
                     offset += len(el.text or "")
         elif tag == qn("w:r"):
+            _flush_authored()
             offset += sum(len(t.text or "") for t in child.findall(qn("w:t")))
+    _flush_authored()
     for cid, start in opens.items():  # range never closed in this paragraph
         spans[cid] = (start, offset)
     return spans
+
+
+def anchors_in_deleted_text(p_el) -> set[str]:
+    """Comment ids whose anchor lies wholly inside deleted text.
+
+    The reviewer wrote "what IS tonal negotiation?" and then deleted the sentence that
+    said it. The comment is still open, but its subject is gone — and a tool that hands
+    such a comment to a model as a live instruction gets a confident rewrite of prose that
+    no longer exists. There is nothing to revise here; there is something to SAY.
+    """
+    inside: set[str] = set()
+    for d in p_el.findall(qn("w:del")):
+        for el in d.iter(qn("w:commentRangeStart")):
+            inside.add(el.get(qn("w:id")))
+    live: set[str] = set()
+    for el in p_el.iter(qn("w:commentRangeStart")):
+        parent = el.getparent()
+        if parent is not None and parent.tag != qn("w:del"):
+            live.add(el.get(qn("w:id")))
+    return {cid for cid in inside if cid and cid not in live}
 
 
 def anchored_sentences(text: str, span: tuple[int, int]) -> set[int]:

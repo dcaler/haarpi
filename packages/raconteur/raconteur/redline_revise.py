@@ -64,9 +64,23 @@ PLACEHOLDERS — a token like ⟦m:1⟧ stands for an equation in the original. 
 exactly, in the sentence whose claim it supports. Never retype an equation as prose, never
 move one to another sentence, and never invent a placeholder of your own.
 
+THE AUTHOR'S OWN WORDS — a token like ⟦a:1⟧ stands for text the AUTHOR wrote BY HAND. It is
+the most expensive text on the page, and it is not yours. Reproduce every ⟦a:N⟧ exactly where
+it stands: you may not rewrite it, shorten it, absorb it into a sentence of your own, or drop
+it. Write AROUND it. It is a fixed point, and your prose must lead into it and out of it
+without repeating what it already says. The legend below gives you their words precisely so
+you can do that — read them; never retype them.
+If, and only if, their text carries an outright ERROR — a typo, a broken construction — you
+may SUGGEST a correction. A suggestion is delivered to the author as a comment and is never
+applied. Never suggest a change of style, wording, emphasis, or opinion: disagreeing with the
+author is not an error in the author.
+
 OUTPUT — a single JSON object mapping sentence number to its replacement text. Use null to
 delete a sentence. Return nothing else: no prose, no commentary, no code fence.
   {"2": "The revised second sentence [@smith2021].", "5": null}
+You may additionally include the key "copyedits", mapping an author placeholder to your
+suggested correction of THEIR sentence:
+  {"2": "…", "copyedits": {"a:1": "…their sentence, with the typo fixed…"}}
 If no sentence needs to change, return {}."""
 
 _PARA_REVISE_PROMPT = """\
@@ -76,11 +90,16 @@ Section: {heading}
 PARAGRAPH, as numbered sentences. ▶ marks the sentence(s) the reviewer's comment is anchored
 to — those are the ones to revise:
 {sentences}
-
+{authored_section}
 REVIEWER COMMENT(S) on this paragraph (address every one):
 {comments}
 {context_section}{bib_section}
 Return the JSON object of changed sentences only."""
+
+_AUTHORED_BLOCK = """
+THE AUTHOR'S OWN SENTENCES — fixed points. Reproduce the placeholder; never the text:
+{legend}
+"""
 
 _PARA_AUDIT_SYS = """\
 You audit ONE revised paragraph of a scholarly paper against the reviewer comment(s) it was
@@ -177,12 +196,17 @@ def _apply_sentence_edits(units: list[str], edits: dict) -> str:
     return "".join(out)
 
 
-def _parse_sentence_edits(raw: str, n_units: int) -> tuple[dict, list[str]]:
-    """Parse the reviser's JSON, keeping only in-range integer keys. Returns (edits, errors).
+def _parse_sentence_edits(raw: str, n_units: int,
+                          authored: dict | None = None) -> tuple[dict, dict, list[str]]:
+    """Parse the reviser's JSON. Returns (edits, copyedits, errors).
 
     Strict on purpose: a lenient parser that falls back to an empty dict on malformed output
     would look exactly like a well-formed edit of nothing, and we would write no tracked
     change while replying that the comment was addressed.
+
+    ``copyedits`` are suggested corrections to the AUTHOR'S OWN spans. They are never
+    applied — they are delivered as comments — so a copyedit naming a span that does not
+    exist is dropped rather than argued with.
     """
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     obj = None
@@ -193,8 +217,17 @@ def _parse_sentence_edits(raw: str, n_units: int) -> tuple[dict, list[str]]:
         except json.JSONDecodeError:
             obj = None
     if obj is None:
-        return {}, ['Output was not a JSON object. Return only a JSON object mapping '
-                    'sentence number to replacement text, e.g. {"2": "…"}.']
+        return {}, {}, ['Output was not a JSON object. Return only a JSON object mapping '
+                        'sentence number to replacement text, e.g. {"2": "…"}.']
+
+    copyedits: dict[str, str] = {}
+    raw_copy = obj.pop("copyedits", None)
+    if isinstance(raw_copy, dict):
+        for k, v in raw_copy.items():
+            key = f"⟦{str(k).strip().strip('⟦⟧')}⟧"
+            if isinstance(v, str) and v.strip() and (authored is None or key in authored):
+                copyedits[key] = v.strip()
+
     edits, errors = {}, []
     for k, v in obj.items():
         if not str(k).strip().isdigit() or not (1 <= int(k) <= n_units):
@@ -204,7 +237,7 @@ def _parse_sentence_edits(raw: str, n_units: int) -> tuple[dict, list[str]]:
             errors.append(f'The value for sentence {k} must be text or null.')
             continue
         edits[str(int(k))] = v
-    return edits, errors
+    return edits, copyedits, errors
 
 
 # ── the per-paragraph adversary ──────────────────────────────────────────────
@@ -241,9 +274,15 @@ def _para_guard_findings(
 def redline_paragraph(
     brain: Brain, title: str, heading: str, paragraph: str, comments: list[str],
     context_section: str, bib_section: str, anchored: set[int], kind: str,
-    known: set[str], rounds: int = 2,
+    known: set[str], rounds: int = 2, authored: dict[str, str] | None = None,
+    copyedits: dict[str, str] | None = None,
 ) -> tuple[str | None, str]:
     """Rewrite one commented paragraph and hold it to the adversarial bar.
+
+    ``authored`` maps ⟦a:N⟧ → the author's exact words: spans the reviser may read and must
+    reproduce, but may never write. ``copyedits``, if given, is filled with any correction
+    the reviser proposes to those spans — corrections that are DELIVERED AS COMMENTS and
+    never applied, because the author's text is theirs.
 
     Returns (new_text, outcome):
       - ("…text…", "edited")   — passes every deterministic guard and the audit.
@@ -257,9 +296,11 @@ def redline_paragraph(
     if not units:
         return None, "skipped"
     comment_block = "\n".join(f"- {c}" for c in comments)
+    legend = "\n".join(f'  {k} = "{v.strip()}"' for k, v in (authored or {}).items())
     base_prompt = _PARA_REVISE_PROMPT.format(
         title=title, heading=heading,
         sentences=_number_sentences(units, anchored),
+        authored_section=_AUTHORED_BLOCK.format(legend=legend) if legend else "",
         comments=comment_block,
         context_section=context_section,
         bib_section=bib_section,
@@ -277,13 +318,17 @@ def redline_paragraph(
             log(f"[warn] paragraph revise failed ({e}); leaving as-is.")
             return None, "skipped"
 
-        edits, errors = _parse_sentence_edits(raw, len(units))
+        edits, proposed_copyedits, errors = _parse_sentence_edits(raw, len(units), authored)
         if errors:
             critique = "\n".join(f"- {e}" for e in errors)
             continue
+        if copyedits is not None:
+            copyedits.update(proposed_copyedits)
         if not edits:
             # The reviser says nothing needs changing. It cannot both leave the paragraph
             # alone and have addressed the comment; let the caller record it as skipped.
+            # (A copyedit it noticed on the author's own text still travels — that is a
+            # remark about their prose, not an answer to their comment.)
             return None, "skipped"
 
         new_text = _apply_sentence_edits(units, edits)
@@ -421,15 +466,31 @@ def redline_revise(
     ids = redline.ids_for(doc)
     body = {rec["index"]: rec for rec in redline.body_paragraphs(doc)}
     dispositions: dict[str, str] = {}
-    frozen_replies: dict[str, str] = {}
+    replies: dict[str, str] = {}
+    copyedit_notes: list[tuple[str, str]] = []
     edited = 0
 
     for anchor in anchors:
         rec = body.get(anchor["index"])
         if rec is None:
             continue
-        comments = [_ask_text(asks[c]) for c in anchor["ids"] if c in asks]
+
+        # A comment whose anchor lies wholly inside deleted text has lost its subject: the
+        # reviewer asked "what IS tonal negotiation?" and then deleted the sentence that
+        # said it. Handing that to a model as a live instruction buys a confident rewrite
+        # of prose that no longer exists. Say so instead.
+        obsolete = hredline.anchors_in_deleted_text(rec["para"]._p) & set(anchor["ids"])
+        for cid in obsolete:
+            dispositions[cid] = "obsolete"
+            replies[cid] = ("The text this comment was anchored to has since been deleted, "
+                            "so there is nothing here to revise. Resolve the thread if the "
+                            "deletion settles it; re-comment on the new text if it does not.")
+        ids_live = [c for c in anchor["ids"] if c not in obsolete]
+        comments = [_ask_text(asks[c]) for c in ids_live if c in asks]
         if not comments:
+            if obsolete:
+                log(f"[raconteur] para {anchor['index']}: {len(obsolete)} comment(s) on "
+                    f"text you deleted — answered, not revised")
             continue
         heading = anchor["heading"] or "Abstract"
         if context_fn is not None:
@@ -438,46 +499,45 @@ def redline_revise(
             ctx = _context_for_section(anchor["heading"], litrev, code, results)
         context_section = f"\n{ctx}" if ctx else ""
 
-        # The reviewer's hand freezes the paragraph. Acceptance is a human act:
-        # a live human tracked change is never rewritten (which would consume
-        # its revision record) — the tool's answer becomes a threaded reply
-        # carrying the proposed text, and the paragraph stands as written.
-        frozen = hredline.has_foreign_markup(rec["para"]._p)
+        # The author's own sentences are atoms: readable, reproducible, untouchable. The
+        # tool's prose around them stays fully editable — deference is owed to the text a
+        # person wrote, not to the paragraph it happens to sit in.
+        authored = anchor.get("authored") or {}
+        proposed: dict[str, str] = {}
 
         log(f"[raconteur] redlining '{heading}' para {anchor['index']} "
             f"({len(comments)} comment(s), anchored to sentence(s) "
             f"{[i + 1 for i in anchor['anchored']] or 'all'}"
-            f"{'; FROZEN — carries the reviewer’s edits' if frozen else ''})…")
+            f"{f'; {len(authored)} authored span(s) held fixed' if authored else ''})…")
 
         new_text, outcome = redline_paragraph(
             brain, cfg.title, heading, anchor["text"], comments,
             context_section, bib_section, set(anchor["anchored"]),
-            anchor["kind"], known,
+            anchor["kind"], known, authored=authored, copyedits=proposed,
         )
 
-        if frozen and outcome == "edited" and new_text:
-            outcome = "frozen"
-            proposal = guards.SENTINEL_RE.sub("[equation]", new_text)
-            for cid in anchor["ids"]:
-                frozen_replies[cid] = (
-                    "This paragraph carries your tracked edits, so it was left "
-                    "untouched (acceptance is yours). Proposed rewrite for this "
-                    f"comment:\n\n{proposal.strip()}")
+        for span, fix in proposed.items():
+            original = authored.get(span, "").strip()
+            if " ".join(fix.split()) == " ".join(original.split()):
+                continue                      # not a correction, an echo
+            copyedit_notes.append((
+                original[:120],
+                "Suggested correction to your own text — NOT applied, it is yours:\n\n"
+                f"{fix}"))
 
-        for cid in anchor["ids"]:
+        for cid in ids_live:
             dispositions[cid] = outcome
 
         if outcome == "edited" and new_text:
-            if redline.tracked_replace_sentencewise(rec["para"]._p, new_text, redline.AUTHOR, ids):
+            if redline.tracked_replace_sentencewise(
+                    rec["para"]._p, new_text, redline.AUTHOR, ids, protect_authored=True):
                 edited += 1
-                log(f"[raconteur]   → tracked change written")
+                log("[raconteur]   → tracked change written"
+                    + (f" (around {len(authored)} authored span(s))" if authored else ""))
             else:
-                for cid in anchor["ids"]:
+                for cid in ids_live:
                     dispositions[cid] = "skipped"
                 log("[warn]   → no textual change; nothing written")
-        elif outcome == "frozen":
-            log("[raconteur]   → paragraph frozen; proposal delivered as a "
-                "threaded reply")
         elif outcome.startswith("route:"):
             cls = outcome.split(":", 1)[1]
             log(f"[warn]   → {_ROUTE_ADVICE.get(cls, 'cannot be a tracked change.')}")
@@ -493,10 +553,14 @@ def redline_revise(
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
         f"({edited} paragraph(s) redlined)")
-    if frozen_replies:
-        n = hredline.add_replies(out, frozen_replies, author=redline.AUTHOR)
-        log(f"[raconteur] {n} frozen-paragraph proposal(s) delivered as "
-            f"threaded replies")
+    if replies:
+        n = hredline.add_replies(out, replies, author=redline.AUTHOR)
+        log(f"[raconteur] {n} threaded reply/replies delivered")
+    if copyedit_notes:
+        # The author's text is theirs. A correction to it is a remark, never an edit.
+        n = hredline.add_anchored_comments(out, copyedit_notes, author=redline.AUTHOR)
+        log(f"[raconteur] {n} suggested copyedit(s) on the author's own text, "
+            f"delivered as comments — not applied")
     _report(dispositions, cmap, known, out)
     if md_sibling:
         _write_md_sibling(project_dir, out)
@@ -510,16 +574,16 @@ def _report(dispositions: dict[str, str], cmap: dict[str, dict],
     if not dispositions:
         return
     log("[raconteur] ── comment dispositions ──")
-    counts = {"edited": 0, "frozen": 0, "routed": 0, "declined": 0}
+    counts = {"edited": 0, "obsolete": 0, "routed": 0, "declined": 0}
     for cid, outcome in dispositions.items():
         text = cmap.get(cid, {}).get("text", "?")[:60]
         if outcome == "edited":
             verdict = "applied as a tracked change"
             counts["edited"] += 1
-        elif outcome == "frozen":
-            verdict = ("FROZEN — the paragraph carries the reviewer's tracked edits; "
-                       "the proposed rewrite was delivered as a threaded reply")
-            counts["frozen"] += 1
+        elif outcome == "obsolete":
+            verdict = ("the text it was anchored to has been deleted — answered in a reply, "
+                       "nothing to revise")
+            counts["obsolete"] += 1
         elif outcome.startswith("route:"):
             verdict = _ROUTE_ADVICE.get(outcome.split(":", 1)[1], "routed")
             counts["routed"] += 1
@@ -527,7 +591,7 @@ def _report(dispositions: dict[str, str], cmap: dict[str, dict],
             verdict = "DECLINED — no verifiable edit could be produced; paragraph unchanged"
             counts["declined"] += 1
         log(f"[raconteur]   [{cid}] {text!r}: {verdict}")
-    log(f"[raconteur] {counts['edited']} applied · {counts['frozen']} frozen · "
+    log(f"[raconteur] {counts['edited']} applied · {counts['obsolete']} obsolete · "
         f"{counts['routed']} routed · {counts['declined']} declined")
 
     from docx import Document

@@ -44,11 +44,13 @@ class ScriptedBrain:
 
 
 def _call(brain, paragraph, comments=("tighten this",), anchored={1},
-          kind="litrev", known={"smith2020", "jones2019"}, rounds=2):
+          kind="litrev", known={"smith2020", "jones2019"}, rounds=2,
+          authored=None, copyedits=None):
     return rr.redline_paragraph(
         brain, "A Paper", "Background", paragraph, list(comments),
         context_section="", bib_section="", anchored=set(anchored),
         kind=kind, known=set(known), rounds=rounds,
+        authored=authored, copyedits=copyedits,
     )
 
 
@@ -93,23 +95,23 @@ def test_number_sentences_marks_anchored():
     "",
 ])
 def test_parse_sentence_edits_rejects_malformed(raw):
-    edits, errors = rr._parse_sentence_edits(raw, 3)
+    edits, _copy, errors = rr._parse_sentence_edits(raw, 3)
     assert edits == {} and errors, "malformed output must produce an error, not a silent {}"
 
 
 def test_parse_sentence_edits_rejects_out_of_range_and_bad_types():
-    edits, errors = rr._parse_sentence_edits('{"9": "x", "1": 5, "2": "ok"}', 3)
+    edits, _copy, errors = rr._parse_sentence_edits('{"9": "x", "1": 5, "2": "ok"}', 3)
     assert edits == {"2": "ok"}
     assert len(errors) == 2
 
 
 def test_parse_sentence_edits_accepts_null():
-    edits, errors = rr._parse_sentence_edits('{"2": null}', 3)
+    edits, _copy, errors = rr._parse_sentence_edits('{"2": null}', 3)
     assert edits == {"2": None} and not errors
 
 
 def test_empty_object_is_valid_but_means_no_change():
-    edits, errors = rr._parse_sentence_edits("{}", 3)
+    edits, _copy, errors = rr._parse_sentence_edits("{}", 3)
     assert edits == {} and errors == []
 
 

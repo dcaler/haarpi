@@ -1,7 +1,9 @@
 from __future__ import annotations
+import json
 import re
 import shutil
 from typing import NamedTuple
+from . import guards
 from .log import log
 from pathlib import Path
 from .brain import Brain
@@ -119,9 +121,13 @@ Focus: {focus}
 {venue_section}{style_section}Structural analysis:
 {analysis}
 
-{evidence_section}{recut_section}{preceding_section}{figure_section}
+{evidence_section}{recut_section}{authored_section}{preceding_section}{figure_section}
 Rules:
-- Write 1-3 sentences. This is a beat, not a section — high notes only.
+- Aim for 1-3 sentences. This is a beat, not a section — high notes only. But an \
+instruction from the author OUTRANKS this: if answering their annotation needs a fourth \
+sentence — a definition they asked for, a term they want explained — write it. Never drop \
+an annotation to stay short. If an annotation genuinely cannot be honoured in this beat, \
+say so plainly in one sentence beginning "CONFLICT:" instead of silently ignoring it.
 - Derive every claim from the content above. No generic academic filler: if the \
 content does not support a claim, do not make it.
 - Do not repeat what the preceding beats already said. Carry the through-line \
@@ -129,6 +135,18 @@ forward from them.
 - Write prose only. Do not output the beat label, a heading, or a bullet.
 {figure_rule}{extra_rules}
 - Output only the beat text — no preamble, no closing remarks.
+"""
+
+_AUTHORED_BLOCK = """\
+THE AUTHOR'S OWN SENTENCES in this beat — they wrote these BY HAND, and they are FIXED:
+{legend}
+
+Reproduce every placeholder above EXACTLY as it appears (⟦a:1⟧, and so on), once each, in \
+its place in the beat. You may not rewrite, shorten, merge, or drop what the author wrote — \
+it is the most expensive text on the page and it is not yours. Write AROUND it: your prose \
+must lead into it and out of it, and must not repeat what it already says. The legend gives \
+you their exact words so that you can do this coherently; read them, never retype them.
+
 """
 
 _RECUT_BLOCK = """\
@@ -141,6 +159,10 @@ The author's annotations on it:
 
 Honour every annotation. Re-derive the beat from the evidence above — do not \
 patch the old wording. Keep only what the author explicitly marked as good.
+
+Every [@citekey] in the previous beat must SURVIVE in your re-cut, unless an annotation \
+asks you to drop that source. A re-cut that loses a citation is rejected outright, and \
+the beat is left as it stands.
 
 """
 
@@ -245,11 +267,13 @@ def _evidence_for_beat(
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
-def _preceding_block(beats: list[tuple[str, str]], frozen: set[str] = frozenset()) -> str:
+def _preceding_block(beats: list[tuple[str, str]],
+                     has_authored: set[str] = frozenset()) -> str:
     if not beats:
         return ""
     written = "\n".join(
-        f"**{name}**{' (written by the author BY HAND — fixed, build around it)' if name in frozen else ''}"
+        f"**{name}**"
+        f"{' (carries sentences the author wrote BY HAND — fixed points)' if name in has_authored else ''}"
         f" — {text}"
         for name, text in beats)
     return (
@@ -299,47 +323,83 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
 
-_REPLIES_PROMPT = """\
-A one-pager was RE-CUT from scratch in response to a reviewer's annotations. \
-For each reviewer comment below, write a 1-2 sentence reply saying specifically \
-how the re-cut addresses it — or, if it does not, why.
+_VERIFY_SYS = """\
+You check whether a reviewer's ask was ACTUALLY satisfied by the delivered text. Be
+adversarial. A gesture toward the ask is not the ask.
 
-Reviewer comments (id: text):
-{comments}
+  * "define X" is satisfied only if the text now DEFINES X. Using X again is not defining
+    it. Deleting X does not define it either — it removes the question without answering it.
+  * "add Y" is satisfied only if Y is present AND NEW. If Y was already in the previous
+    text, adding nothing did not address the ask, and claiming to have added it is false.
+  * A vaguer or shorter sentence is not an explanation.
 
-The re-cut one-pager:
-{onepager}
+Respond with EXACTLY one line, and nothing else:
+  SATISFIED: <the words in the delivered text that satisfy it, quoted>
+  NOT SATISFIED: <what is still missing — one sentence>"""
 
-Return ONLY a JSON object mapping each comment id to its reply string."""
+_VERIFY_PROMPT = """\
+The reviewer's ask, on the "{beat}" beat:
+{ask}
 
-_FALLBACK_REPLY = ("Re-cut: the narrative was re-derived from the evidence with this "
-                   "annotation in the brief — see the tracked replacement in this beat.")
+The beat as it read BEFORE:
+{before}
+
+The beat as DELIVERED now:
+{after}
+
+Was the ask satisfied?"""
+
+_OUTCOME_NOTE = {
+    "rewritten": "",
+    "refused": ("The re-cut of this beat was REJECTED by a check — it would have dropped a "
+                "citation, an equation, or one of your own sentences — so the beat is "
+                "unchanged. "),
+    "untouched": "This beat was not changed. ",
+}
 
 
-def _draft_replies(brain: Brain, text: str, user_rev: Path) -> dict[str, str]:
-    """One reply per reviewer comment; fail soft to a mechanical reply."""
-    import json
-    from . import redline
-    from haarpi.redline import TOOL_AUTHORS
+def _verify_replies(brain: Brain, asks: dict[str, dict], beat_of: dict[str, str],
+                    before: dict[str, str], after: dict[str, str],
+                    outcomes: dict[str, str]) -> dict[str, str]:
+    """One reply per open ask, and every reply is CHECKED against what was delivered.
 
-    tool_lower = {a.lower() for a in TOOL_AUTHORS}
-    cmap = {cid: c for cid, c in redline.comments_by_id(user_rev).items()
-            if (c.get("author") or "").lower() not in tool_lower}
-    if not cmap:
-        return {}
-    listing = "\n".join(f"- {cid}: {c['text']}" for cid, c in cmap.items())
-    raw = brain.coordinator(
-        _REPLIES_PROMPT.format(comments=listing, onepager=text),
-        system=_SYSTEM,
-        num_ctx=8192,
-    )
-    try:
-        m = re.search(r"\{.*\}", raw, re.S)
-        parsed = json.loads(m.group(0)) if m else {}
-    except Exception:
-        parsed = {}
-    return {cid: str(parsed.get(cid) or parsed.get(str(cid)) or _FALLBACK_REPLY)
-            for cid in cmap}
+    Nothing here is taken on trust. The tool once replied "We explicitly added the recovery
+    of Beethoven's Fifth to the Approach" about a phrase that was already in the paragraph
+    and which it had not touched — a report of a change derived from the intention to make
+    it, not from the change. So each ask is put to an adversary along with the text before
+    and the text after, and the reply is built from the VERDICT.
+
+    A reply that says "not addressed" is worth more than a reply that says "addressed" and
+    is wrong: the reviewer can act on the first.
+    """
+    out: dict[str, str] = {}
+    for cid, ask in asks.items():
+        beat = beat_of.get(cid, "")
+        outcome = outcomes.get(beat, "untouched")
+        prefix = _OUTCOME_NOTE.get(outcome, "")
+        b, a = before.get(beat, ""), after.get(beat, "")
+        if not a or not beat:
+            out[cid] = (prefix or "This comment was not addressed in the re-cut. ") + \
+                       "Re-comment on the delivered text if it still stands."
+            continue
+        try:
+            verdict = brain.coordinator(
+                _VERIFY_PROMPT.format(beat=beat, ask=ask["text"].strip(),
+                                      before=b or "(this beat did not exist)", after=a),
+                system=_VERIFY_SYS, num_ctx=8192).strip()
+        except Exception as e:  # noqa: BLE001
+            log(f"[warn] reply verification failed for comment {cid} ({e})")
+            out[cid] = (prefix + "The re-cut addressed this beat; please check the tracked "
+                        "changes against your comment — this reply could not be verified.")
+            continue
+        line = verdict.splitlines()[0].strip() if verdict else ""
+        if line.upper().startswith("SATISFIED"):
+            out[cid] = prefix + line.split(":", 1)[-1].strip()
+        else:
+            reason = line.split(":", 1)[-1].strip() if ":" in line else line
+            out[cid] = (prefix + "NOT addressed. " + reason).strip()
+            log(f"[warn] comment {cid} on '{beat}' is NOT satisfied by the re-cut: {reason}")
+    return out
 
 
 def _strip_spurious_bold(doc) -> int:
@@ -381,29 +441,113 @@ def _strip_spurious_bold(doc) -> int:
     return cleaned
 
 
+_COPYEDIT_SYS = """\
+You proofread sentences the AUTHOR of a paper wrote by hand. You are looking ONLY for
+outright errors: a typo, a misspelling, a broken grammatical construction, a word plainly
+used in place of another ("it's" for "its", "has dates" for "dates").
+
+You are NOT an editor. Style, word choice, emphasis, hedging, length, and opinion are the
+author's own — disagreeing with them is not an error in them. If a sentence is merely one
+you would have written differently, it has no error.
+
+OUTPUT — a single JSON object mapping the placeholder to the corrected sentence, containing
+ONLY the sentences that carry a real error. Return {} if there are none. No other output."""
+
+_COPYEDIT_PROMPT = """\
+The author's sentences:
+{legend}
+
+Return the JSON object of corrections."""
+
+
+def _copyedit_notes(brain: Brain, authored: dict[str, dict[str, str]]
+                    ) -> list[tuple[str, str]]:
+    """Typos in the author's own text, offered as comments — never as edits.
+
+    Their text is frozen against the tool's pen, which would otherwise leave an obvious
+    misspelling standing forever with no way to raise it. So the tool raises it: it says
+    so, and the author decides. The correction is never applied.
+    """
+    legend = "\n".join(f'  {k} = "{v.strip()}"'
+                       for spans in authored.values() for k, v in spans.items())
+    if not legend.strip():
+        return []
+    try:
+        raw = brain.coordinator(_COPYEDIT_PROMPT.format(legend=legend),
+                                system=_COPYEDIT_SYS, num_ctx=8192)
+    except Exception as e:  # noqa: BLE001
+        log(f"[warn] copyedit pass failed ({e}); no suggestions offered.")
+        return []
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(obj, dict):
+        return []
+
+    words = {k: v for spans in authored.values() for k, v in spans.items()}
+    notes: list[tuple[str, str]] = []
+    for key, fix in obj.items():
+        key = f"⟦{str(key).strip().strip('⟦⟧')}⟧"
+        original = words.get(key, "").strip()
+        if not original or not isinstance(fix, str) or not fix.strip():
+            continue
+        if " ".join(fix.split()) == " ".join(original.split()):
+            continue                                  # not a correction, an echo
+        notes.append((
+            original[:120],
+            "Suggested correction to your own text — NOT applied, these are your words:"
+            f"\n\n{fix.strip()}"))
+    return notes
+
+
+def _recut_guard_findings(old: str, new: str, known: set[str]) -> list[guards.Finding]:
+    """What a re-cut of one beat may not do, decided in code.
+
+    The re-cut path used to run NO guards at all — it inherited the redline machinery's
+    rendering half and not its checking half — which is exactly how a beat was rewritten
+    whole and silently dropped its only citation.
+    """
+    findings = (guards.author_year_prose(new)
+                + guards.dropped_citekeys(old, new)
+                + guards.dropped_sentinels(old, new)
+                + guards.invented_sentinels(old, new))
+    if known:
+        findings += guards.unresolved_keys(new, known)
+    return findings
+
+
 def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
                  brain: Brain, text: str, beats: list[tuple[str, str]],
-                 user_rev: Path, frozen: dict[str, str] | None = None,
-                 proposals: dict[str, str] | None = None) -> None:
+                 user_rev: Path, authored: dict[str, dict[str, str]] | None = None,
+                 skipped: set[str] | None = None,
+                 known: set[str] | None = None) -> None:
     """Deliver the re-cut as a redline on the reviewer's own document.
 
-    A re-cut replaces the narrative, but it must not replace the CONVERSATION,
-    and it must not touch the reviewer's hand. Acceptance is a human act: the
-    reviewer's tracked changes are never accepted here, and any beat carrying
-    their live markup is FROZEN — left verbatim, markup and all. The tool's
-    re-cut of a frozen beat, if the reviewer commented on it, arrives as an
-    anchored comment (a proposal), never as an edit. Unfrozen beats are
-    replaced as tracked changes; every reviewer comment gets a threaded reply.
-    Major version — new datestamp, chain reset to onepager_ra — but the
-    threads and the reviewer's own markup ride along into the new cycle.
+    A re-cut replaces the narrative. It must not replace the CONVERSATION, and it must not
+    write a word of the author's prose. Acceptance is a human act: the reviewer's tracked
+    changes are never accepted here, and every sentence they typed by hand is held as a
+    fixed point (an atom) that the re-cut writes AROUND. The tool's prose beside their
+    sentences is fair game — the beat is not abandoned merely because they touched it.
+
+    Every beat replacement is checked before it is written: a re-cut that would drop a
+    citation, drop an equation, or lose one of the author's sentences is refused, and the
+    beat is left exactly as they left it.
+
+    Major version — new datestamp, chain reset to onepager_ra — but the threads and the
+    reviewer's own markup ride along into the new cycle.
     """
     from docx import Document
-    from docx.oxml.ns import qn
-    from . import redline as rl
     from haarpi import redline as hrl
 
-    frozen = frozen or {}
-    proposals = proposals or {}
+    from . import redline as rl
+
+    authored = authored or {}
+    skipped = set(skipped or ())
+    known = known or set()
 
     out = paper_dir / major_onepager_name(cfg.short_title, "docx")
     shutil.copy2(user_rev, out)
@@ -415,61 +559,97 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
 
     final = _beats_from_md(text)             # beat -> body prose, no label/heading
     fallback = dict(beats)
-    replaced, done = 0, set()
-    frozen_hit: set[str] = set()
-    frozen_anchor: dict[str, str] = {}       # beat -> visible text of its paragraph
-    frozen_cids: set[str] = set()            # comment ids anchored in frozen beats
+    replaced, refused, done = 0, 0, set()
+    outcomes: dict[str, str] = {}            # beat -> rewritten | refused | untouched
+    before: dict[str, str] = {}              # what the reviewer's beat said
+    after: dict[str, str] = {}               # what we actually delivered
     for rec in rl.body_paragraphs(doc):
         # accepted text, not .text — a label the reviewer tracked in is
         # invisible to python-docx's .text
         accepted = rl._accepted_para_text(rec["para"]._p).strip()
         beat = _beat_of_para(rec["heading"], accepted)
+        if beat is None or beat in done:
+            continue
         legacy = _label_led(accepted) is not None   # inline label → migrate it
-        if beat is None:
+        spans = authored.get(beat, {})
+        p_el = rec["para"]._p
+        before[beat] = _strip_label(beat, accepted) if legacy else accepted
+
+        # The label is the TOOL's scaffolding, not the author's prose — so a beat carrying
+        # the author's sentences still gets its heading, because we rewrite the beat AROUND
+        # them and the label leaves with the text we replaced. A beat we did NOT rewrite
+        # keeps its old shape: adding a heading above a paragraph that still opens with
+        # "Approach — " gives the reader the word twice.
+        def _migrate_heading(el=p_el, name=beat, is_legacy=legacy):
+            if is_legacy:
+                hrl.tracked_heading_before(el, name, rl.AUTHOR, ids)
+
+        def _stands(el=p_el, name=beat):
+            outcomes[name] = outcomes.get(name, "untouched")
+            after[name] = rl._accepted_para_text(el).strip()
+            done.add(name)
+
+        if beat in skipped:
+            log(f"[raconteur] beat '{beat}' left untouched (the re-cut could not keep the "
+                f"author's sentence(s) intact)")
+            _stands()
             continue
-        # Belt and braces: whatever the caller computed, a paragraph carrying
-        # the reviewer's live markup is frozen. Acceptance is a human act.
-        if beat in frozen or hrl.has_foreign_markup(rec["para"]._p):
-            frozen_hit.add(beat)
-            frozen_anchor.setdefault(
-                beat, "".join(t.text or "" for t in rec["para"]._p.iter(qn("w:t"))))
-            frozen_cids.update(
-                s.get(qn("w:id"))
-                for s in rec["para"]._p.findall(qn("w:commentRangeStart")))
+
+        # A beat the author has a hand in is written from the validated per-beat draft,
+        # which still carries their placeholders; the tightened markdown has expanded them
+        # back into prose and can no longer be laid into the document safely.
+        new = (fallback.get(beat) if spans else (final.get(beat) or fallback.get(beat)))
+        if not new:
+            _stands()
             continue
-        if beat in done:
+        new = new.replace("**", "")
+
+        old = hrl.paragraph_text(p_el, protect_authored=True)
+        findings = _recut_guard_findings(old, new, known)
+        if findings:
+            refused += 1
+            outcomes[beat] = "refused"
+            log(f"[warn] beat '{beat}' REFUSED — the re-cut would have: "
+                + "; ".join(f.imperative for f in findings))
+            log("[warn]   → left as it stands. Nothing written for this beat.")
+            _stands()
             continue
-        new = final.get(beat) or fallback.get(beat)
-        if new and rl.tracked_replace_sentencewise(
-                rec["para"]._p, new.replace("**", ""), rl.AUTHOR, ids):
-            if legacy:
-                # migrate: the inline label leaves with the diff, and the beat
-                # name arrives above the paragraph as a real section heading
-                hrl.tracked_heading_before(rec["para"]._p, beat, rl.AUTHOR, ids)
+
+        if rl.tracked_replace_sentencewise(p_el, new, rl.AUTHOR, ids,
+                                           protect_authored=True):
             replaced += 1
-            done.add(beat)
+            outcomes[beat] = "rewritten"
+            # The old inline label left with the text we replaced; the beat name comes
+            # back as a real section heading.
+            _migrate_heading()
+            log(f"[raconteur] beat '{beat}' re-cut as tracked changes"
+                + (f", around {len(spans)} authored span(s)" if spans else ""))
+        _stands()
+
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
-        f"(re-cut: {replaced} beat(s) replaced as tracked changes; "
-        f"{len(frozen_hit)} author-edited beat(s) frozen verbatim)")
+        f"(re-cut: {replaced} beat(s) rewritten, {refused} refused; the author's "
+        f"sentences held fixed throughout)")
 
-    log("[raconteur] drafting replies to the reviewer's comments…")
-    replies = _draft_replies(brain, text, user_rev)
-    for cid in frozen_cids & set(replies):
-        replies[cid] = ("This beat carries your tracked edits, so it was left "
-                        "untouched — see the re-cut proposal comment on this "
-                        "paragraph. Acceptance is yours.")
+    # Every reply is checked against what was actually delivered, beat by beat.
+    log("[raconteur] verifying the re-cut against each open ask…")
+    asks = {a["id"]: a for a in hrl.open_asks(user_rev)}
+    beat_of: dict[str, str] = {}
+    for anchor in rl.comment_anchors(user_rev, only=set(asks)):
+        b = _beat_of_para(anchor.get("heading") or "", anchor["text"])
+        for cid in anchor["ids"]:
+            if b:
+                beat_of[cid] = b
+    replies = _verify_replies(brain, asks, beat_of, before, after, outcomes)
     n = hrl.add_replies(out, replies, author=rl.AUTHOR)
     log(f"[raconteur] {n} threaded repl{'y' if n == 1 else 'ies'} written")
 
-    notes = [(frozen_anchor[b],
-              f"Re-cut proposal for the {b} beat — NOT applied, this paragraph "
-              f"carries your edits and acceptance is yours:\n\n{p}")
-             for b, p in proposals.items() if b in frozen_anchor]
-    if notes:
-        n = hrl.add_anchored_comments(out, notes, author=rl.AUTHOR)
-        log(f"[raconteur] {n} re-cut proposal(s) delivered as comments on "
-            f"frozen beat(s)")
+    if authored:
+        notes = _copyedit_notes(brain, authored)
+        if notes:
+            n = hrl.add_anchored_comments(out, notes, author=rl.AUTHOR)
+            log(f"[raconteur] {n} suggested copyedit(s) on the author's own text, "
+                f"delivered as comments — not applied")
 
     md_path = paper_dir / major_onepager_name(cfg.short_title, "md")
     md_path.write_text(rl.accepted_markdown(Document(str(out))).strip() + "\n",
@@ -543,32 +723,60 @@ def _beats_from_md(md: str) -> dict[str, str]:
     return out
 
 
-def _frozen_beats(user_rev: Path) -> dict[str, str]:
-    """Beats the reviewer's hand is in: any live human tracked change freezes them.
+def _authored_by_beat(user_rev: Path) -> dict[str, dict[str, str]]:
+    """beat -> {⟦a:N⟧: the author's exact words} for the sentences they typed into it.
 
-    Returns beat -> the beat's accepted body text (the fixed point the rest of
-    the narrative is regenerated around). Human text is the most expensive text
-    in the system; the re-cut never rewrites it and never accepts it — it
-    builds around it, and argues only in comments."""
+    The unit of deference is the SPAN, not the beat. A beat carrying the author's hand is
+    not abandoned — it is re-cut AROUND their sentences, which stand as fixed points. The
+    tool's own prose beside them stays fair game, which is the whole difference between
+    deferring to the author and freezing whatever paragraph they happened to touch.
+
+    Sentinels are numbered per paragraph, and each beat is one paragraph, so a beat's
+    legend is self-consistent.
+    """
     from docx import Document
-    from . import redline as rl
     from haarpi import redline as hrl
 
-    out: dict[str, list[str]] = {}
-    markup: set[str] = set()
+    from . import redline as rl
+
+    out: dict[str, dict[str, str]] = {}
     for rec in rl.body_paragraphs(Document(str(user_rev))):
         # accepted text, not .text — a label the reviewer tracked in is
         # invisible to python-docx's .text
         accepted = rl._accepted_para_text(rec["para"]._p).strip()
         beat = _beat_of_para(rec["heading"], accepted)
-        if beat is None:
+        if beat is None or beat in out:
             continue
-        if _label_led(accepted):
-            accepted = _strip_label(beat, accepted)
-        out.setdefault(beat, []).append(accepted)
-        if hrl.has_foreign_markup(rec["para"]._p):
-            markup.add(beat)
-    return {b: "\n\n".join(t for t in out[b] if t) for b in markup}
+        atoms = hrl.authored_atoms(rec["para"]._p)
+        if atoms:
+            out[beat] = atoms
+    return out
+
+
+def _expand_spans(text: str, authored: dict[str, str]) -> str:
+    """A beat as a reader sees it: the author's placeholders back in their own words."""
+    for key, words in authored.items():
+        text = text.replace(key, words.strip())
+    return text
+
+
+def _sentinel_errors(text: str, authored: dict[str, str]) -> list[str]:
+    """Why a generated beat may not be written: it lost, duplicated, or invented a span.
+
+    The author's sentences are the one thing a re-cut may not get wrong, so this fails
+    closed rather than delivering a beat with a hole where their words were.
+    """
+    errors = []
+    for key in authored:
+        n = text.count(key)
+        if n == 0:
+            errors.append(f"{key} is missing — the author's sentence must appear, in place.")
+        elif n > 1:
+            errors.append(f"{key} appears {n} times — it must appear exactly once.")
+    for found in set(guards.SENTINEL_RE.findall(text)):
+        if found not in authored:
+            errors.append(f"{found} is not a real placeholder — do not invent one.")
+    return errors
 
 
 def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
@@ -668,6 +876,7 @@ def _onepager_fresh(
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     figures = load_figure_manifest(project_dir, cfg.results_dir or "results")
     style_profile = load_style_profile(project_dir)
+    known = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
     log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
@@ -679,13 +888,17 @@ def _onepager_fresh(
     prior, beat_notes, general = brief if brief else ({}, {}, "")
     general_block = _RECUT_GENERAL.format(notes=general) if general else ""
 
-    # The reviewer's hand freezes a beat: it is a fixed point the rest of the
-    # narrative is regenerated around, never a candidate for rewriting.
-    frozen = _frozen_beats(user_rev) if user_rev is not None else {}
-    frozen_names = set(frozen)
+    # The author's own sentences are fixed points the beat is rebuilt AROUND — not a
+    # reason to abandon the beat. Deference is owed to the text they wrote, not to the
+    # paragraph it happens to sit in.
+    authored = _authored_by_beat(user_rev) if user_rev is not None else {}
+    if authored:
+        log("[raconteur] the author's hand is in: "
+            + ", ".join(f"{b} ({len(a)} span(s))" for b, a in sorted(authored.items()))
+            + " — held fixed, written around")
 
     beats: list[tuple[str, str]] = []
-    proposals: dict[str, str] = {}
+    skipped: set[str] = set()          # beats the re-cut could not safely touch
     for beat in _BEATS:
         can_embed = bool(figure_list) and beat.name == _FIGURE_BEAT
         recut_section = ""
@@ -695,6 +908,8 @@ def _onepager_fresh(
                 prior=prior.get(beat.name, "(this beat did not exist)"),
                 notes=beat_notes.get(beat.name, "(none on this beat)"),
             ) + general_block
+        spans = authored.get(beat.name, {})
+        legend = "\n".join(f'  {k} = "{v.strip()}"' for k, v in spans.items())
         prompt = _BEAT_PROMPT.format(
             beat=beat.name,
             intent=beat.intent,
@@ -708,27 +923,49 @@ def _onepager_fresh(
                 beat.sources, cfg.description, litrev, code, results
             ),
             recut_section=recut_section,
-            preceding_section=_preceding_block(beats, frozen_names),
+            authored_section=_AUTHORED_BLOCK.format(legend=legend) if spans else "",
+            preceding_section=_preceding_block(beats, set(authored)),
             figure_section=figure_list if can_embed else "",
             figure_rule=_FIGURE_RULE if can_embed else _NO_FIGURE_RULE,
             extra_rules=f"\n{beat.rules}" if beat.rules else "",
         )
-        if beat.name in frozen:
-            if beat.name in beat_notes:
-                log(f"[raconteur] beat '{beat.name}' carries the author's edits — "
-                    f"frozen; drafting a proposal for their comments…")
-                ptext = brain.coordinator(prompt, system=_SYSTEM, num_ctx=16384)
-                proposals[beat.name] = _strip_label(beat.name, ptext)
-            else:
-                log(f"[raconteur] beat '{beat.name}' carries the author's edits — "
-                    f"frozen, kept verbatim")
-            beats.append((beat.name, frozen[beat.name]))
-            continue
-        log(f"[raconteur] drafting beat '{beat.name}'…")
-        text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=16384)
-        beats.append((beat.name, _strip_label(beat.name, text)))
+        log(f"[raconteur] drafting beat '{beat.name}'…"
+            + (f" ({len(spans)} authored span(s) held fixed)" if spans else ""))
 
-    draft = _assemble(beats)
+        text = _strip_label(beat.name, brain.coordinator(prompt, system=_SYSTEM,
+                                                         num_ctx=16384))
+
+        # Check the draft BEFORE it reaches the document, and give it one chance to fix
+        # what it broke. The previous text is what it must not silently lose: its
+        # citations, its equations, and above all the author's sentences.
+        def _problems(draft: str, was: str = prior.get(beat.name, "")) -> list[str]:
+            errs = _sentinel_errors(draft, spans)
+            if was:
+                errs += [f.imperative
+                         for f in _recut_guard_findings(was, draft, known)]
+            return errs
+
+        problems = _problems(text)
+        if problems:
+            log("[warn]   → draft rejected: " + "; ".join(problems[:3]))
+            retry = prompt + ("\n\nYour previous attempt was REJECTED:\n"
+                              + "\n".join(f"- {p}" for p in problems)
+                              + "\nReturn the beat again, fixing every one.")
+            text = _strip_label(beat.name, brain.coordinator(retry, system=_SYSTEM,
+                                                             num_ctx=16384))
+            still = _problems(text)
+            if still:
+                # Fail closed. A beat delivered with a hole where the author's words were —
+                # or with its only citation quietly gone — is worse than a beat left alone.
+                log(f"[warn]   → beat '{beat.name}' NOT re-cut: {'; '.join(still[:2])}. "
+                    f"Left exactly as it stands.")
+                skipped.add(beat.name)
+                text = prior.get(beat.name, "").strip() or text
+        beats.append((beat.name, text))
+
+    # The critique reads the one-pager as a reader would — the author's sentences in full,
+    # not as placeholders. Only the document write needs the sentinels.
+    draft = _assemble([(n, _expand_spans(t, authored.get(n, {}))) for n, t in beats])
 
     log("[raconteur] critiquing one-pager…")
     critique = brain.coordinator(
@@ -740,14 +977,19 @@ def _onepager_fresh(
 
     log("[raconteur] tightening one-pager…")
     tighten_prompt = _REVISE_PROMPT.format(onepager=draft, critique=critique)
-    if frozen_names:
-        tighten_prompt += ("\n\nThese beats were written by the author BY HAND — "
-                           "reproduce them VERBATIM, whatever the critique says: "
-                           + ", ".join(sorted(frozen_names)) + ".")
+    if authored:
+        # The tightener reads the author's sentences as prose, so it must be told which
+        # prose is theirs. It may reword the beat around them; it may not touch them.
+        tighten_prompt += (
+            "\n\nThese sentences were written by the AUTHOR, by hand. Reproduce each one "
+            "VERBATIM, whatever the critique says — you may rewrite the prose around them, "
+            "never the sentences themselves:\n"
+            + "\n".join(f'- "{v.strip()}"'
+                        for spans in authored.values() for v in spans.values()))
     tightened = brain.coordinator(tighten_prompt, system=_SYSTEM, num_ctx=8192)
     if user_rev is not None:
         _write_recut(project_dir, cfg, paper_dir, brain, tightened, beats, user_rev,
-                     frozen=frozen, proposals=proposals)
+                     authored=authored, skipped=skipped, known=known)
     else:
         _write(project_dir, cfg, paper_dir, tightened)
 
