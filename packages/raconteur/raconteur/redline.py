@@ -219,6 +219,17 @@ def accepted_body_text(doc) -> str:
     return "\n\n".join(parts)
 
 
+def _heading_level(style_name: str) -> int:
+    """The level Word's style says, not the level the reader guesses.
+
+    Flattening every heading to '## ' put the document TITLE (a Heading 1, since pandoc
+    renders '# Title' that way) at the same level as the beats beneath it — so the markdown
+    the next stage binds had no top level at all, and 'Motivation' outranked nothing.
+    """
+    digits = "".join(ch for ch in (style_name or "") if ch.isdigit())
+    return int(digits) if digits else 1
+
+
 def accepted_markdown(doc) -> str:
     """The post-edit manuscript rendered back to markdown, headings and all.
 
@@ -236,11 +247,10 @@ def accepted_markdown(doc) -> str:
             continue
         if is_heading_style(style):
             if text:
-                parts.append(f"## {text}")
+                parts.append("#" * _heading_level(style) + f" {text}")
             continue
-        accepted = _accepted_para_text(p._p).strip()
-        if accepted:
-            parts.append(accepted)
+        if text:
+            parts.append(text)
     return "\n\n".join(parts)
 
 
