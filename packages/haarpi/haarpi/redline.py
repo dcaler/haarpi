@@ -589,6 +589,20 @@ def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
             "clean": not unresolved and reviewer_changes == 0}
 
 
+def has_foreign_markup(p_el, tool_authors=TOOL_AUTHORS) -> bool:
+    """True when the paragraph carries a live tracked change by a human.
+
+    Human markup freezes a paragraph: acceptance is a human act, and the tool
+    never rewrites — or silently accepts — text a person tracked into the
+    document. A frozen paragraph gets comments, never edits."""
+    tool_lower = {a.lower() for a in tool_authors}
+    for tag in ("w:ins", "w:del"):
+        for el in p_el.iter(qn(tag)):
+            if (el.get(qn("w:author")) or "").lower() not in tool_lower:
+                return True
+    return False
+
+
 _CE_CTYPE = ("application/vnd.openxmlformats-officedocument.wordprocessingml"
              ".commentsExtended+xml")
 _CE_RELTYPE = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
@@ -683,6 +697,121 @@ def add_replies(path: Path, replies: dict[str, str],
         ex.set(f"{{{_W15}}}paraId", reply_para)
         if parent_para:
             ex.set(f"{{{_W15}}}paraIdParent", parent_para)
+        ex.set(f"{{{_W15}}}done", "0")
+        added += 1
+
+    if not added:
+        return 0
+
+    def _ser(root):
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8",
+                              standalone=True)
+    parts["word/comments.xml"] = _ser(croot)
+    parts["word/document.xml"] = _ser(docroot)
+    parts[ce_name] = _ser(ceroot)
+    if created_ce:
+        ct = etree.fromstring(parts["[Content_Types].xml"])
+        ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        ov = etree.SubElement(ct, f"{{{ns}}}Override")
+        ov.set("PartName", "/word/commentsExtended.xml")
+        ov.set("ContentType", _CE_CTYPE)
+        parts["[Content_Types].xml"] = _ser(ct)
+        rels_name = "word/_rels/document.xml.rels"
+        rr = etree.fromstring(parts[rels_name])
+        rns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        nums = [int(rel.get("Id")[3:]) for rel in rr
+                if (rel.get("Id") or "").startswith("rId") and rel.get("Id")[3:].isdigit()]
+        rel = etree.SubElement(rr, f"{{{rns}}}Relationship")
+        rel.set("Id", f"rId{max(nums, default=0) + 1}")
+        rel.set("Type", _CE_RELTYPE)
+        rel.set("Target", "commentsExtended.xml")
+        parts[rels_name] = _ser(rr)
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in parts.items():
+            z.writestr(n, b)
+    return added
+
+
+def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
+                          author: str = "raconteur", initials: str = "ra") -> int:
+    """Write new top-level comments, each anchored to the paragraph containing its key.
+
+    ``notes`` is a list of (paragraph_text_fragment, comment_text): the fragment —
+    whitespace-normalised — locates the first body paragraph whose visible text
+    contains it, and the comment is anchored across that whole paragraph. This is
+    the tool's voice on text it must not edit (a human-frozen paragraph): a
+    disagreement or a proposal lands as a comment, never as a tracked change.
+    Tool-authored comments never block a gate (see ``unresolved_comments``).
+
+    Requires an existing word/comments.xml (in practice these notes only arise on
+    documents the reviewer has already commented); returns 0 if there is none.
+    """
+    if not notes:
+        return 0
+    parts = _zip_parts(path)
+    if "word/comments.xml" not in parts:
+        return 0
+    croot = etree.fromstring(parts["word/comments.xml"])
+    docroot = etree.fromstring(parts["word/document.xml"])
+
+    existing = [int(i) for c in croot.findall(qn("w:comment"))
+                if (i := c.get(qn("w:id"))) and i.isdigit()]
+    next_id = max(existing + [0]) + 1
+
+    ce_name = "word/commentsExtended.xml"
+    created_ce = ce_name not in parts
+    ceroot = (etree.fromstring(parts[ce_name]) if not created_ce
+              else etree.fromstring(f'<w15:commentsEx xmlns:w15="{_W15}"/>'.encode()))
+
+    def _norm(s: str) -> str:
+        return " ".join(s.split())
+
+    body = docroot.find(qn("w:body"))
+    paras = list(body.iter(qn("w:p"))) if body is not None else []
+
+    added = 0
+    for fragment, text in notes:
+        if not (fragment or "").strip() or not (text or "").strip():
+            continue
+        frag = _norm(fragment)
+        target = next(
+            (p for p in paras
+             if frag in _norm("".join(t.text or "" for t in p.iter(qn("w:t"))))),
+            None)
+        if target is None:
+            continue
+
+        nid = str(next_id)
+        next_id += 1
+
+        s_el = etree.Element(qn("w:commentRangeStart")); s_el.set(qn("w:id"), nid)
+        e_el = etree.Element(qn("w:commentRangeEnd"));   e_el.set(qn("w:id"), nid)
+        first_run = target.find(qn("w:r"))
+        anchor_at = first_run if first_run is not None else None
+        if anchor_at is not None:
+            anchor_at.addprevious(s_el)
+        else:
+            target.insert(0, s_el)
+        target.append(e_el)
+        ref_run = etree.SubElement(target, qn("w:r"))
+        ref = etree.SubElement(ref_run, qn("w:commentReference"))
+        ref.set(qn("w:id"), nid)
+
+        c = etree.SubElement(croot, qn("w:comment"))
+        c.set(qn("w:id"), nid)
+        c.set(qn("w:author"), author)
+        c.set(qn("w:initials"), initials)
+        c.set(qn("w:date"), _now())
+        p = etree.SubElement(c, qn("w:p"))
+        p.set(f"{{{_W14}}}paraId", _fresh_para_id())
+        r = etree.SubElement(p, qn("w:r"))
+        t = etree.SubElement(r, qn("w:t"))
+        t.set(_XML_SPACE, "preserve")
+        t.text = text.strip()
+
+        ex = etree.SubElement(ceroot, f"{{{_W15}}}commentEx")
+        ex.set(f"{{{_W15}}}paraId", p.get(f"{{{_W14}}}paraId"))
         ex.set(f"{{{_W15}}}done", "0")
         added += 1
 

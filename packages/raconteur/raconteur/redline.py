@@ -133,7 +133,10 @@ def body_paragraphs(doc) -> list[dict]:
                 heading = _accepted_para_text(p._p).strip()
                 in_references = guards.is_references(heading)
             continue
-        if in_references or not (p.text or "").strip():
+        # Accepted text, not p.text: a paragraph whose content sits wholly
+        # inside live tracked markup (a full tracked replacement, a reviewer
+        # rewrite) is still a body paragraph — .text alone reads it as empty.
+        if in_references or not _accepted_para_text(p._p).strip():
             continue
         out.append({
             "index": i,

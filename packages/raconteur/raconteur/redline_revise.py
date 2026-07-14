@@ -35,6 +35,8 @@ import re
 import shutil
 from pathlib import Path
 
+from haarpi import redline as hredline
+
 from . import guards, redline
 from .brain import Brain
 from .config import ProjectConfig
@@ -393,6 +395,7 @@ def redline_revise(
     ids = redline.ids_for(doc)
     body = {rec["index"]: rec for rec in redline.body_paragraphs(doc)}
     dispositions: dict[str, str] = {}
+    frozen_replies: dict[str, str] = {}
     edited = 0
 
     for anchor in anchors:
@@ -409,15 +412,31 @@ def redline_revise(
             ctx = _context_for_section(anchor["heading"], litrev, code, results)
         context_section = f"\n{ctx}" if ctx else ""
 
+        # The reviewer's hand freezes the paragraph. Acceptance is a human act:
+        # a live human tracked change is never rewritten (which would consume
+        # its revision record) — the tool's answer becomes a threaded reply
+        # carrying the proposed text, and the paragraph stands as written.
+        frozen = hredline.has_foreign_markup(rec["para"]._p)
+
         log(f"[raconteur] redlining '{heading}' para {anchor['index']} "
             f"({len(comments)} comment(s), anchored to sentence(s) "
-            f"{[i + 1 for i in anchor['anchored']] or 'all'})…")
+            f"{[i + 1 for i in anchor['anchored']] or 'all'}"
+            f"{'; FROZEN — carries the reviewer’s edits' if frozen else ''})…")
 
         new_text, outcome = redline_paragraph(
             brain, cfg.title, heading, anchor["text"], comments,
             context_section, bib_section, set(anchor["anchored"]),
             anchor["kind"], known,
         )
+
+        if frozen and outcome == "edited" and new_text:
+            outcome = "frozen"
+            proposal = guards.SENTINEL_RE.sub("[equation]", new_text)
+            for cid in anchor["ids"]:
+                frozen_replies[cid] = (
+                    "This paragraph carries your tracked edits, so it was left "
+                    "untouched (acceptance is yours). Proposed rewrite for this "
+                    f"comment:\n\n{proposal.strip()}")
 
         for cid in anchor["ids"]:
             dispositions[cid] = outcome
@@ -430,6 +449,9 @@ def redline_revise(
                 for cid in anchor["ids"]:
                     dispositions[cid] = "skipped"
                 log("[warn]   → no textual change; nothing written")
+        elif outcome == "frozen":
+            log("[raconteur]   → paragraph frozen; proposal delivered as a "
+                "threaded reply")
         elif outcome.startswith("route:"):
             cls = outcome.split(":", 1)[1]
             log(f"[warn]   → {_ROUTE_ADVICE.get(cls, 'cannot be a tracked change.')}")
@@ -445,6 +467,10 @@ def redline_revise(
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
         f"({edited} paragraph(s) redlined)")
+    if frozen_replies:
+        n = hredline.add_replies(out, frozen_replies, author=redline.AUTHOR)
+        log(f"[raconteur] {n} frozen-paragraph proposal(s) delivered as "
+            f"threaded replies")
     _report(dispositions, cmap, known, out)
     if md_sibling:
         _write_md_sibling(project_dir, out)
@@ -458,12 +484,16 @@ def _report(dispositions: dict[str, str], cmap: dict[str, dict],
     if not dispositions:
         return
     log("[raconteur] ── comment dispositions ──")
-    counts = {"edited": 0, "routed": 0, "declined": 0}
+    counts = {"edited": 0, "frozen": 0, "routed": 0, "declined": 0}
     for cid, outcome in dispositions.items():
         text = cmap.get(cid, {}).get("text", "?")[:60]
         if outcome == "edited":
             verdict = "applied as a tracked change"
             counts["edited"] += 1
+        elif outcome == "frozen":
+            verdict = ("FROZEN — the paragraph carries the reviewer's tracked edits; "
+                       "the proposed rewrite was delivered as a threaded reply")
+            counts["frozen"] += 1
         elif outcome.startswith("route:"):
             verdict = _ROUTE_ADVICE.get(outcome.split(":", 1)[1], "routed")
             counts["routed"] += 1
@@ -471,8 +501,8 @@ def _report(dispositions: dict[str, str], cmap: dict[str, dict],
             verdict = "DECLINED — no verifiable edit could be produced; paragraph unchanged"
             counts["declined"] += 1
         log(f"[raconteur]   [{cid}] {text!r}: {verdict}")
-    log(f"[raconteur] {counts['edited']} applied · {counts['routed']} routed · "
-        f"{counts['declined']} declined")
+    log(f"[raconteur] {counts['edited']} applied · {counts['frozen']} frozen · "
+        f"{counts['routed']} routed · {counts['declined']} declined")
 
     from docx import Document
     doc = Document(str(out))

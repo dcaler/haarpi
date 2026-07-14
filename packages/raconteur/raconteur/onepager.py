@@ -245,10 +245,13 @@ def _evidence_for_beat(
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
-def _preceding_block(beats: list[tuple[str, str]]) -> str:
+def _preceding_block(beats: list[tuple[str, str]], frozen: set[str] = frozenset()) -> str:
     if not beats:
         return ""
-    written = "\n".join(f"**{name}** — {text}" for name, text in beats)
+    written = "\n".join(
+        f"**{name}**{' (written by the author BY HAND — fixed, build around it)' if name in frozen else ''}"
+        f" — {text}"
+        for name, text in beats)
     return (
         "Beats already written (continue from these; do not repeat them):\n"
         f"{written}\n\n"
@@ -346,8 +349,11 @@ def _strip_spurious_bold(doc) -> int:
     bold lead-in label once donated its rPr to the full tracked replacement.
     The one-pager's body is plain prose — headings get their weight from their
     style, not their runs — so a wholly-bold paragraph is an artifact, while
-    partial bold (real emphasis) is kept."""
+    partial bold (real emphasis) is kept. Paragraphs carrying the reviewer's
+    live tracked changes are left entirely alone — frozen means frozen, even
+    for formatting; the scar heals there once the human accepts their edits."""
     from docx.oxml.ns import qn
+    from haarpi import redline as hrl
 
     def _bolded(r):
         rpr = r.find(qn("w:rPr"))
@@ -358,6 +364,8 @@ def _strip_spurious_bold(doc) -> int:
 
     cleaned = 0
     for p in doc.paragraphs:
+        if hrl.has_foreign_markup(p._p):
+            continue
         text_runs = [r for r in p._p.iter(qn("w:r"))
                      if any((t.text or "") for t in r.iter(qn("w:t")))
                      or any((t.text or "") for t in r.iter(qn("w:delText")))]
@@ -375,25 +383,32 @@ def _strip_spurious_bold(doc) -> int:
 
 def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
                  brain: Brain, text: str, beats: list[tuple[str, str]],
-                 user_rev: Path) -> None:
+                 user_rev: Path, frozen: dict[str, str] | None = None,
+                 proposals: dict[str, str] | None = None) -> None:
     """Deliver the re-cut as a redline on the reviewer's own document.
 
-    A re-cut replaces the narrative, but it must not replace the CONVERSATION:
-    the output is a copy of the reviewer's docx with their tracked edits
-    accepted into the base (they persist by construction), each beat replaced
-    as a tracked change, and every comment answered with a threaded reply.
+    A re-cut replaces the narrative, but it must not replace the CONVERSATION,
+    and it must not touch the reviewer's hand. Acceptance is a human act: the
+    reviewer's tracked changes are never accepted here, and any beat carrying
+    their live markup is FROZEN — left verbatim, markup and all. The tool's
+    re-cut of a frozen beat, if the reviewer commented on it, arrives as an
+    anchored comment (a proposal), never as an edit. Unfrozen beats are
+    replaced as tracked changes; every reviewer comment gets a threaded reply.
     Major version — new datestamp, chain reset to onepager_ra — but the
-    threads ride along into the new cycle.
+    threads and the reviewer's own markup ride along into the new cycle.
     """
     from docx import Document
+    from docx.oxml.ns import qn
     from . import redline as rl
     from haarpi import redline as hrl
+
+    frozen = frozen or {}
+    proposals = proposals or {}
 
     out = paper_dir / major_onepager_name(cfg.short_title, "docx")
     shutil.copy2(user_rev, out)
 
     doc = Document(str(out))
-    counts = hrl.accept_all_changes(doc)   # reviewer's edits become the base text
     if n := _strip_spurious_bold(doc):
         log(f"[raconteur] un-bolded {n} label-era paragraph(s)")
     ids = rl.ids_for(doc)
@@ -401,12 +416,28 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
     final = _beats_from_md(text)             # beat -> body prose, no label/heading
     fallback = dict(beats)
     replaced, done = 0, set()
+    frozen_hit: set[str] = set()
+    frozen_anchor: dict[str, str] = {}       # beat -> visible text of its paragraph
+    frozen_cids: set[str] = set()            # comment ids anchored in frozen beats
     for rec in rl.body_paragraphs(doc):
-        beat = _beat_of(rec["heading"] or "")
-        legacy = beat is None                # pre-heading doc: label-led paragraph
-        if legacy:
-            beat = _beat_of((rec["para"].text or "").strip())
-        if beat is None or beat in done:
+        # accepted text, not .text — a label the reviewer tracked in is
+        # invisible to python-docx's .text
+        accepted = rl._accepted_para_text(rec["para"]._p).strip()
+        beat = _beat_of_para(rec["heading"], accepted)
+        legacy = _label_led(accepted) is not None   # inline label → migrate it
+        if beat is None:
+            continue
+        # Belt and braces: whatever the caller computed, a paragraph carrying
+        # the reviewer's live markup is frozen. Acceptance is a human act.
+        if beat in frozen or hrl.has_foreign_markup(rec["para"]._p):
+            frozen_hit.add(beat)
+            frozen_anchor.setdefault(
+                beat, "".join(t.text or "" for t in rec["para"]._p.iter(qn("w:t"))))
+            frozen_cids.update(
+                s.get(qn("w:id"))
+                for s in rec["para"]._p.findall(qn("w:commentRangeStart")))
+            continue
+        if beat in done:
             continue
         new = final.get(beat) or fallback.get(beat)
         if new and rl.tracked_replace_sentencewise(
@@ -420,17 +451,31 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
         f"(re-cut: {replaced} beat(s) replaced as tracked changes; "
-        f"{counts.get('ins', 0)} reviewer insertion(s) accepted)")
+        f"{len(frozen_hit)} author-edited beat(s) frozen verbatim)")
 
     log("[raconteur] drafting replies to the reviewer's comments…")
     replies = _draft_replies(brain, text, user_rev)
+    for cid in frozen_cids & set(replies):
+        replies[cid] = ("This beat carries your tracked edits, so it was left "
+                        "untouched — see the re-cut proposal comment on this "
+                        "paragraph. Acceptance is yours.")
     n = hrl.add_replies(out, replies, author=rl.AUTHOR)
     log(f"[raconteur] {n} threaded repl{'y' if n == 1 else 'ies'} written")
 
+    notes = [(frozen_anchor[b],
+              f"Re-cut proposal for the {b} beat — NOT applied, this paragraph "
+              f"carries your edits and acceptance is yours:\n\n{p}")
+             for b, p in proposals.items() if b in frozen_anchor]
+    if notes:
+        n = hrl.add_anchored_comments(out, notes, author=rl.AUTHOR)
+        log(f"[raconteur] {n} re-cut proposal(s) delivered as comments on "
+            f"frozen beat(s)")
+
     md_path = paper_dir / major_onepager_name(cfg.short_title, "md")
-    md_path.write_text(f"# {cfg.title} — one-pager\n\n{text.strip()}\n",
+    md_path.write_text(rl.accepted_markdown(Document(str(out))).strip() + "\n",
                        encoding="utf-8")
-    log(f"[raconteur] wrote {md_path.relative_to(project_dir)}")
+    log(f"[raconteur] wrote {md_path.relative_to(project_dir)} "
+        f"(accepted view of the delivered redline)")
 
 
 def _beat_of(text: str) -> str | None:
@@ -442,13 +487,38 @@ def _beat_of(text: str) -> str | None:
     return None
 
 
+def _label_led(text: str) -> str | None:
+    """The beat of a paragraph carrying an EXPLICIT inline label ('Gap — …').
+
+    Stricter than _beat_of: the beat name must be followed by a separator, so
+    body prose that merely opens with a beat word is never mistaken for a
+    label. An explicit label outranks heading scoping — a frozen legacy
+    paragraph sitting under some other beat's migrated heading still belongs
+    to ITS beat."""
+    t = text.lstrip("#*-–—• ").strip()
+    for beat in _BEATS:
+        if t.lower().startswith(beat.name.lower()):
+            rest = t[len(beat.name):].lstrip("*").lstrip()
+            if rest[:1] in _LABEL_DASHES:
+                return beat.name
+    return None
+
+
+def _beat_of_para(heading: str, text: str) -> str | None:
+    """The beat a document paragraph belongs to: inline label first, then heading."""
+    return _label_led(text) or _beat_of(heading or "")
+
+
 def _beats_from_md(md: str) -> dict[str, str]:
     """Beat-name -> body prose (heading/label stripped), from beat-structured markdown.
 
     Understands both shapes: '## Gap' section headings with the body in the
     blocks that follow (current), and legacy '**Gap** — …' label-led paragraphs.
-    A document with any beat heading parses heading-mode exclusively, so body
-    prose that merely opens with a beat word is never mistaken for a label."""
+    Mixed documents are real: a re-cut migrates replaced beats to headings while
+    the author's frozen beats keep their legacy label paragraphs. So heading-mode
+    still adopts a label-led paragraph that sits OUTSIDE any beat section, for a
+    beat no heading has claimed — but body prose inside a headed section is never
+    mistaken for a label."""
     blocks = [b.strip() for b in md.split("\n\n") if b.strip()]
     out: dict[str, str] = {}
     if any(b.startswith("#") and _beat_of(b) for b in blocks):
@@ -458,6 +528,11 @@ def _beats_from_md(md: str) -> dict[str, str]:
                 beat = _beat_of(b)
                 current = beat if beat and beat not in out else None
                 continue
+            lab = _label_led(b)          # a legacy label paragraph among headed
+            if lab and lab not in out:   # beats — a frozen beat, kept verbatim;
+                out[lab] = _strip_label(lab, b)   # its label outranks the
+                current = None                     # enclosing heading's scope
+                continue
             if current:
                 out[current] = f"{out[current]}\n\n{b}" if current in out else b
         return out
@@ -466,6 +541,34 @@ def _beats_from_md(md: str) -> dict[str, str]:
         if beat and beat not in out:
             out[beat] = _strip_label(beat, b)
     return out
+
+
+def _frozen_beats(user_rev: Path) -> dict[str, str]:
+    """Beats the reviewer's hand is in: any live human tracked change freezes them.
+
+    Returns beat -> the beat's accepted body text (the fixed point the rest of
+    the narrative is regenerated around). Human text is the most expensive text
+    in the system; the re-cut never rewrites it and never accepts it — it
+    builds around it, and argues only in comments."""
+    from docx import Document
+    from . import redline as rl
+    from haarpi import redline as hrl
+
+    out: dict[str, list[str]] = {}
+    markup: set[str] = set()
+    for rec in rl.body_paragraphs(Document(str(user_rev))):
+        # accepted text, not .text — a label the reviewer tracked in is
+        # invisible to python-docx's .text
+        accepted = rl._accepted_para_text(rec["para"]._p).strip()
+        beat = _beat_of_para(rec["heading"], accepted)
+        if beat is None:
+            continue
+        if _label_led(accepted):
+            accepted = _strip_label(beat, accepted)
+        out.setdefault(beat, []).append(accepted)
+        if hrl.has_foreign_markup(rec["para"]._p):
+            markup.add(beat)
+    return {b: "\n\n".join(t for t in out[b] if t) for b in markup}
 
 
 def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
@@ -510,7 +613,7 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
         if not comments:
             continue
         block = "\n".join(f"- {c}" for c in comments)
-        beat = _beat_of(anchor.get("heading") or "") or _beat_of(anchor["text"])
+        beat = _beat_of_para(anchor.get("heading") or "", anchor["text"])
         if beat is None:
             general.append(block)
         else:
@@ -553,7 +656,13 @@ def _onepager_fresh(
     prior, beat_notes, general = brief if brief else ({}, {}, "")
     general_block = _RECUT_GENERAL.format(notes=general) if general else ""
 
+    # The reviewer's hand freezes a beat: it is a fixed point the rest of the
+    # narrative is regenerated around, never a candidate for rewriting.
+    frozen = _frozen_beats(user_rev) if user_rev is not None else {}
+    frozen_names = set(frozen)
+
     beats: list[tuple[str, str]] = []
+    proposals: dict[str, str] = {}
     for beat in _BEATS:
         can_embed = bool(figure_list) and beat.name == _FIGURE_BEAT
         recut_section = ""
@@ -563,29 +672,37 @@ def _onepager_fresh(
                 prior=prior.get(beat.name, "(this beat did not exist)"),
                 notes=beat_notes.get(beat.name, "(none on this beat)"),
             ) + general_block
-        log(f"[raconteur] drafting beat '{beat.name}'…")
-        text = brain.coordinator(
-            _BEAT_PROMPT.format(
-                beat=beat.name,
-                intent=beat.intent,
-                title=cfg.title,
-                topic=cfg.topic,
-                focus=cfg.focus,
-                venue_section=venue_section,
-                style_section=style_section,
-                analysis=analysis_view(analysis, beat.drop),
-                evidence_section=_evidence_for_beat(
-                    beat.sources, cfg.description, litrev, code, results
-                ),
-                recut_section=recut_section,
-                preceding_section=_preceding_block(beats),
-                figure_section=figure_list if can_embed else "",
-                figure_rule=_FIGURE_RULE if can_embed else _NO_FIGURE_RULE,
-                extra_rules=f"\n{beat.rules}" if beat.rules else "",
+        prompt = _BEAT_PROMPT.format(
+            beat=beat.name,
+            intent=beat.intent,
+            title=cfg.title,
+            topic=cfg.topic,
+            focus=cfg.focus,
+            venue_section=venue_section,
+            style_section=style_section,
+            analysis=analysis_view(analysis, beat.drop),
+            evidence_section=_evidence_for_beat(
+                beat.sources, cfg.description, litrev, code, results
             ),
-            system=_SYSTEM,
-            num_ctx=16384,
+            recut_section=recut_section,
+            preceding_section=_preceding_block(beats, frozen_names),
+            figure_section=figure_list if can_embed else "",
+            figure_rule=_FIGURE_RULE if can_embed else _NO_FIGURE_RULE,
+            extra_rules=f"\n{beat.rules}" if beat.rules else "",
         )
+        if beat.name in frozen:
+            if beat.name in beat_notes:
+                log(f"[raconteur] beat '{beat.name}' carries the author's edits — "
+                    f"frozen; drafting a proposal for their comments…")
+                ptext = brain.coordinator(prompt, system=_SYSTEM, num_ctx=16384)
+                proposals[beat.name] = _strip_label(beat.name, ptext)
+            else:
+                log(f"[raconteur] beat '{beat.name}' carries the author's edits — "
+                    f"frozen, kept verbatim")
+            beats.append((beat.name, frozen[beat.name]))
+            continue
+        log(f"[raconteur] drafting beat '{beat.name}'…")
+        text = brain.coordinator(prompt, system=_SYSTEM, num_ctx=16384)
         beats.append((beat.name, _strip_label(beat.name, text)))
 
     draft = _assemble(beats)
@@ -599,13 +716,15 @@ def _onepager_fresh(
     log(f"[raconteur] critique findings:\n{critique.strip()}")
 
     log("[raconteur] tightening one-pager…")
-    tightened = brain.coordinator(
-        _REVISE_PROMPT.format(onepager=draft, critique=critique),
-        system=_SYSTEM,
-        num_ctx=8192,
-    )
+    tighten_prompt = _REVISE_PROMPT.format(onepager=draft, critique=critique)
+    if frozen_names:
+        tighten_prompt += ("\n\nThese beats were written by the author BY HAND — "
+                           "reproduce them VERBATIM, whatever the critique says: "
+                           + ", ".join(sorted(frozen_names)) + ".")
+    tightened = brain.coordinator(tighten_prompt, system=_SYSTEM, num_ctx=8192)
     if user_rev is not None:
-        _write_recut(project_dir, cfg, paper_dir, brain, tightened, beats, user_rev)
+        _write_recut(project_dir, cfg, paper_dir, brain, tightened, beats, user_rev,
+                     frozen=frozen, proposals=proposals)
     else:
         _write(project_dir, cfg, paper_dir, tightened)
 
@@ -639,7 +758,7 @@ def _revise(
         # Beats live under their own section headings; legacy one-pagers carry
         # the beat name as an inline lead-in label instead. Either way, route
         # each beat its own evidence bundle.
-        name = _beat_of(heading or "") or _beat_of(para_text)
+        name = _beat_of_para(heading, para_text)
         for beat in _BEATS:
             if beat.name == name:
                 return _evidence_for_beat(
