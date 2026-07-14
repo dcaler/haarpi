@@ -1578,15 +1578,15 @@ def run(directory: str = ".", brain_override: str | None = None,
               f"{', '.join(f'[@{k}]' for k in unmatched[:8])}"
               + (" ..." if len(unmatched) > 8 else ""))
 
-    # The bibliography must exist BEFORE the document that cites it: citeproc reads
-    # refs.bib to turn [@key] into a citation. Exported after the render, a first run
-    # had no bib to read and shipped raw citekeys to the reader.
+    # refs.bib is exported before the review is written. Nothing in the render needs it
+    # (the [@citekeys] stay as written, and the annotated bibliography is ours), but the
+    # downstream stages bind it, and a bibliography that exists only after the document
+    # it belongs to is a trap waiting for the first consumer who reads them in order.
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
 
     out_md, out_docx = render.write_review(
         cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
-        metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line(),
-        bib_path=bib_path)
+        metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line())
 
     elapsed = time.time() - t0
     print("\n" + "=" * 60)

@@ -80,7 +80,39 @@ def test_figure_manifest_skips_nas_litter(tmp_path):
     _mk(res / "figures" / "@eaDir" / "E1_0_recovery.png" / "SYNOFILE_THUMB_M.png")
     _mk(res / "figures" / ".hidden" / "x.png")
     figs = load_figure_manifest(tmp_path)
-    assert figs == [str(real.relative_to(tmp_path))]
+    assert [f.path for f in figs] == [str(real.relative_to(tmp_path))]
+
+
+def test_figure_manifest_prefers_rayleighs_captions(tmp_path):
+    """rayleigh names the axes and the colour encoding. raconteur used to glob for .png
+    files and hand the writer nothing but filenames — so it invented the axes."""
+    import json
+
+    from raconteur.context import load_figure_manifest
+    res = tmp_path / "results"
+    _mk(res / "figures" / "E1_0_recovery.png", "png")
+    _mk(res / "figures" / "E1_0_recovery.svg", "svg")   # the same plot, no caption
+    (res / "findings.json").write_text(json.dumps({
+        "experiments": [{"figures": [{
+            "path": "figures/E1_0_recovery.png",
+            "caption": "Distance to the target over tolerance x radius (blue = closer).",
+        }]}]
+    }), encoding="utf-8")
+
+    figs = load_figure_manifest(tmp_path)
+    assert [f.path for f in figs] == ["results/figures/E1_0_recovery.png"]
+    assert "blue = closer" in figs[0].caption, "the writer must see what the figure shows"
+
+
+def test_a_captionless_twin_is_never_offered(tmp_path):
+    """The same plot exists as .png, .svg and .eps. Offering all three lets the writer pick
+    a format rayleigh never described."""
+    from raconteur.context import load_figure_manifest
+    res = tmp_path / "results"
+    for ext in ("png", "svg", "eps"):
+        _mk(res / "figures" / f"E1_0_recovery.{ext}", ext)
+    figs = load_figure_manifest(tmp_path)          # no findings.json → glob fallback
+    assert len(figs) == 1
 
 
 def test_results_crawl_keeps_an_oversize_first_file(tmp_path):

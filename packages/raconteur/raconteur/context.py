@@ -1,6 +1,8 @@
 from __future__ import annotations
+import json
 import re
 import sys
+from typing import NamedTuple
 from .log import log
 from pathlib import Path
 
@@ -273,14 +275,66 @@ _FIGURE_SUFFIXES = {".png", ".svg", ".pdf", ".jpg", ".jpeg"}
 _MAX_FIGURES_LISTED = 12
 
 
-def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[str]:
-    """List rayleigh figure files as project-relative paths, for figure embedding.
+class Figure(NamedTuple):
+    """A figure and what it shows. ``caption`` is rayleigh's, and may be empty."""
+    path: str
+    caption: str = ""
 
-    Returns paths like 'results/figures/opinion_drift.png' that pandoc can
-    resolve via --resource-path=<project_dir>. Prefers a figures/ subdir; falls
-    back to image files anywhere under the results directory.
+
+def _rayleigh_captions(project_dir: Path, subdir: str) -> dict[str, str]:
+    """rayleigh's own captions, keyed by project-relative path.
+
+    rayleigh WRITES these — naming the axes, the colour encoding, and what to look for:
+
+      "PRIMARY: recovery landscape. Distance to Beethoven 5-1 over tolerance x radius
+       (blue = closer to the phrase). Expect a low-distance settling band…"
+
+    raconteur used to throw them away and glob the figures directory for .png files, so the
+    model saw nothing but filenames and invented captions from them. It cannot mention an
+    axis it has never seen.
+    """
+    findings = project_dir / (subdir or "results") / "findings.json"
+    if not findings.is_file():
+        return {}
+    try:
+        data = json.loads(findings.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        log(f"[warn] could not read {findings.name} ({e}); figure captions unavailable")
+        return {}
+    out: dict[str, str] = {}
+    for exp in data.get("experiments", []) or []:
+        for fig in exp.get("figures", []) or []:
+            path, caption = fig.get("path"), (fig.get("caption") or "").strip()
+            if path and caption:
+                # findings.json paths are relative to the results dir
+                out[str(Path(subdir or "results") / path)] = caption
+    return out
+
+
+def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[Figure]:
+    """rayleigh's figures, each with the caption rayleigh wrote for it.
+
+    findings.json is AUTHORITATIVE where it exists: it says which figures carry the results
+    and what each one shows. The directory holds the same plot three times over (.png, .svg,
+    .eps) and a glob offers all of them — including the two formats rayleigh never described,
+    so the writer could pick a captionless twin of a figure it had a perfectly good caption
+    for. Fall back to globbing only when there is no manifest at all.
+
+    Paths are project-relative ('results/figures/x.png') so pandoc can resolve them via
+    --resource-path=<project_dir>.
     """
     base = project_dir / (subdir or "results")
+    captions = _rayleigh_captions(project_dir, subdir)
+    if captions:
+        figs = [Figure(rel, cap) for rel, cap in sorted(captions.items())
+                if (project_dir / rel).is_file()][:_MAX_FIGURES_LISTED]
+        if figs:
+            log(f"[raconteur] {len(figs)} figure(s) from rayleigh's manifest, "
+                f"with the captions rayleigh wrote")
+            return figs
+        log("[warn] findings.json lists figures but none of the files exist — "
+            "falling back to the figures directory")
+
     fig_dir = base / "figures"
     search = fig_dir if fig_dir.is_dir() else base
     if not search.is_dir():
@@ -292,10 +346,19 @@ def load_figure_manifest(project_dir: Path, subdir: str = "results") -> list[str
         and not any(part.startswith((".", "@"))
                     for part in p.relative_to(search).parts)
     )
-    rel = [str(p.relative_to(project_dir)) for p in paths[:_MAX_FIGURES_LISTED]]
-    if rel:
-        log(f"[raconteur] found {len(rel)} figure(s) under {subdir}/")
-    return rel
+    seen: set[str] = set()
+    figs: list[Figure] = []
+    for p in paths:
+        if p.stem in seen:          # the same plot in another format
+            continue
+        seen.add(p.stem)
+        figs.append(Figure(str(p.relative_to(project_dir)), ""))
+        if len(figs) >= _MAX_FIGURES_LISTED:
+            break
+    if figs:
+        log(f"[raconteur] found {len(figs)} figure(s) under {subdir}/ "
+            f"(no rayleigh manifest — the writer has no description of what they show)")
+    return figs
 
 
 def load_onepager(project_dir: Path, short_title: str) -> str:

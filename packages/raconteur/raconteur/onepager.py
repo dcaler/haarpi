@@ -103,9 +103,19 @@ _FIGURE_BEAT = "Key result(s)"
 
 _FIGURE_RULE = (
     "- You may embed AT MOST TWO figures, and only those that carry the argument. "
-    "Use exactly this markdown form on its own line: ![short caption](figure/path). "
     "Choose paths only from the figure list above; do not invent paths. Omit figures "
-    "entirely if none is essential."
+    "entirely if none is essential.\n"
+    "- EVERY figure must be INTRODUCED IN THE TEXT before it appears: a sentence that says "
+    "what the reader should see in it (\"Figure 1 shows …\", \"…, as Figure 2 makes "
+    "plain\"). A figure the prose never mentions is a figure the reader is never told to "
+    "look at.\n"
+    "- Number figures in the order they appear, from 1, and write the caption as "
+    "\"Figure N: …\" on its own line, in this exact markdown form:\n"
+    "  ![Figure 1: what it plots, on what axes, and what the colours mean](figure/path)\n"
+    "- The caption must be INFORMATIVE — enough for a reader to interpret the figure "
+    "without the text: what is plotted, on which axes, what the colour encoding means, and "
+    "what to look for. Adapt the description given with each figure above; do not "
+    "invent axes, units, or colours it does not mention."
 )
 _NO_FIGURE_RULE = "- Do not embed a figure in this beat."
 
@@ -238,14 +248,24 @@ def _ensure_style(project_dir: Path, cfg: ProjectConfig) -> None:
         cfg.save(project_dir)
 
 
-def _figure_section(figures: list[str]) -> str:
+def _figure_section(figures) -> str:
+    """The figures, WITH what rayleigh says each one shows.
+
+    A path alone tells the writer nothing — it cannot name an axis it has never seen, so it
+    invents one. rayleigh's caption names the axes, the colour encoding, and what to look
+    for; that is the raw material for a caption a reader can actually use.
+    """
     if not figures:
         return ""
-    lines = "\n".join(f"- {p}" for p in figures)
-    return (
-        "Available figures (embed at most two, only if essential, using "
-        "![caption](path) with these exact paths):\n" + lines + "\n"
-    )
+    lines = []
+    for f in figures:
+        path = f.path if hasattr(f, "path") else str(f)
+        caption = getattr(f, "caption", "")
+        lines.append(f"- {path}\n    what it shows: {caption}" if caption
+                     else f"- {path}\n    what it shows: (rayleigh recorded no description "
+                          f"— do not invent one; describe only what the results support)")
+    return ("Available figures (embed at most two, only if essential, using these exact "
+            "paths):\n" + "\n".join(lines) + "\n")
 
 
 def _evidence_for_beat(
@@ -504,6 +524,54 @@ def _copyedit_notes(brain: Brain, authored: dict[str, dict[str, str]]
     return notes
 
 
+_CAPTION_STYLES = ("image caption", "caption")
+
+
+def _caption_paragraphs(doc) -> list:
+    """The document's existing figure captions, in order.
+
+    The figures are ALREADY in the .docx as real images — pandoc embedded them at genesis.
+    A re-cut must therefore edit the caption that is there, not emit ![caption](path) into
+    the prose, which would land in the reader's Word document as literal markdown text.
+    """
+    return [p for p in doc.paragraphs
+            if (p.style.name or "").strip().lower() in _CAPTION_STYLES]
+
+
+def _recaption(doc, beat_text: str, ids, author: str) -> tuple[str, int]:
+    """Lift the figure captions out of a beat's markdown and onto the document's figures.
+
+    Returns (prose_without_the_image_lines, captions_rewritten). Order is the only sound
+    correspondence available here: the one-pager carries at most two figures and they are
+    already embedded, in order. If the writer produced a different number of figures than
+    the document holds, that is a structural change a redline cannot make — say so and
+    touch nothing.
+    """
+    from . import redline as rl
+
+    figs = list(guards.FIGURE_MD_RE.finditer(beat_text))
+    prose = guards.FIGURE_MD_RE.sub("", beat_text)
+    prose = re.sub(r"\n{3,}", "\n\n", prose).strip()
+    if not figs:
+        return prose, 0
+
+    caps = _caption_paragraphs(doc)
+    if len(caps) != len(figs):
+        log(f"[warn] the re-cut wrote {len(figs)} figure caption(s) but the document holds "
+            f"{len(caps)} figure(s) — captions left alone. Adding or removing a figure is "
+            f"not something a redline can do; produce it in rayleigh and re-render.")
+        return prose, 0
+
+    n = 0
+    for i, (m, cap_para) in enumerate(zip(figs, caps), start=1):
+        caption = (m.group("caption") or "").strip()
+        if not guards.FIGURE_NUM_RE.match(caption):
+            caption = f"Figure {i}: {caption}"
+        if rl.tracked_replace(cap_para._p, caption, author, ids):
+            n += 1
+    return prose, n
+
+
 def _recut_guard_findings(old: str, new: str, known: set[str]) -> list[guards.Finding]:
     """What a re-cut of one beat may not do, decided in code.
 
@@ -559,7 +627,7 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
 
     final = _beats_from_md(text)             # beat -> body prose, no label/heading
     fallback = dict(beats)
-    replaced, refused, done = 0, 0, set()
+    replaced, refused, recaptioned, done = 0, 0, 0, set()
     outcomes: dict[str, str] = {}            # beat -> rewritten | refused | untouched
     before: dict[str, str] = {}              # what the reviewer's beat said
     after: dict[str, str] = {}               # what we actually delivered
@@ -604,6 +672,13 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
             continue
         new = new.replace("**", "")
 
+        # The figures are already embedded in this document. Their captions are edited in
+        # place; the image markdown never reaches the prose, where Word would render it as
+        # the literal text "![Figure 1: …](results/figures/….png)".
+        new, n_caps = _recaption(doc, new, ids, rl.AUTHOR)
+        if n_caps:
+            recaptioned += n_caps
+
         old = hrl.paragraph_text(p_el, protect_authored=True)
         findings = _recut_guard_findings(old, new, known)
         if findings:
@@ -628,8 +703,9 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
 
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
-        f"(re-cut: {replaced} beat(s) rewritten, {refused} refused; the author's "
-        f"sentences held fixed throughout)")
+        f"(re-cut: {replaced} beat(s) rewritten, {refused} refused"
+        + (f", {recaptioned} figure caption(s) rewritten" if recaptioned else "")
+        + f"; the author's sentences held fixed throughout)")
 
     # Every reply is checked against what was actually delivered, beat by beat.
     log("[raconteur] verifying the re-cut against each open ask…")
@@ -940,6 +1016,7 @@ def _onepager_fresh(
         # citations, its equations, and above all the author's sentences.
         def _problems(draft: str, was: str = prior.get(beat.name, "")) -> list[str]:
             errs = _sentinel_errors(draft, spans)
+            errs += [f.imperative for f in guards.figure_findings(draft)]
             if was:
                 errs += [f.imperative
                          for f in _recut_guard_findings(was, draft, known)]
@@ -987,6 +1064,16 @@ def _onepager_fresh(
             + "\n".join(f'- "{v.strip()}"'
                         for spans in authored.values() for v in spans.values()))
     tightened = brain.coordinator(tighten_prompt, system=_SYSTEM, num_ctx=8192)
+
+    # The tightener can quietly undo what the beats got right — dropping the sentence that
+    # introduced a figure, or a caption's number. The per-beat drafts already passed those
+    # checks, so a tightened version that fails them is not an improvement.
+    broke = guards.figure_findings(tightened)
+    if broke and not guards.figure_findings(draft):
+        log("[warn] the tightening pass broke a figure ("
+            + "; ".join(f.kind for f in broke) + ") — keeping the drafted beats instead")
+        tightened = draft
+
     if user_rev is not None:
         _write_recut(project_dir, cfg, paper_dir, brain, tightened, beats, user_rev,
                      authored=authored, skipped=skipped, known=known)

@@ -48,8 +48,7 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
 
 
 def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
-                 corpus, unmatched: list[str], metrics_line: str = "",
-                 bib_path: Path | None = None) -> tuple[Path, Path | None]:
+                 corpus, unmatched: list[str], metrics_line: str = "") -> tuple[Path, Path | None]:
     md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched, metrics_line)
     today = date.today().strftime("%y%m%d")
     stem = f"{today}_{cfg.project_name}_litreview_ra"
@@ -57,9 +56,10 @@ def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
     out_md.write_text(md, encoding="utf-8")
 
     out_docx = paths.output / f"{stem}.docx"
-    # The narrative cites with [@citekeys]; without citeproc they reach the reader as
-    # literal text. The annotated bibliography above is ours, so citeproc must not
-    # append a second reference list.
-    if pandoc_convert(out_md, out_docx, bib_path=bib_path, suppress_bibliography=True):
+    # No citeproc, deliberately. The narrative keeps its [@citekeys] as written (author's
+    # call, 2026-07-14): the key names the exact entry in the annotated bibliography below,
+    # where "(Bowling et al. 2018)" would leave the reader guessing between three Bowlings.
+    # The bibliography is ours, not citeproc's, so nothing is missing from the document.
+    if pandoc_convert(out_md, out_docx):
         return out_md, out_docx
     return out_md, None

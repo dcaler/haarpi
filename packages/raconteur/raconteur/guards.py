@@ -320,6 +320,63 @@ def unnumbered_results_paragraphs(paras: list[Paragraph]) -> list[Finding]:
     ]
 
 
+# ── FIGURES ───────────────────────────────────────────────────────────────────
+
+FIGURE_MD_RE = re.compile(r"!\[(?P<caption>[^\]]*)\]\((?P<path>[^)\s]+)[^)]*\)")
+FIGURE_NUM_RE = re.compile(r"^\s*Figure\s+(\d+)\s*[:.]", re.IGNORECASE)
+FIGURE_REF_RE = re.compile(r"\bFig(?:ure)?\.?\s*(\d+)", re.IGNORECASE)
+
+_MIN_CAPTION_WORDS = 8
+
+
+def figure_findings(text: str) -> list[Finding]:
+    """A figure the prose never introduces is a figure the reader is never told to look at.
+
+    Three things a figure owes its reader, all checkable:
+      * a NUMBER, so the text can refer to it ("Figure 1: …");
+      * an INTRODUCTION in the prose ("Figure 1 shows …") — without one the reader meets an
+        image with no idea why it is there or what to see in it;
+      * a caption INFORMATIVE enough to interpret the figure: the axes, the encoding, what
+        to look for. "Recovery landscape showing optimal distance" names no axis and no
+        colour, and a reader cannot read the plot from it.
+    """
+    figs = list(FIGURE_MD_RE.finditer(text))
+    if not figs:
+        return []
+    prose = FIGURE_MD_RE.sub(" ", text)          # the text WITHOUT the caption lines
+    referenced = {int(n) for n in FIGURE_REF_RE.findall(prose)}
+
+    out: list[Finding] = []
+    for i, m in enumerate(figs, start=1):
+        caption = (m.group("caption") or "").strip()
+        num = FIGURE_NUM_RE.match(caption)
+        if not num:
+            out.append(Finding(
+                "unnumbered-figure", f"figure {i}",
+                f'Number this figure: its caption must begin "Figure {i}: " so the text can '
+                f'refer to it. Got: "{caption[:60]}".'))
+            continue
+        n = int(num.group(1))
+        if n != i:
+            out.append(Finding(
+                "misnumbered-figure", f"figure {i}",
+                f'This is figure {i} in order of appearance but its caption says "Figure '
+                f'{n}". Number figures from 1, in the order they appear.'))
+        body = caption[num.end():].strip()
+        if len(body.split()) < _MIN_CAPTION_WORDS:
+            out.append(Finding(
+                "thin-caption", f"figure {i}",
+                f'Caption "{caption[:60]}" is not enough to read the figure by. Say what is '
+                f'plotted, on which axes, and what the colours mean — everything a reader '
+                f'needs to interpret it without the surrounding text.'))
+        if n not in referenced:
+            out.append(Finding(
+                "unintroduced-figure", f"figure {i}",
+                f'Nothing in the prose introduces Figure {n}. Add a sentence saying what the '
+                f'reader should see in it ("Figure {n} shows …") before the figure appears.'))
+    return out
+
+
 # ── VERIFIABILITY (phase: redline) ────────────────────────────────────────────
 
 def dropped_citekeys(old: str, new: str) -> list[Finding]:

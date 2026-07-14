@@ -32,6 +32,7 @@ import copy
 import datetime
 import difflib
 import re
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -1194,7 +1195,13 @@ def release_markdown(doc) -> str:
 def mint_release(src: Path, dst: Path, md_sibling: bool = True) -> dict:
     """Consolidate a gate-passed markup into a release: accept every tracked
     change, strip the comment threads, write the bare-name docx (and its .md
-    sibling — what downstream LLM consumers actually read)."""
+    sibling — what downstream LLM consumers actually read).
+
+    The [@citekeys] stay as they are, here and everywhere (author's call, 2026-07-14): the
+    key names the exact bibliography entry, and "(Bowling et al. 2018)" does not — three
+    sources can render to the same author-year. The reviewer reads the key and knows what
+    was cited; so does the next stage.
+    """
     doc = Document(str(src))
     counts = accept_all_changes(doc)
     anchors = strip_comment_anchors(doc)

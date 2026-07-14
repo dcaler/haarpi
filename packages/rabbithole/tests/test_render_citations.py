@@ -1,8 +1,11 @@
-"""The review cites; the render must resolve those citations.
+"""The [@citekey] reaches the reader as a [@citekey].
 
-A released litreview shipped 70 literal "[@citekey]" strings in its body. Two causes,
-both pinned here: the renderer never ran citeproc, and `report` exported refs.bib
-AFTER rendering the document that needed it.
+Author's call (2026-07-14): the key names the exact entry in the annotated bibliography.
+"(Bowling et al. 2018)" leaves a reader who wants to check the source guessing between
+three Bowlings — and the reviewer marking up this document is precisely the person who
+wants to check the source.
+
+So rabbitHole does not run citeproc, and nothing downstream rewrites the keys either.
 """
 
 from __future__ import annotations
@@ -26,39 +29,43 @@ def _cfg():
     )
 
 
-def test_write_review_passes_the_bib_to_citeproc(tmp_path, monkeypatch):
+def test_the_review_renders_without_citeproc(tmp_path, monkeypatch):
     seen = {}
 
     def fake_convert(src, dst, bib_path=None, resource_path=None,
                      suppress_bibliography=False):
-        seen.update(src=src, dst=dst, bib=bib_path, suppress=suppress_bibliography)
+        seen.update(bib=bib_path, suppress=suppress_bibliography)
         dst.write_bytes(b"docx")
         return True
 
     monkeypatch.setattr(render, "pandoc_convert", fake_convert)
     paths = _Paths(tmp_path)
-    bib = paths.output / "refs.bib"
-    bib.write_text("@article{k1984,}\n", encoding="utf-8")
-
     out_md, out_docx = render.write_review(
         _cfg(), paths, "ollama", "A claim [@k1984].", "## Annotated Bibliography\n",
-        corpus=[], unmatched=[], bib_path=bib)
+        corpus=[], unmatched=[])
 
     assert out_docx is not None
-    assert seen["bib"] == bib
-    # our annotated bibliography is the reference list; citeproc must not add another
-    assert seen["suppress"] is True
+    assert seen["bib"] is None, "no bibliography means no citeproc means the key survives"
 
 
-def test_report_exports_the_bib_before_it_renders(tmp_path):
-    """Ordering, not flags: refs.bib written after the render is a bib the render
-    could not have read."""
+def test_the_key_survives_into_the_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "pandoc_convert", lambda *a, **k: False)
+    paths = _Paths(tmp_path)
+    out_md, _ = render.write_review(
+        _cfg(), paths, "ollama", "A claim [@k1984].", "## Annotated Bibliography\n",
+        corpus=[], unmatched=[])
+    assert "[@k1984]" in out_md.read_text()
+
+
+def test_report_still_exports_the_bib_before_it_renders(tmp_path):
+    """Nothing in the render needs refs.bib, but the stages downstream bind it — and a
+    bibliography written after the document it belongs to is a trap for the first consumer
+    that reads them in order."""
     import inspect
 
     from rabbithole import summarize
 
-    src = inspect.getsource(summarize.run_report) if hasattr(summarize, "run_report") \
-        else inspect.getsource(summarize)
+    src = inspect.getsource(summarize)
     export_at = src.index("_export_bibtex(cfg, gc, paths, citekeys, corpus)")
     render_at = src.index("render.write_review(")
-    assert export_at < render_at, "refs.bib must be exported before write_review"
+    assert export_at < render_at

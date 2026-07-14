@@ -83,7 +83,8 @@ def test_citeproc_resolves_the_key_for_real(md, bib, tmp_path):
 
 @pytest.mark.skipif(not render.check_pandoc(), reason="pandoc not installed")
 def test_without_a_bib_the_raw_key_survives(md, tmp_path):
-    """The defect itself, pinned: this is what a bare render does."""
+    """What rabbitHole relies on: no bibliography, no citeproc, and the [@citekey] reaches
+    the reader intact — which is what the author wants (it names the exact bib entry)."""
     import re
     import zipfile
 
