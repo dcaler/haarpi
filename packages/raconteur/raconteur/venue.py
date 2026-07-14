@@ -15,7 +15,6 @@ from .context import load_litreview, load_onepager
 from .naming import parse, today
 from .render import to_docx
 from .revise import read_text, build_revision_context
-from .notify import send_email
 
 # ── shared system ─────────────────────────────────────────────────────────────
 
@@ -640,8 +639,3 @@ def run(project_dir: Path, refresh: bool = False) -> None:
     _update_yaml(project_dir, cfg, brain, final_text, gcfg)
     _write(project_dir, cfg, paper_dir, _with_slate(final_text, cfg))
 
-    send_email(
-        f"raconteur venue done: {cfg.short_title}",
-        f"Venue analysis complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
-        gcfg,
-    )

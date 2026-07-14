@@ -1,8 +1,28 @@
 """Optional email notifications via the local mail program.
 
-Piggybacks on whatever mailer the server already uses for SLURM job mail
-(SLURM's `MailProg`), so the tools need no SMTP credentials of their own.
-Resolution order for the mail command:
+WHO REPORTS WHAT. There are two notifiers on this pipeline and they must not say the same
+thing twice. The author was getting every finished task reported to him twice, seconds apart,
+from two different addresses:
+
+  TRUNDLR reports that a TASK finished. It PATCHes the task to done/failed and mails the
+    exit code, the duration and the log tail. It is the ALARM, and it is the only thing that
+    can report a crash — a tool that dies never reaches its own last line.
+
+  HAARPI reports what it DECIDED. A gate passed and released X; the annotations classified to
+    tier T and queued chain C. That is information trundlr cannot have, and it is the one
+    mail worth reading.
+
+  A TOOL DOES NOT REPORT ITS OWN COMPLETION. "raconteur one-pager done" and "rabbitHole
+    gather complete" carried nothing trundlr had not just said, and arrived seconds behind
+    it. They are gone. (They also fired on every manual run, so debugging the pipeline mailed
+    the author each time.)
+
+If you are adding a send_email() to a tool verb, the question to answer first is: what does
+this say that "DONE: <task title>" does not?
+
+Piggybacks on whatever mailer the server already uses for SLURM job mail (SLURM's
+`MailProg`), so the tools need no SMTP credentials of their own. Resolution order for the
+mail command:
 
   1. mail_prog        (the tool's config / env override)
   2. SLURM's MailProg, read from `scontrol show config`

@@ -342,9 +342,3 @@ def run(project_dir: Path, section: str) -> None:
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
-    from .notify import send_email
-    send_email(
-        f"raconteur focus done: {cfg.short_title} — {heading}",
-        f"Section refined: {heading}\nProject: {project_dir}",
-        gcfg,
-    )

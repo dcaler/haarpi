@@ -1256,9 +1256,3 @@ def run(project_dir: Path, resynth: bool = False) -> None:
             "initials and re-run to revise, or run 'raconteur outline'")
         return
 
-    from .notify import send_email
-    send_email(
-        f"raconteur one-pager done: {cfg.short_title}",
-        f"One-pager complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
-        gcfg,
-    )

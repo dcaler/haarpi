@@ -67,12 +67,6 @@ def run(project_dir: Path) -> None:
     else:
         _draft_fresh(project_dir, cfg, brain, paper_dir)
 
-    from .notify import send_email
-    send_email(
-        f"raconteur paper done: {cfg.short_title}",
-        f"Paper draft complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
-        gcfg,
-    )
 
 
 def _draft_fresh(

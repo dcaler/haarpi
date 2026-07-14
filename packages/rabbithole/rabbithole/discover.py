@@ -643,8 +643,8 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         "oa_links": sum(1 for c in shortlist if c.oa_pdf_url),
     }
     _print_next_steps(cfg, paths, shortlist, collection_key)
-    _notify_done(cfg, gc, paths, shortlist, collection_key, stats,
-                 elapsed=time.time() - t0)
+    _write_gather_log(cfg, gc, paths, shortlist, collection_key, stats,
+                      elapsed=time.time() - t0)
     return 0
 
 
@@ -829,9 +829,15 @@ def _print_next_steps(cfg, paths, shortlist, collection_key: str) -> None:
     print("  • Then: rabbitHole report")
 
 
-def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
-                 elapsed: float = 0.0) -> None:
-    from . import notify
+def _write_gather_log(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
+                      elapsed: float = 0.0) -> None:
+    """Append the run summary to litReview/work/gather.log.
+
+    It used to email this summary as well. It no longer does: trundlr already mails when the
+    task finishes — with the exit code and the log tail — so a "gather complete" from the
+    tool arrived seconds later saying nothing trundlr had not just said. See
+    ``haarpi.notify`` for who reports what.
+    """
     label = "missing from Zotero" if collection_key else "candidates"
     src = ", ".join(f"{k} {v}" for k, v in stats["sources"].items()) or "(none)"
     h, r = divmod(int(elapsed), 3600)
@@ -875,7 +881,6 @@ def _notify_done(cfg, gc, paths, shortlist, collection_key: str, stats: dict,
         "then run `rabbitHole report`.",
     ]
     body = "\n".join(lines)
-    notify.send_email(f"rabbitHole: gather complete for '{cfg.project_name}'", body, gc)
 
     from datetime import datetime
     log_path = paths.work / "gather.log"

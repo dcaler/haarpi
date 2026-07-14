@@ -1600,35 +1600,5 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  Sources read: {len(corpus)} | cited & annotated: {len(located)} "
           f"| brain: {brain.backend}")
 
-    _notify_report_done(cfg, gc, paths, corpus, located, out_md, out_docx,
-                        brain.backend, unmatched, elapsed)
-    return 0
 
 
-def _notify_report_done(cfg, gc, paths, corpus, located, out_md, out_docx,
-                        backend, unmatched, elapsed: float) -> None:
-    from . import notify
-    lines = [
-        f"Runtime: {_fmt_dt(elapsed)}",
-        "",
-        f"report complete for '{cfg.project_name}'.",
-        "",
-        f"Topic: {cfg.topic}",
-        f"Focus: {cfg.focus or '(none)'}",
-        "",
-        "Results",
-        f"  Sources in corpus: {len(corpus)}",
-        f"  Cited & annotated: {len(located)}",
-        f"  Brain: {backend}",
-    ]
-    if unmatched:
-        lines.append(f"  Unmatched citekeys: {', '.join(f'[@{k}]' for k in unmatched[:8])}"
-                     + (" ..." if len(unmatched) > 8 else ""))
-    lines += [
-        "",
-        f"Review (md)  : {out_md}",
-    ]
-    if out_docx:
-        lines.append(f"Review (docx): {out_docx}")
-    notify.send_email(f"rabbitHole: report complete for '{cfg.project_name}'",
-                      "\n".join(lines), gc)

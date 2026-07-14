@@ -640,9 +640,3 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
         log("[raconteur] draft exists — annotate paper/*.docx with your initials and re-run")
         return
 
-    from .notify import send_email
-    send_email(
-        f"raconteur paper done: {cfg.short_title}",
-        f"Paper draft complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
-        gcfg,
-    )

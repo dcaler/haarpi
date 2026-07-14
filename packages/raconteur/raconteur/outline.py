@@ -570,12 +570,6 @@ def run(project_dir: Path, venue: str = "") -> None:
             log("[raconteur] outline already exists — annotate the docx with your initials and re-run to revise")
             return
 
-    from .notify import send_email
-    send_email(
-        f"raconteur outline done: {cfg.short_title}",
-        f"Outline complete for '{cfg.title or cfg.short_title}'.\nProject: {project_dir}",
-        gcfg,
-    )
 
 
 # ── fresh outline: analyse → draft → critique→revise × 2 ─────────────────────
