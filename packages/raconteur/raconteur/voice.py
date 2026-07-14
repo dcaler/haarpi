@@ -345,7 +345,8 @@ def outside_palette(text: str, palette: dict[str, float],
                    if c not in palette and count_phrase(text, c)})
 
 
-def style_block(sig: dict, exemplars: list[str], budget: int = 2400) -> str:
+def style_block(sig: dict, exemplars: list[str], analysis: str = "",
+                budget: int = 3800) -> str:
     """The voice, as the drafter must receive it: a palette and some real prose.
 
     Exemplars FIRST and never truncated mid-passage. The profile used to be capped at 2,000
@@ -390,20 +391,39 @@ def style_block(sig: dict, exemplars: list[str], budget: int = 2400) -> str:
         parts.append(f"\nPUNCTUATION: he uses {' and '.join(habits)} freely.")
 
     head = "\n".join(parts)
-    if not exemplars:
-        return head + "\n"
+    out = head
 
-    # exemplars are the point: give them the room, and never cut one in half
-    body = ["\nHIS PROSE — this is the voice to match:"]
-    room = max(budget - len(head), 400)
-    used = 0
-    for ex in exemplars:
-        ex = " ".join(ex.split())
-        if used + len(ex) > room and used:
-            break
-        body.append(f"  > {ex}")
-        used += len(ex)
-    return head + "\n" + "\n".join(body) + "\n"
+    # Exemplars come first and are never cut in half. They are the point: three sentences of
+    # the real thing outweigh any amount of description, and it was precisely the exemplars
+    # that the old 2,000-character cap threw away.
+    if exemplars:
+        # Reserve room for the analysis rather than letting a third exemplar eat it: two
+        # passages already show the voice, and what the analysis says — how he opens a
+        # paragraph, when he hedges, where the number goes — is exactly what counting cannot.
+        reserve = min(len(analysis or ""), 1300)
+        room = max(budget - len(head) - reserve, 700)
+        body = ["\nHIS PROSE — this is the voice to match:"]
+        used = 0
+        for ex in exemplars:
+            ex = " ".join(ex.split())
+            if used + len(ex) > room and used:
+                break
+            body.append(f"  > {ex}")
+            used += len(ex)
+        out += "\n" + "\n".join(body) + "\n"
+
+    # The analysis is the first thing to cut, not the last — and it is cut at a paragraph,
+    # never mid-word.
+    if analysis and (room := budget - len(out)) > 500:
+        kept: list[str] = []
+        for para in analysis.strip().split("\n\n"):
+            para = para.strip()
+            if sum(len(p) for p in kept) + len(para) > room:
+                break
+            kept.append(para)
+        if kept:
+            out += "\nHOW HE WRITES:\n" + "\n\n".join(kept) + "\n"
+    return out
 
 
 # ── the corpora on disk ──────────────────────────────────────────────────────

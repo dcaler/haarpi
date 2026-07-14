@@ -279,7 +279,7 @@ def load_style_signature(project_dir: Path) -> dict:
     return meta.get("signature") or {}
 
 
-def load_style_profile(project_dir: Path, kind: str = "", budget: int = 2400) -> str:
+def load_style_profile(project_dir: Path, kind: str = "", budget: int = 3800) -> str:
     """The author's voice, as the drafter must receive it.
 
     A MEASURED palette — the transitions, hedges and rhythm of the author's own published
@@ -301,7 +301,9 @@ def load_style_profile(project_dir: Path, kind: str = "", budget: int = 2400) ->
     log("[raconteur] reading style_profile.md")
     sig = meta.get("signature") or {}
     exemplars = _exemplars(body, kind)
-    block = voice.style_block(sig, exemplars, budget=budget)
+    analysis = (body.split("## Voice — analysis", 1)[1].strip()
+                if "## Voice — analysis" in body else "")
+    block = voice.style_block(sig, exemplars, analysis, budget=budget)
     if block:
         return block
     # an untrained or hand-written profile: fall back to its prose, whole sentences only
