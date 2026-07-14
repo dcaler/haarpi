@@ -31,24 +31,9 @@ belongs. Do not include a references section. Calibrate depth, length, and bread
 of coverage to the scope and venue constraints above. Output only the paper draft.
 """
 
-def _venue_specs_block(cfg: ProjectConfig) -> str:
-    lines = []
-    v = cfg.venue
-    if v.name:
-        lines.append(f"Target venue: {v.name}")
-        if v.page_limit:
-            lines.append(f"Page limit: {v.page_limit}")
-        if v.word_limit:
-            lines.append(f"Word limit: {v.word_limit}")
-        if v.citation_style:
-            lines.append(f"Citation style: {v.citation_style}")
-        if v.columns == 2:
-            lines.append("Format: two-column")
-        if v.abstract_limit:
-            lines.append(f"Abstract word limit: {v.abstract_limit}")
-        if v.format_notes:
-            lines.append(f"Format notes: {v.format_notes}")
-    return ("\n".join(lines) + "\n") if lines else ""
+def _venue_specs_block(cfg: ProjectConfig, venue: str = "") -> str:
+    from . import slate
+    return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
 def _venue_section(cfg: ProjectConfig, project_dir: Path) -> str:

@@ -206,24 +206,10 @@ def _context_for_section(heading: str, litrev: str, code: str, results: str) -> 
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
-def _venue_block(cfg: ProjectConfig) -> str:
-    lines = []
-    v = cfg.venue
-    if v.name:
-        lines.append(f"Target venue: {v.name}")
-        if v.page_limit:
-            lines.append(f"Page limit: {v.page_limit}")
-        if v.word_limit:
-            lines.append(f"Word limit: {v.word_limit}")
-        if v.citation_style:
-            lines.append(f"Citation style: {v.citation_style}")
-        if v.columns == 2:
-            lines.append("Format: two-column")
-        if v.abstract_limit:
-            lines.append(f"Abstract word limit: {v.abstract_limit}")
-        if v.format_notes:
-            lines.append(f"Format notes: {v.format_notes}")
-    return ("Venue specifications:\n" + "\n".join(lines) + "\n") if lines else ""
+def _venue_block(cfg: ProjectConfig, venue: str = "") -> str:
+    """A manuscript is written FOR a venue. Which one is an argument, not a global."""
+    from . import slate
+    return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
 # _is_references is imported from guards at the top of this module.
@@ -354,8 +340,10 @@ def _draft_abstract(
     venue_section: str,
     style_section: str,
     analysis: str,
+    venue: str = "",
 ) -> str:
-    limit = str(cfg.venue.abstract_limit) if cfg.venue.abstract_limit else "150–250"
+    v = cfg.venue(venue) if venue else None
+    limit = str(v.abstract_limit) if v and v.abstract_limit else "150–250"
     log("[raconteur] drafting abstract…")
     return brain.coordinator(
         _DRAFT_ABSTRACT_PROMPT.format(
@@ -396,8 +384,9 @@ def _assemble(title: str, abstract: str, sections: list[tuple[str, str]]) -> str
     return "\n".join(parts)
 
 
-def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> None:
-    out_path = paper_dir / major_name(cfg.short_title, "md")
+def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
+           venue: str = "") -> None:
+    out_path = paper_dir / major_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
     bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
@@ -426,6 +415,7 @@ def _draft_paper(
     brain: Brain,
     paper_dir: Path,
     outline_text: str,
+    venue: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
@@ -439,7 +429,7 @@ def _draft_paper(
     log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
 
-    venue_section = _venue_block(cfg)
+    venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
     style_section = _style_block(style_profile)
     drafted: list[tuple[str, str]] = []
@@ -481,9 +471,10 @@ def _draft_paper(
         log(f"[raconteur] section complete: {heading}")
 
     _ensure_acknowledgements(drafted)
-    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
+    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
+                               venue=venue)
     assembled = _assemble(cfg.title, abstract, drafted)
-    _write(project_dir, cfg, paper_dir, assembled)
+    _write(project_dir, cfg, paper_dir, assembled, venue)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys)}")
 
 
@@ -496,6 +487,7 @@ def _revise_paper(
     paper_dir: Path,
     user_rev: Path,
     outline_text: str,
+    venue: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
@@ -514,7 +506,7 @@ def _revise_paper(
         log("[warn] no annotations in revision file — nothing to revise")
         return
 
-    venue_section = _venue_block(cfg)
+    venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
     style_section = _style_block(style_profile)
     existing_map = dict(_parse_sections(existing_text))
@@ -551,9 +543,10 @@ def _revise_paper(
         log(f"[raconteur] section complete: {heading}")
 
     _ensure_acknowledgements(revised)
-    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis)
+    abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
+                               venue=venue)
     _write(project_dir, cfg, paper_dir,
-           _assemble(cfg.title, abstract, revised))
+           _assemble(cfg.title, abstract, revised), venue)
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -564,6 +557,7 @@ def _redline_paper(
     brain: Brain,
     paper_dir: Path,
     user_rev: Path,
+    venue: str = "",
 ) -> None:
     """Answer each anchored comment with an in-place tracked change on the reviewer's .docx.
 
@@ -583,7 +577,7 @@ def _redline_paper(
                    litrev, code, results, _bib_block(bib_summary), bib_keys)
 
 
-def run(project_dir: Path, resynth: bool = False) -> None:
+def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
     if not ProjectConfig.exists(project_dir):
         log("[error] no paper/raconteur.yaml — run 'raconteur init' first")
         raise SystemExit(1)
@@ -599,24 +593,38 @@ def run(project_dir: Path, resynth: bool = False) -> None:
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 
+    from . import slate
+    venue = slate.resolve(cfg, venue)
+    if venue:
+        log(f"[raconteur] writing for {cfg.venues[venue].name} ({venue})")
+
+    # Every binding is scoped to this venue: its outline, its markup, its draft. The JASSS
+    # paper sits beside the ISMIR one and neither can see the other's redline.
+    scope = [venue] if venue else []
+    others = [v for v in cfg.venues if v != venue]
+
     from haarpi.naming import find_latest_release
     outline_path = find_latest_release(
-        paper_dir / "output", cfg.short_title, "md", chain_includes="outline",
+        paper_dir / "output", cfg.short_title, "md",
+        chain_includes=scope + ["outline"],
     ) or find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
-                     chain_includes="outline")
+                     chain_includes=scope + ["outline"])
     if outline_path is None:
-        log("[error] no outline found in paper/ — run 'raconteur outline' first")
+        where = f" for {venue}" if venue else ""
+        log(f"[error] no outline{where} found in paper/ — run 'raconteur outline"
+            + (f" --venue {venue}'" if venue else "'") + " first")
         raise SystemExit(1)
     outline_text = outline_path.read_text(encoding="utf-8")
     log(f"[raconteur] using outline: {outline_path.name}")
 
+    excludes = ["outline", "venue", "onepager"] + others
     user_rev = find_user_revision(paper_dir, cfg.short_title,
-                                  chain_excludes=["outline", "venue", "onepager"])
+                                  chain_includes=scope, chain_excludes=excludes)
     existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
-                           chain_excludes=["outline", "venue", "onepager"])
+                           chain_includes=scope, chain_excludes=excludes)
 
     if not existing:
-        _draft_paper(project_dir, cfg, brain, paper_dir, outline_text)
+        _draft_paper(project_dir, cfg, brain, paper_dir, outline_text, venue)
     elif user_rev:
         log(f"[raconteur] found revision: {user_rev.name}")
         if resynth:
@@ -624,9 +632,10 @@ def run(project_dir: Path, resynth: bool = False) -> None:
             # discards the reviewer's comments and gives them no redline to read the edits
             # against. Major version — new datestamp, chain reset.
             log("[raconteur] --resynth: regenerating the whole draft (no redline)")
-            _revise_paper(project_dir, cfg, brain, paper_dir, user_rev, outline_text)
+            _revise_paper(project_dir, cfg, brain, paper_dir, user_rev, outline_text,
+                          venue)
         else:
-            _redline_paper(project_dir, cfg, brain, paper_dir, user_rev)
+            _redline_paper(project_dir, cfg, brain, paper_dir, user_rev, venue)
     else:
         log("[raconteur] draft exists — annotate paper/*.docx with your initials and re-run")
         return

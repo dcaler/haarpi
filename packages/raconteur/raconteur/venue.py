@@ -405,6 +405,22 @@ def _find_venue_user_revision(paper_dir: Path, short_title: str) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _with_slate(text: str, cfg: ProjectConfig) -> str:
+    """Append the venue slate — the table the author decides on.
+
+    Rendered from the CONFIG, with no model in the loop: by the time we get here the
+    author's rows and statuses are already in `cfg.venues` (see `_update_yaml`), and this
+    just draws them. A slate the model was allowed to rewrite would be a slate that could
+    lose the row the author typed.
+    """
+    from . import slate as slate_mod
+
+    if not cfg.venues:
+        return text
+    body = text.split(slate_mod.SLATE_HEADING, 1)[0].rstrip()
+    return body + "\n\n" + slate_mod.render(cfg.venues)
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> str:
     """Write venue_analysis.md (fixed) and dated docx. Returns the md text."""
     md_path = paper_dir / "venue_analysis.md"
@@ -426,45 +442,95 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
 
 # ── yaml update (worker) ─────────────────────────────────────────────────────
 
-_EXTRACT_REC_PROMPT = """\
-Extract the primary recommended venue and its format details from this venue analysis.
+_CANDIDATES_PROMPT = """\
+List every venue this analysis puts forward as a candidate for the paper.
 
-Return ONLY valid JSON with exactly these keys (null for any unknown value):
-{{"venue": "full venue name", "type": "journal or conference", \
-"page_limit": null, "word_limit": null, "citation_style": "", \
-"abstract_limit": null, "columns": 1}}
+Return ONLY a JSON array. Each element:
+{{"venue": "full venue name", "type": "journal|conference|workshop", \
+"url": "the venue's call-for-papers or author-guidelines URL if the analysis gives one, \
+else \\"\\""}}
 
-Do not guess format details not stated in the text. Use null, not zero.
+Every venue the analysis discusses as a possibility, in the order it discusses them. Do not \
+invent a URL.
 
 Venue analysis:
 {analysis}"""
 
 
-def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str) -> None:
-    """Extract recommended venue from analysis and write it to raconteur.yaml."""
-    log("[raconteur] updating raconteur.yaml with recommendation…")
-    raw = brain.worker(_EXTRACT_REC_PROMPT.format(analysis=analysis), num_ctx=4096)
+def _candidates_from(brain: Brain, analysis: str) -> dict[str, VenueConfig]:
+    """The venues the analysis proposes — CANDIDATES, every one of them.
+
+    The tool proposes; the author disposes. This used to extract "the primary recommended
+    venue" and write it straight into the config as though the decision had been made,
+    which is the tool selecting a venue for the author. It never gets to do that.
+    """
     try:
-        rec = json.loads(_strip_fence(raw))
-    except Exception as e:
-        log(f"[warn] could not parse recommendation JSON: {e}")
-        return
+        raw = brain.worker(_CANDIDATES_PROMPT.format(analysis=analysis), num_ctx=8192)
+        m = re.search(r"\[.*\]", _strip_fence(raw), re.S)
+        items = json.loads(m.group(0)) if m else []
+    except Exception as e:  # noqa: BLE001
+        log(f"[warn] could not read the candidate venues from the analysis ({e})")
+        return {}
+    out: dict[str, VenueConfig] = {}
+    for item in items if isinstance(items, list) else []:
+        name = (item or {}).get("venue", "").strip() if isinstance(item, dict) else ""
+        if not name:
+            continue
+        slug = venue_slug(name)
+        kind = (item.get("type") or "").strip().lower()
+        out[slug] = VenueConfig(
+            name=name, status="candidate", origin="raconteur",
+            kind=kind if kind in ("journal", "conference", "workshop") else "",
+            url=(item.get("url") or "").strip(),
+        )
+    return out
 
-    venue_name = rec.get("venue", "")
-    if not venue_name:
-        log("[warn] no venue name extracted — raconteur.yaml not updated")
-        return
 
-    cfg.venue = VenueConfig(
-        name=venue_name,
-        page_limit=rec.get("page_limit") or None,
-        word_limit=rec.get("word_limit") or None,
-        citation_style=rec.get("citation_style") or "",
-        columns=int(rec.get("columns") or 1),
-        abstract_limit=rec.get("abstract_limit") or None,
-    )
+def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str,
+                 gcfg: GlobalConfig | None = None) -> None:
+    """Fold the analysis (and the author's slate in it) into the venues map.
+
+    Three rules, and they are the whole design:
+
+      * The tool only ever proposes CANDIDATES. Selecting a venue is the author's act, made
+        on the slate, in the document — like accepting a change or resolving a comment.
+      * A venue the author declared is untouchable. Their row may name a venue raconteur's
+        brainstorm never found, which is exactly the case that must work.
+      * A format spec comes from the venue's own page, or it is unknown. It is never
+        inferred from prose the tool wrote about the venue.
+    """
+    from . import slate as slate_mod
+
+    log("[raconteur] updating the venue slate…")
+    venues = dict(cfg.venues)
+
+    for slug, cand in _candidates_from(brain, analysis).items():
+        if slug in venues:                      # keep what the author has said about it
+            if cand.url and not venues[slug].url:
+                venues[slug].url = cand.url
+            continue
+        venues[slug] = cand
+
+    # The author's own rows — including venues we never proposed — and their statuses.
+    author_slate = slate_mod.parse(analysis)
+    if author_slate:
+        venues = slate_mod.merge(venues, author_slate)
+        for slug in slate_mod.dropped(venues, author_slate):
+            log(f"[note] venue '{slug}' is not on the slate any more — left at "
+                f"'{venues[slug].status}'. Set its status to 'declined' to retire it.")
+
+    email = getattr(gcfg, "contact_email", "") if gcfg else ""
+    for slug, v in venues.items():
+        wanted = (v.status or "").lower() in ("selected", "submitted")
+        if wanted and v.url and not v.sources:
+            slate_mod.fetch_specs(v, brain, email)
+
+    cfg.venues = venues
     cfg.save(project_dir)
-    log(f"[raconteur] raconteur.yaml updated: venue = {venue_name}")
+    chosen = cfg.selected_venues()
+    log(f"[raconteur] {len(venues)} venue(s) on the slate; "
+        + (f"selected: {', '.join(chosen)}" if chosen
+           else "none selected yet — set a status on the slate to write for one"))
 
 
 # ── fresh run ─────────────────────────────────────────────────────────────────
@@ -490,7 +556,7 @@ def _venue_fresh(
     # Passes 3–4: one critique → revise cycle
     final = _critique_revise(brain, draft, paper_profile)
 
-    return _write(project_dir, cfg, paper_dir, final)
+    return final
 
 
 # ── user-annotation revision ──────────────────────────────────────────────────
@@ -522,7 +588,7 @@ def _venue_revise(
         system=_SYSTEM,
         num_ctx=12288,
     )
-    return _write(project_dir, cfg, paper_dir, revised)
+    return revised
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -546,11 +612,18 @@ def run(project_dir: Path) -> None:
     user_rev = _find_venue_user_revision(paper_dir, cfg.short_title)
     if user_rev:
         log(f"[raconteur] found venue revision: {user_rev.name}")
+        # The author's slate is read from THEIR document, and folded into the config,
+        # BEFORE any model rewrites the analysis around it. A revision pass regenerates
+        # this document's prose, and a model asked to revise a document containing a table
+        # will cheerfully revise the table — including the row the author typed to name a
+        # venue it never proposed. Their decision is taken out of harm's way first.
+        _update_yaml(project_dir, cfg, brain, read_text(user_rev), gcfg)
         final_text = _venue_revise(project_dir, cfg, brain, paper_dir, user_rev)
     else:
         final_text = _venue_fresh(project_dir, cfg, brain, paper_dir, gcfg)
 
-    _update_yaml(project_dir, cfg, brain, final_text)
+    _update_yaml(project_dir, cfg, brain, final_text, gcfg)
+    _write(project_dir, cfg, paper_dir, _with_slate(final_text, cfg))
 
     send_email(
         f"raconteur venue done: {cfg.short_title}",

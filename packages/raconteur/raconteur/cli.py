@@ -62,9 +62,20 @@ def main() -> None:
         help="re-cut the narrative from scratch with your annotations as the brief "
              "(major version — for narrative-level rejections, not line edits)",
     )
-    sub.add_parser("venue", help="analyse and recommend publication venues")
-    sub.add_parser("outline", help="generate a paper outline from the approved one-pager")
+    sub.add_parser("venue", help="analyse venues and put a slate to the author")
+    outline_p = sub.add_parser(
+        "outline", help="generate a paper outline from the approved one-pager")
+    outline_p.add_argument(
+        "--venue", metavar="SLUG", default="",
+        help="which venue this outline is FOR (default: the one selected venue; "
+             "required when several are selected)",
+    )
     paper_p = sub.add_parser("draft", aliases=["paper"], help="write a fresh draft or redline your revision")
+    paper_p.add_argument(
+        "--venue", metavar="SLUG", default="",
+        help="which venue this manuscript is FOR (default: the one selected venue; "
+             "required when several are selected)",
+    )
     paper_p.add_argument(
         "--resynth",
         action="store_true",
@@ -106,10 +117,10 @@ def main() -> None:
             run(project_dir)
         case "outline":
             from .outline import run
-            run(project_dir)
+            run(project_dir, venue=args.venue)
         case "paper" | "draft":
             from .paper import run
-            run(project_dir, resynth=args.resynth)
+            run(project_dir, resynth=args.resynth, venue=args.venue)
         case "focus":
             from .focus import run
             run(project_dir, args.section)

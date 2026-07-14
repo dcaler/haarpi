@@ -24,6 +24,45 @@ def today() -> str:
     return date.today().strftime("%y%m%d")
 
 
+def _tokens(value: str | list[str] | None) -> list[str]:
+    """Chain tokens to match against, lowercased. One, several, or none."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.lower()]
+    return [v.lower() for v in value if v]
+
+
+# Chain tokens that name a KIND of document. Everything else in a chain is either an author
+# (initials, or `ra`) or a VENUE — which is how a venue rides in a filename without the
+# parser, the gate, the redline or the release logic needing to know venues exist.
+DELIVERABLE_WORDS = ("onepager", "venue", "outline", "litreview", "methods", "results")
+
+
+def venue_of(path: Path, short_title: str, known: list[str] | None = None) -> str:
+    """The venue a document is FOR — '' for the shared ones (the one-pager, the litreview).
+
+    `260714_Chords_ismir_outline_ra_DCR.docx` is ISMIR's outline; the JASSS one sits beside
+    it, and each redline finds its own.
+    """
+    parsed = parse(path, short_title)
+    if not parsed:
+        return ""
+    known_lower = [k.lower() for k in known] if known is not None else None
+    for token in parsed[1]:
+        t = token.lower()
+        if t in DELIVERABLE_WORDS or t == "ra":
+            continue
+        if known_lower is not None:
+            if t in known_lower:
+                return t
+            continue
+        if token != t:          # initials are written as initials (DCR); a slug is lower
+            continue
+        return t
+    return ""
+
+
 def _pattern(short_title: str) -> re.Pattern:
     # chain is * not + : a fully bare release (`260715_title.docx`) has no chain at all
     return re.compile(
@@ -65,10 +104,12 @@ def find_latest_release(
     doc_dir: Path,
     short_title: str,
     ext: str = "docx",
-    chain_includes: str | None = None,
+    chain_includes: str | list[str] | None = None,
 ) -> Path | None:
     """Newest release — what an unattended consumer binds. `chain_includes`
-    narrows to a deliverable kind (e.g. 'litreview') when a stage emits several."""
+    narrows to a deliverable kind (e.g. 'litreview', or ['ismir', 'outline']) when a
+    stage emits several."""
+    includes = _tokens(chain_includes)
     candidates = []
     for p in doc_dir.glob(f"*.{ext}"):
         result = parse(p, short_title)
@@ -77,9 +118,9 @@ def find_latest_release(
         _, chain, _ = result
         if not is_release(chain):
             continue
-        if chain_includes is not None:
-            if chain_includes.lower() not in [c.lower() for c in chain]:
-                continue
+        chain_lower = [c.lower() for c in chain]
+        if any(inc not in chain_lower for inc in includes):
+            continue
         candidates.append(p)
     if not candidates:
         return None
@@ -104,17 +145,16 @@ def find_latest(
     short_title: str,
     ext: str,
     last_initials: str | None = None,
-    chain_includes: str | None = None,
+    chain_includes: str | list[str] | None = None,
     chain_excludes: str | list[str] | None = None,
 ) -> Path | None:
     """Newest file matching the naming convention.
 
-    chain_includes: only files whose chain contains this element.
-    chain_excludes: skip files whose chain contains any of these elements.
+    chain_includes: only files whose chain contains ALL of these elements.
+    chain_excludes: skip files whose chain contains ANY of these elements.
     """
-    excludes = (
-        [chain_excludes] if isinstance(chain_excludes, str) else (chain_excludes or [])
-    )
+    includes = _tokens(chain_includes)
+    excludes = _tokens(chain_excludes)
     candidates = []
     for p in paper_dir.glob(f"*.{ext}"):
         result = parse(p, short_title)
@@ -125,10 +165,9 @@ def find_latest(
         if last_initials is not None:
             if not chain or chain[-1].lower() != last_initials.lower():
                 continue
-        if chain_includes is not None:
-            if chain_includes.lower() not in chain_lower:
-                continue
-        if any(exc.lower() in chain_lower for exc in excludes):
+        if any(inc not in chain_lower for inc in includes):
+            continue
+        if any(exc in chain_lower for exc in excludes):
             continue
         candidates.append(p)
     if not candidates:
@@ -139,13 +178,17 @@ def find_latest(
 def find_user_revision(
     paper_dir: Path,
     short_title: str,
-    chain_includes: str | None = None,
+    chain_includes: str | list[str] | None = None,
     chain_excludes: str | list[str] | None = None,
 ) -> Path | None:
-    """Newest .docx whose last initials are not 'ra' (i.e. the researcher's revision)."""
-    excludes = (
-        [chain_excludes] if isinstance(chain_excludes, str) else (chain_excludes or [])
-    )
+    """Newest .docx the REVIEWER last touched — their markup, awaiting the tool's answer.
+
+    ``chain_includes`` may name SEVERAL tokens, all of which must be present. A venue-scoped
+    deliverable needs exactly that: the ISMIR outline is the file whose chain carries both
+    `ismir` and `outline`, and the JASSS one sits beside it.
+    """
+    includes = _tokens(chain_includes)
+    excludes = _tokens(chain_excludes)
     candidates = []
     for p in paper_dir.glob("*.docx"):
         result = parse(p, short_title)
@@ -154,11 +197,16 @@ def find_user_revision(
         _, chain, _ = result
         if not chain or chain[-1].lower() == "ra":
             continue
+        # A RELEASE is nobody's turn (no `ra` in the chain at all), and its last token is a
+        # deliverable word — `260714_Chords_ismir.docx` ends in "ismir", which is not "ra"
+        # and is emphatically not a reviewer's initials. Without this, a venue's release
+        # reads as markup on itself.
+        if is_release(chain):
+            continue
         chain_lower = [c.lower() for c in chain]
-        if chain_includes is not None:
-            if chain_includes.lower() not in chain_lower:
-                continue
-        if any(exc.lower() in chain_lower for exc in excludes):
+        if any(inc not in chain_lower for inc in includes):
+            continue
+        if any(exc in chain_lower for exc in excludes):
             continue
         candidates.append(p)
     if not candidates:

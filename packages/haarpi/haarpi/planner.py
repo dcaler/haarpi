@@ -139,10 +139,18 @@ _DELIVERABLE_LABEL = {
     "outline":  "outline",
 }
 
-# next rung after a deliverable's gate passes
+# The next rung after a deliverable's gate passes.
+#
+#   onepager → venue → outline → draft
+#
+# The venue analysis is the FORK. Before it there is one narrative and one of everything;
+# after it there is an outline and a manuscript PER VENUE the author selected. The one-pager
+# used to jump straight to the outline, which quietly assumed a paper is written for nobody
+# in particular — but an outline has a length, a column count and an audience, and those
+# come from somewhere.
 PAPER_LADDER: dict[str, list[str]] = {
-    "onepager": ["outline", "comment"],
-    "venue":    ["outline", "comment"],
+    "onepager": ["venue", "comment"],
+    "venue":    ["outline", "comment"],     # queued once per SELECTED venue
     "outline":  ["draft", "comment"],
 }
 
@@ -168,6 +176,58 @@ PAPER_DELIVERABLE_TIERS: dict[str, dict[str, list[str]]] = {
     },
 }
 PAPER_DELIVERABLE_TIERS["venue"] = PAPER_DELIVERABLE_TIERS["outline"]
+
+
+def _selected_venues(root: Path) -> list[str]:
+    """The venues the AUTHOR chose, read from raconteur's config.
+
+    Selecting a venue is the author's act, made on the slate in the venue analysis — the
+    tool proposes candidates and never promotes one. So the ladder does not fork until the
+    author has said where this paper is going.
+    """
+    try:
+        from raconteur.config import ProjectConfig
+    except ImportError:                       # raconteur not installed in this stack
+        return []
+    if not ProjectConfig.exists(root):
+        return []
+    try:
+        return ProjectConfig.load(root).selected_venues()
+    except Exception as e:                    # noqa: BLE001 — a broken yaml must not wedge the gate
+        print(f"  [note] could not read the venue slate ({e})")
+        return []
+
+
+def _queue_next_rung(root: Path, m, client, tr_cfg: dict, deliverable: str,
+                     venue: str, dst: Path) -> str:
+    """Queue what comes after a deliverable's gate — once per venue where that applies.
+
+    The venue analysis is the FORK in the ladder. Before it, there is one narrative and one
+    of everything. After it, there is one outline and one manuscript PER SELECTED VENUE, and
+    those chains are independent: they share the one-pager, not the paper.
+    """
+    steps = PAPER_LADDER[deliverable]
+    if deliverable != "venue":
+        queued = queue_chain(client, m.trundlr_project_id, "paper", steps, tr_cfg,
+                             description=f"{deliverable} gate passed: {dst.name}.",
+                             venue=venue)
+        return (f"; queued cycle {queued['cycle']} "
+                f"({' -> '.join(steps)} -> next)"
+                + (f" for {venue}" if venue else ""))
+
+    chosen = _selected_venues(root)
+    if not chosen:
+        return ("; NO VENUE SELECTED — nothing queued. Set a venue's status to "
+                "'selected' on the slate in the venue analysis, then re-run `haarpi next`. "
+                "An outline is written FOR somewhere, and only you can say where.")
+    notes = []
+    for slug in chosen:
+        queued = queue_chain(client, m.trundlr_project_id, "paper", steps, tr_cfg,
+                             description=f"venue gate passed ({dst.name}): "
+                                         f"write the {slug} paper.",
+                             venue=slug)
+        notes.append(f"{slug} (cycle {queued['cycle']})")
+    return (f"; queued an outline chain for each selected venue: {', '.join(notes)}")
 
 
 def _deliverable_of(markup: Path, short_title: str) -> str:
@@ -276,28 +336,51 @@ def estimate_hours(tasks: list[dict], stage: str, step: str, fallback: float) ->
     return round(statistics.median(float(t["duration"]) for t in recent), 3)
 
 
-def next_cycle(titles: list[str], stage: str) -> int:
+def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
     """One shared number for every step a planning run queues, so a cycle reads
-    as one unit; one past the highest `<stage> <step> N` already present."""
-    pat = re.compile(rf"^{re.escape(stage)} \w+ (\d+)$", re.I)
+    as one unit; one past the highest `<stage> [venue] <step> N` already present.
+
+    Cycles count PER VENUE: the JASSS paper's first outline is its cycle 1, however many
+    rounds the ISMIR paper has already been through."""
+    mid = rf"{re.escape(venue)} \w+" if venue else r"\w+"
+    pat = re.compile(rf"^{re.escape(stage)} {mid} (\d+)$", re.I)
     nums = [int(m.group(1)) for t in titles for m in [pat.match((t or "").strip())] if m]
     return max(nums, default=0) + 1
 
 
 # ── queueing ─────────────────────────────────────────────────────────────────
 
+_VENUE_AWARE = re.compile(r"raconteur (outline|draft|paper)\b")
+
+
+def _venued(command: str | None, venue: str) -> str | None:
+    """Give a venue-aware verb its venue, explicitly.
+
+    A queued command that names the venue it is writing for is a provenance feature: read
+    back off the trundlr board a month later, `haarpi raconteur draft --venue jasss` says
+    which paper it wrote, and a bare `draft` would not.
+    """
+    if not command or not venue or not _VENUE_AWARE.search(command):
+        return command
+    return f"{command} --venue {venue}"
+
+
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
                 steps: list[str], tr_cfg: dict, description: str = "",
-                approval: bool = False) -> dict:
+                approval: bool = False, venue: str = "") -> dict:
     """Queue the steps as a dependency chain, always appending the next planner
     invocation as a runner task — the loop feeds itself.
 
     A step may be "otherstage:step" (cross-stage escalation; it queues into
     that stage's registry under that stage's title). approval=True prepends a
-    command-less human task that gates the whole chain (confirm_tiers)."""
+    command-less human task that gates the whole chain (confirm_tiers).
+
+    ``venue`` scopes a paper-stage chain to one venue: it names the chain ("paper ismir
+    outline 1"), and every venue-aware command in it carries `--venue`. Two venues' chains
+    are independent and run in parallel — they share the narrative, not the paper."""
     history = client.all_tasks()
     cycle = next_cycle([t.get("title", "") for t in client.tasks_for_project(project_id)],
-                       stage)
+                       stage, venue)
 
     plan_steps: list[tuple[str, str, Step]] = []
     if approval:
@@ -316,13 +399,16 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
     first = True
     for st, name, step in plan_steps:
         rid = _resource_id(tr_cfg, "human" if step.human else step.resource)
-        title = f"{st} {name} {cycle}"
+        # the venue belongs to the paper stage; an escalation into litreview is shared work
+        v = venue if (venue and st == stage) else ""
+        title = f"{st} {v} {name} {cycle}" if v else f"{st} {name} {cycle}"
+        command = _venued(step.command, v)
         desc = step.desc
         if first and description:
             desc = f"{description} — {step.desc}"    # the plan + the instructions
         task = client.create_task(
             title, project_id,
-            command=step.command,
+            command=command,
             depends_on_id=prev_id,
             description=desc,
             resource_id=rid,
@@ -330,8 +416,8 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
         )
         prev_id = task["id"]
         first = False
-        queued.append({"title": title, "id": task["id"], "command": step.command})
-    return {"cycle": cycle, "tasks": queued}
+        queued.append({"title": title, "id": task["id"], "command": command})
+    return {"cycle": cycle, "tasks": queued, "venue": venue}
 
 
 # ── classification ───────────────────────────────────────────────────────────
@@ -513,13 +599,19 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         return 0
 
     deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
-    infix = deliverable or (m.stages[stage].get("infix") or "")
+    venue = naming.venue_of(markup, m.short_title) if stage == "paper" else ""
+    infix = "_".join(p for p in (venue, deliverable or
+                                 (m.stages[stage].get("infix") or "")) if p)
     if check["clean"]:
         rel_name = naming.release_name(m.short_title, "docx", infix=infix)
         dst = m.output_dir(root, stage) / rel_name
         if dry_run:
             rung = f" ({deliverable} rung)" if deliverable else ""
-            print(f"[dry-run] clean markup{rung} -> would mint {dst.name}")
+            for_v = f" for {venue}" if venue else ""
+            print(f"[dry-run] clean markup{rung}{for_v} -> would mint {dst.name}")
+            if deliverable == "venue":
+                print(f"[dry-run] would queue an outline chain per selected venue: "
+                      f"{', '.join(_selected_venues(root)) or '(none selected on the slate)'}")
             return 0
         result = redline.mint_release(markup, dst)
 
@@ -530,21 +622,19 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             # manuscript's gate speaks for the paper stage.
             project.record_plan(root, {
                 "type": "gate", "stage": stage, "deliverable": deliverable,
-                "annotation_hash": ahash, "markup": markup.name,
+                "venue": venue, "annotation_hash": ahash, "markup": markup.name,
                 "release": dst.name})
             queued_note = ""
             if m.trundlr_project_id:
                 try:
                     client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
-                    queued = queue_chain(
-                        client, m.trundlr_project_id, stage,
-                        PAPER_LADDER[deliverable], tr_cfg,
-                        description=f"{deliverable} gate passed: {dst.name}.")
-                    queued_note = (f"; queued cycle {queued['cycle']} "
-                                   f"({' -> '.join(PAPER_LADDER[deliverable])} -> next)")
+                    queued_note = _queue_next_rung(
+                        root, m, client, tr_cfg, deliverable, venue, dst)
                 except trundlr.TrundlrError as e:
                     queued_note = f"; [trundlr] queueing failed ({e}) — queue the next rung manually"
-            msg = f"{stage}: {deliverable} gate PASSED — released {dst.name}{queued_note}"
+            for_v = f" ({venue})" if venue else ""
+            msg = (f"{stage}: {deliverable}{for_v} gate PASSED — "
+                   f"released {dst.name}{queued_note}")
             print(f"haarpi next: {msg}")
             _email(cfg, f"haarpi: {m.name} — {deliverable} gate passed", msg)
             return 0
@@ -574,6 +664,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     tier = plan["tier"]
     steps = (dtiers or STAGE_TIERS[stage])[tier]
     what = f"{stage} [{deliverable}]" if deliverable else stage
+    if venue:
+        what += f" ({venue})"
     summary = [f"{what}: {len(check['unresolved'])} unresolved ask(s) -> tier {tier}",
                f"  assessment: {plan.get('assessment', '')}",
                f"  chain: {' -> '.join(steps)} -> next"]
@@ -588,7 +680,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
     if plan.get("gather_topics"):
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
-    entry = {"type": "plan", "stage": stage, "deliverable": deliverable,
+    entry = {"type": "plan", "stage": stage, "deliverable": deliverable, "venue": venue,
              "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
@@ -604,7 +696,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         if plan.get("gather_topics"):
             desc += " | gather topics: " + ", ".join(plan["gather_topics"])
         queued = queue_chain(client, m.trundlr_project_id, stage, steps, tr_cfg,
-                             description=desc, approval=confirm)
+                             description=desc, approval=confirm, venue=venue)
         entry["cycle"] = queued["cycle"]
         entry["tasks"] = [t["title"] for t in queued["tasks"]]
         project.record_plan(root, entry)

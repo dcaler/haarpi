@@ -201,18 +201,9 @@ def _context_for_section(heading: str, litrev: str, code: str, results: str) -> 
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
-def _venue_block(cfg: ProjectConfig) -> str:
-    lines = []
-    v = cfg.venue
-    if v.name:
-        lines.append(f"Target venue: {v.name}")
-        if v.page_limit:
-            lines.append(f"Page limit: {v.page_limit}")
-        if v.word_limit:
-            lines.append(f"Word limit: {v.word_limit}")
-        if v.citation_style:
-            lines.append(f"Citation style: {v.citation_style}")
-    return ("Venue specifications:\n" + "\n".join(lines) + "\n") if lines else ""
+def _venue_block(cfg: ProjectConfig, venue: str = "") -> str:
+    from . import slate
+    return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
 def _critique_revise(

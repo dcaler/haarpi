@@ -105,8 +105,8 @@ def run(project_dir: Path) -> None:
         if cfg.description:
             preview = cfg.description.replace("\n", " ")
             print(f"  description : {preview[:80]}…")
-        if cfg.venue.name:
-            print(f"  venue       : {cfg.venue.name}")
+        for slug in cfg.selected_venues():
+            print(f"  venue       : {cfg.venues[slug].name} ({slug})")
         print()
 
     # 1. litReview
