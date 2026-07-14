@@ -160,3 +160,29 @@ def test_an_unknown_venue_is_refused():
     cfg = _cfg({"ismir": VenueConfig(name="ISMIR", status="selected")})
     with __import__("pytest").raises(SystemExit):
         slate.resolve(cfg, "nosuchvenue")
+
+
+# ── reading the candidates out of an existing analysis ───────────────────────
+
+def test_the_candidates_are_read_out_of_the_analysis():
+    """The whole extraction ran behind a broad `except Exception`, so a NameError in it
+    looked exactly like "the model returned nothing" — and the slate came back empty."""
+    from raconteur import venue as venue_mod
+
+    brain = types.SimpleNamespace(worker=lambda *a, **k: """[
+      {"venue": "Journal of Artificial Societies and Social Simulation", "type": "journal"},
+      {"venue": "ISMIR", "type": "conference", "url": "https://ismir.net/cfp"}
+    ]""")
+    got = venue_mod._candidates_from(brain, "…any analysis text…")
+
+    assert set(got) == {"jasss", "ismir"}
+    assert got["ismir"].url == "https://ismir.net/cfp"
+    assert got["jasss"].kind == "journal"
+    assert all(v.status == "candidate" for v in got.values()), "the tool never selects"
+    assert all(v.origin == "raconteur" for v in got.values())
+
+
+def test_a_model_that_returns_junk_yields_no_candidates():
+    from raconteur import venue as venue_mod
+    brain = types.SimpleNamespace(worker=lambda *a, **k: "I could not find any venues.")
+    assert venue_mod._candidates_from(brain, "…") == {}

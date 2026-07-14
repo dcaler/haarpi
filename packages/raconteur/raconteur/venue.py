@@ -4,12 +4,13 @@ from __future__ import annotations
 from .log import log
 
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
 
 from .brain import Brain
-from .config import ProjectConfig, GlobalConfig, VenueConfig
+from .config import ProjectConfig, GlobalConfig, VenueConfig, venue_slug
 from .context import load_litreview, load_onepager
 from .naming import parse, today
 from .render import to_docx
@@ -593,7 +594,7 @@ def _venue_revise(
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
-def run(project_dir: Path) -> None:
+def run(project_dir: Path, refresh: bool = False) -> None:
     if not ProjectConfig.exists(project_dir):
         log("[error] no paper/raconteur.yaml found — run 'raconteur init' first")
         raise SystemExit(1)
@@ -608,6 +609,7 @@ def run(project_dir: Path) -> None:
         raise SystemExit(1)
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
+    existing = paper_dir / "venue_analysis.md"
 
     user_rev = _find_venue_user_revision(paper_dir, cfg.short_title)
     if user_rev:
@@ -619,6 +621,15 @@ def run(project_dir: Path) -> None:
         # venue it never proposed. Their decision is taken out of harm's way first.
         _update_yaml(project_dir, cfg, brain, read_text(user_rev), gcfg)
         final_text = _venue_revise(project_dir, cfg, brain, paper_dir, user_rev)
+    elif existing.is_file() and not refresh:
+        # An analysis the author has not marked up is an analysis that stands. Re-deriving
+        # it would throw away a document they may have read, argued with, and be waiting to
+        # act on — and a second brainstorm of the same paper is not new information, it is
+        # a different sample. So: keep the prose, and make sure it carries a slate to decide
+        # on. `--refresh` is how you ask for a genuinely new analysis.
+        log("[raconteur] the venue analysis already exists — keeping it, and putting its "
+            "slate to you. Use --refresh to re-derive the analysis from scratch.")
+        final_text = existing.read_text(encoding="utf-8")
     else:
         final_text = _venue_fresh(project_dir, cfg, brain, paper_dir, gcfg)
 

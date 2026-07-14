@@ -62,7 +62,12 @@ def main() -> None:
         help="re-cut the narrative from scratch with your annotations as the brief "
              "(major version — for narrative-level rejections, not line edits)",
     )
-    sub.add_parser("venue", help="analyse venues and put a slate to the author")
+    venue_p = sub.add_parser("venue", help="analyse venues and put a slate to the author")
+    venue_p.add_argument(
+        "--refresh", action="store_true",
+        help="re-derive the analysis from scratch, discarding the existing one "
+             "(default: keep it and re-put its slate to you)",
+    )
     outline_p = sub.add_parser(
         "outline", help="generate a paper outline from the approved one-pager")
     outline_p.add_argument(
@@ -114,7 +119,7 @@ def main() -> None:
             run(project_dir, resynth=args.resynth)
         case "venue":
             from .venue import run
-            run(project_dir)
+            run(project_dir, refresh=args.refresh)
         case "outline":
             from .outline import run
             run(project_dir, venue=args.venue)
