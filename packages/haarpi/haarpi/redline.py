@@ -1001,16 +1001,101 @@ def add_replies(path: Path, replies: dict[str, str],
     return added
 
 
+def _visible_runs(p_el) -> list:
+    """Every run carrying visible text, in document order — including runs INSIDE a
+    tracked insertion, which is where the author's own words live. Deleted text is not
+    visible, and a comment-reference run is plumbing."""
+    out = []
+    for r in p_el.iter(qn("w:r")):
+        parent = r.getparent()
+        if parent is not None and parent.tag == qn("w:del"):
+            continue
+        if r.find(qn("w:commentReference")) is not None:
+            continue
+        if r.find(qn("w:t")) is not None:
+            out.append(r)
+    return out
+
+
+def _split_run(run, text: str):
+    """A copy of ``run`` carrying ``text`` — same formatting, same place in the redline."""
+    clone = copy.deepcopy(run)
+    t = clone.find(qn("w:t"))
+    t.text = text
+    t.set(_XML_SPACE, "preserve")
+    return clone
+
+
+def anchor_fragment(p_el, fragment: str, nid: str) -> bool:
+    """Bracket EXACTLY ``fragment`` with comment-range markers, splitting runs to do it.
+
+    A comment on a whole paragraph, whose text is "its", makes the reader hunt for the word
+    it means. A comment ON the word says everything by where it sits.
+
+    The markers may land INSIDE a ``w:ins`` — they must, since the author's sentences are
+    tracked insertions and that is exactly the text we most often have something to say
+    about. This is legal (comment-range markers are run-level elements, which a tracked
+    insertion's content model admits) and it is how Word itself comments on inserted text.
+    The author's characters are not touched: the run is split, and each piece keeps its
+    formatting and its place in the tracked change.
+
+    Returns False if the fragment is not in this paragraph — the caller falls back to
+    anchoring the paragraph, which is worse but never wrong.
+    """
+    runs = _visible_runs(p_el)
+    spans = [(r, r.find(qn("w:t")).text or "") for r in runs]
+    full = "".join(t for _, t in spans)
+    idx = full.find(fragment)
+    if idx < 0:
+        return False
+    end = idx + len(fragment)
+
+    first = last = None
+    pos = 0
+    for run, txt in spans:
+        r_start, r_end = pos, pos + len(txt)
+        pos = r_end
+        if r_end <= idx or r_start >= end:
+            continue                                   # this run is outside the fragment
+        lo = max(idx, r_start) - r_start
+        hi = min(end, r_end) - r_start
+        parent = run.getparent()
+        at = list(parent).index(run)
+        pieces = []
+        if txt[:lo]:
+            pieces.append(_split_run(run, txt[:lo]))
+        mid = _split_run(run, txt[lo:hi])
+        pieces.append(mid)
+        if txt[hi:]:
+            pieces.append(_split_run(run, txt[hi:]))
+        parent.remove(run)
+        for k, el in enumerate(pieces):
+            parent.insert(at + k, el)
+        if first is None:
+            first = mid
+        last = mid
+
+    if first is None:
+        return False
+    s_el = etree.Element(qn("w:commentRangeStart")); s_el.set(qn("w:id"), nid)
+    e_el = etree.Element(qn("w:commentRangeEnd"));   e_el.set(qn("w:id"), nid)
+    first.addprevious(s_el)
+    last.addnext(e_el)
+    return True
+
+
 def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
                           author: str = "raconteur", initials: str = "ra") -> int:
-    """Write new top-level comments, each anchored to the paragraph containing its key.
+    """Write new top-level comments, each anchored to the text it is ABOUT.
 
-    ``notes`` is a list of (paragraph_text_fragment, comment_text): the fragment —
-    whitespace-normalised — locates the first body paragraph whose visible text
-    contains it, and the comment is anchored across that whole paragraph. This is
-    the tool's voice on text it must not edit (a human-frozen paragraph): a
-    disagreement or a proposal lands as a comment, never as a tracked change.
-    Tool-authored comments never block a gate (see ``unresolved_comments``).
+    ``notes`` is a list of (fragment, comment_text). The fragment locates the paragraph,
+    and then — where it can be found exactly — the comment is anchored on those characters
+    alone: on the word "it's", not on the sentence containing it. Failing that it falls
+    back to the whole paragraph, which is worse but never wrong.
+
+    This is the tool's voice on text it must not edit (the author's own): a disagreement, a
+    correction, a proposal lands as a comment, never as a tracked change. Tool-authored
+    comments never block a gate (see ``unresolved_comments``).
 
     Requires an existing word/comments.xml (in practice these notes only arise on
     documents the reviewer has already commented); returns 0 if there is none.
@@ -1053,15 +1138,16 @@ def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
         nid = str(next_id)
         next_id += 1
 
-        s_el = etree.Element(qn("w:commentRangeStart")); s_el.set(qn("w:id"), nid)
-        e_el = etree.Element(qn("w:commentRangeEnd"));   e_el.set(qn("w:id"), nid)
-        first_run = target.find(qn("w:r"))
-        anchor_at = first_run if first_run is not None else None
-        if anchor_at is not None:
-            anchor_at.addprevious(s_el)
-        else:
-            target.insert(0, s_el)
-        target.append(e_el)
+        # On the words themselves where we can find them; on the paragraph where we cannot.
+        if not anchor_fragment(target, fragment.strip(), nid):
+            s_el = etree.Element(qn("w:commentRangeStart")); s_el.set(qn("w:id"), nid)
+            e_el = etree.Element(qn("w:commentRangeEnd"));   e_el.set(qn("w:id"), nid)
+            first_run = target.find(qn("w:r"))
+            if first_run is not None:
+                first_run.addprevious(s_el)
+            else:
+                target.insert(0, s_el)
+            target.append(e_el)
         ref_run = etree.SubElement(target, qn("w:r"))
         ref = etree.SubElement(ref_run, qn("w:commentReference"))
         ref.set(qn("w:id"), nid)

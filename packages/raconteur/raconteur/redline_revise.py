@@ -36,6 +36,7 @@ import shutil
 from pathlib import Path
 
 from haarpi import redline as hredline
+from haarpi import text as htext
 
 from . import guards, redline
 from .brain import Brain
@@ -518,12 +519,9 @@ def redline_revise(
 
         for span, fix in proposed.items():
             original = authored.get(span, "").strip()
-            if " ".join(fix.split()) == " ".join(original.split()):
-                continue                      # not a correction, an echo
-            copyedit_notes.append((
-                original[:120],
-                "Suggested correction to your own text — NOT applied, it is yours:\n\n"
-                f"{fix}"))
+            # Word by word, anchored on the offending words, saying only the correction —
+            # never the author's whole sentence handed back with the change buried in it.
+            copyedit_notes.extend(htext.copyedit_notes(original, fix.strip()))
 
         for cid in ids_live:
             dispositions[cid] = outcome

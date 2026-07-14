@@ -3,6 +3,8 @@ import json
 import re
 import shutil
 from typing import NamedTuple
+from haarpi import text as htext
+
 from . import guards
 from .log import log
 from pathlib import Path
@@ -515,12 +517,11 @@ def _copyedit_notes(brain: Brain, authored: dict[str, dict[str, str]]
         original = words.get(key, "").strip()
         if not original or not isinstance(fix, str) or not fix.strip():
             continue
-        if " ".join(fix.split()) == " ".join(original.split()):
-            continue                                  # not a correction, an echo
-        notes.append((
-            original[:120],
-            "Suggested correction to your own text — NOT applied, these are your words:"
-            f"\n\n{fix.strip()}"))
+        # Word by word, anchored on the offending words, saying only the correction. The
+        # whole sentence restated — with a missing "t" or a stray apostrophe buried
+        # somewhere inside it — is the tool handing the author their own prose back and
+        # making them find the difference.
+        notes.extend(htext.copyedit_notes(original, fix.strip()))
     return notes
 
 
