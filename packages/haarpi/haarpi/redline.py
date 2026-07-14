@@ -97,6 +97,23 @@ def _rpr_clone(run_el):
     return copy.deepcopy(rpr) if rpr is not None else None
 
 
+def _dominant_rpr(els):
+    """Formatting of the text run carrying the most characters.
+
+    A paragraph often opens with a short specially-formatted run (a bold
+    lead-in label, an italic term); the first run must not donate its
+    formatting to a whole replacement. The run holding the bulk of the prose
+    is what the replacement should look like — even when that run has no rPr
+    at all (plain beats bold)."""
+    best, best_len = None, -1
+    for r in els:
+        if r.tag == qn("w:r") and _is_text_run(r):
+            n = sum(len(t.text or "") for t in r.findall(qn("w:t")))
+            if n > best_len:
+                best, best_len = _rpr_clone(r), n
+    return best
+
+
 def _text_run(text: str, rpr=None):
     r = OxmlElement("w:r")
     if rpr is not None:
@@ -330,8 +347,7 @@ def tracked_replace(p_el, new_text: str, author: str, ids: _Ids | None = None) -
     old_text, smap, consumed = serialize_paragraph(p_el)
     if not consumed or new_text.strip() == old_text.strip():
         return False
-    rpr = next((_rpr_clone(r) for r in consumed
-                if r.tag == qn("w:r") and _is_text_run(r)), None)
+    rpr = _dominant_rpr(consumed)
     _relay(p_el, _redline_chunk(old_text, new_text, smap, author, ids, rpr), consumed)
     return True
 
@@ -351,8 +367,7 @@ def tracked_replace_sentencewise(p_el, new_text: str, author: str,
     old_text, smap, consumed = serialize_paragraph(p_el)
     if not consumed or new_text.strip() == old_text.strip():
         return False
-    rpr = next((_rpr_clone(r) for r in consumed
-                if r.tag == qn("w:r") and _is_text_run(r)), None)
+    rpr = _dominant_rpr(consumed)
 
     old_units = sentence_units(old_text)
     new_units = sentence_units(new_text)
@@ -379,9 +394,28 @@ def tracked_insert_after(p_el, text: str, author: str, ids: _Ids | None = None):
     ppr = p_el.find(qn("w:pPr"))
     if ppr is not None:
         new_p.append(copy.deepcopy(ppr))
-    rpr = next((_rpr_clone(r) for r in p_el.findall(qn("w:r")) if _is_text_run(r)), None)
+    rpr = _dominant_rpr(p_el.findall(qn("w:r")))
     new_p.append(_ins(text, author, ids.next(), rpr))
     p_el.addnext(new_p)
+    return new_p
+
+
+def tracked_heading_before(p_el, text: str, author: str, ids: _Ids | None = None,
+                           style: str = "Heading2"):
+    """Insert a heading paragraph (wholly a tracked insertion) before ``p_el``.
+
+    For structural migrations — e.g. promoting a paragraph's inline lead-in label
+    to a real section heading. The style id must exist in the document's styles
+    part for Word to render it as a heading."""
+    ids = ids or _Ids(1000)
+    new_p = OxmlElement("w:p")
+    ppr = OxmlElement("w:pPr")
+    pstyle = OxmlElement("w:pStyle")
+    pstyle.set(qn("w:val"), style)
+    ppr.append(pstyle)
+    new_p.append(ppr)
+    new_p.append(_ins(text, author, ids.next()))
+    p_el.addprevious(new_p)
     return new_p
 
 

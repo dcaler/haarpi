@@ -181,7 +181,8 @@ Critique:
 {critique}
 
 Rules:
-- Keep the beat structure: each beat is a short bolded label followed by 1-3 sentences.
+- Keep the beat structure: each beat is a "## <beat name>" heading followed by 1-3 \
+sentences of plain prose. No bold text.
 - Cut every sentence that is not essential to the through-line. Do not exceed ~500 words.
 - Keep concrete values. Do not add new claims, and do not add figures — keep at most two.
 - Output only the revised one-pager — no preamble."""
@@ -260,7 +261,7 @@ _LABEL_DASHES = "—-–:"
 def _strip_label(name: str, text: str) -> str:
     """Drop a beat label the model emitted despite being told not to."""
     t = text.strip()
-    for prefix in (f"- **{name}**", f"**{name}**", f"- {name}", name):
+    for prefix in (f"- **{name}**", f"**{name}**", f"## {name}", f"- {name}", name):
         if t.lower().startswith(prefix.lower()):
             t = t[len(prefix):].lstrip().lstrip(_LABEL_DASHES).lstrip()
             break
@@ -271,11 +272,15 @@ _FIG_LINE = re.compile(r"[ \t]*(!\[[^\]]*\]\([^)]+\))[ \t]*$", re.M)
 
 
 def _assemble(beats: list[tuple[str, str]]) -> str:
-    """Bold-label paragraphs, each figure left standing as its own block."""
+    """Each beat under its own section heading, figures standing as their own blocks.
+
+    Headings, not inline bold labels: a bold lead-in run would donate its
+    formatting to any tracked replacement of the paragraph, and headings are
+    what the redline reader routes by."""
     out = []
     for name, text in beats:
         body = _FIG_LINE.sub(r"\n\n\1\n", text.strip()).strip()
-        out.append(f"**{name}** — {body}")
+        out.append(f"## {name}\n\n{body}")
     return "\n\n".join(out)
 
 
@@ -357,17 +362,25 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
     counts = hrl.accept_all_changes(doc)   # reviewer's edits become the base text
     ids = rl.ids_for(doc)
 
-    final = _beats_from_md(text)
-    replaced = 0
+    final = _beats_from_md(text)             # beat -> body prose, no label/heading
+    fallback = dict(beats)
+    replaced, done = 0, set()
     for rec in rl.body_paragraphs(doc):
-        beat = _beat_of((rec["para"].text or "").strip())
-        if beat is None:
+        beat = _beat_of(rec["heading"] or "")
+        legacy = beat is None                # pre-heading doc: label-led paragraph
+        if legacy:
+            beat = _beat_of((rec["para"].text or "").strip())
+        if beat is None or beat in done:
             continue
-        new = final.get(beat) or next(
-            (f"**{n}** — {t}" for n, t in beats if n == beat), None)
+        new = final.get(beat) or fallback.get(beat)
         if new and rl.tracked_replace_sentencewise(
                 rec["para"]._p, new.replace("**", ""), rl.AUTHOR, ids):
+            if legacy:
+                # migrate: the inline label leaves with the diff, and the beat
+                # name arrives above the paragraph as a real section heading
+                hrl.tracked_heading_before(rec["para"]._p, beat, rl.AUTHOR, ids)
             replaced += 1
+            done.add(beat)
     doc.save(str(out))
     log(f"[raconteur] wrote {out.relative_to(project_dir)} "
         f"(re-cut: {replaced} beat(s) replaced as tracked changes; "
@@ -385,7 +398,8 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
 
 
 def _beat_of(text: str) -> str | None:
-    t = text.lstrip("*-–—• ").lower()
+    """The beat a heading or a legacy label-led paragraph belongs to."""
+    t = text.lstrip("#*-–—• ").lower()
     for beat in _BEATS:
         if t.startswith(beat.name.lower()):
             return beat.name
@@ -393,12 +407,28 @@ def _beat_of(text: str) -> str | None:
 
 
 def _beats_from_md(md: str) -> dict[str, str]:
-    """Beat-name -> full paragraph text, from any beat-labelled markdown."""
+    """Beat-name -> body prose (heading/label stripped), from beat-structured markdown.
+
+    Understands both shapes: '## Gap' section headings with the body in the
+    blocks that follow (current), and legacy '**Gap** — …' label-led paragraphs.
+    A document with any beat heading parses heading-mode exclusively, so body
+    prose that merely opens with a beat word is never mistaken for a label."""
+    blocks = [b.strip() for b in md.split("\n\n") if b.strip()]
     out: dict[str, str] = {}
-    for para in md.split("\n\n"):
-        beat = _beat_of(para.strip())
+    if any(b.startswith("#") and _beat_of(b) for b in blocks):
+        current: str | None = None
+        for b in blocks:
+            if b.startswith("#"):
+                beat = _beat_of(b)
+                current = beat if beat and beat not in out else None
+                continue
+            if current:
+                out[current] = f"{out[current]}\n\n{b}" if current in out else b
+        return out
+    for b in blocks:
+        beat = _beat_of(b)
         if beat and beat not in out:
-            out[beat] = para.strip()
+            out[beat] = _strip_label(beat, b)
     return out
 
 
@@ -413,6 +443,8 @@ def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
     md = redline.accepted_markdown(Document(str(user_rev)))
     for line in md.splitlines():
         if line.startswith("#"):
+            if _beat_of(line):
+                continue   # a beat heading is never the title
             title = re.sub(r"\s*[—–-]+\s*one-pager\s*$", "", line.lstrip("# ").strip())
             if title and title != cfg.title:
                 log(f"[raconteur] adopting reviewer's title: {title!r}")
@@ -442,15 +474,21 @@ def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], s
         if not comments:
             continue
         block = "\n".join(f"- {c}" for c in comments)
-        beat = _beat_of(anchor["text"])
+        beat = _beat_of(anchor.get("heading") or "") or _beat_of(anchor["text"])
         if beat is None:
             general.append(block)
         else:
             notes[beat] = f"{notes[beat]}\n{block}" if beat in notes else block
     for h in redline.heading_comments(user_rev):
         comments = [cmap[c]["text"] for c in h["ids"] if c in cmap]
-        if comments:
-            general.append("\n".join(f"- {c}" for c in comments))
+        if not comments:
+            continue
+        block = "\n".join(f"- {c}" for c in comments)
+        beat = _beat_of(h["heading"])
+        if beat is None:
+            general.append(block)
+        else:
+            notes[beat] = f"{notes[beat]}\n{block}" if beat in notes else block
     return prior, notes, "\n".join(general)
 
 
@@ -562,11 +600,12 @@ def _revise(
     bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
     def beat_context(heading: str, para_text: str) -> str:
-        # The one-pager's structure lives in the paragraph's leading bold
-        # label, not in headings — route each beat its own evidence bundle.
-        t = para_text.lstrip("*-–—• ").lower()
+        # Beats live under their own section headings; legacy one-pagers carry
+        # the beat name as an inline lead-in label instead. Either way, route
+        # each beat its own evidence bundle.
+        name = _beat_of(heading or "") or _beat_of(para_text)
         for beat in _BEATS:
-            if t.startswith(beat.name.lower()):
+            if beat.name == name:
                 return _evidence_for_beat(
                     beat.sources, cfg.description, litrev, code, results
                 )

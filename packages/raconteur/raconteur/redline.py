@@ -127,8 +127,10 @@ def body_paragraphs(doc) -> list[dict]:
         if is_heading_style(style):
             # The title is skipped but does not open a section: the abstract that follows it
             # belongs to no section, not to a section named after the paper.
+            # Accepted text, not p.text: a tracked-inserted heading's runs live
+            # inside w:ins, which python-docx's .text does not see.
             if not is_title_style(style):
-                heading = (p.text or "").strip()
+                heading = _accepted_para_text(p._p).strip()
                 in_references = guards.is_references(heading)
             continue
         if in_references or not (p.text or "").strip():
@@ -179,7 +181,7 @@ def heading_comments(path: Path) -> list[dict]:
             continue
         ids = [s.get(qn("w:id")) for s in p._p.findall(qn("w:commentRangeStart"))]
         if ids:
-            out.append({"index": i, "heading": (p.text or "").strip(), "ids": ids})
+            out.append({"index": i, "heading": _accepted_para_text(p._p).strip(), "ids": ids})
     return out
 
 
@@ -199,7 +201,7 @@ def accepted_markdown(doc) -> str:
     parts: list[str] = []
     for p in doc.paragraphs:
         style = _style_name(p)
-        text = (p.text or "").strip()
+        text = _accepted_para_text(p._p).strip()
         if is_title_style(style):
             if text:
                 parts.append(f"# {text}")
