@@ -488,7 +488,7 @@ def _candidates_from(brain: Brain, analysis: str) -> dict[str, VenueConfig]:
 
 
 def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str,
-                 gcfg: GlobalConfig | None = None) -> None:
+                 gcfg: GlobalConfig | None = None, markup: Path | None = None) -> None:
     """Fold the analysis (and the author's slate in it) into the venues map.
 
     Three rules, and they are the whole design:
@@ -513,7 +513,11 @@ def _update_yaml(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: 
         venues[slug] = cand
 
     # The author's own rows — including venues we never proposed — and their statuses.
-    author_slate = slate_mod.parse(analysis)
+    # Read from the .docx when there is one: that is where they edited the table, and a
+    # Word table is not paragraphs. Parsed from the document's TEXT it comes back empty,
+    # and their decision is silently unread.
+    author_slate = (slate_mod.parse_docx(markup) if markup is not None
+                    else slate_mod.parse(analysis))
     if author_slate:
         venues = slate_mod.merge(venues, author_slate)
         for slug in slate_mod.dropped(venues, author_slate):
@@ -619,7 +623,7 @@ def run(project_dir: Path, refresh: bool = False) -> None:
         # this document's prose, and a model asked to revise a document containing a table
         # will cheerfully revise the table — including the row the author typed to name a
         # venue it never proposed. Their decision is taken out of harm's way first.
-        _update_yaml(project_dir, cfg, brain, read_text(user_rev), gcfg)
+        _update_yaml(project_dir, cfg, brain, read_text(user_rev), gcfg, markup=user_rev)
         final_text = _venue_revise(project_dir, cfg, brain, paper_dir, user_rev)
     elif existing.is_file() and not refresh:
         # An analysis the author has not marked up is an analysis that stands. Re-deriving

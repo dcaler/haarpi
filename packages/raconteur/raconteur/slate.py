@@ -64,49 +64,93 @@ def render(venues: dict[str, VenueConfig]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def parse(text: str) -> dict[str, dict]:
-    """Read the slate back out of an analysis (the author's accepted version of it).
+def _row(cells: list[str]) -> tuple[str, dict] | None:
+    """One slate row -> (slug, record). None when it is a header, a rule, or unreadable."""
+    cells = [c.strip().strip("*_ ") for c in cells]
+    if not cells or not cells[0] or cells[0].lower() == "slug":
+        return None
+    if set(cells[0]) <= set("-: "):                     # a markdown rule
+        return None
+    slug = (venue_slug(cells[0]) if " " in cells[0]
+            else re.sub(r"[^a-z0-9]", "", cells[0].lower()))
+    name = cells[1] if len(cells) > 1 and cells[1] else cells[0]
+    if not slug or not name:
+        return None
+    kind = cells[2].lower() if len(cells) > 2 else ""
+    status, url = "", ""
+    for c in cells[2:]:
+        if c.lower() in _STATUSES:
+            status = c.lower()
+        if (u := _URL.search(c)):
+            url = u.group(0)
+    return slug, {
+        "name": name,
+        "kind": kind if kind in ("journal", "conference", "workshop") else "",
+        "status": status or "candidate",
+        "url": url,
+    }
 
-    Returns ``{slug: {name, kind, status, url, origin}}``. Tolerant on purpose: this is a
-    table a human edits by hand in Word, so a missing column, a stray asterisk from a bold
-    run, or a struck-through row that pandoc rendered as plain text must not lose the whole
-    slate. A row we cannot read at all is skipped and reported, never guessed at.
+
+def parse(text: str) -> dict[str, dict]:
+    """Read the slate out of an analysis in MARKDOWN.
+
+    Tolerant on purpose: a missing column, or a stray asterisk from a bold run, must not
+    lose the whole slate. A row that cannot be read is skipped, never guessed at.
     """
     body = text.split(SLATE_HEADING, 1)[1] if SLATE_HEADING in text else ""
     if not body:
         return {}
     out: dict[str, dict] = {}
     for line in body.splitlines():
-        if line.strip().startswith("#") and not line.strip().startswith("#####"):
+        if line.strip().startswith("#"):
             if out:
                 break                      # the next section ends the slate
             continue
         m = _ROW.match(line)
         if not m or _SEP.match(line):
             continue
-        cells = [c.strip().strip("*_ ") for c in m.group("cells").split("|")]
-        if not cells or cells[0].lower() in ("slug", ""):
-            continue
-        slug = venue_slug(cells[0]) if " " in cells[0] else re.sub(
-            r"[^a-z0-9]", "", cells[0].lower())
-        name = cells[1] if len(cells) > 1 and cells[1] else cells[0]
-        if not slug or not name:
-            continue
-        kind = cells[2].lower() if len(cells) > 2 else ""
-        status = ""
-        url = ""
-        for c in cells[2:]:
-            if c.lower() in _STATUSES:
-                status = c.lower()
-            if (u := _URL.search(c)):
-                url = u.group(0)
-        out[slug] = {
-            "name": name,
-            "kind": kind if kind in ("journal", "conference", "workshop") else "",
-            "status": status or "candidate",
-            "url": url,
-        }
+        got = _row(m.group("cells").split("|"))
+        if got:
+            out[got[0]] = got[1]
     return out
+
+
+def parse_docx(path) -> dict[str, dict]:
+    """Read the slate out of the author's WORD DOCUMENT — which is where they edit it.
+
+    The slate is rendered to a real Word table, and a Word table is not paragraphs: every
+    reader in this codebase walks `doc.paragraphs`, and a table is invisible to all of them.
+    A slate parsed from the paragraph text of a .docx comes back EMPTY — the author's
+    decision, silently unread.
+
+    Cells are read as ACCEPTED text (their tracked insertions kept, their deletions gone),
+    and a row the author struck in Word is a row they removed: Word marks it `w:trPr/w:del`
+    and it does not survive here either.
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+    from haarpi.redline import _accepted_para_text
+
+    def _cell(c) -> str:
+        return " ".join(_accepted_para_text(p._p).strip() for p in c.paragraphs).strip()
+
+    def _struck(row) -> bool:
+        trpr = row._tr.find(qn("w:trPr"))
+        return trpr is not None and trpr.find(qn("w:del")) is not None
+
+    for table in Document(str(path)).tables:
+        header = [_cell(c).lower() for c in table.rows[0].cells]
+        if not header or header[0] != "slug":
+            continue
+        out: dict[str, dict] = {}
+        for row in table.rows[1:]:
+            if _struck(row):
+                continue
+            got = _row([_cell(c) for c in row.cells])
+            if got:
+                out[got[0]] = got[1]
+        return out
+    return {}
 
 
 def merge(venues: dict[str, VenueConfig], slate: dict[str, dict]) -> dict[str, VenueConfig]:

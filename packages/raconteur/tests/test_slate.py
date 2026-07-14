@@ -186,3 +186,78 @@ def test_a_model_that_returns_junk_yields_no_candidates():
     from raconteur import venue as venue_mod
     brain = types.SimpleNamespace(worker=lambda *a, **k: "I could not find any venues.")
     assert venue_mod._candidates_from(brain, "…") == {}
+
+
+# ── the slate is a WORD TABLE, and that is where the author edits it ─────────
+
+def _slate_docx(tmp_path, rows, struck=(), tracked=()):
+    """A .docx whose slate is a real Word table — what pandoc actually renders."""
+    from docx import Document
+    from docx.oxml.ns import qn
+    from haarpi.redline import _ins
+
+    d = Document()
+    d.add_paragraph("Venue slate", style="Heading 2")
+    t = d.add_table(rows=1, cols=5)
+    for i, h in enumerate(("slug", "venue", "kind", "status", "source")):
+        t.rows[0].cells[i].text = h
+    for r in rows:
+        cells = t.add_row().cells
+        for i, val in enumerate(r):
+            cells[i].text = val
+    for i in struck:                       # the author deleted this row in Word
+        row = t.rows[i]
+        trpr = row._tr.makeelement(qn("w:trPr"), {})
+        trpr.append(row._tr.makeelement(qn("w:del"),
+                                        {qn("w:id"): "9", qn("w:author"): "DCR",
+                                         qn("w:date"): "2026-07-14T00:00:00Z"}))
+        row._tr.insert(0, trpr)
+    for i, col, text in tracked:           # the author typed into this cell
+        cell = t.rows[i].cells[col]
+        cell.text = ""
+        cell.paragraphs[0]._p.append(_ins(text, "DCR", 7))
+    path = tmp_path / "slate.docx"
+    d.save(str(path))
+    return path
+
+
+def test_the_slate_is_read_out_of_the_word_table(tmp_path):
+    """Rendered to .docx the slate is a TABLE, and a table is not paragraphs — every reader
+    in this codebase walks doc.paragraphs, so a slate parsed from the document's text comes
+    back EMPTY and the author's decision goes silently unread."""
+    doc = _slate_docx(tmp_path, [
+        ("ismir", "ISMIR", "conference", "candidate", "(raconteur)"),
+        ("jasss", "JASSS", "journal", "candidate", "(raconteur)"),
+    ])
+    got = slate.parse_docx(doc)
+    assert set(got) == {"ismir", "jasss"}
+
+    from raconteur.revise import read_text
+    assert slate.parse(read_text(doc)) == {}, "the paragraph text never sees the table"
+
+
+def test_a_status_the_author_typed_is_read_as_tracked_text(tmp_path):
+    """They type "selected" over "candidate"; Word records it as a tracked insertion."""
+    doc = _slate_docx(tmp_path, [
+        ("ismir", "ISMIR", "conference", "candidate", "(raconteur)"),
+    ], tracked=[(1, 3, "selected")])
+    assert slate.parse_docx(doc)["ismir"]["status"] == "selected"
+
+
+def test_a_row_the_author_struck_in_word_is_gone(tmp_path):
+    doc = _slate_docx(tmp_path, [
+        ("ismir", "ISMIR", "conference", "selected", "(raconteur)"),
+        ("cmj", "Computer Music Journal", "journal", "candidate", "(raconteur)"),
+    ], struck=[2])
+    got = slate.parse_docx(doc)
+    assert set(got) == {"ismir"}, "a struck row is a row they removed"
+
+
+def test_a_row_the_author_added_names_a_venue_we_never_proposed(tmp_path):
+    doc = _slate_docx(tmp_path, [
+        ("ismir", "ISMIR", "conference", "candidate", "(raconteur)"),
+        ("nime", "NIME 2027", "conference", "selected", "https://nime.org/2027/cfp"),
+    ])
+    merged = slate.merge({"ismir": VenueConfig(name="ISMIR")}, slate.parse_docx(doc))
+    assert merged["nime"].by_author and merged["nime"].status == "selected"
+    assert merged["nime"].url == "https://nime.org/2027/cfp"
