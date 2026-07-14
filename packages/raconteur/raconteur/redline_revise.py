@@ -324,6 +324,26 @@ def redline_paragraph(
 
 # ── orchestration ────────────────────────────────────────────────────────────
 
+def _ask_text(ask: dict) -> str:
+    """One open ask, with its thread — the whole of what the reviewer said.
+
+    The thread is part of the ask. Under the comment protocol, new information about an
+    unmet ask arrives as a REPLY rather than a second comment, so a reviser that reads
+    only the top comment reads only half its instructions. And an ask the tool has
+    already answered, still open, is not a fresh request — it is one the tool got wrong,
+    and it must not be answered the same way twice.
+    """
+    parts = [ask["text"].strip()]
+    for f in ask.get("followups", []):
+        parts.append(f"(reviewer, same thread) {f.strip()}")
+    if ask.get("repeat"):
+        parts.append("** You already answered this and the reviewer left it OPEN: your "
+                     "previous answer did not satisfy them. Do not repeat it. **")
+        for r in ask.get("prior_tool_replies", []):
+            parts.append(f"(your previous, rejected answer) {r.strip()[:300]}")
+    return "\n".join(parts)
+
+
 def _out_path(paper_dir: Path, short_title: str, user_rev: Path) -> Path:
     """A redline is a MINOR version: it keeps the reviewer's datestamp and extends the chain.
 
@@ -379,9 +399,15 @@ def redline_revise(
     out = _out_path(paper_dir, cfg.short_title, user_rev)
     shutil.copy2(user_rev, out)
 
-    anchors = redline.comment_anchors(out)
+    # Only the OPEN asks. A resolved comment is history, not an instruction — answering
+    # it again rewrites prose the reviewer has already accepted. And a thread is part of
+    # its ask: the reviewer's follow-up replies come with it, and an ask the tool has
+    # already answered (still open) is a failure to repair, not a fresh request.
+    asks = {a["id"]: a for a in hredline.open_asks(out)}
+    live = set(asks)
+    anchors = redline.comment_anchors(out, only=live)
     cmap = redline.comments_by_id(out)
-    headings = redline.heading_comments(out)
+    headings = redline.heading_comments(out, only=live)
 
     if not anchors and not headings:
         log("[warn] no comment anchors found in the revision — nothing to redline")
@@ -402,7 +428,7 @@ def redline_revise(
         rec = body.get(anchor["index"])
         if rec is None:
             continue
-        comments = [cmap[c]["text"] for c in anchor["ids"] if c in cmap]
+        comments = [_ask_text(asks[c]) for c in anchor["ids"] if c in asks]
         if not comments:
             continue
         heading = anchor["heading"] or "Abstract"

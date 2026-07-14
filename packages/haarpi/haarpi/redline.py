@@ -449,16 +449,31 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
     n = 0
     opens: dict[str, int] = {}
     spans: dict[str, tuple[int, int]] = {}
+
+    def _open(cid):
+        if cid:
+            opens[cid] = offset
+
+    def _close(cid):
+        if cid in opens:
+            spans[cid] = (opens.pop(cid), offset)
+
     for child in list(p_el):
         tag = child.tag
         if tag == qn("w:commentRangeStart"):
-            opens[child.get(qn("w:id"))] = offset
+            _open(child.get(qn("w:id")))
         elif tag == qn("w:commentRangeEnd"):
-            cid = child.get(qn("w:id"))
-            if cid in opens:
-                spans[cid] = (opens.pop(cid), offset)
-        elif tag == qn("w:pPr") or _is_ref_run(child) or tag == qn("w:del"):
+            _close(child.get(qn("w:id")))
+        elif tag == qn("w:pPr") or _is_ref_run(child):
             continue
+        elif tag == qn("w:del"):
+            # Deleted text is not in the serialized paragraph, so it advances no offset —
+            # but an anchor nested INSIDE it must still be seen. A reviewer who comments on
+            # a phrase and then deletes it leaves the anchor there, and a search of direct
+            # children alone loses the comment entirely. It collapses to a point: the place
+            # where the text they were talking about used to be.
+            for el in child.iter(qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
+                (_open if el.tag == qn("w:commentRangeStart") else _close)(el.get(qn("w:id")))
         elif _is_opaque(child):
             # Must mirror serialize_paragraph's numbering exactly. Hardcoding the width as
             # len("⟦m:0⟧") drifts one char per atom from the tenth atom onward, which
@@ -467,7 +482,15 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
             n += 1
             offset += len(f"⟦{_sentinel_kind(child)}:{n}⟧")
         elif tag == qn("w:ins"):
-            offset += sum(len(t.text or "") for t in child.iter(qn("w:t")))
+            # Insertions read as accepted text; anchors nested inside one are real anchors
+            # (a reviewer commenting on their own inserted sentence).
+            for el in child.iter():
+                if el.tag == qn("w:commentRangeStart"):
+                    _open(el.get(qn("w:id")))
+                elif el.tag == qn("w:commentRangeEnd"):
+                    _close(el.get(qn("w:id")))
+                elif el.tag == qn("w:t"):
+                    offset += len(el.text or "")
         elif tag == qn("w:r"):
             offset += sum(len(t.text or "") for t in child.findall(qn("w:t")))
     for cid, start in opens.items():  # range never closed in this paragraph
@@ -476,11 +499,18 @@ def comment_spans(p_el) -> dict[str, tuple[int, int]]:
 
 
 def anchored_sentences(text: str, span: tuple[int, int]) -> set[int]:
-    """Indices of the sentences a comment's character range overlaps."""
+    """Indices of the sentences a comment's character range overlaps.
+
+    A zero-width span is not a comment about nothing: it is a comment whose text was
+    deleted (see ``comment_spans``). It bears on the sentence it now sits in.
+    """
+    start, end = span
+    if end <= start:
+        end = start + 1
     out: set[int] = set()
     pos = 0
     for i, unit in enumerate(sentence_units(text)):
-        if pos < span[1] and span[0] < pos + len(unit):
+        if pos < end and start < pos + len(unit):
             out.add(i)
         pos += len(unit)
     return out
@@ -529,43 +559,122 @@ def _zip_parts(path: Path) -> dict[str, bytes]:
         return {n: z.read(n) for n in z.namelist()}
 
 
-def unresolved_comments(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
-    """Top-level, human-authored comments not marked done.
+def comment_threads(path: Path, tool_authors=TOOL_AUTHORS) -> dict[str, dict]:
+    """Every comment, with its thread position and its resolution state.
 
-    Replies (commentEx with a paraIdParent) are conversation, not asks — the ask
-    lives in the parent, and resolving the thread marks the parent done. Tool-
-    authored comments (the redline's replies) never block a gate."""
+    One reading of the comments part, so that every caller agrees about what a
+    comment IS. They did not, and the disagreement was expensive: the gate honoured
+    ``w15:done`` while the reviser did not, so nine settled comments were re-fired as
+    fresh instructions and the tool spent a cycle rewriting text the author had
+    already blessed.
+
+    Returns ``{id: {id, author, text, done, is_tool, parent, replies}}`` where
+    ``parent`` is the comment id this one replies to (None for a top-level ask) and
+    ``replies`` is the ordered list of ids replying to it.
+
+    Resolution is recorded per PARAGRAPH id in commentsExtended.xml, and Word marks a
+    thread done by marking its top comment — so a reply inherits its parent's state.
+    """
     parts = _zip_parts(path)
     if "word/comments.xml" not in parts:
-        return []
+        return {}
     croot = etree.fromstring(parts["word/comments.xml"])
 
-    done_ids: set[str] = set()
-    reply_ids: set[str] = set()
+    done_paras: set[str] = set()
+    parent_of_para: dict[str, str] = {}
     if "word/commentsExtended.xml" in parts:
         ce = etree.fromstring(parts["word/commentsExtended.xml"])
         for cex in ce.iter(f"{{{_W15}}}commentEx"):
             pid = cex.get(f"{{{_W15}}}paraId")
+            if not pid:
+                continue
             if cex.get(f"{{{_W15}}}done") == "1":
-                done_ids.add(pid)
-            if cex.get(f"{{{_W15}}}paraIdParent") is not None:
-                reply_ids.add(pid)
+                done_paras.add(pid)
+            parent = cex.get(f"{{{_W15}}}paraIdParent")
+            if parent:
+                parent_of_para[pid] = parent
 
-    out = []
     tool_lower = {a.lower() for a in tool_authors}
+    owner_of_para: dict[str, str] = {}
+    out: dict[str, dict] = {}
     for c in croot.findall(qn("w:comment")):
+        cid = c.get(qn("w:id"))
+        para_ids = [p for p in (p.get(f"{{{_W14}}}paraId") for p in c.findall(qn("w:p"))) if p]
+        for p in para_ids:
+            owner_of_para[p] = cid
         author = c.get(qn("w:author")) or ""
-        if author.lower() in tool_lower:
-            continue
-        para_ids = [p.get(f"{{{_W14}}}paraId") for p in c.findall(qn("w:p"))]
-        para_ids = [p for p in para_ids if p]
-        if para_ids and all(p in reply_ids for p in para_ids):
-            continue                       # a reply, not a top-level ask
-        if para_ids and any(p in done_ids for p in para_ids):
-            continue                       # thread resolved
-        text = "".join(t.text or "" for t in c.iter(qn("w:t")))
-        out.append({"id": c.get(qn("w:id")), "author": author, "text": text})
+        out[cid] = {
+            "id": cid,
+            "author": author,
+            "text": "".join(t.text or "" for t in c.iter(qn("w:t"))),
+            "is_tool": author.lower() in tool_lower,
+            "done": any(p in done_paras for p in para_ids),
+            "_paras": para_ids,
+            "parent": None,
+            "replies": [],
+        }
+
+    for cid, rec in out.items():
+        for p in rec["_paras"]:
+            parent_para = parent_of_para.get(p)
+            if parent_para and owner_of_para.get(parent_para) not in (None, cid):
+                rec["parent"] = owner_of_para[parent_para]
+                break
+    for cid, rec in out.items():
+        if rec["parent"] in out:
+            out[rec["parent"]]["replies"].append(cid)
+    # a reply inherits the thread's resolution: Word marks the top comment done
+    for cid, rec in out.items():
+        if rec["parent"] in out and out[rec["parent"]]["done"]:
+            rec["done"] = True
+    for rec in out.values():
+        rec.pop("_paras", None)
     return out
+
+
+def open_asks(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
+    """The reviewer's LIVE instructions: top-level, human-authored, not resolved.
+
+    This is the only thing a revision may act on. A resolved comment is history, not
+    an instruction — re-firing it makes the tool rewrite text the reviewer already
+    accepted, which is how a settled "this is ok" produced a full paragraph re-cut.
+
+    Each ask carries its thread, because the thread is part of the ask:
+
+      ``followups`` — the reviewer's own replies. Under the comment protocol, new
+        information about an unmet ask arrives as a reply rather than a second
+        comment, so a tool that ignores replies ignores half of what it was told.
+
+      ``repeat`` — True when the tool has ALREADY replied in this thread and the ask
+        is still open. That is not a new task; it is a task the tool already failed.
+        The signal is derived from the document, so the reviewer never has to
+        hand-write "this still needs a definition" to be heard a second time.
+    """
+    threads = comment_threads(path, tool_authors)
+    out = []
+    for rec in threads.values():
+        if rec["is_tool"] or rec["parent"] or rec["done"]:
+            continue
+        replies = [threads[r] for r in rec["replies"] if r in threads]
+        out.append({
+            "id": rec["id"],
+            "author": rec["author"],
+            "text": rec["text"],
+            "followups": [r["text"] for r in replies if not r["is_tool"]],
+            "prior_tool_replies": [r["text"] for r in replies if r["is_tool"]],
+            "repeat": any(r["is_tool"] for r in replies),
+        })
+    return sorted(out, key=lambda r: int(r["id"]) if str(r["id"]).isdigit() else 0)
+
+
+def unresolved_comments(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
+    """Top-level, human-authored comments not marked done — what blocks a gate.
+
+    Replies are conversation, not asks: the ask lives in the parent, and resolving the
+    thread marks the parent done. Tool-authored comments never block a gate.
+    """
+    return [{"id": a["id"], "author": a["author"], "text": a["text"]}
+            for a in open_asks(path, tool_authors)]
 
 
 def pending_reviewer_changes(path: Path, tool_authors=TOOL_AUTHORS) -> int:

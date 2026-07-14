@@ -592,42 +592,65 @@ def _adopt_title(project_dir: Path, cfg: ProjectConfig, user_rev: Path) -> None:
             return
 
 
+def _ask_block(ask: dict) -> str:
+    """One reviewer ask, rendered for the brief — with its thread, and its history.
+
+    A thread is part of the ask. New information about an unmet ask arrives as a REPLY
+    (that is the protocol), so a brief that carries only the top comment carries only
+    half of what the reviewer said. And an ask the tool has already answered, still
+    open, is not a fresh task: it is a task the tool got wrong. Saying so is what stops
+    the next pass from confidently repeating the last one's mistake.
+    """
+    lines = [f"- {ask['text'].strip()}"]
+    for f in ask.get("followups", []):
+        lines.append(f"  (reviewer, in the same thread) {f.strip()}")
+    if ask.get("repeat"):
+        lines.append("  ** YOU ALREADY ANSWERED THIS ONCE AND THE REVIEWER LEFT IT OPEN. "
+                     "Your previous answer did not satisfy them — do not repeat it. **")
+        for r in ask.get("prior_tool_replies", []):
+            lines.append(f"  (your previous, rejected answer) {r.strip()[:300]}")
+    return "\n".join(lines)
+
+
 def _annotation_brief(user_rev: Path) -> tuple[dict[str, str], dict[str, str], str]:
     """The re-cut briefing from the reviewer's docx.
 
-    Returns (prior, notes, general): each beat's previous text with the
-    reviewer's tracked changes accepted, the comments anchored to it, and the
-    annotations that anchor to no recognisable beat (title, figures) — those
-    apply to the whole narrative.
+    Returns (prior, notes, general): each beat's previous text with the reviewer's
+    tracked changes accepted, the OPEN asks anchored to it, and the asks that anchor to
+    no recognisable beat (title, figures) — those apply to the whole narrative.
+
+    Only open asks. A resolved comment is history, not an instruction: re-firing it
+    makes the tool rewrite prose the reviewer has already accepted, and a settled
+    "this sentence is ok" is quite capable of provoking a full re-cut of the paragraph
+    it blessed.
     """
     from docx import Document
+    from haarpi import redline as hredline
+
     from . import redline
 
     prior = _beats_from_md(redline.accepted_markdown(Document(str(user_rev))))
 
+    asks = {a["id"]: a for a in hredline.open_asks(user_rev)}
+    live = set(asks)
+
     notes: dict[str, str] = {}
     general: list[str] = []
-    cmap = redline.comments_by_id(user_rev)
-    for anchor in redline.comment_anchors(user_rev):
-        comments = [cmap[c]["text"] for c in anchor["ids"] if c in cmap]
-        if not comments:
-            continue
-        block = "\n".join(f"- {c}" for c in comments)
-        beat = _beat_of_para(anchor.get("heading") or "", anchor["text"])
+
+    def _add(beat: str | None, block: str) -> None:
+        if not block:
+            return
         if beat is None:
             general.append(block)
         else:
             notes[beat] = f"{notes[beat]}\n{block}" if beat in notes else block
-    for h in redline.heading_comments(user_rev):
-        comments = [cmap[c]["text"] for c in h["ids"] if c in cmap]
-        if not comments:
-            continue
-        block = "\n".join(f"- {c}" for c in comments)
-        beat = _beat_of(h["heading"])
-        if beat is None:
-            general.append(block)
-        else:
-            notes[beat] = f"{notes[beat]}\n{block}" if beat in notes else block
+
+    for anchor in redline.comment_anchors(user_rev, only=live):
+        block = "\n".join(_ask_block(asks[c]) for c in anchor["ids"] if c in asks)
+        _add(_beat_of_para(anchor.get("heading") or "", anchor["text"]), block)
+    for h in redline.heading_comments(user_rev, only=live):
+        block = "\n".join(_ask_block(asks[c]) for c in h["ids"] if c in asks)
+        _add(_beat_of(h["heading"]), block)
     return prior, notes, "\n".join(general)
 
 

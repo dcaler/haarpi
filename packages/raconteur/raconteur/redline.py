@@ -147,13 +147,31 @@ def body_paragraphs(doc) -> list[dict]:
     return out
 
 
-def comment_anchors(path: Path) -> list[dict]:
+def _anchor_ids(p_el, only: set[str] | None) -> list[str]:
+    """Comment ids anchored in this paragraph, optionally restricted to a live set.
+
+    ``iter``, not ``findall``: a reviewer who comments on text they then delete leaves the
+    anchor INSIDE the ``w:del``, where a direct-children search cannot see it. Such a comment
+    used to vanish from paragraph routing entirely — silently, which is the worst way for a
+    reviewer's instruction to die.
+    """
+    ids = [s.get(qn("w:id")) for s in p_el.iter(qn("w:commentRangeStart"))]
+    if only is not None:
+        ids = [i for i in ids if i in only]
+    return ids
+
+
+def comment_anchors(path: Path, only: set[str] | None = None) -> list[dict]:
     """Body paragraphs carrying a comment anchor, with comment ids and current text.
 
     Returns ``[{index, para, heading, kind, ids, text, anchored}]`` in document order.
     ``text`` is the serialized paragraph (atoms as sentinels) — the exact string the reviser
     is asked to revise. ``anchored`` is the sorted set of sentence indices the paragraph's
     comments actually bear on; that set is what the minimal-edit guard enforces against.
+
+    ``only`` restricts routing to a set of comment ids — pass the OPEN asks
+    (``haarpi.redline.open_asks``). A resolved comment is history, not an instruction:
+    routed as if live, it makes the tool rewrite prose the reviewer has already accepted.
 
     Paragraphs with no comment are omitted, as are headings and References — a comment on a
     heading usually means "add a section" or "find more sources", which is a routing decision,
@@ -163,18 +181,19 @@ def comment_anchors(path: Path) -> list[dict]:
     out = []
     for rec in body_paragraphs(doc):
         p_el = rec["para"]._p
-        ids = [s.get(qn("w:id")) for s in p_el.findall(qn("w:commentRangeStart"))]
+        ids = _anchor_ids(p_el, only)
         if not ids:
             continue
         text = paragraph_text(p_el)
         anchored: set[int] = set()
-        for span in comment_spans(p_el).values():
-            anchored |= anchored_sentences(text, span)
+        for cid, span in comment_spans(p_el).items():
+            if only is None or cid in only:
+                anchored |= anchored_sentences(text, span)
         out.append({**rec, "ids": ids, "text": text, "anchored": sorted(anchored)})
     return out
 
 
-def heading_comments(path: Path) -> list[dict]:
+def heading_comments(path: Path, only: set[str] | None = None) -> list[dict]:
     """Comments anchored to a heading. These cannot be answered by a paragraph edit — they
     ask for a section to be added, split, or resourced. The caller routes them."""
     doc = Document(str(path))
@@ -182,7 +201,7 @@ def heading_comments(path: Path) -> list[dict]:
     for i, p in enumerate(doc.paragraphs):
         if not is_heading_style(_style_name(p)):
             continue
-        ids = [s.get(qn("w:id")) for s in p._p.findall(qn("w:commentRangeStart"))]
+        ids = _anchor_ids(p._p, only)
         if ids:
             out.append({"index": i, "heading": _accepted_para_text(p._p).strip(), "ids": ids})
     return out
