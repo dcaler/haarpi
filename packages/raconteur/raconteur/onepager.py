@@ -339,6 +339,40 @@ def _draft_replies(brain: Brain, text: str, user_rev: Path) -> dict[str, str]:
             for cid in cmap}
 
 
+def _strip_spurious_bold(doc) -> int:
+    """Un-bold paragraphs whose every text run is bold. Returns paragraphs cleaned.
+
+    Uniform run-level bold across a whole paragraph is the label era's scar: a
+    bold lead-in label once donated its rPr to the full tracked replacement.
+    The one-pager's body is plain prose — headings get their weight from their
+    style, not their runs — so a wholly-bold paragraph is an artifact, while
+    partial bold (real emphasis) is kept."""
+    from docx.oxml.ns import qn
+
+    def _bolded(r):
+        rpr = r.find(qn("w:rPr"))
+        if rpr is None:
+            return None
+        b = rpr.find(qn("w:b"))
+        return b if b is not None and b.get(qn("w:val")) not in ("0", "false", "none") else None
+
+    cleaned = 0
+    for p in doc.paragraphs:
+        text_runs = [r for r in p._p.iter(qn("w:r"))
+                     if any((t.text or "") for t in r.iter(qn("w:t")))
+                     or any((t.text or "") for t in r.iter(qn("w:delText")))]
+        if not text_runs or not all(_bolded(r) is not None for r in text_runs):
+            continue
+        for r in text_runs:
+            rpr = r.find(qn("w:rPr"))
+            for tag in ("w:b", "w:bCs"):
+                el = rpr.find(qn(tag))
+                if el is not None:
+                    rpr.remove(el)
+        cleaned += 1
+    return cleaned
+
+
 def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
                  brain: Brain, text: str, beats: list[tuple[str, str]],
                  user_rev: Path) -> None:
@@ -360,6 +394,8 @@ def _write_recut(project_dir: Path, cfg: ProjectConfig, paper_dir: Path,
 
     doc = Document(str(out))
     counts = hrl.accept_all_changes(doc)   # reviewer's edits become the base text
+    if n := _strip_spurious_bold(doc):
+        log(f"[raconteur] un-bolded {n} label-era paragraph(s)")
     ids = rl.ids_for(doc)
 
     final = _beats_from_md(text)             # beat -> body prose, no label/heading
@@ -611,9 +647,17 @@ def _revise(
                 )
         return ""
 
-    redline_revise(project_dir, cfg, brain, paper_dir, user_rev,
-                   litrev, code, results, _bib_block(bib_summary), bib_keys,
-                   context_fn=beat_context, md_sibling=True)
+    out, _ = redline_revise(project_dir, cfg, brain, paper_dir, user_rev,
+                            litrev, code, results, _bib_block(bib_summary), bib_keys,
+                            context_fn=beat_context, md_sibling=True)
+
+    # Label-era documents carry wholly-bold beat paragraphs, and any tracked
+    # edit written into one inherited that bold — normalise the delivered copy.
+    from docx import Document
+    doc = Document(str(out))
+    if n := _strip_spurious_bold(doc):
+        doc.save(str(out))
+        log(f"[raconteur] un-bolded {n} label-era paragraph(s)")
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
