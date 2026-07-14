@@ -70,3 +70,53 @@ def test_a_copyedit_naming_a_span_that_does_not_exist_is_dropped():
     edits, copyedits, errors = rr._parse_sentence_edits(
         _edits({"1": "x", "copyedits": {"a:9": "invented"}}), 3, AUTHORED)
     assert copyedits == {} and not errors
+
+
+# ── the guard must not reject a draft for obeying its instructions ───────────
+
+def test_a_draft_carrying_the_authors_placeholder_is_not_an_invention():
+    """The bug that killed three of five beats in the 2026-07-14 re-cut.
+
+    The generation guard compared the draft against the beat's ACCEPTED PROSE — where the
+    author's sentence is spelled out in words and no placeholder exists — so every ⟦a:1⟧ the
+    draft had been ORDERED to carry read as one it had invented. Rejected, retried, rejected,
+    beat left untouched. And the write path, comparing against the serialized paragraph,
+    went on to report "0 refused": the feature silently disabled itself on precisely the
+    beats it exists for.
+    """
+    from raconteur import onepager as op
+
+    spans = {"⟦a:1⟧": "The author typed this by hand."}
+    draft = "Fresh tool prose. ⟦a:1⟧ And more tool prose."
+
+    accepted_prose = "Old tool prose. The author typed this by hand."
+    assert op._beat_problems(draft, spans, accepted_prose, set()), \
+        "this is the bug, pinned: against the prose, obedience looks like invention"
+
+    serialized = "Old tool prose. ⟦a:1⟧"
+    assert op._beat_problems(draft, spans, serialized, set()) == [], \
+        "against the serialized paragraph, the obedient draft passes"
+
+
+def test_a_draft_that_drops_the_authors_span_is_still_refused():
+    from raconteur import onepager as op
+
+    spans = {"⟦a:1⟧": "The author typed this by hand."}
+    problems = op._beat_problems("I rewrote it my way.", spans, "Old prose. ⟦a:1⟧", set())
+    assert problems and "missing" in problems[0]
+
+
+def test_a_draft_that_invents_a_placeholder_is_still_refused():
+    from raconteur import onepager as op
+
+    spans = {"⟦a:1⟧": "The author typed this by hand."}
+    problems = op._beat_problems("Prose. ⟦a:1⟧ More. ⟦a:7⟧", spans, "Old. ⟦a:1⟧", set())
+    assert problems and "not a real placeholder" in problems[0]
+
+
+def test_a_draft_that_drops_a_citation_is_still_refused():
+    from raconteur import onepager as op
+
+    problems = op._beat_problems("Rewritten with no source.", {},
+                                 "Old prose [@setzler2022].", {"setzler2022"})
+    assert problems and "setzler2022" in problems[0]

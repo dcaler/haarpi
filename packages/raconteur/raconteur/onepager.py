@@ -800,6 +800,52 @@ def _beats_from_md(md: str) -> dict[str, str]:
     return out
 
 
+def _prior_serialized(user_rev: Path) -> dict[str, str]:
+    """beat -> the previous paragraph AS THE GUARDS MUST SEE IT: authored spans as ⟦a:N⟧.
+
+    There are two views of the same beat, and handing the wrong one to a guard is fatal in a
+    way that looks like nothing at all.
+
+    The ACCEPTED PROSE (``_annotation_brief``'s ``prior``) is what a reader sees: the
+    author's sentence spelled out in words. Compared against THAT, every ⟦a:1⟧ the draft was
+    ORDERED to carry is a placeholder the model invented — and `invented_sentinels` rejects
+    the beat for obeying its instructions. It happened: three of the five beats in the
+    2026-07-14 re-cut were killed this way, twice each, and reported only as "NOT re-cut",
+    while the write path (which compares against the serialized text, correctly) went on to
+    report "0 refused". The feature silently disabled itself on precisely the beats it exists
+    for — the ones the author had touched.
+
+    So the guards get the SERIALIZED view, where ⟦a:1⟧ genuinely exists.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+
+    from . import redline as rl
+
+    out: dict[str, str] = {}
+    for rec in rl.body_paragraphs(Document(str(user_rev))):
+        accepted = rl._accepted_para_text(rec["para"]._p).strip()
+        beat = _beat_of_para(rec["heading"], accepted)
+        if beat is None or beat in out:
+            continue
+        out[beat] = hrl.paragraph_text(rec["para"]._p, protect_authored=True)
+    return out
+
+
+def _beat_problems(draft: str, spans: dict[str, str], was: str,
+                   known: set[str]) -> list[str]:
+    """Why a generated beat may not be written — checked BEFORE it reaches the document.
+
+    ``was`` must be the SERIALIZED previous paragraph (see ``_prior_serialized``), never the
+    accepted prose.
+    """
+    errs = _sentinel_errors(draft, spans)
+    errs += [f.imperative for f in guards.figure_findings(draft)]
+    if was:
+        errs += [f.imperative for f in _recut_guard_findings(was, draft, known)]
+    return errs
+
+
 def _authored_by_beat(user_rev: Path) -> dict[str, dict[str, str]]:
     """beat -> {⟦a:N⟧: the author's exact words} for the sentences they typed into it.
 
@@ -969,6 +1015,9 @@ def _onepager_fresh(
     # reason to abandon the beat. Deference is owed to the text they wrote, not to the
     # paragraph it happens to sit in.
     authored = _authored_by_beat(user_rev) if user_rev is not None else {}
+    # The guards compare a draft against the PREVIOUS paragraph, and must see it the way the
+    # draft was told to write it: with the author's spans as placeholders.
+    prior_ser = _prior_serialized(user_rev) if user_rev is not None else {}
     if authored:
         log("[raconteur] the author's hand is in: "
             + ", ".join(f"{b} ({len(a)} span(s))" for b, a in sorted(authored.items()))
@@ -978,14 +1027,20 @@ def _onepager_fresh(
     skipped: set[str] = set()          # beats the re-cut could not safely touch
     for beat in _BEATS:
         can_embed = bool(figure_list) and beat.name == _FIGURE_BEAT
+        spans = authored.get(beat.name, {})
         recut_section = ""
         if brief:
+            # Show the previous beat as the model must WRITE it: with the author's spans as
+            # placeholders, in the positions they occupied. Spelled out, the model reads
+            # their sentence as ordinary prose it may reword — and it is looking straight at
+            # the words it has just been forbidden to touch.
+            was = (prior_ser.get(beat.name) if spans else None) \
+                or prior.get(beat.name, "(this beat did not exist)")
             recut_section = _RECUT_BLOCK.format(
                 beat=beat.name,
-                prior=prior.get(beat.name, "(this beat did not exist)"),
+                prior=was,
                 notes=beat_notes.get(beat.name, "(none on this beat)"),
             ) + general_block
-        spans = authored.get(beat.name, {})
         legend = "\n".join(f'  {k} = "{v.strip()}"' for k, v in spans.items())
         prompt = _BEAT_PROMPT.format(
             beat=beat.name,
@@ -1012,16 +1067,12 @@ def _onepager_fresh(
         text = _strip_label(beat.name, brain.coordinator(prompt, system=_SYSTEM,
                                                          num_ctx=16384))
 
-        # Check the draft BEFORE it reaches the document, and give it one chance to fix
-        # what it broke. The previous text is what it must not silently lose: its
-        # citations, its equations, and above all the author's sentences.
-        def _problems(draft: str, was: str = prior.get(beat.name, "")) -> list[str]:
-            errs = _sentinel_errors(draft, spans)
-            errs += [f.imperative for f in guards.figure_findings(draft)]
-            if was:
-                errs += [f.imperative
-                         for f in _recut_guard_findings(was, draft, known)]
-            return errs
+        # Check the draft BEFORE it reaches the document, and give it one chance to fix what
+        # it broke. The "previous text" is the SERIALIZED paragraph — the author's spans as
+        # ⟦a:N⟧, not spelled out. Against the accepted prose, every placeholder the draft was
+        # ordered to carry reads as one it invented, and the beat is rejected for obeying.
+        def _problems(draft: str, was: str = prior_ser.get(beat.name, "")) -> list[str]:
+            return _beat_problems(draft, spans, was, known)
 
         problems = _problems(text)
         if problems:
