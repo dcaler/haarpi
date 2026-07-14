@@ -377,6 +377,62 @@ def figure_findings(text: str) -> list[Finding]:
     return out
 
 
+# ── VOICE ─────────────────────────────────────────────────────────────────────
+
+def style_findings(text: str, signature: dict) -> list[Finding]:
+    """Where the draft does not sound like the author — decided by counting, not by taste.
+
+    "Match this author's voice" is not a check, it is a wish. These are checks:
+
+      * a transition, hedge or intensifier the author has NEVER used in tens of thousands of
+        words of their own published prose. The candidate sets are CLOSED classes, which is
+        what makes this sound — a domain term cannot be mistaken for a style tic, and the
+        earlier attempt to learn what an author "never writes" by contrasting corpora
+        produced `jaccard distance` and `harmonic similarity`, i.e. the vocabulary of the
+        paper itself.
+      * sentences that run to a length the author does not write.
+
+    Phrased positively, always: the finding names what the author DOES write. A model told
+    not to write "moreover" writes "furthermore"; a model told the author writes "however",
+    "thus" and "overall" reaches for one of those.
+    """
+    from . import voice
+
+    if not signature or not (text or "").strip():
+        return []
+
+    out: list[Finding] = []
+    for label, key, candidates in (
+        ("transition", "connectives", voice.CONNECTIVES),
+        ("hedge", "hedges", voice.HEDGES),
+        ("intensifier", "intensifiers", voice.INTENSIFIERS),
+    ):
+        palette = signature.get(key) or {}
+        if not palette:
+            continue
+        for phrase in voice.outside_palette(text, palette, candidates):
+            his = ", ".join(list(palette)[:5])
+            out.append(Finding(
+                "off-voice", f"{label} {phrase!r}",
+                f'Replace the {label} "{phrase}" — this author has never once written it. '
+                f'He writes: {his}.'))
+
+    mean = signature.get("sentence_words_mean")
+    if mean:
+        units = [u for u in sentence_units(text) if len(u.split()) >= 4]
+        if len(units) >= 3:
+            got = sum(len(u.split()) for u in units) / len(units)
+            lo, hi = mean * 0.6, mean * 1.5
+            if got < lo or got > hi:
+                out.append(Finding(
+                    "off-voice", "rhythm",
+                    f"Sentences here average {got:.0f} words; this author's average "
+                    f"{mean} (range {signature.get('sentence_words_p10', '?')}–"
+                    f"{signature.get('sentence_words_p90', '?')}). "
+                    f"{'Combine some — they are clipped.' if got < lo else 'Break some up.'}"))
+    return out
+
+
 # ── VERIFIABILITY (phase: redline) ────────────────────────────────────────────
 
 def dropped_citekeys(old: str, new: str) -> list[Finding]:

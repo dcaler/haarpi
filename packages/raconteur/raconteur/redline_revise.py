@@ -245,7 +245,7 @@ def _parse_sentence_edits(raw: str, n_units: int,
 
 def _para_guard_findings(
     old_text: str, new_text: str, touched: set[int], anchored: set[int],
-    n_units: int, kind: str, known: set[str],
+    n_units: int, kind: str, known: set[str], signature: dict | None = None,
 ) -> list[guards.Finding]:
     """Everything about a paragraph rewrite that Python can decide precisely.
 
@@ -269,6 +269,8 @@ def _para_guard_findings(
         findings.append(guards.Finding(
             "uncited", "paragraph",
             "The paragraph now cites no source — restore a [@citekey] from the bibliography."))
+    # "Match this author's voice" is a wish; a transition he has never written is a finding.
+    findings += guards.style_findings(new_text, signature or {})
     return findings
 
 
@@ -276,7 +278,7 @@ def redline_paragraph(
     brain: Brain, title: str, heading: str, paragraph: str, comments: list[str],
     context_section: str, bib_section: str, anchored: set[int], kind: str,
     known: set[str], rounds: int = 2, authored: dict[str, str] | None = None,
-    copyedits: dict[str, str] | None = None,
+    copyedits: dict[str, str] | None = None, signature: dict | None = None,
 ) -> tuple[str | None, str]:
     """Rewrite one commented paragraph and hold it to the adversarial bar.
 
@@ -338,7 +340,7 @@ def redline_paragraph(
         # Deterministic guards run first: the expensive audit never sees a paragraph that is
         # already broken. Any failure feeds a focused re-revise.
         findings = _para_guard_findings(
-            paragraph, new_text, touched, anchored, len(units), kind, known)
+            paragraph, new_text, touched, anchored, len(units), kind, known, signature)
         if findings:
             critique = "\n".join(f"- {f.imperative}" for f in findings)
             continue

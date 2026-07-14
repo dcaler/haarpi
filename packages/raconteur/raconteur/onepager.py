@@ -12,7 +12,8 @@ from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import (
     load_litreview, load_methods, load_results, load_bib_summary,
-    load_bib_keys, load_style_profile, load_figure_manifest, check_prerequisites,
+    load_bib_keys, load_style_profile, load_style_signature,
+    load_figure_manifest, check_prerequisites,
 )
 from .naming import major_onepager_name, find_latest, find_user_revision
 from .render import to_docx
@@ -98,6 +99,16 @@ _BEATS: list[_Beat] = [
         + _NO_PRIORITY_CLAIMS,
     ),
 ]
+
+# Which kind of the author's prose each beat is. A Results paragraph and a Discussion
+# paragraph are not written in the same voice, even by the same person.
+_BEAT_KIND = {
+    "Motivation": "litrev",
+    "Gap": "litrev",
+    "Approach": "methods",
+    "Key result(s)": "results",
+    "Implication": "discussion",
+}
 
 # Figures come from rayleigh's results dir, so results are the only beat that can
 # carry one — and it inherits the whole two-figure budget.
@@ -224,9 +235,8 @@ sentences of plain prose. No bold text.
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _style_block(style_profile: str) -> str:
-    if not style_profile:
-        return ""
-    return f"Writing style guidance (match this author's voice):\n{style_profile}\n\n"
+    """The voice block is self-describing now — a palette and real prose, not 'guidance'."""
+    return f"{style_profile}\n\n" if style_profile else ""
 
 
 def _ensure_style(project_dir: Path, cfg: ProjectConfig) -> None:
@@ -833,7 +843,7 @@ def _prior_serialized(user_rev: Path) -> dict[str, str]:
 
 
 def _beat_problems(draft: str, spans: dict[str, str], was: str,
-                   known: set[str]) -> list[str]:
+                   known: set[str], signature: dict | None = None) -> list[str]:
     """Why a generated beat may not be written — checked BEFORE it reaches the document.
 
     ``was`` must be the SERIALIZED previous paragraph (see ``_prior_serialized``), never the
@@ -841,6 +851,7 @@ def _beat_problems(draft: str, spans: dict[str, str], was: str,
     """
     errs = _sentinel_errors(draft, spans)
     errs += [f.imperative for f in guards.figure_findings(draft)]
+    errs += [f.imperative for f in guards.style_findings(draft, signature or {})]
     if was:
         errs += [f.imperative for f in _recut_guard_findings(was, draft, known)]
     return errs
@@ -998,14 +1009,13 @@ def _onepager_fresh(
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     figures = load_figure_manifest(project_dir, cfg.results_dir or "results")
-    style_profile = load_style_profile(project_dir)
+    signature = load_style_signature(project_dir)
     known = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
     log("[raconteur] analysing paper structure…")
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
 
     venue_section = _build_venue_section(cfg, project_dir)
-    style_section = _style_block(style_profile)
     figure_list = _figure_section(figures)
 
     prior, beat_notes, general = brief if brief else ({}, {}, "")
@@ -1028,6 +1038,9 @@ def _onepager_fresh(
     for beat in _BEATS:
         can_embed = bool(figure_list) and beat.name == _FIGURE_BEAT
         spans = authored.get(beat.name, {})
+        # a beat is a kind of prose, and his Results voice is not his Discussion voice
+        style_section = _style_block(
+            load_style_profile(project_dir, kind=_BEAT_KIND.get(beat.name, "")))
         recut_section = ""
         if brief:
             # Show the previous beat as the model must WRITE it: with the author's spans as
@@ -1072,7 +1085,7 @@ def _onepager_fresh(
         # ⟦a:N⟧, not spelled out. Against the accepted prose, every placeholder the draft was
         # ordered to carry reads as one it invented, and the beat is rejected for obeying.
         def _problems(draft: str, was: str = prior_ser.get(beat.name, "")) -> list[str]:
-            return _beat_problems(draft, spans, was, known)
+            return _beat_problems(draft, spans, was, known, signature)
 
         problems = _problems(text)
         if problems:

@@ -252,23 +252,87 @@ def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
     return summary
 
 
-def load_style_profile(project_dir: Path) -> str:
-    """Return the global style profile body (stripped of YAML frontmatter), capped at 2000 chars."""
+def _read_profile() -> tuple[dict, str]:
+    """The style profile: (frontmatter, body). Empty if it has never been trained."""
+    import yaml
+
     from .config import GLOBAL_CONFIG_PATH
     path = GLOBAL_CONFIG_PATH.parent / "style_profile.md"
     if not path.exists():
-        return ""
+        return {}, ""
     text = path.read_text(encoding="utf-8", errors="replace")
-    # strip YAML frontmatter
+    meta: dict = {}
     if text.startswith("---"):
         end = text.find("\n---\n", 3)
         if end != -1:
+            try:
+                meta = yaml.safe_load(text[4:end]) or {}
+            except yaml.YAMLError:
+                meta = {}
             text = text[end + 5:]
-    text = text.strip()
-    if len(text) > 2000:
-        text = text[:2000] + "\n[…truncated]"
+    return meta, text.strip()
+
+
+def load_style_signature(project_dir: Path) -> dict:
+    """The MEASURED voice: rhythm, and the closed-class palettes. What the guards check."""
+    meta, _ = _read_profile()
+    return meta.get("signature") or {}
+
+
+def load_style_profile(project_dir: Path, kind: str = "", budget: int = 2400) -> str:
+    """The author's voice, as the drafter must receive it.
+
+    A MEASURED palette — the transitions, hedges and rhythm of the author's own published
+    prose — followed by passages of the real thing. Exemplars are never cut in half: the old
+    loader capped the profile at 2,000 characters with the verbatim excerpts at the END of
+    the file, so the excerpts were exactly what got truncated, and every draft raconteur ever
+    wrote was styled from a 350-word DESCRIPTION of the author's prose with not one sentence
+    of the prose itself. It was cut off, memorably, in the middle of quoting the metaphor
+    that best demonstrated the voice it was meant to imitate.
+
+    ``kind`` selects section-appropriate exemplars (a Methods voice is not a Discussion
+    voice); without it, all of them are candidates.
+    """
+    from . import voice
+
+    meta, body = _read_profile()
+    if not meta and not body:
+        return ""
     log("[raconteur] reading style_profile.md")
-    return text
+    sig = meta.get("signature") or {}
+    exemplars = _exemplars(body, kind)
+    block = voice.style_block(sig, exemplars, budget=budget)
+    if block:
+        return block
+    # an untrained or hand-written profile: fall back to its prose, whole sentences only
+    return body[:budget]
+
+
+_EX_HEADING = re.compile(r"^#{2,3}\s*(.+?)\s*$")
+
+
+def _exemplars(body: str, kind: str = "") -> list[str]:
+    """Verbatim passages from the profile, preferring those for this section kind."""
+    if "## Voice — exemplars" not in body:
+        return []
+    section = body.split("## Voice — exemplars", 1)[1].split("\n## ", 1)[0]
+    out: list[tuple[str, str]] = []
+    current = ""
+    for line in section.splitlines():
+        if (m := _EX_HEADING.match(line.strip())):
+            current = m.group(1).strip().lower()
+            continue
+        raw = line.strip()
+        if not raw.startswith(">"):
+            continue                      # the section's own prose is not an exemplar
+        t = raw.lstrip("> ").strip()
+        if len(t.split()) >= 10:
+            out.append((current, t))
+    if kind:
+        preferred = [t for k, t in out if k == kind.lower()]
+        if preferred:
+            return preferred + [t for k, t in out if k != kind.lower()]
+    return [t for _, t in out]
 
 
 _FIGURE_SUFFIXES = {".png", ".svg", ".pdf", ".jpg", ".jpeg"}

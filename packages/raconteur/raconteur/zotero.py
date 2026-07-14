@@ -57,7 +57,13 @@ class ZoteroClient:
         return out
 
     def fulltext(self, attachment_key: str) -> str:
-        """Return Zotero-indexed full text for an attachment."""
+        """Zotero's INDEXED text for an attachment — a flat blob.
+
+        Good enough to read; useless to measure. Zotero's indexer flattens the page: the
+        paragraph breaks are gone, the lines are as the typesetter wrapped them, and the
+        running heads and page numbers are still in there. Prefer ``download``, and read the
+        PDF itself — which is what rabbitHole has always done.
+        """
         try:
             r = self._http.get(f"{self._base}/items/{attachment_key}/fulltext")
             if r.status_code == 200:
@@ -65,6 +71,19 @@ class ZoteroClient:
         except Exception:
             pass
         return ""
+
+    def download(self, attachment_key: str, dest: Path) -> bool:
+        """Fetch the attachment FILE itself, so it can be read properly."""
+        try:
+            r = self._http.get(f"{self._base}/items/{attachment_key}/file",
+                               follow_redirects=True, timeout=60)
+            if r.status_code == 200 and r.content:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(r.content)
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
     def close(self) -> None:
         self._http.close()

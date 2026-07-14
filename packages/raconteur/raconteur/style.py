@@ -94,69 +94,119 @@ def _load_existing_profile(project_dir: Path = None) -> dict:
 
 
 def _write_profile(project_dir: Path, author: str, paper_keys: list[str],
-                   papers_used: list[str], analysis: str) -> Path:
+                   papers_used: list[str], analysis: str,
+                   signature: dict | None = None,
+                   exemplars: list[str] | None = None) -> Path:
+    """The profile: a MEASURED signature, passages of the real prose, and a short analysis.
+
+    In that order of importance. The signature is countable and cannot be argued with; the
+    exemplars are the voice itself; the analysis is a model's impression of both, and is the
+    first thing to cut when the budget runs out — not, as it used to be, the last.
+    """
     today = date.today().strftime("%y%m%d")
-    frontmatter = yaml.safe_dump({
+    meta = {
         "author": author,
         "last_updated": today,
         "paper_keys": paper_keys,
         "papers_used": papers_used,
-    }, default_flow_style=False, allow_unicode=True).strip()
-    content = f"---\n{frontmatter}\n---\n\n{analysis.strip()}\n"
+    }
+    if signature:
+        meta["signature"] = signature
+    frontmatter = yaml.safe_dump(meta, default_flow_style=False,
+                                 allow_unicode=True, sort_keys=False).strip()
+
+    body = []
+    if exemplars:
+        body.append("## Voice — exemplars\n")
+        body.append("Passages of the author's own published prose. This is the voice.\n")
+        for ex in exemplars:
+            body.append(f"> {' '.join(ex.split())}\n")
+    if analysis and analysis.strip():
+        body.append("## Voice — analysis\n")
+        body.append(analysis.strip() + "\n")
+
+    content = f"---\n{frontmatter}\n---\n\n" + "\n".join(body)
     path = STYLE_PROFILE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.with_suffix(".md.bak").write_text(path.read_text(encoding="utf-8"),
+                                               encoding="utf-8")
     path.write_text(content, encoding="utf-8")
     return path
 
 
 def fetch_and_train(project_dir: Path, cfg: ProjectConfig, gcfg: GlobalConfig,
                     author_name: str, confirmed_items: list[dict]) -> Path:
-    """Fetch fulltext for confirmed items, analyze style, write profile."""
-    zcfg = ZoteroConfig.from_env()
-    zotero = ZoteroClient(zcfg)
+    """Read the author's papers and MEASURE how they write.
 
-    excerpts_parts: list[str] = []
+    The PDFs themselves, not Zotero's fulltext index. The index is a flat blob — nine papers
+    come back as nine paragraphs of 288 sentences each — which is fine to read and useless to
+    measure, and a voice signature is nothing but measurement. rabbitHole has read the PDFs
+    with PyMuPDF all along; this now does the same, and reads them by LAYOUT BLOCK, so the
+    author's paragraph structure survives.
+    """
+    import tempfile
+
+    from . import voice
+
+    zotero = ZoteroClient(ZoteroConfig.from_env())
+    tmp = Path(tempfile.mkdtemp(prefix="raconteur-style-"))
+
+    prose_parts: list[str] = []
     paper_keys: list[str] = []
     papers_used: list[str] = []
 
     for item in confirmed_items:
         key = item.get("data", {}).get("key", "")
         label = _item_label(item)
-        log(f"[raconteur] fetching fulltext: {label[:60]}…")
         att_key = zotero.pdf_attachment_key(key)
-        text = ""
-        if att_key:
-            text = zotero.fulltext(att_key)
-        if not text:
-            log(f"[raconteur] no fulltext for {label[:50]} — skipping")
+        if not att_key:
+            log(f"[raconteur] no PDF for {label[:50]} — skipping")
             continue
-        prose = _extract_prose(text)
-        if not prose:
+        log(f"[raconteur] reading: {label[:60]}…")
+        pdf = tmp / f"{key}.pdf"
+        prose = ""
+        if zotero.download(att_key, pdf):
+            prose = voice.pdf_prose(pdf)
+        if not prose:                       # no file, or an image-only scan
+            prose = voice.clean_prose(zotero.fulltext(att_key))
+        if len(prose.split()) < 500:
             log(f"[raconteur] no usable prose in {label[:50]} — skipping")
             continue
-        excerpts_parts.append(f"--- From: {label} ---\n{prose[:1500]}")
+        prose_parts.append(prose)
         paper_keys.append(key)
         papers_used.append(label)
 
     zotero.close()
-
-    if not excerpts_parts:
-        log("[error] no fulltext retrieved — cannot train style")
+    if not prose_parts:
+        log("[error] no readable papers — cannot train a voice")
         raise SystemExit(1)
 
-    log(f"[raconteur] analysing style from {len(excerpts_parts)} paper(s)…")
-    brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
-    analysis = brain.coordinator(
-        _ANALYZE_STYLE_PROMPT.format(
-            author=author_name,
-            excerpts="\n\n".join(excerpts_parts),
-        ),
-        system=_SYSTEM,
-        num_ctx=16384,
-    )
+    corpus = voice._tidy("\n\n".join(prose_parts))
+    signature = voice.signature(corpus, clean=False)
+    exemplars = voice.pick_exemplars(corpus, n=4)
+    log(f"[raconteur] measured {signature['corpus_words']:,} words from "
+        f"{len(paper_keys)} paper(s): {signature.get('sentence_words_mean')}-word sentences, "
+        f"{len(signature.get('connectives') or {})} transitions in his palette")
 
-    path = _write_profile(project_dir, author_name, paper_keys, papers_used, analysis)
-    log(f"[raconteur] wrote {path.relative_to(project_dir)}")
+    # The analysis is a nicety now — the signature and the exemplars carry the voice — so a
+    # brain that is busy or absent must not cost the author their profile.
+    analysis = ""
+    try:
+        brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
+        analysis = brain.coordinator(
+            _ANALYZE_STYLE_PROMPT.format(
+                author=author_name,
+                excerpts="\n\n".join(f"--- excerpt ---\n{e}" for e in exemplars),
+            ),
+            system=_SYSTEM, num_ctx=16384)
+    except Exception as e:  # noqa: BLE001
+        log(f"[warn] the style analysis pass failed ({e}) — the measured signature and the "
+            f"exemplars are written regardless; they are what matters")
+
+    path = _write_profile(project_dir, author_name, paper_keys, papers_used,
+                          analysis, signature=signature, exemplars=exemplars)
+    log(f"[raconteur] wrote {path}")
     return path
 
 
