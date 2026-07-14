@@ -641,11 +641,12 @@ def run_queue(root: Path) -> int:
         if not m.trundlr_project_id:
             pid, created = trundlr.resolve_project_id(
                 tr_cfg["url"], m.name, folder=str(root.resolve()),
-                description="HAARPi research pipeline")
+                description="HAARPi research pipeline",
+                priority=m.trundlr_priority)
             m.trundlr_project_id = pid
             project.save_manifest(m, root)
             print(f"  trundlr project '{m.name}' (id {pid}"
-                  + (", created)" if created else ")"))
+                  + (f", created at priority {m.trundlr_priority})" if created else ")"))
         titles = [t.get("title", "") for t in
                   client.tasks_for_project(m.trundlr_project_id)]
         if any(t.startswith("litreview ") for t in titles):
@@ -671,9 +672,18 @@ def _ask(label: str, default: str = "") -> str:
     return got or default
 
 
+def _ask_priority(default: int = trundlr.PRIORITY_DEFAULT) -> int:
+    """The project's standing in the queue, asked once. A new project used to be born
+    at priority 1 — top band, ahead of everything already running — which is a claim
+    the tool has no business making on the user's behalf."""
+    got = _ask(f"trundlr priority ({trundlr.PRIORITY_MIN} urgent .. "
+               f"{trundlr.PRIORITY_MAX} background)", str(default))
+    return trundlr.clamp_priority(got)
+
+
 def run_init(root: Path, name: str | None = None, short_title: str | None = None,
              brief: str | None = None, initials: str | None = None,
-             no_trundlr: bool = False) -> int:
+             priority: int | None = None, no_trundlr: bool = False) -> int:
     """One interview -> haarpi.yaml + the stage skeleton + the trundlr project +
     the lit-review opening chain. Identity is answered once, here; the stage
     tools' own inits go straight to their substance."""
@@ -691,25 +701,31 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
               "nothing missing to seed.")
         return 2
     default_name = re.sub(r"^\d{6}_", "", root.name)
+    cfg = pipeline_config()
+    tr_cfg = cfg.get("trundlr", {})
+    asks_trundlr = not no_trundlr and bool(tr_cfg.get("url"))
     m = project.Manifest(
         name=name or _ask("project name", default_name),
         short_title=short_title or _ask("short title (filename stem)",
                                         (name or default_name).lower()),
         brief=brief if brief is not None else _ask("research brief (long-form)"),
         initials=initials or _ask("your initials (revision chain)", "DCR"),
+        trundlr_priority=(trundlr.clamp_priority(priority) if priority is not None
+                          else _ask_priority() if asks_trundlr
+                          else trundlr.PRIORITY_DEFAULT),
     )
-    cfg = pipeline_config()
-    tr_cfg = cfg.get("trundlr", {})
     lines = []
-    if not no_trundlr and tr_cfg.get("url"):
+    if asks_trundlr:
         try:
             client = trundlr.TrundlrClient(tr_cfg["url"])
             pid, created = trundlr.resolve_project_id(
                 tr_cfg["url"], m.name, folder=str(root.resolve()),
-                description="HAARPi research pipeline")
+                description="HAARPi research pipeline",
+                priority=m.trundlr_priority)
             m.trundlr_project_id = pid
             lines.append(f"trundlr project '{m.name}' (id {pid}"
-                         + (", created)" if created else ")"))
+                         + (f", created at priority {m.trundlr_priority})" if created
+                            else ")"))
             queued = queue_chain(client, pid, "litreview",
                                  ["gather", "collect", "report", "comment"], tr_cfg,
                                  description=m.brief[:300])

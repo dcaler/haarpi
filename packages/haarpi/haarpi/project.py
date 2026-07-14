@@ -56,6 +56,7 @@ class Manifest:
     brief: str = ""
     initials: str = "DCR"              # the human reviewer's chain suffix
     trundlr_project_id: int | None = None
+    trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
 
     def stage_dir(self, root: Path, stage: str) -> Path:
@@ -87,7 +88,7 @@ def load_manifest(root: Path) -> Manifest:
 def save_manifest(m: Manifest, root: Path) -> Path:
     data = {"name": m.name, "short_title": m.short_title, "brief": m.brief,
             "initials": m.initials, "trundlr_project_id": m.trundlr_project_id,
-            "stages": m.stages}
+            "trundlr_priority": m.trundlr_priority, "stages": m.stages}
     fp = root / MANIFEST
     fp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
                   encoding="utf-8")

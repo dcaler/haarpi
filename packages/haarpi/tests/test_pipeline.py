@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from haarpi import planner, project
+from haarpi import planner, project, trundlr
 from test_release_gate import _make_markup
 
 
@@ -105,7 +105,7 @@ def proj(tmp_path, servers):
     root = tmp_path / "260812_myproject"
     root.mkdir()
     rc = planner.run_init(root, name="myproject", short_title="myproj",
-                          brief="test brief", initials="DCR")
+                          brief="test brief", initials="DCR", priority=2)
     assert rc == 0
     return root
 
@@ -114,6 +114,8 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     tr, _ = servers
     m = project.load_manifest(proj)
     assert m.trundlr_project_id == 1 and m.short_title == "myproj"
+    # the answered priority reaches trundlr and is remembered for a later `queue`
+    assert tr.projects[0]["priority"] == 2 and m.trundlr_priority == 2
     assert (proj / "litReview" / "output").is_dir()
     assert (proj / ".haarpi" / "plans").is_dir()
     titles = [t["title"] for t in tr.tasks]
@@ -125,6 +127,37 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert tr.tasks[0]["command"].startswith("haarpi rabbithole")
     assert "command" not in tr.tasks[3]
     assert tr.tasks[4]["command"] == "haarpi next"
+
+
+def test_init_asks_priority_and_defaults_to_trundlrs_own_band(tmp_path, servers,
+                                                              monkeypatch):
+    """Unanswered, a new project takes trundlr's default band — it does not barge in
+    at priority 1 ahead of everything already queued."""
+    tr, _ = servers
+    root = tmp_path / "260814_asked"
+    root.mkdir()
+    asked: list[str] = []
+
+    def fake_input(prompt=""):
+        asked.append(prompt)
+        return ""            # accept every offered default
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert planner.run_init(root, name="asked", short_title="asked",
+                            brief="b", initials="DCR") == 0
+    assert any("priority" in p for p in asked)
+    assert tr.projects[0]["priority"] == trundlr.PRIORITY_DEFAULT
+    assert project.load_manifest(root).trundlr_priority == trundlr.PRIORITY_DEFAULT
+
+
+def test_init_clamps_a_priority_trundlr_would_reject(tmp_path, servers):
+    """Trundlr accepts 1..4. A typo lands in range instead of failing the init."""
+    tr, _ = servers
+    root = tmp_path / "260814_clamped"
+    root.mkdir()
+    assert planner.run_init(root, name="clamped", short_title="clamped", brief="b",
+                            initials="DCR", priority=9) == 0
+    assert tr.projects[0]["priority"] == trundlr.PRIORITY_MAX
 
 
 def test_clean_markup_mints_release_and_advances(proj, servers):
@@ -249,11 +282,14 @@ def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     root = tmp_path / "260813_other"
     root.mkdir()
     planner.run_init(root, name="other", short_title="other", brief="b",
-                     initials="DCR", no_trundlr=True)
+                     initials="DCR", priority=1, no_trundlr=True)
     assert project.load_manifest(root).trundlr_project_id is None
     assert planner.run_queue(root) == 0
     m = project.load_manifest(root)
     assert m.trundlr_project_id is not None
+    # deferred registration still opens the project in the band init answered
+    created = [p for p in tr.projects if p["name"] == "other"]
+    assert created and created[0]["priority"] == 1
     titles = [t["title"] for t in tr.tasks if t.get("project_id") == m.trundlr_project_id]
     assert titles[0].startswith("litreview gather")
     assert planner.run_queue(root) == 0                         # idempotent: nothing doubled

@@ -64,8 +64,23 @@ def list_projects(api_url: str) -> list:
     return _api(api_url, "GET", "/projects/") or []
 
 
-def create_project(api_url: str, name: str, folder: str = None, description: str = None) -> dict:
-    body = {"name": name, "priority": 1}
+PRIORITY_MIN, PRIORITY_MAX = 1, 4      # trundlr's own bounds; 1 = most urgent
+PRIORITY_DEFAULT = 3                   # trundlr's own default band
+
+
+def clamp_priority(value) -> int:
+    """A priority trundlr will accept. Out-of-range or unreadable input falls back
+    to trundlr's default band rather than failing the whole init on a typo."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return PRIORITY_DEFAULT
+    return max(PRIORITY_MIN, min(PRIORITY_MAX, n))
+
+
+def create_project(api_url: str, name: str, folder: str = None, description: str = None,
+                   priority: int = PRIORITY_DEFAULT) -> dict:
+    body = {"name": name, "priority": clamp_priority(priority)}
     if folder:
         body["folder"] = folder
     if description:
@@ -74,16 +89,18 @@ def create_project(api_url: str, name: str, folder: str = None, description: str
 
 
 def resolve_project_id(api_url: str, name: str, folder: str = None,
-                       description: str = None, create: bool = True):
+                       description: str = None, create: bool = True,
+                       priority: int = PRIORITY_DEFAULT):
     """Resolve a project NAME to trundlr's numeric id (trundlr keys projects by int id).
     Returns (id, created). Matches an existing project by exact name; creates one if
-    absent and create=True, else returns (None, False)."""
+    absent and create=True, else returns (None, False). `priority` applies only to a
+    project we create — an existing project's band is the user's, not ours to restate."""
     for p in list_projects(api_url):
         if p.get("name") == name:
             return int(p["id"]), False
     if not create:
         return None, False
-    return int(create_project(api_url, name, folder, description)["id"]), True
+    return int(create_project(api_url, name, folder, description, priority)["id"]), True
 
 
 # ── tasks ────────────────────────────────────────────────────────────────────

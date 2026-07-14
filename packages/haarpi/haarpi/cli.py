@@ -33,7 +33,7 @@ _USAGE = """\
 haarpi — Human Authored Agentic Research Pipeline
 
 usage:
-  haarpi init [--name N --short-title S --brief B --initials I --no-trundlr]
+  haarpi init [--name N --short-title S --brief B --initials I --priority 1-4 --no-trundlr]
         one interview -> haarpi.yaml, stage skeleton, trundlr project + first chain
   haarpi next [--stage S] [--file F] [--dry-run]
         read the finished markup: mint a release, or classify + queue rework
@@ -60,12 +60,16 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         ap.add_argument("--short-title")
         ap.add_argument("--brief")
         ap.add_argument("--initials")
+        ap.add_argument("--priority", type=int,
+                        help="trundlr priority band, 1 (urgent) .. 4 (background); "
+                             "asked in the interview if omitted")
         ap.add_argument("--no-trundlr", action="store_true")
         ap.add_argument("--dir", default=".")
         a = ap.parse_args(rest)
         return planner.run_init(Path(a.dir).resolve(), name=a.name,
                                 short_title=a.short_title, brief=a.brief,
-                                initials=a.initials, no_trundlr=a.no_trundlr)
+                                initials=a.initials, priority=a.priority,
+                                no_trundlr=a.no_trundlr)
 
     root = project.find_root()
     if root is None:
