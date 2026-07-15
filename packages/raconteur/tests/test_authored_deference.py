@@ -233,3 +233,39 @@ def test_a_real_typo_still_gets_through():
     brain = _Echo(json.dumps({"S1": "This can encourage new thought patterns and engage "
                                     "new audiences."}))
     assert op._copyedit_notes(brain, authored) == [("though", "thought")]
+
+
+# ── a figure shortfall is SOFT: it retries the beat, it must never abandon it ─
+
+def test_a_missing_figure_is_not_an_integrity_breach():
+    """The 2026-07-14 skip cascade, pinned. The Key result(s) beat failed the figure guard,
+    was rejected WHOLE, and the three 'define this' asks that lived in it died with it. A
+    figure the model could not caption is a quality shortfall, not a hole where the author's
+    words were — so it stays out of the fatal gate that decides whether to abandon a beat.
+    """
+    from raconteur import onepager as op
+
+    draft = "The landscape settles at moderate tolerance."     # answers fine, writes 0 figures
+    assert op._beat_integrity_problems(draft, {}, "Old prose.", set()) == [], \
+        "no citation, span, or echo broken — nothing here may abandon the beat"
+    figs = op._beat_figure_problems(draft, expect_figures=2)
+    assert figs, "the two missing figures ARE caught — as a soft problem"
+    # the combined view still carries both, for callers that want the whole list
+    assert op._beat_problems(draft, {}, "Old prose.", set(), expect_figures=2) == figs
+
+
+def test_a_dropped_citation_is_still_a_fatal_integrity_breach():
+    from raconteur import onepager as op
+
+    problems = op._beat_integrity_problems("Rewritten with no source.", {},
+                                           "Old prose [@setzler2022].", {"setzler2022"})
+    assert problems and "setzler2022" in problems[0]
+
+
+def test_retyping_an_authored_span_is_still_a_fatal_integrity_breach():
+    from raconteur import onepager as op
+
+    draft = ("However, by re-expressing its visual output in audio we can uncover new "
+             "applications of generative segregation. ⟦a:1⟧")
+    problems = op._beat_integrity_problems(draft, ECHOED, "Old prose. ⟦a:1⟧", set())
+    assert problems and any("retyped" in p for p in problems)

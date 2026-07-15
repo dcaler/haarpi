@@ -932,22 +932,110 @@ def _prior_serialized(user_rev: Path) -> dict[str, str]:
     return out
 
 
-def _beat_problems(draft: str, spans: dict[str, str], was: str,
-                   known: set[str], signature: dict | None = None,
-                   expect_figures: int | None = None) -> list[str]:
-    """Why a generated beat may not be written — checked BEFORE it reaches the document.
+def _beat_integrity_problems(draft: str, spans: dict[str, str], was: str,
+                             known: set[str], signature: dict | None = None) -> list[str]:
+    """The problems that make a beat unsafe to WRITE — a dropped citation, a dropped or
+    invented authored span, the author's own sentence retyped, an off-voice draft.
 
-    ``was`` must be the SERIALIZED previous paragraph (see ``_prior_serialized``), never the
-    accepted prose. ``expect_figures`` is how many figures the document already holds; see
-    ``guards.figure_findings``.
+    These are FATAL: a beat that trips one is left exactly as it stands, because a hole
+    where the author's words were — or a beat with its only citation quietly gone — is worse
+    than a stale beat. ``was`` must be the SERIALIZED previous paragraph (see
+    ``_prior_serialized``), never the accepted prose.
     """
     errs = _sentinel_errors(draft, spans)
     errs += [f.imperative for f in guards.echoed_spans(draft, spans)]
-    errs += [f.imperative for f in guards.figure_findings(draft, expect=expect_figures)]
     errs += [f.imperative for f in guards.style_findings(draft, signature or {})]
     if was:
         errs += [f.imperative for f in _recut_guard_findings(was, draft, known)]
     return errs
+
+
+def _beat_figure_problems(draft: str, expect_figures: int | None = None) -> list[str]:
+    """A figure the prose never numbers, introduces, or captions. SOFT: a quality shortfall,
+    not an integrity breach, so it drives a retry but never abandons the beat — the prose
+    that answers the reviewer's comments must not be held hostage to a caption the model
+    could not get right. The figures are re-captioned in place at write time regardless.
+    ``expect_figures`` is how many figures the document already holds; see
+    ``guards.figure_findings``.
+    """
+    return [f.imperative for f in guards.figure_findings(draft, expect=expect_figures)]
+
+
+def _beat_problems(draft: str, spans: dict[str, str], was: str,
+                   known: set[str], signature: dict | None = None,
+                   expect_figures: int | None = None) -> list[str]:
+    """Integrity and figure problems together. The drafting loop keeps them apart — only
+    integrity can abandon a beat — but callers that want the whole list use this."""
+    return (_beat_integrity_problems(draft, spans, was, known, signature)
+            + _beat_figure_problems(draft, expect_figures))
+
+
+# The reviewer's asks are verified against the DELIVERED text at the end of the run, and the
+# reply says, honestly, which ones the re-cut missed. But an honest "NOT addressed" is a
+# consolation, not a fix. The same judgement, run against the DRAFT while it can still be
+# redone, turns a reported failure into a retried one: a "define this" the model ignored is
+# put back to it with the reason, up to a bounded number of times.
+_MAX_BEAT_TRIES = 3
+
+_INLOOP_VERIFY_SYS = (
+    "You judge whether a DRAFT paragraph answers a reviewer's asks, before it is delivered. "
+    "Be strict and literal. An ask to DEFINE a term is answered only if the draft says, in "
+    "the text, what the term MEANS — not by using it again, and not by deleting it. If the "
+    "draft does the thing asked, say OK; otherwise say what it still needs, in one clause.")
+
+_INLOOP_VERIFY_PROMPT = """A reviewer left these asks on the "{beat}" beat. For each, decide whether the DRAFT below answers it.
+
+Asks:
+{asks}
+
+The beat as it read BEFORE:
+{before}
+
+The DRAFT under review:
+{draft}
+
+Output exactly one line per ask, numbered, and nothing else:
+  <n>: OK
+  <n>: MISSING — <what the draft still needs to do, one clause>"""
+
+_MISSING_RE = re.compile(r"(\d+)\s*[:.]?\s*MISSING\b[\s—:-]*(.*)", re.IGNORECASE)
+
+
+def _unaddressed_asks(brain: Brain, beat: str, before: str, draft: str,
+                      beat_asks: list[dict]) -> list[str]:
+    """Which of a beat's open asks the DRAFT still leaves unanswered — the verify verdict fed
+    back into the drafting loop, so an ask the model ignored is retried, not merely reported.
+
+    Returns one feedback string per unaddressed ask; ``[]`` when the draft answers them all,
+    when the beat has no open asks, or when the judge cannot be reached — a verify hiccup
+    must never block a structurally-sound beat from being delivered.
+    """
+    if not beat_asks:
+        return []
+    lines = []
+    for i, a in enumerate(beat_asks, start=1):
+        ref = (a.get("on") or "").strip()
+        lines.append(f'{i}. "{a["text"].strip()}"'
+                     + (f' (what "this"/"it" refers to: {ref})' if ref else ""))
+    try:
+        verdict = brain.coordinator(
+            _INLOOP_VERIFY_PROMPT.format(
+                beat=beat, asks="\n".join(lines),
+                before=before or "(this beat did not exist)", draft=draft),
+            system=_INLOOP_VERIFY_SYS, num_ctx=8192).strip()
+    except Exception as e:  # noqa: BLE001
+        log(f"[warn] in-loop verify failed for beat '{beat}' ({e}) — accepting the draft")
+        return []
+    missing: list[str] = []
+    for line in verdict.splitlines():
+        m = _MISSING_RE.match(line.strip())
+        if not m:
+            continue
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(beat_asks):
+            why = m.group(2).strip() or "not addressed"
+            missing.append(f'"{beat_asks[idx]["text"].strip()}" — {why}')
+    return missing
 
 
 def _authored_by_beat(user_rev: Path) -> dict[str, dict[str, str]]:
@@ -1173,6 +1261,26 @@ def _onepager_fresh(
             + ", ".join(f"{b} ({len(a)} span(s))" for b, a in sorted(authored.items()))
             + " — held fixed, written around")
 
+    # The open asks on each beat, with what each one points at — so a draft can be checked
+    # against them AS IT IS WRITTEN and retried when it leaves one unanswered, instead of only
+    # being told, after delivery, that it failed. (Re-cut only; genesis has no asks.)
+    asks_by_beat: dict[str, list[dict]] = {}
+    if user_rev is not None and brief:
+        from haarpi import redline as hrl
+
+        from . import redline as rl
+
+        live = {a["id"]: a for a in hrl.open_asks(user_rev)}
+        on = anchor_words(user_rev, only=set(live))
+        for anchor in rl.comment_anchors(user_rev, only=set(live)):
+            b = _beat_of_para(anchor.get("heading") or "", anchor["text"])
+            if b is None:
+                continue
+            for cid in anchor["ids"]:
+                if cid in live:
+                    asks_by_beat.setdefault(b, []).append(
+                        {"text": live[cid]["text"], "on": on.get(cid, "")})
+
     beats: list[tuple[str, str]] = []
     skipped: set[str] = set()          # beats the re-cut could not safely touch
     for beat in _BEATS:
@@ -1226,33 +1334,56 @@ def _onepager_fresh(
         log(f"[raconteur] drafting beat '{beat.name}'…"
             + (f" ({len(spans)} authored span(s) held fixed)" if spans else ""))
 
+        beat_asks = asks_by_beat.get(beat.name, [])
+        before_prose = prior.get(beat.name, "")
+
+        # The "previous text" the integrity guards compare against is the SERIALIZED paragraph
+        # — the author's spans as ⟦a:N⟧, not spelled out. Against the accepted prose, every
+        # placeholder the draft was ordered to carry reads as one it invented.
+        def _integrity(draft: str, was: str = prior_ser.get(beat.name, "")) -> list[str]:
+            return _beat_integrity_problems(draft, spans, was, known, signature)
+
+        # Retry on anything wrong — a broken guard, a figure it did not caption, or an ask it
+        # left unanswered — but only an INTEGRITY breach can abandon the beat. A figure the
+        # model could not caption, or a definition it would not write, is delivered as prose
+        # and reported honestly; it never costs the reviewer the beat's other answers.
         text = _strip_label(beat.name, brain.coordinator(prompt, system=_SYSTEM,
                                                          num_ctx=16384))
-
-        # Check the draft BEFORE it reaches the document, and give it one chance to fix what
-        # it broke. The "previous text" is the SERIALIZED paragraph — the author's spans as
-        # ⟦a:N⟧, not spelled out. Against the accepted prose, every placeholder the draft was
-        # ordered to carry reads as one it invented, and the beat is rejected for obeying.
-        def _problems(draft: str, was: str = prior_ser.get(beat.name, ""),
-                      figs: int | None = expect) -> list[str]:
-            return _beat_problems(draft, spans, was, known, signature, expect_figures=figs)
-
-        problems = _problems(text)
-        if problems:
-            log("[warn]   → draft rejected: " + "; ".join(problems[:3]))
-            retry = prompt + ("\n\nYour previous attempt was REJECTED:\n"
+        integrity: list[str] = []
+        figs: list[str] = []
+        unans: list[str] = []
+        for attempt in range(1, _MAX_BEAT_TRIES + 1):
+            integrity = _integrity(text)
+            figs = _beat_figure_problems(text, expect)
+            unans = ([] if integrity
+                     else _unaddressed_asks(brain, beat.name, before_prose,
+                                            _expand_spans(text, spans), beat_asks))
+            problems = integrity + figs + unans
+            if not problems or attempt == _MAX_BEAT_TRIES:
+                break
+            log(f"[warn]   → beat '{beat.name}' attempt {attempt}: "
+                + "; ".join(problems[:3]) + " — retrying")
+            retry = prompt + ("\n\nYour previous attempt still has problems:\n"
                               + "\n".join(f"- {p}" for p in problems)
-                              + "\nReturn the beat again, fixing every one.")
+                              + "\nReturn the beat again, fixing every one. Keep every "
+                                "citation and every sentence the author wrote.")
             text = _strip_label(beat.name, brain.coordinator(retry, system=_SYSTEM,
                                                              num_ctx=16384))
-            still = _problems(text)
-            if still:
-                # Fail closed. A beat delivered with a hole where the author's words were —
-                # or with its only citation quietly gone — is worse than a beat left alone.
-                log(f"[warn]   → beat '{beat.name}' NOT re-cut: {'; '.join(still[:2])}. "
-                    f"Left exactly as it stands.")
-                skipped.add(beat.name)
-                text = prior.get(beat.name, "").strip() or text
+
+        if integrity:
+            # Fail closed. A hole where the author's words were, or a dropped citation, is
+            # worse than a beat left alone.
+            log(f"[warn]   → beat '{beat.name}' NOT re-cut: {'; '.join(integrity[:2])}. "
+                f"Left exactly as it stands.")
+            skipped.add(beat.name)
+            text = prior.get(beat.name, "").strip() or text
+        else:
+            if figs:
+                log(f"[raconteur]   → beat '{beat.name}' delivered; figures fell short "
+                    f"({figs[0]}) — prose kept, captions handled at write time")
+            if unans:
+                log(f"[raconteur]   → beat '{beat.name}' delivered; {len(unans)} ask(s) may "
+                    f"still be unmet — the reply will say which")
         beats.append((beat.name, text))
 
     # The critique reads the one-pager as a reader would — the author's sentences in full,

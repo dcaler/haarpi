@@ -153,3 +153,61 @@ def test_the_adversary_is_told_when_the_anchored_text_was_struck():
     op._verify_replies(brain, ASKS, BEAT_OF, BEFORE, AFTER, OUT,
                        on={"7": "underexamined"}, deleted={"7"})
     assert "DELETED the text the comment was anchored to" in brain.seen
+
+
+# ── the verdict feeds a retry, not just a reply ──────────────────────────────
+
+class _Judge:
+    """A brain scripted with a whole in-loop verdict block, recording the prompt it saw."""
+
+    def __init__(self, block):
+        self.block = block
+        self.seen = ""
+
+    def coordinator(self, prompt, **_):
+        self.seen = prompt
+        return self.block
+
+
+_BEAT_ASKS = [
+    {"text": "define this", "on": "vacuous freezing"},
+    {"text": "define this", "on": "blind-monkey baseline"},
+]
+
+
+def test_an_unaddressed_ask_is_reported_back_for_a_retry():
+    """The whole point: a 'define this' the model ignored comes back to it, with the reason,
+    while the beat can still be redone — instead of only reaching the reviewer as a polite
+    'NOT addressed' after the fact."""
+    brain = _Judge("1: OK\n2: MISSING — never says what a blind-monkey baseline is")
+    missing = op._unaddressed_asks(brain, "Key result(s)", "before", "a draft", _BEAT_ASKS)
+    assert missing == ['"define this" — never says what a blind-monkey baseline is']
+
+
+def test_a_draft_that_answers_every_ask_triggers_no_retry():
+    brain = _Judge("1: OK\n2: OK")
+    assert op._unaddressed_asks(brain, "Key result(s)", "before", "a draft", _BEAT_ASKS) == []
+
+
+def test_the_judge_is_told_what_each_ask_points_at():
+    """A 'define this' with no referent is the riddle that made the tool define the heading.
+    The in-loop judge must see the same pin the reviewer put down."""
+    brain = _Judge("1: OK\n2: OK")
+    op._unaddressed_asks(brain, "Key result(s)", "before", "a draft", _BEAT_ASKS)
+    assert "vacuous freezing" in brain.seen and "blind-monkey baseline" in brain.seen
+
+
+def test_a_beat_with_no_open_asks_never_calls_the_judge():
+    """No asks, no cost — and no LLM round-trip to discover there was nothing to check."""
+    brain = _Judge("unused")
+    assert op._unaddressed_asks(brain, "Motivation", "before", "a draft", []) == []
+    assert brain.seen == "", "the judge must not be consulted when there is nothing to verify"
+
+
+def test_a_verify_hiccup_never_blocks_a_sound_draft():
+    """A structurally-sound beat must not be held back because the judge could not be reached."""
+    class _Broken:
+        def coordinator(self, *a, **k):
+            raise RuntimeError("model down")
+
+    assert op._unaddressed_asks(_Broken(), "Gap", "before", "a draft", _BEAT_ASKS) == []
