@@ -933,21 +933,36 @@ def _prior_serialized(user_rev: Path) -> dict[str, str]:
 
 
 def _beat_integrity_problems(draft: str, spans: dict[str, str], was: str,
-                             known: set[str], signature: dict | None = None) -> list[str]:
+                             known: set[str]) -> list[str]:
     """The problems that make a beat unsafe to WRITE — a dropped citation, a dropped or
-    invented authored span, the author's own sentence retyped, an off-voice draft.
+    invented authored span, the author's own sentence retyped.
 
     These are FATAL: a beat that trips one is left exactly as it stands, because a hole
     where the author's words were — or a beat with its only citation quietly gone — is worse
     than a stale beat. ``was`` must be the SERIALIZED previous paragraph (see
     ``_prior_serialized``), never the accepted prose.
+
+    Voice is NOT here — an off-voice draft is a quality shortfall, not a hole where the
+    author's words were; see ``_beat_style_problems``.
     """
     errs = _sentinel_errors(draft, spans)
     errs += [f.imperative for f in guards.echoed_spans(draft, spans)]
-    errs += [f.imperative for f in guards.style_findings(draft, signature or {})]
     if was:
         errs += [f.imperative for f in _recut_guard_findings(was, draft, known)]
     return errs
+
+
+def _beat_style_problems(draft: str, signature: dict | None = None) -> list[str]:
+    """An off-voice draft — a transition the author never writes, sentences longer than his.
+    SOFT, like a figure shortfall: it drives a retry so the model can match the voice, but a
+    lingering style nit must never abandon the beat and carry the reviewer's answers off with
+    it. That is the 2026-07-15 skip, pinned: the Key result(s) beat — sound in every authored
+    span and citation — was thrown away over the single word "crucially", and the four
+    "define this" asks living in it died. Worse, while style sat in the integrity list it also
+    silenced the in-loop ask-verify (gated on ``not integrity``): the model was retried for
+    its voice and never once told a definition was still missing.
+    """
+    return [f.imperative for f in guards.style_findings(draft, signature or {})]
 
 
 def _beat_figure_problems(draft: str, expect_figures: int | None = None) -> list[str]:
@@ -964,9 +979,10 @@ def _beat_figure_problems(draft: str, expect_figures: int | None = None) -> list
 def _beat_problems(draft: str, spans: dict[str, str], was: str,
                    known: set[str], signature: dict | None = None,
                    expect_figures: int | None = None) -> list[str]:
-    """Integrity and figure problems together. The drafting loop keeps them apart — only
-    integrity can abandon a beat — but callers that want the whole list use this."""
-    return (_beat_integrity_problems(draft, spans, was, known, signature)
+    """Integrity, style and figure problems together. The drafting loop keeps them apart —
+    only integrity can abandon a beat — but callers that want the whole list use this."""
+    return (_beat_integrity_problems(draft, spans, was, known)
+            + _beat_style_problems(draft, signature)
             + _beat_figure_problems(draft, expect_figures))
 
 
@@ -1341,24 +1357,29 @@ def _onepager_fresh(
         # — the author's spans as ⟦a:N⟧, not spelled out. Against the accepted prose, every
         # placeholder the draft was ordered to carry reads as one it invented.
         def _integrity(draft: str, was: str = prior_ser.get(beat.name, "")) -> list[str]:
-            return _beat_integrity_problems(draft, spans, was, known, signature)
+            return _beat_integrity_problems(draft, spans, was, known)
 
-        # Retry on anything wrong — a broken guard, a figure it did not caption, or an ask it
-        # left unanswered — but only an INTEGRITY breach can abandon the beat. A figure the
-        # model could not caption, or a definition it would not write, is delivered as prose
-        # and reported honestly; it never costs the reviewer the beat's other answers.
+        # Retry on anything wrong — a broken guard, an off-voice transition, a figure it did
+        # not caption, or an ask it left unanswered — but only an INTEGRITY breach can abandon
+        # the beat. An off-voice word, a figure the model could not caption, or a definition it
+        # would not write is delivered as prose and reported honestly; it never costs the
+        # reviewer the beat's other answers. Style is a retry, never an abandonment: gating it
+        # here (not in integrity) is also what lets the ask-verify below fire when only the
+        # voice is off — so the model is finally told the definition is still missing.
         text = _strip_label(beat.name, brain.coordinator(prompt, system=_SYSTEM,
                                                          num_ctx=16384))
         integrity: list[str] = []
+        style: list[str] = []
         figs: list[str] = []
         unans: list[str] = []
         for attempt in range(1, _MAX_BEAT_TRIES + 1):
             integrity = _integrity(text)
+            style = _beat_style_problems(text, signature)
             figs = _beat_figure_problems(text, expect)
             unans = ([] if integrity
                      else _unaddressed_asks(brain, beat.name, before_prose,
                                             _expand_spans(text, spans), beat_asks))
-            problems = integrity + figs + unans
+            problems = integrity + style + figs + unans
             if not problems or attempt == _MAX_BEAT_TRIES:
                 break
             log(f"[warn]   → beat '{beat.name}' attempt {attempt}: "
@@ -1378,6 +1399,9 @@ def _onepager_fresh(
             skipped.add(beat.name)
             text = prior.get(beat.name, "").strip() or text
         else:
+            if style:
+                log(f"[raconteur]   → beat '{beat.name}' delivered; voice still off in places "
+                    f"({style[0]}) — kept, not abandoned over a word")
             if figs:
                 log(f"[raconteur]   → beat '{beat.name}' delivered; figures fell short "
                     f"({figs[0]}) — prose kept, captions handled at write time")

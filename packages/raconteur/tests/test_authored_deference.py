@@ -254,6 +254,43 @@ def test_a_missing_figure_is_not_an_integrity_breach():
     assert op._beat_problems(draft, {}, "Old prose.", set(), expect_figures=2) == figs
 
 
+# ── an off-voice draft is SOFT too: the 2026-07-15 skip, over one word ───────
+
+_SIG = {"connectives": {"however": 5, "thus": 3, "first": 2}}
+
+
+def test_an_off_voice_transition_is_not_an_integrity_breach():
+    """The 2026-07-15 skip, pinned. Key result(s) was sound in every authored span and
+    citation, but its draft said "crucially" — a transition this author never writes — so the
+    style guard, then sitting inside the integrity list, abandoned the whole beat and the four
+    "define this" asks died with it. Voice is a quality shortfall, not a hole where the
+    author's words were: it drives a retry, it never abandons the beat.
+    """
+    from raconteur import onepager as op
+
+    draft = "Crucially, the emergent clustering fails to beat the baseline."
+    assert op._beat_integrity_problems(draft, {}, "Old prose.", set()) == [], \
+        "an off-voice word breaks no span, citation or echo — it may not abandon the beat"
+    style = op._beat_style_problems(draft, _SIG)
+    assert style and "crucially" in style[0], "the off-voice transition IS caught — softly"
+    # the combined view still carries it, for callers that want the whole list
+    assert style[0] in op._beat_problems(draft, {}, "Old prose.", set(), signature=_SIG)
+
+
+def test_style_no_longer_suppresses_the_ask_verify():
+    """The second, quieter half of the same bug. `unans` is computed only when integrity is
+    empty; while style sat in integrity, an off-voice draft kept integrity non-empty, so the
+    in-loop ask-verify never fired — the model was retried for its voice and never once told a
+    definition was still missing. With style out of integrity, a beat that is off-voice but
+    structurally sound clears the integrity gate, and the ask-verify runs.
+    """
+    from raconteur import onepager as op
+
+    draft = "Crucially, the model settles at moderate tolerance."
+    assert op._beat_integrity_problems(draft, {}, "Old prose.", set()) == [], \
+        "off-voice alone must leave integrity empty, so `[] if integrity` lets the ask-verify run"
+
+
 def test_a_dropped_citation_is_still_a_fatal_integrity_breach():
     from raconteur import onepager as op
 
