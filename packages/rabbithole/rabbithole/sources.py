@@ -238,10 +238,27 @@ def _split_name(name: str) -> Author:
 # ──────────────────────────────────────────────────────────────────────────
 # Crossref
 # ──────────────────────────────────────────────────────────────────────────
+def _full_title(title: str, subtitle: str) -> str:
+    """Join Crossref's separate subtitle back onto the title.
+
+    Crossref splits "Title: Subtitle" across two fields; Zotero, OpenAlex, and
+    Semantic Scholar keep it as one string. Left unjoined, every subtitled paper
+    arrives with a systematically short title, and any Zotero record without a
+    DOI then can't be recognised as already collected — the 2026-07-14 consGateII
+    gather re-listed Guagnano 1995 (filed since Jun 30) for exactly this reason."""
+    title = (title or "").strip()
+    subtitle = (subtitle or "").strip()
+    if not subtitle or not title:
+        return title or subtitle
+    if _norm_title(subtitle) in _norm_title(title):
+        return title
+    return f"{title.rstrip(':').rstrip()}: {subtitle}"
+
+
 def search_crossref(query: str, limit: int, email: str,
                     year_from: int | None = None, year_to: int | None = None) -> list[Candidate]:
     params = {"query": query, "rows": min(limit, 100), "select":
-              "DOI,title,author,issued,container-title,publisher,abstract,"
+              "DOI,title,subtitle,author,issued,container-title,publisher,abstract,"
               "is-referenced-by-count,URL,type,subject"}
     if email:
         params["mailto"] = email
@@ -270,7 +287,8 @@ def search_crossref(query: str, limit: int, email: str,
         abstract = it.get("abstract", "") or ""
         abstract = _strip_jats(abstract)
         out.append(Candidate(
-            title=(it.get("title") or [""])[0],
+            title=_full_title((it.get("title") or [""])[0],
+                              (it.get("subtitle") or [""])[0]),
             authors=authors,
             year=year,
             venue=(it.get("container-title") or [""])[0],

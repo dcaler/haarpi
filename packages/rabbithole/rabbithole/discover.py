@@ -20,7 +20,7 @@ import time
 
 from . import config, filters, ranking, render, runlog, sources
 from .brain import Brain
-from .models import Candidate, norm_doi
+from .models import Candidate, _norm_title, norm_doi
 
 
 _EXTRACT_SYS = """\
@@ -660,17 +660,77 @@ def _item_keys(data: dict) -> list[str]:
     return keys
 
 
-def _hit(c: Candidate, keys: set[str]) -> bool:
-    return bool((c.doi_key and c.doi_key in keys) or
-                (c.title_key and c.title_key in keys))
+def _title_stem(title: str) -> str:
+    """Normalised pre-colon stem of a title; '' when too short to be distinctive."""
+    stem = _norm_title((title or "").split(":", 1)[0])
+    return stem if len(stem.split()) >= 3 else ""
 
 
-def _library_hit(c: Candidate, library: dict) -> dict | None:
-    if c.doi_key and c.doi_key in library:
-        return library[c.doi_key]
-    if c.title_key and c.title_key in library:
-        return library[c.title_key]
-    return None
+def _corroborated(title_key: str, family: str, year) -> str:
+    """A title key that only counts alongside first-author family + year agreement."""
+    if not (title_key and family and year):
+        return ""
+    return f"{title_key}|{family}|{year}"
+
+
+def _zotero_author_year(data: dict) -> tuple[str, str]:
+    fam = ""
+    for cr in data.get("creators") or []:
+        fam = (cr.get("lastName") or cr.get("name") or "").strip()
+        if fam:
+            break
+    m = re.search(r"\b(?:1[89]|20)\d{2}\b", data.get("date") or "")
+    return _norm_title(fam), (m.group(0) if m else "")
+
+
+class _ZoteroIndex:
+    """Identity index over Zotero items: DOI, exact normalised title, and a
+    subtitle-tolerant channel for records where one side lost the ": Subtitle"
+    half (a bare-DOI Zotero record vs a source that splits subtitles off, in
+    either direction).
+
+    The subtitle channel only ever compares one side's pre-colon STEM against
+    the other side's WHOLE title — never stem against stem — so two different
+    papers that share a main title ("…: Part I" / "…: Part II") cannot collide.
+    A stem hit additionally requires first-author family and year to agree: a
+    title stem alone is too generic to spend a candidate on, and a false
+    "already collected" here silently costs the human a paper."""
+
+    def __init__(self) -> None:
+        self.exact: dict[str, dict] = {}   # doi key / title key   -> item
+        self.whole: dict[str, dict] = {}   # corroborated full title -> item
+        self.stem: dict[str, dict] = {}    # corroborated pre-colon stem -> item
+
+    def add(self, item: dict) -> None:
+        data = item.get("data", {})
+        for k in _item_keys(data):
+            self.exact.setdefault(k, item)
+        fam, year = _zotero_author_year(data)
+        title = data.get("title", "")
+        whole_key = _corroborated(_norm_title(title), fam, year)
+        if whole_key:
+            self.whole.setdefault(whole_key, item)
+        stem_key = _corroborated(_title_stem(title), fam, year)
+        if stem_key and stem_key != whole_key:
+            self.stem.setdefault(stem_key, item)
+
+    def find(self, c: Candidate) -> dict | None:
+        if c.doi_key and c.doi_key in self.exact:
+            return self.exact[c.doi_key]
+        if c.title_key and c.title_key in self.exact:
+            return self.exact[c.title_key]
+        fam = _norm_title(c.authors[0].family or c.authors[0].display) if c.authors else ""
+        whole_key = _corroborated(c.title_key, fam, c.year or "")
+        # the candidate's whole title IS a Zotero item's pre-colon stem
+        # (the Zotero record carries the subtitle; the source dropped it)
+        if whole_key and whole_key in self.stem:
+            return self.stem[whole_key]
+        # the candidate's pre-colon stem IS a Zotero item's whole title
+        # (the source carries the subtitle; the Zotero record dropped it)
+        stem_key = _corroborated(_title_stem(c.title), fam, c.year or "")
+        if stem_key and stem_key != whole_key and stem_key in self.whole:
+            return self.whole[stem_key]
+        return None
 
 
 def _zotero_filter(cfg, gc, ranked: list[Candidate]):
@@ -687,21 +747,20 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
         print(f"\n[warn] Zotero unavailable ({e}); listing all candidates.")
         return "", ranked, 0, 0
 
-    present: set[str] = set()
+    collection = _ZoteroIndex()
     for it in zc.collection_items(coll):
-        present.update(_item_keys(it.get("data", {})))
+        collection.add(it)
 
-    library: dict[str, dict] = {}
+    library = _ZoteroIndex()
     for it in zc.library_items():
-        for k in _item_keys(it.get("data", {})):
-            library.setdefault(k, it)
+        library.add(it)
 
     kept, already, added = [], 0, 0
     for c in ranked:
-        if _hit(c, present):
+        if collection.find(c) is not None:
             already += 1
             continue
-        item = _library_hit(c, library)
+        item = library.find(c)
         if item is not None and zc.add_item_to_collection(item, coll):
             added += 1
             continue
