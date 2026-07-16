@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import re
-import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -322,18 +321,53 @@ def _resource_id(tr_cfg: dict, kind: str) -> int | None:
 _ESTIMATE_WINDOW = 5
 
 
+# The June->July title rename ("lit review write 4" -> "litreview report 1") orphaned
+# every new-style step from its realised history: the estimator matched nothing, fell
+# back to the cold-start constant, and budgeted a ~26-hour synthesis at 3 (task 591,
+# 2026-07-16) — throwing every downstream start time in the queue.
+_STEP_SYNONYMS: dict[tuple[str, str], tuple[str, str]] = {
+    ("litreview", "write"): ("litreview", "report"),
+}
+_TITLE_RE = re.compile(r"^(.*?)\s+(\w+)\s+\d+$")
+
+
+def _canonical(title: str) -> tuple[str, str] | None:
+    """Reduce a task title to its (stage, step) identity across naming eras.
+
+    Whitespace in the stage name collapses ("lit review" == "litreview"), a venue
+    infix folds into its stage ("paper ismir outline 3" is paper/outline work), and
+    renamed verbs map forward through _STEP_SYNONYMS. None for titles that don't
+    look like `<stage> <step> <cycle>` at all."""
+    m = _TITLE_RE.match((title or "").strip())
+    if not m:
+        return None
+    stage = re.sub(r"\s+", "", m.group(1).lower())
+    step = m.group(2).lower()
+    stage = next((s for s in STAGE_STEPS if stage == s or stage.startswith(s)), stage)
+    return _STEP_SYNONYMS.get((stage, step), (stage, step))
+
+
 def estimate_hours(tasks: list[dict], stage: str, step: str, fallback: float) -> float:
-    """Median realised duration of the last few completed `<stage> <step> N`
-    tasks (pooled across projects) — the schedule self-tunes from history."""
-    pat = re.compile(rf"^{re.escape(stage)} {re.escape(step)} (\d+)$", re.I)
+    """Budget a step from the realised durations of its recent completed history,
+    pooled across projects and across title eras (see _canonical).
+
+    The number is a BUDGET, not a forecast. The loss is asymmetric: a task that
+    finishes under budget releases its dependents immediately (deps fire on
+    completion, not on schedule), but one that overruns drags every downstream
+    start time with it. So take the high end of the recent window — the
+    second-highest realised duration (~p80, immune to a single freak outlier) —
+    rather than the median, which undershoots exactly when dispersion is worst."""
+    want = (stage.lower(), step.lower())
     done = [t for t in tasks
-            if t.get("status") == "done" and pat.match((t.get("title") or "").strip())
+            if t.get("status") == "done"
+            and _canonical(t.get("title") or "") == want
             and isinstance(t.get("duration"), (int, float)) and t["duration"] > 0]
     if not done:
         return fallback
     done.sort(key=lambda t: (t.get("end_date") or "", t.get("id") or 0))
-    recent = done[-_ESTIMATE_WINDOW:]
-    return round(statistics.median(float(t["duration"]) for t in recent), 3)
+    recent = sorted(float(t["duration"]) for t in done[-_ESTIMATE_WINDOW:])
+    budget = recent[-2] if len(recent) >= 3 else recent[-1]
+    return round(budget, 3)
 
 
 def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
