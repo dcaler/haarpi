@@ -8,6 +8,7 @@ from .guards import (
     LITREV_KW as _LITREV_KW,
     CODE_KW as _CODE_KW,
     RESULTS_KW as _RESULTS_KW,
+    DISCUSSION_KW as _DISCUSSION_KW,
     is_references as _is_references,
     is_abstract as _is_abstract,
     is_acknowledgements as _is_acknowledgements,
@@ -204,16 +205,27 @@ def _parse_sections(text: str) -> list[tuple[str, str]]:
 # one kind ("Model Evaluation" wants both code and results context), so it uses the keyword
 # sets directly rather than guards.section_kind(), which picks a single winner.
 
+# A Discussion connects results to background: the guards classify it "other" and demand a
+# citation per paragraph, but the drafter used to hand it NEITHER the litreview NOR results —
+# so the model wrote uncited prose or author-year from memory, and every Discussion drew a
+# wall of uncited findings the repair rounds could not clear. It gets the litreview in full
+# (the citations it was missing) plus a bounded results slice: the analysis already carries
+# key_findings, so full litrev + full results would overrun the num_ctx budget for no gain.
+_MAX_DISCUSSION_RESULTS_CHARS = 4000
+
 
 def _context_for_section(heading: str, litrev: str, code: str, results: str) -> str:
     h = heading.lower()
+    is_discussion = any(kw in h for kw in _DISCUSSION_KW)
     parts = []
-    if any(kw in h for kw in _LITREV_KW) and litrev:
+    if (is_discussion or any(kw in h for kw in _LITREV_KW)) and litrev:
         parts.append(f"Literature review:\n{litrev}")
     if any(kw in h for kw in _CODE_KW) and code:
         parts.append(f"Methods (raster writeup):\n{code}")
     if any(kw in h for kw in _RESULTS_KW) and results:
         parts.append(f"Results Content:\n{results}")
+    elif is_discussion and results:
+        parts.append(f"Results Content:\n{results[:_MAX_DISCUSSION_RESULTS_CHARS]}")
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 

@@ -91,6 +91,11 @@ CODE_KW = {"method", "approach", "implement", "model", "framework",
            "algorithm", "system", "pipeline", "design"}
 RESULTS_KW = {"result", "evaluation", "experiment", "finding",
               "outcome", "performance", "validation", "empirical"}
+# Discussion/Conclusion: NOT a section_kind (it stays "other", so its citation floor holds),
+# only a context selector — a Discussion connects its findings back to the literature, so it
+# needs the litreview to cite against. Kept out of section_kind deliberately: were it a kind,
+# it would have to be one that still demands citations, and "other" already does that.
+DISCUSSION_KW = {"discussion", "conclusion", "concluding"}
 
 _REFERENCES_RE = re.compile(r"^\d*\.?\s*references?\b", re.IGNORECASE)
 _ABSTRACT_RE = re.compile(r"^\d*\.?\s*abstract\b", re.IGNORECASE)
