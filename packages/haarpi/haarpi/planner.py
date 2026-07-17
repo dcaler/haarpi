@@ -626,7 +626,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     stage, markup = found
 
     check = redline.gate_check(markup)
-    ahash = project.annotation_hash(check["unresolved"], check["reviewer_changes"])
+    ahash = project.annotation_hash(check["unresolved"], check["reviewer_changes"],
+                                    markup.name)
     if project.already_planned(root, ahash):
         print(f"haarpi next: this annotation set was already planned (hash {ahash}) — "
               "loop guard, refusing to plan it twice.")

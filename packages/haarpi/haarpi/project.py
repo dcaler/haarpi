@@ -190,9 +190,19 @@ def ledger_dir(root: Path) -> Path:
     return root / STATE_DIR / "plans"
 
 
-def annotation_hash(unresolved: list[dict], reviewer_changes: int) -> str:
-    """The loop guard: one annotation set must never be planned twice."""
-    blob = json.dumps({"u": unresolved, "rc": reviewer_changes}, sort_keys=True)
+def annotation_hash(unresolved: list[dict], reviewer_changes: int,
+                    markup: str = "") -> str:
+    """The loop guard: one markup's annotation set must never be planned twice.
+
+    Keyed on the markup's identity as well as its asks. A clean approval carries
+    NO annotations, so hashing the asks alone makes every clean gate on the
+    ladder collide on the empty set — the first approval poisons every later one,
+    and the next clean rung (a venue slate, an approved outline) wedges on a false
+    "already planned". The file a gate was passed on is what tells two clean
+    approvals apart; re-firing on the same file still reproduces its hash, so the
+    genuine double-plan the guard exists for is still caught."""
+    blob = json.dumps({"m": markup, "u": unresolved, "rc": reviewer_changes},
+                      sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
