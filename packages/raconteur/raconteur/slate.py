@@ -188,10 +188,10 @@ def merge(venues: dict[str, VenueConfig], slate: dict[str, dict]) -> dict[str, V
 
 _CFP_SYS = (
     "You read a venue's call for papers or author guidelines and extract its SUBMISSION "
-    "FORMAT. You report only what the page actually states. A format detail the page does "
-    "not give is null — never a typical value, never a value from a venue you know. A "
-    "fabricated page limit is worse than no page limit: the author cannot tell it is wrong "
-    "until the desk reject."
+    "REQUIREMENTS — both the format and the content structure it mandates. You report only "
+    "what the page actually states. A detail the page does not give is null — never a typical "
+    "value, never a value from a venue you know. A fabricated page limit is worse than no "
+    "page limit: the author cannot tell it is wrong until the desk reject."
 )
 
 _CFP_PROMPT = """\
@@ -202,14 +202,24 @@ Source page:
 Return ONLY a JSON object with exactly these keys, using null for anything the page does \
 not state:
 {{"page_limit": null, "word_limit": null, "abstract_limit": null, "columns": null, \
-"citation_style": null, "format_notes": null}}
+"citation_style": null, "required_sections": null, "anonymized": null, \
+"template_url": null, "template_kind": null, "format_notes": null}}
 
 - page_limit / word_limit / abstract_limit: integers, for the MAIN submission (not the \
 camera-ready, not the abstract-only track), excluding references if the page says so.
 - columns: 1 or 2.
 - citation_style: the named style (e.g. "APA", "IEEE", "Chicago author-date"), if stated.
-- format_notes: anything else an author must obey — template, anonymisation, section \
-limits, supplementary rules. One short paragraph, or null."""
+- required_sections: content the submission MUST contain that a writer would otherwise miss \
+— CCS concepts, keywords, an ethics or reproducibility statement, an ODD model description, \
+a mandated section order. One short list or paragraph, or null.
+- anonymized: true if the venue is double-blind or requires an anonymised submission; false \
+if it explicitly permits author names / is single-blind; null if the page does not say.
+- template_url: the URL of the submission template or author kit IF the page links one (a \
+.zip, an Overleaf project, a .cls or .docx template). The link itself, or null.
+- template_kind: "latex-acm", "latex-ieee", "latex", "word", or "overleaf" if identifiable, \
+else null.
+- format_notes: anything else an author must obey — section limits, supplementary rules. \
+One short paragraph, or null."""
 
 
 def fetch_specs(venue: VenueConfig, brain, email: str = "") -> VenueConfig:
@@ -255,6 +265,21 @@ def fetch_specs(venue: VenueConfig, brain, email: str = "") -> VenueConfig:
         setattr(venue, field_name, value)
         venue.sources[field_name] = "cfp"      # read, not guessed
         got.append(field_name)
+
+    # anonymized is a bool (False is a real answer, not "unknown"); the template
+    # fields feed the human fetch task, not the writer — all read, not guessed.
+    anon = spec.get("anonymized")
+    if isinstance(anon, bool):
+        venue.anonymized = anon
+        venue.sources["anonymized"] = "cfp"
+        got.append("anonymized")
+    for tf in ("template_url", "template_kind"):
+        value = spec.get(tf)
+        if isinstance(value, str) and value.strip():
+            setattr(venue, tf, value.strip())
+            venue.sources[tf] = "cfp"
+            got.append(tf)
+
     log(f"[raconteur] {venue.name}: {', '.join(got) if got else 'the CFP states no format'}"
         + (" (from the call for papers)" if got else ""))
     return venue
@@ -299,7 +324,13 @@ def specs_block(venue: VenueConfig | None) -> str:
     if venue.url:
         lines.append(f"Call for papers: {venue.url}")
     lines += [f"{venue.spec_line(f)}" for f in VenueConfig.SPEC_FIELDS
-              if f != "format_notes"]
+              if f not in ("format_notes", "required_sections")]
+    if venue.required_sections:
+        lines.append(f"Required sections/content: {venue.required_sections}")
+    if venue.anonymized is True:
+        lines.append("DOUBLE-BLIND: this venue is anonymised. Write with NO author names and "
+                     "no first-person reference to your own prior work — cite it in the third "
+                     "person, as though by other authors.")
     if venue.format_notes:
         lines.append(f"Format notes: {venue.format_notes}")
     if not any(venue.sources.get(f) == "cfp" for f in VenueConfig.SPEC_FIELDS):
@@ -307,6 +338,34 @@ def specs_block(venue: VenueConfig | None) -> str:
                      "papers. Write to the argument, not to an assumed length, and do not "
                      "state a limit you cannot verify.")
     return "Venue specifications:\n" + "\n".join(lines) + "\n"
+
+
+def template_brief(venue: VenueConfig, target: str) -> str:
+    """The human's instructions for fetching a venue's submission template.
+
+    Locating the template artefact is the one thing the machine cannot do reliably —
+    it is a download or an author-kit maze, not prose on a page — so it stays a human
+    task. Everything the CFP DID yield is pre-filled here so the fetch is a drop, not
+    a hunt: the link if the page gave one, the kind if we could name it, the anonymous
+    variant if the venue is blind. Absent a link, it points at the CFP and says where
+    to look. An honest 'no template needed' is a valid outcome, not a failure."""
+    name = venue.name or "this venue"
+    lines = [f"Fetch the submission template for {name} and drop it in {target}/."]
+    if venue.template_url:
+        kind = f" (looks like a {venue.template_kind} template)" if venue.template_kind else ""
+        lines.append(f"The call for papers links one: {venue.template_url}{kind}")
+    elif venue.url:
+        lines.append("The CFP did not link a template directly — start there and follow it "
+                     f"to the author kit / template download: {venue.url}")
+    else:
+        lines.append("No CFP URL on file — find the venue's author guidelines, and its "
+                     "template from there.")
+    if venue.anonymized is True:
+        lines.append("This venue is DOUBLE-BLIND — get the anonymised/blinded template variant.")
+    lines.append(f"When the file(s) are in {target}/, mark this task done. If the venue needs "
+                 "no template, mark it done with the folder empty — nothing downstream needs "
+                 "it until the paper is packaged for submission.")
+    return "\n".join(lines)
 
 
 def dropped(venues: dict[str, VenueConfig], slate: dict[str, dict]) -> list[str]:

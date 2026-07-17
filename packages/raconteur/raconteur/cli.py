@@ -94,6 +94,14 @@ def main() -> None:
         help="section number or heading (e.g. '2' or 'Methods')",
     )
 
+    package_p = sub.add_parser(
+        "package", help="lay the approved manuscript into a venue's submission template")
+    package_p.add_argument(
+        "--venue", metavar="SLUG", default="",
+        help="which venue to package for (default: the one selected venue; "
+             "required when several are selected)",
+    )
+
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
@@ -129,6 +137,9 @@ def main() -> None:
         case "focus":
             from .focus import run
             run(project_dir, args.section)
+        case "package":
+            from .package import run
+            run(project_dir, venue=args.venue)
         case _:
             parser.print_help()
             sys.exit(1)

@@ -306,3 +306,74 @@ def test_a_pdf_is_detected_by_its_bytes_not_its_extension(monkeypatch):
     monkeypatch.setattr(web, "_client", lambda email: _C())
     monkeypatch.setattr(web, "_pdf_text", lambda data, mx: "read as pdf")
     assert web.fetch_page_text("https://x/whatever", "") == "read as pdf"
+
+
+# ── the widened fetch: content structure, anonymity, and the template link ────
+# A conference CFP mandates more than a format — required sections, double-blind,
+# a template to submit in. The first two shape the WRITING (so they ride into the
+# specs block the outline/draft read); the template link only pre-fills the human
+# fetch task, so it stays OUT of the writer's block.
+
+def test_the_fetch_reads_content_rules_and_the_template_link(monkeypatch):
+    import raconteur.web as web
+    monkeypatch.setattr(web, "fetch_page_text", lambda *a, **k: "double-blind; needs CCS")
+    brain = types.SimpleNamespace(coordinator=lambda *a, **k: (
+        '{"required_sections": "CCS concepts and keywords", "anonymized": true, '
+        '"template_url": "https://acm.org/kit.zip", "template_kind": "latex-acm"}'))
+    out = slate.fetch_specs(VenueConfig(name="CHI", url="https://chi.acm.org/cfp"), brain)
+    assert out.required_sections == "CCS concepts and keywords"
+    assert out.anonymized is True
+    assert out.template_url == "https://acm.org/kit.zip"
+    assert out.template_kind == "latex-acm"
+    for f in ("required_sections", "anonymized", "template_url", "template_kind"):
+        assert out.sources[f] == "cfp"
+
+
+def test_a_stated_single_blind_is_false_not_unknown(monkeypatch):
+    import raconteur.web as web
+    monkeypatch.setattr(web, "fetch_page_text", lambda *a, **k: "author names allowed")
+    brain = types.SimpleNamespace(coordinator=lambda *a, **k: '{"anonymized": false}')
+    out = slate.fetch_specs(VenueConfig(name="V", url="https://v/cfp"), brain)
+    assert out.anonymized is False and out.sources["anonymized"] == "cfp"
+
+
+def test_the_writer_block_carries_content_rules_and_the_blind_directive():
+    v = VenueConfig(name="CHI", required_sections="CCS concepts and keywords",
+                    anonymized=True, sources={"required_sections": "cfp"})
+    block = slate.specs_block(v)
+    assert "CCS concepts and keywords" in block
+    assert "DOUBLE-BLIND" in block
+
+
+def test_a_named_but_non_blind_venue_gets_no_blind_directive():
+    block = slate.specs_block(VenueConfig(name="V", anonymized=False,
+                                          page_limit=8, sources={"page_limit": "cfp"}))
+    assert "DOUBLE-BLIND" not in block
+
+
+def test_the_template_link_is_not_shown_to_the_writer():
+    v = VenueConfig(name="CHI", template_url="https://acm.org/kit.zip",
+                    page_limit=8, sources={"page_limit": "cfp"})
+    assert "kit.zip" not in slate.specs_block(v)
+
+
+# ── the template brief: the human's scaffolded fetch instructions ─────────────
+
+def test_the_brief_prefills_a_known_template_link_and_kind():
+    v = VenueConfig(name="CHI", template_url="https://acm.org/kit.zip",
+                    template_kind="latex-acm")
+    brief = slate.template_brief(v, "paper/templates/chi")
+    assert "https://acm.org/kit.zip" in brief and "latex-acm" in brief
+    assert "paper/templates/chi/" in brief
+
+
+def test_the_brief_falls_back_to_the_cfp_when_no_template_link():
+    v = VenueConfig(name="CSS2026", url="https://css/cfp")
+    brief = slate.template_brief(v, "paper/templates/css2026")
+    assert "https://css/cfp" in brief
+    assert "empty" in brief          # 'no template needed' is a valid outcome
+
+
+def test_the_brief_asks_for_the_blinded_variant_when_double_blind():
+    v = VenueConfig(name="CHI", url="https://chi/cfp", anonymized=True)
+    assert "DOUBLE-BLIND" in slate.template_brief(v, "paper/templates/chi")

@@ -197,6 +197,50 @@ def _selected_venues(root: Path) -> list[str]:
         return []
 
 
+def _selected_venue_configs(root: Path) -> dict:
+    """The selected venues as raconteur VenueConfig records (slug -> record).
+
+    Richer than _selected_venues (which returns bare slugs): the template task and
+    its email brief need each venue's name, CFP url, detected template link, and
+    double-blind flag. Empty when raconteur or its config is absent."""
+    try:
+        from raconteur.config import ProjectConfig
+    except ImportError:                       # raconteur not installed in this stack
+        return {}
+    if not ProjectConfig.exists(root):
+        return {}
+    try:
+        cfg = ProjectConfig.load(root)
+    except Exception as e:                    # noqa: BLE001 — a broken yaml must not wedge the fork
+        print(f"  [note] could not read the venue slate ({e})")
+        return {}
+    return {s: cfg.venues[s] for s in cfg.selected_venues() if s in cfg.venues}
+
+
+def _queue_template_task(root: Path, m, client, tr_cfg: dict, slug: str, vcfg,
+                         cycle: int) -> str:
+    """Scaffold a drop-slot and queue the human task that fills it.
+
+    Locating a venue's submission template is the one step the machine cannot do
+    reliably (see raconteur.slate.template_brief), so it is a human task — but a
+    well-scaffolded one: a labelled folder already waits, and the brief pre-fills
+    everything the CFP yielded. Runs in PARALLEL with the outline/draft chain (off
+    the critical path); the future packaging rung is what will depend on it."""
+    from raconteur import slate
+    tdir = m.stage_dir(root, "paper") / "templates" / slug
+    tdir.mkdir(parents=True, exist_ok=True)
+    target_rel = tdir.relative_to(root).as_posix()
+    brief = slate.template_brief(vcfg, target_rel)
+    readme = tdir / "README.md"
+    if not readme.exists():                   # never clobber a human's notes
+        readme.write_text(f"# Submission template — {vcfg.name or slug}\n\n{brief}\n",
+                          encoding="utf-8")
+    client.create_task(
+        f"paper {slug} template {cycle}", m.trundlr_project_id, description=brief,
+        resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
+    return brief
+
+
 def _queue_next_rung(root: Path, m, client, tr_cfg: dict, deliverable: str,
                      venue: str, dst: Path) -> str:
     """Queue what comes after a deliverable's gate — once per venue where that applies.
@@ -214,19 +258,64 @@ def _queue_next_rung(root: Path, m, client, tr_cfg: dict, deliverable: str,
                 f"({' -> '.join(steps)} -> next)"
                 + (f" for {venue}" if venue else ""))
 
-    chosen = _selected_venues(root)
-    if not chosen:
+    records = _selected_venue_configs(root)
+    if not records:
         return ("; NO VENUE SELECTED — nothing queued. Set a venue's status to "
                 "'selected' on the slate in the venue analysis, then re-run `haarpi next`. "
                 "An outline is written FOR somewhere, and only you can say where.")
-    notes = []
-    for slug in chosen:
+    notes, briefs = [], []
+    for slug, vcfg in records.items():
         queued = queue_chain(client, m.trundlr_project_id, "paper", steps, tr_cfg,
                              description=f"venue gate passed ({dst.name}): "
                                          f"write the {slug} paper.",
                              venue=slug)
         notes.append(f"{slug} (cycle {queued['cycle']})")
-    return (f"; queued an outline chain for each selected venue: {', '.join(notes)}")
+        try:
+            briefs.append(_queue_template_task(root, m, client, tr_cfg, slug, vcfg,
+                                               queued["cycle"]))
+        except Exception as e:                # noqa: BLE001 — a template task must not wedge the fork
+            print(f"  [note] could not queue the {slug} template task ({e})")
+    note = f"; queued an outline chain for each selected venue: {', '.join(notes)}"
+    if briefs:
+        note += "\n\n  ── Submission templates to fetch (queued as human tasks) ──\n" \
+                + "\n\n".join(briefs)
+    return note
+
+
+def _template_task_id(client, m, venue: str) -> int | None:
+    """The venue's template-fetch task, so packaging waits until the template is in the
+    slot. None when there is none (the template was placed by hand, no task) — packaging
+    then simply runs, and `raconteur package` degrades if the slot is still empty."""
+    pat = re.compile(rf"^paper {re.escape(venue)} template \d+$", re.I)
+    ids = [t.get("id") for t in client.tasks_for_project(m.trundlr_project_id)
+           if pat.match((t.get("title") or "").strip())]
+    return ids[-1] if ids else None
+
+
+def _queue_packaging(root: Path, m, client, tr_cfg: dict, venue: str, release: Path) -> str:
+    """After a venue's manuscript is approved, assemble + compile its submission and hand
+    the author the PDF to finish.
+
+    Terminal rung: the author edits the .tex and submits, so no planner call follows. The
+    package RUNNER waits on the template task (the artefact must be in the slot); the human
+    review that follows is where the author reads the PDF and fills the venue-specific
+    blocks. `raconteur package` no-ops gracefully when a venue has no template."""
+    titles = [t.get("title", "") for t in client.tasks_for_project(m.trundlr_project_id)]
+    cycle = next_cycle(titles, "paper", venue)
+    pkg = client.create_task(
+        f"paper {venue} package {cycle}", m.trundlr_project_id,
+        command=_venued("haarpi raconteur package", venue),
+        description=f"Assemble + compile the {venue} submission from {release.name}.",
+        resource_id=_resource_id(tr_cfg, "runner"),
+        duration=estimate_hours(client.all_tasks(), "paper", "package", 0.3),
+        depends_on_id=_template_task_id(client, m, venue))
+    client.create_task(
+        f"paper {venue} submission {cycle}", m.trundlr_project_id,
+        description=(f"Read paper/submission/{venue}/submission.pdf, finish submission.tex "
+                     "(author, affiliations, abstract, keywords), and submit."),
+        resource_id=_resource_id(tr_cfg, "human"), duration=1.0,
+        depends_on_id=pkg["id"])
+    return f"; queued packaging for {venue} (cycle {cycle}: package -> submission)"
 
 
 def _deliverable_of(markup: Path, short_title: str) -> str:
@@ -384,7 +473,7 @@ def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
 
 # ── queueing ─────────────────────────────────────────────────────────────────
 
-_VENUE_AWARE = re.compile(r"raconteur (outline|draft|paper)\b")
+_VENUE_AWARE = re.compile(r"raconteur (outline|draft|paper|package)\b")
 
 
 def _venued(command: str | None, venue: str) -> str | None:
@@ -647,6 +736,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             if deliverable == "venue":
                 print(f"[dry-run] would queue an outline chain per selected venue: "
                       f"{', '.join(_selected_venues(root)) or '(none selected on the slate)'}")
+            elif not deliverable and stage == "paper" and venue:
+                print(f"[dry-run] would queue packaging for {venue} (package -> submission)")
             return 0
         result = redline.mint_release(markup, dst)
 
@@ -678,17 +769,20 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         project.record_plan(root, {
             "type": "gate", "stage": stage, "annotation_hash": ahash,
             "markup": markup.name, "release": dst.name, "archived": archived})
-        opened, refreshed = [], []
+        opened, refreshed, packaged = [], [], ""
         if m.trundlr_project_id:
             try:
                 client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
                 opened = _advance(root, m, client, tr_cfg)
                 refreshed = _refresh_stale(root, m, client, tr_cfg, stage, dst)
+                if stage == "paper" and venue:      # the approved manuscript -> package it
+                    packaged = _queue_packaging(root, m, client, tr_cfg, venue, dst)
             except trundlr.TrundlrError as e:
                 print(f"  [trundlr] advance skipped: {e}")
         msg = (f"{stage}: gate PASSED — released {dst.name}"
                + (f"; opened {', '.join(opened)}" if opened else "")
-               + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else ""))
+               + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else "")
+               + packaged)
         print(f"haarpi next: {msg}")
         _email(cfg, f"haarpi: {m.name} — {stage} gate passed", msg)
         return 0

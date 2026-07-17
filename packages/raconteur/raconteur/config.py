@@ -47,11 +47,18 @@ class VenueConfig:
     citation_style: str = ""
     columns: int | None = None   # unknown until the CFP says
     abstract_limit: int | None = None
+    required_sections: str = ""        # content the venue mandates: CCS, keywords, ethics…
+    anonymized: bool | None = None     # double-blind — strips authorship from the writing
+    template_url: str = ""             # best-effort link to the template / author kit
+    template_kind: str = ""            # latex-acm | latex-ieee | latex | word | overleaf | ""
     format_notes: str = ""
     sources: dict = field(default_factory=dict)   # field name -> cfp | analysis | author
 
+    # The specs a WRITER is shown (format + mandated content). anonymized and the
+    # template_* fields are handled apart: the first is a prose directive, the last
+    # two feed the human template-fetch task, not the draft.
     SPEC_FIELDS = ("page_limit", "word_limit", "citation_style", "columns",
-                   "abstract_limit", "format_notes")
+                   "abstract_limit", "required_sections", "format_notes")
 
     @property
     def by_author(self) -> bool:
