@@ -5,7 +5,7 @@ from .log import log
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_methods, load_results, load_venue_analysis, check_prerequisites, load_onepager
+from .context import load_litreview, load_methods, load_results, load_venue_analysis, check_prerequisites, load_onepager, load_figure_manifest
 from .naming import (
     major_name, major_outline_name, find_latest, find_user_revision,
 )
@@ -187,6 +187,11 @@ present in the results content; results_structure gives structural order but the
 results give the specific content; bullet points must cite specific findings from \
 key_findings with values where present (if key_findings is empty, extract concrete \
 facts directly from the results_section above)
+- If key_figures is non-empty in the analysis: every figure must be PLACED in the \
+Results subsection whose finding it shows — add a bullet of the form \
+"- Figure: <that figure's caption> (`<that figure's exact path>`)". Use each figure's \
+exact path from key_figures, place every figure exactly once, and never invent a figure, \
+a path, or a caption that key_figures does not give
 - If methods source code is absent, Methods describes the planned approach only; \
 if results content is absent, Results describes anticipated findings only; \
 Discussion and Conclusion must not claim specific empirical outcomes not supported \
@@ -243,6 +248,9 @@ results content was provided)
 are introduced or derived there (only applies when key_equations is non-empty)
 11. Results subsections that do not cite specific findings from key_findings \
 (only applies when key_findings is non-empty)
+11b. A figure in key_figures that is not placed in any Results subsection, or a \
+placed figure whose path or caption does not match key_figures exactly (only \
+applies when key_figures is non-empty) — every figure must appear exactly once
 12. A missing unnumbered Abstract section at the top, or one whose bullets \
 write abstract prose instead of naming what the abstract must distil
 13. A missing Acknowledgements section between the Conclusion and References, \
@@ -301,7 +309,9 @@ and all its ### subsections grounded in the actual results — cite specific val
 outcomes, and patterns present in the results content; results_structure gives \
 structural order; each Results subsection must cite specific findings from \
 key_findings with values where present (if key_findings is empty, extract concrete \
-facts directly from the results content above)
+facts directly from the results content above); and if key_figures is non-empty, place \
+each figure in the Results subsection whose finding it shows with a bullet \
+"- Figure: <caption> (`<exact path>`)", every figure exactly once, exact paths only
 - Every other ## section and its subsections must be copied verbatim
 - Output only the complete outline — no preamble or closing remarks
 """
@@ -409,13 +419,18 @@ def analysis_view(analysis: str, drop: tuple[str, ...] = ()) -> str:
 
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str,
-    narrative: str = "",
+    narrative: str = "", figures=None,
 ) -> str:
     """Return structural analysis as a JSON string (coordinator call).
 
     ``narrative`` is the human-approved one-pager: the concise path through the
     paper. When present it anchors the intellectual structure — the extracted
     contribution, pillars, and discussion angle must honour that through-line.
+
+    ``figures`` is rayleigh's manifest (path + caption). Carried into the analysis
+    as ``key_figures`` so every downstream pass — draft, critique, revise, refresh —
+    knows which figures exist and can place each in the Results subsection it shows.
+    An outline that never names a figure leaves the draft to guess where they go.
     """
     litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
     narrative_context = (
@@ -451,6 +466,10 @@ def _analyze_structure(
         parsed["key_findings"] = _extract_findings(brain, results)
         log("[raconteur] extracting experimental design from results…")
         parsed["key_design"] = _extract_design(brain, results)
+
+    if figures:
+        parsed["key_figures"] = [{"path": f.path, "caption": f.caption} for f in figures]
+        log(f"[raconteur] {len(figures)} figure(s) carried into the analysis for placement")
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
@@ -581,11 +600,12 @@ def _outline_fresh(
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
+    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
     narrative = load_onepager(project_dir, cfg.short_title)
 
     # Pass 1: structural analysis
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
 
     venue_section = _build_venue_section(cfg, project_dir, venue)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
@@ -637,10 +657,11 @@ def _refresh_content(
     venue: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
+    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
     narrative = load_onepager(project_dir, cfg.short_title)
 
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir, venue)

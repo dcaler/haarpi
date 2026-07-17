@@ -14,7 +14,7 @@ from .guards import (
 )
 from .context import (
     load_litreview, load_methods, load_results, load_bib_summary,
-    load_bib_keys, load_style_profile, load_onepager,
+    load_bib_keys, load_style_profile, load_onepager, load_figure_manifest,
 )
 from .log import log
 from .naming import major_name, find_latest, find_user_revision
@@ -54,6 +54,11 @@ Instructions:
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
+- Where the section outline places a figure — a bullet of the form \
+"- Figure: <caption> (`<path>`)" — render it as a Markdown image `![<caption>](<path>)` at \
+the point in the prose where it belongs, using that EXACT path and caption from the outline \
+(they match key_figures in the analysis). Do not invent a figure or a path, do not add a \
+figure the outline did not place in this section, and never repeat one
 - For Background/Introduction sections: synthesise ideas from the literature into \
 argument — do not list or summarise individual papers; cite using [@citekey] format \
 from the bibliography above
@@ -87,6 +92,9 @@ Check for:
 4. Methods text that does not reference specific details (algorithms, equations, \
 parameters) when a methods writeup was available
 5. Results text that does not cite specific values or findings when results were available
+5b. A figure the section outline places (a "- Figure: … (`path`)" bullet) that is not \
+rendered in the prose as `![…](path)` with the exact path, or an image whose path is not \
+one the outline placed here
 6. Discussion that does not address the discussion_angle or limitations from the analysis
 7. Subsections under 100 words or over 500 words
 
@@ -164,6 +172,9 @@ Instructions:
 - Maintain academic prose register and subsection structure
 - If methods source code is provided: update Methods to reference it specifically
 - If results content is provided: update Results to cite specific values and findings
+- Preserve any figures (`![…](…)`) already in the text; if the section outline places a \
+figure the text lacks — a "- Figure: <caption> (`<path>`)" bullet — add it as \
+`![<caption>](<path>)` with that exact path
 - Output only the revised section text — no heading, no preamble
 """
 
@@ -390,7 +401,9 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
     out_path.write_text(text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
     bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
-    docx = to_docx(out_path, bib_path=bib_path)
+    # resource_path lets pandoc resolve project-relative figure paths (results/figures/x.png)
+    # embedded in the prose — the .md lives in paper/, the figures do not.
+    docx = to_docx(out_path, bib_path=bib_path, resource_path=project_dir)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 
@@ -423,11 +436,12 @@ def _draft_paper(
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
+    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
     narrative = load_onepager(project_dir, cfg.short_title)
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
 
     venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
@@ -494,11 +508,12 @@ def _revise_paper(
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
+    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
     narrative = load_onepager(project_dir, cfg.short_title)
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
 
     existing_text = read_text(user_rev)
     annotations = build_revision_context(user_rev)
