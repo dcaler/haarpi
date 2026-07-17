@@ -70,14 +70,24 @@ def test_tool_comments_never_block(tmp_path):
     assert redline.gate_check(p)["clean"]
 
 
-def test_reviewer_tracked_change_blocks_even_without_comments(tmp_path):
+def test_reviewer_tracked_change_alone_does_not_block(tmp_path):
+    # A reviewer's own edit is their final word on that span, not a comment the tool
+    # must answer. With no unresolved comment, the gate is clean and reports the edit
+    # for context; the mint accepts it into the release.
     doc = Document()
     para = doc.add_paragraph("Original text here.")
     ids = redline.ids_for(doc)
     redline.tracked_replace(para._p, "Reviewer rewrote this.", "DCR", ids)
     doc.save(str(tmp_path / "m.docx"))
     check = redline.gate_check(tmp_path / "m.docx")
-    assert not check["clean"] and check["reviewer_changes"] > 0
+    assert check["clean"] and check["reviewer_changes"] > 0
+
+
+def test_an_open_comment_still_blocks_with_tracked_changes_present(tmp_path):
+    # Dropping the tracked-change conjunct must not weaken the comment gate: an
+    # unresolved comment blocks even when the doc also carries tracked changes.
+    p = _make_markup(tmp_path / "m.docx", resolved=False, tracked=True)
+    assert not redline.gate_check(p)["clean"]
 
 
 def test_tool_tracked_changes_do_not_block(tmp_path):

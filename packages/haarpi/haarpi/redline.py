@@ -850,11 +850,19 @@ def pending_reviewer_changes(path: Path, tool_authors=TOOL_AUTHORS) -> int:
 
 
 def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
-    """The mechanical gate: clean ⟺ no unresolved asks of either kind."""
+    """The mechanical gate: clean ⟺ every reviewer comment is resolved.
+
+    Comments are the work order. In the default redline path the tool edits only in
+    answer to a comment, so resolving every comment adjudicates every tool change —
+    the comment gate already governs the tool's edits. The reviewer's OWN tracked
+    edits are their final word on that span, not an instruction the tool must process;
+    they are reported for context but do not gate, and the mint accepts them into the
+    release along with everything else. (Was: also required reviewer_changes == 0 —
+    the "accept every tracked change to advance" rule, now retired.)"""
     unresolved = unresolved_comments(path, tool_authors)
     reviewer_changes = pending_reviewer_changes(path, tool_authors)
     return {"unresolved": unresolved, "reviewer_changes": reviewer_changes,
-            "clean": not unresolved and reviewer_changes == 0}
+            "clean": not unresolved}
 
 
 def has_foreign_markup(p_el, tool_authors=TOOL_AUTHORS) -> bool:
