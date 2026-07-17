@@ -17,7 +17,18 @@ from raconteur import paper
 
 def test_the_draft_prompt_instructs_figure_embedding():
     assert "![" in paper._DRAFT_SECTION_PROMPT
-    assert "- Figure:" in paper._DRAFT_SECTION_PROMPT
+    assert "Figure:" in paper._DRAFT_SECTION_PROMPT
+    # The outline names each figure once, in its section; the draft must render ONLY the
+    # figures its own section outline names — never the whole manifest in every section.
+    assert "ONLY" in paper._DRAFT_SECTION_PROMPT
+    assert "did not name here" in paper._DRAFT_SECTION_PROMPT
+
+
+def test_the_paper_stage_does_not_reload_the_figure_manifest():
+    """The manifest fed the analysis a global key_figures list, and the model then rendered
+    every figure in every section. Figure placement now lives solely in the human-approved
+    outline; the paper stage must not pull the manifest back in and re-flood the sections."""
+    assert not hasattr(paper, "load_figure_manifest")
 
 
 def test_the_critique_enforces_figure_embedding():
