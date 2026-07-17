@@ -970,11 +970,92 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
     return 0
 
 
+def _paper_pick(root: Path, m: project.Manifest, includes: list[str],
+                want_release: bool) -> Path | None:
+    """Newest paper-stage doc matching a rung, across output/ and the stage root.
+
+    `includes` are the chain tokens the rung must carry (a venue slug, a deliverable word,
+    or both); any OTHER deliverable word disqualifies it — so the bare per-venue manuscript
+    (chain == [venue]) is told apart from that venue's outline (chain == [venue, outline])."""
+    includes = [i.lower() for i in includes]
+    exclude = {w for w in _PAPER_DELIVERABLE_WORDS if w not in includes}
+    best: Path | None = None
+    for d in {m.output_dir(root, "paper"), m.stage_dir(root, "paper")}:
+        if not d.is_dir():
+            continue
+        for p in d.glob("*.docx"):
+            parsed = naming.parse(p, m.short_title)
+            if not parsed:
+                continue
+            chain = [c.lower() for c in parsed[1]]
+            if any(i not in chain for i in includes) or any(w in chain for w in exclude):
+                continue
+            if naming.is_release(parsed[1]) != want_release:
+                continue
+            if best is None or p.stat().st_mtime > best.stat().st_mtime:
+                best = p
+    return best
+
+
+def _paper_rung_state(root: Path, m: project.Manifest, includes: list[str]) -> str:
+    """A ladder rung's state: a release wins over a spent working markup, which wins
+    over nothing (the deliverable chain stays on disk after its gate, so 'released'
+    must not read as 'in flight' just because the markup is still there)."""
+    rel = _paper_pick(root, m, includes, want_release=True)
+    if rel:
+        return f"released   {rel.name}"
+    fl = _paper_pick(root, m, includes, want_release=False)
+    if fl:
+        chain = (naming.parse(fl, m.short_title) or ("", ["ra"], ""))[1]
+        turn = "your turn" if chain[-1].lower() != "ra" else "tool's turn"
+        return f"in flight  {fl.name}  ({turn})"
+    return "pending"
+
+
+def _submission_state(root: Path, m: project.Manifest, venue: str) -> str:
+    """The packaging rung: a compiled PDF, an assembled-but-uncompiled project, or
+    nothing yet — annotated with whether the venue's template is in its slot."""
+    paper_root = m.stage_dir(root, "paper")
+    subdir = paper_root / "submission" / venue
+    tdir = paper_root / "templates" / venue
+    has_template = tdir.is_dir() and any(
+        p.is_file() and p.name.lower() != "readme.md" for p in tdir.rglob("*"))
+    tnote = "template ready" if has_template else "no template"
+    if subdir.is_dir():
+        pdf = next(iter(sorted(subdir.glob("*.pdf"))), None)
+        if pdf:
+            return f"packaged   {pdf.name}"
+        docx = next(iter(sorted(subdir.glob("*_submission.docx"))), None)
+        if docx:
+            return f"packaged   {docx.name}"
+        if any(subdir.iterdir()):
+            return f"assembled  (no PDF; {tnote})"
+    return f"pending    ({tnote})"
+
+
+def _print_paper_status(root: Path, m: project.Manifest) -> None:
+    """The paper stage is a ladder, not one deliverable — expand it. Shared rungs
+    (onepager, venue) sit under `paper`; the ladder forks per selected venue below
+    (outline → draft → submission), which is where it multiplexes."""
+    stale = project.stale_inputs(root, m, "paper")
+    print("  paper" + (f"        STALE inputs: {', '.join(stale)}" if stale else ""))
+    for deliv in ("onepager", "venue"):
+        print(f"    {deliv:<12} {_paper_rung_state(root, m, [deliv])}")
+    for v in _selected_venues(root):
+        print(f"    {v}")
+        print(f"      {'outline':<12} {_paper_rung_state(root, m, [v, 'outline'])}")
+        print(f"      {'draft':<12} {_paper_rung_state(root, m, [v])}")
+        print(f"      {'submission':<12} {_submission_state(root, m, v)}")
+
+
 def run_status(root: Path) -> int:
     m = project.load_manifest(root)
     opened = {e.get("stage") for e in project.list_plans(root) if e.get("type") == "opened"}
     print(f"{m.name} ({m.short_title}) — trundlr project {m.trundlr_project_id or '—'}")
     for stage, spec in m.stages.items():
+        if stage == "paper":
+            _print_paper_status(root, m)
+            continue
         rel = project.latest_release(root, m, stage)
         flight = project.in_flight(root, m, stage)
         stale = project.stale_inputs(root, m, stage)
