@@ -243,7 +243,6 @@ def _critique_revise(
             text=text,
         ),
         system=_SYSTEM,
-        num_ctx=8192,
     )
     log(f"[raconteur] critique {n} findings:\n{critique}")
     if "no issues found" in critique.lower():
@@ -258,7 +257,6 @@ def _critique_revise(
             critique=critique,
         ),
         system=_SYSTEM,
-        num_ctx=8192,
     )
 
 
