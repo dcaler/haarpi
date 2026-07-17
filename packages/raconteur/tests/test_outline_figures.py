@@ -53,3 +53,13 @@ def test_the_draft_prompt_instructs_figure_placement():
 
 def test_the_critique_enforces_figure_placement():
     assert "key_figures" in outline._CRITIQUE_PROMPT
+
+
+def test_the_draft_prompt_does_not_resend_raw_code_or_results():
+    # The raw methods writeup and results digest are distilled into the analysis; re-sending
+    # them overran num_ctx and, because the analysis sits at the top, it was the analysis
+    # (and its figure paths) Ollama discarded. The outline plans from the distilled analysis.
+    assert "{code_section}" not in outline._DRAFT_PROMPT
+    assert "{results_section}" not in outline._DRAFT_PROMPT
+    # the grounding rules must point at the analysis's distilled keys, not a raw dump
+    assert "key_findings" in outline._DRAFT_PROMPT and "key_equations" in outline._DRAFT_PROMPT

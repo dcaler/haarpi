@@ -156,8 +156,6 @@ Focus: {focus}
 Structural analysis:
 {analysis}
 {narrative_section}{litrev_section}
-{code_section}
-{results_section}
 Rules:
 - The outline must expand the author-approved narrative spine, if provided — every \
 beat of that narrative must be represented, and the section structure must serve \
@@ -175,25 +173,20 @@ named subsection, not a generic placeholder
 - Results must follow the sequence in results_structure from the analysis
 - Discussion must address the discussion_angle from the analysis, and include \
 a Limitations subsection
-- If methods source code is provided above: Methods subsections must be grounded \
-in the actual code — reference specific algorithms, functions, parameters, and \
-implementation choices present in the code; method_steps gives structural order \
-but the code gives the specific content; bullet points must specify which equations \
-from key_equations are introduced or derived there (if key_equations is empty, \
-extract equations directly from the code_section above)
-- If results content is provided above: Results subsections must be grounded in \
-the actual results — cite specific values, outcomes, patterns, or model outputs \
-present in the results content; results_structure gives structural order but the \
-results give the specific content; bullet points must cite specific findings from \
-key_findings with values where present (if key_findings is empty, extract concrete \
-facts directly from the results_section above)
+- Methods subsections must be grounded in the analysis's method_steps, key_equations, \
+and key_design — name the specific algorithms, parameters, and design choices they \
+record; method_steps gives the order, and each subsection must specify which equations \
+from key_equations it introduces or derives
+- Results subsections must be grounded in the analysis's key_findings — cite the \
+specific values, outcomes, and patterns key_findings records; results_structure gives \
+the order
 - If key_figures is non-empty in the analysis: every figure must be PLACED in the \
 Results subsection whose finding it shows — add a bullet of the form \
 "- Figure: <that figure's caption> (`<that figure's exact path>`)". Use each figure's \
 exact path from key_figures, place every figure exactly once, and never invent a figure, \
 a path, or a caption that key_figures does not give
-- If methods source code is absent, Methods describes the planned approach only; \
-if results content is absent, Results describes anticipated findings only; \
+- If the analysis carries no key_equations or key_design, Methods describes the planned \
+approach only; if it carries no key_findings, Results describes anticipated findings only; \
 Discussion and Conclusion must not claim specific empirical outcomes not supported \
 by the available content
 - Include 3–5 bullet points per subsection describing what that subsection \
@@ -480,7 +473,7 @@ def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
     critique = brain.coordinator(
         _CRITIQUE_PROMPT.format(analysis=analysis, outline=outline),
         system=_SYSTEM,
-        num_ctx=8192,
+        num_ctx=16384,     # analysis + a growing outline overran the 8k budget (5,324 tok)
     )
     log(f"[raconteur] critique {n} findings:\n{critique}")
 
@@ -488,7 +481,7 @@ def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
     revised = brain.coordinator(
         _REVISE_PROMPT.format(analysis=analysis, outline=outline, critique=critique),
         system=_SYSTEM,
-        num_ctx=8192,
+        num_ctx=16384,     # analysis + outline + critique; same window the draft uses
     )
     return revised
 
@@ -610,8 +603,11 @@ def _outline_fresh(
     venue_section = _build_venue_section(cfg, project_dir, venue)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
-    code_section = f"Methods (raster writeup):\n{code}\n" if code else ""
-    results_section = f"Results Content:\n{results}\n" if results else ""
+    # The raw methods writeup and results digest are NOT re-sent here — the analysis above
+    # already distilled them (key_equations/key_design, key_findings, key_figures). Sending
+    # both overran num_ctx and, because the analysis sits at the top, it was the analysis
+    # (and its figure paths) Ollama discarded. The draft plans from the distilled analysis;
+    # the manuscript draft (paper.py) still writes from the raw content per section.
 
     # Pass 2: draft
     log("[raconteur] drafting outline…")
@@ -624,8 +620,6 @@ def _outline_fresh(
             analysis=analysis,
             narrative_section=narrative_section,
             litrev_section=litrev_section,
-            code_section=code_section,
-            results_section=results_section,
             credit_roles="\n".join(f"  - {r}" for r in _CREDIT_ROLES),
         ),
         system=_SYSTEM,
