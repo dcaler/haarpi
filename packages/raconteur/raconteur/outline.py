@@ -5,7 +5,11 @@ from .log import log
 from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_methods, load_results, load_venue_analysis, check_prerequisites, load_onepager, load_figure_manifest
+from .context import (
+    load_litreview, load_methods, load_results, load_venue_analysis,
+    check_prerequisites, load_onepager, load_figure_manifest,
+    load_author_figures, author_figure_sections,
+)
 from .naming import (
     major_name, major_outline_name, find_latest, find_user_revision,
 )
@@ -426,7 +430,7 @@ def analysis_view(analysis: str, drop: tuple[str, ...] = ()) -> str:
 
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str,
-    narrative: str = "", figures=None,
+    narrative: str = "", figures=None, project_dir: Path | None = None,
 ) -> str:
     """Return structural analysis as a JSON string (coordinator call).
 
@@ -434,9 +438,11 @@ def _analyze_structure(
     paper. When present it anchors the intellectual structure — the extracted
     contribution, pillars, and discussion angle must honour that through-line.
 
-    ``figures`` is rayleigh's manifest (path + caption). Carried into the analysis
-    as ``key_figures`` so every downstream pass — draft, critique, revise, refresh —
-    knows which figures exist and can place each in the Results subsection it shows.
+    ``figures`` is rayleigh's manifest plus the author's own illustrations (path +
+    caption + origin). Carried into the analysis as ``key_figures`` so every downstream
+    pass — draft, critique, revise, refresh — knows which figures exist and where each
+    belongs: a 'results' figure with the finding it shows, an 'author' figure in the
+    section the author named. ``project_dir`` supplies those section hints.
     An outline that never names a figure leaves the draft to guess where they go.
     """
     litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
@@ -475,7 +481,11 @@ def _analyze_structure(
         parsed["key_design"] = _extract_design(brain, results)
 
     if figures:
-        parsed["key_figures"] = [{"path": f.path, "caption": f.caption} for f in figures]
+        hints = author_figure_sections(project_dir) if project_dir else {}
+        parsed["key_figures"] = [
+            {"path": f.path, "caption": f.caption, "origin": f.origin,
+             **({"section": hints[f.path]} if hints.get(f.path) else {})}
+            for f in figures]
         log(f"[raconteur] {len(figures)} figure(s) carried into the analysis for placement")
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
@@ -708,12 +718,15 @@ def _outline_fresh(
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
-    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
+    figures = ((load_figure_manifest(project_dir, cfg.results_dir or "results")
+                if cfg.results_dir else [])
+               + load_author_figures(project_dir))
     narrative = load_onepager(project_dir, cfg.short_title)
 
     # Pass 1: structural analysis
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
+                                  narrative, figures, project_dir)
 
     venue_section = _build_venue_section(cfg, project_dir, venue)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
@@ -769,11 +782,14 @@ def _refresh_content(
     venue: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
-    figures = load_figure_manifest(project_dir, cfg.results_dir or "results") if cfg.results_dir else []
+    figures = ((load_figure_manifest(project_dir, cfg.results_dir or "results")
+                if cfg.results_dir else [])
+               + load_author_figures(project_dir))
     narrative = load_onepager(project_dir, cfg.short_title)
 
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative, figures)
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
+                                  narrative, figures, project_dir)
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir, venue)

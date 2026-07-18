@@ -32,10 +32,31 @@ def test_figures_are_carried_into_the_analysis_as_key_figures():
     parsed = json.loads(out.split("\n\n", 1)[1])
     assert parsed["key_figures"] == [
         {"path": "results/figures/E1_0_recovery-landscape.png",
-         "caption": "PRIMARY: recovery landscape."},
+         "caption": "PRIMARY: recovery landscape.", "origin": "results"},
         {"path": "results/figures/E2_0_the-fair-fight.png",
-         "caption": "The fair fight: Schelling vs monkey."},
+         "caption": "The fair fight: Schelling vs monkey.", "origin": "results"},
     ]
+
+
+def test_an_author_illustration_carries_its_origin_and_section(tmp_path):
+    """The placement rule branches on origin — a results figure follows its finding, an
+    author illustration stays in the section the author named. Without these keys in
+    key_figures the rule has nothing to branch on and a schematic lands in Results."""
+    (tmp_path / "paper" / "figures").mkdir(parents=True)
+    (tmp_path / "illustrations").mkdir()
+    (tmp_path / "illustrations" / "s.png").write_bytes(b"x")
+    (tmp_path / "paper" / "figures" / "figures.yaml").write_text(
+        "- path: illustrations/s.png\n"
+        "  caption: A schematic of the lattice and its move rule.\n"
+        "  section: 2.1 The Model\n")
+    from raconteur.context import load_author_figures
+    figs = load_author_figures(tmp_path)
+    out = outline._analyze_structure(_brain(), "desc", litrev="", code="", results="",
+                                     figures=figs, project_dir=tmp_path)
+    kf = json.loads(out.split("\n\n", 1)[1])["key_figures"]
+    assert kf == [{"path": "illustrations/s.png",
+                   "caption": "A schematic of the lattice and its move rule.",
+                   "origin": "author", "section": "2.1 The Model"}]
 
 
 def test_no_figures_means_no_key_figures_key():
