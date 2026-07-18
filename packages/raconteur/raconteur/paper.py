@@ -49,7 +49,8 @@ Section outline (follow this structure exactly):
 {bib_section}\
 Instructions:
 - Write fully developed academic prose; do not reproduce the outline bullets verbatim
-- Use ### for subsection headings, matching names from the outline
+- Use ### for subsection headings and #### for sub-subsections, matching both the \
+names AND the heading levels the outline uses — do not flatten a #### into a ###
 - Each subsection should be 150–300 words of connected prose
 - For Methods sections: reference specific algorithms, functions, parameters, and \
 equations from the source code above; do not use vague descriptions

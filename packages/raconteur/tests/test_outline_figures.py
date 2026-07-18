@@ -46,9 +46,16 @@ def test_no_figures_means_no_key_figures_key():
 
 
 def test_the_draft_prompt_instructs_figure_placement():
-    # the rule and the exact bullet form must be in the prompt the model actually sees
+    # the rule and the exact line form must be in the prompt the model actually sees
     assert "key_figures" in outline._DRAFT_PROMPT
-    assert "- Figure:" in outline._DRAFT_PROMPT
+    assert "Figure N:" in outline._DRAFT_PROMPT
+    # numbered from 1 in order — the paper stage has no numbering rule of its own, so an
+    # unnumbered outline yields captions no prose can refer to ("Figure 3 shows …")
+    assert "numbered from 1" in outline._DRAFT_PROMPT
+    # results figures follow their finding; author illustrations stay where the author put
+    # them. A model schematic dragged into Results is the defect this guards against.
+    assert "origin" in outline._DRAFT_PROMPT
+    assert "never move it into Results" in outline._DRAFT_PROMPT
 
 
 def test_the_critique_enforces_figure_placement():

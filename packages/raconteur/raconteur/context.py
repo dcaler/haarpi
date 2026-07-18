@@ -342,9 +342,79 @@ _MAX_FIGURES_LISTED = 12
 
 
 class Figure(NamedTuple):
-    """A figure and what it shows. ``caption`` is rayleigh's, and may be empty."""
+    """A figure and what it shows. ``caption`` is rayleigh's, and may be empty.
+
+    ``origin`` says who owns the placement decision. 'results' figures belong with the
+    finding they show and rayleigh captions them. 'author' figures — a model schematic, a
+    conceptual diagram — belong wherever the author put them, and only the author can say
+    where that is. Tracked-change deference protects an author's figure through a REVISE,
+    but a regeneration reads no prior outline and would silently drop it; the manifest is
+    what survives that.
+    """
     path: str
     caption: str = ""
+    origin: str = "results"
+
+
+# The author's own illustrations, declared where the author can edit them by hand. Mirrors
+# rayleigh's findings.json for figures rayleigh did not make.
+AUTHOR_FIGURES_FILE = "figures.yaml"
+
+
+def load_author_figures(project_dir: Path) -> list[Figure]:
+    """Author-supplied illustrations from paper/figures/figures.yaml.
+
+    Schema — a list, each entry naming a file in paper/figures/ and where it belongs:
+
+        - path: paper/figures/model-schematic.png
+          caption: A schematic of the 1D chord lattice — agents as pitch-class sets…
+          section: 2.1 The Model
+
+    ``section`` is a hint carried into the outline prompt; the outline still does the
+    placing. Entries whose file is missing are dropped with a warning rather than silently,
+    because a figure declared and not placed is a figure the author thinks is in the paper.
+    """
+    manifest = project_dir / "paper" / "figures" / AUTHOR_FIGURES_FILE
+    if not manifest.is_file():
+        return []
+    try:
+        import yaml
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or []
+    except Exception as e:                                  # malformed YAML is the author's
+        log(f"[warn] could not read {manifest.name}: {e}")   # typo, not a reason to die
+        return []
+    if not isinstance(data, list):
+        log(f"[warn] {manifest.name} must be a list of figures — ignoring")
+        return []
+    figs: list[Figure] = []
+    for entry in data:
+        if not isinstance(entry, dict) or not entry.get("path"):
+            continue
+        rel = str(entry["path"]).strip()
+        if not (project_dir / rel).is_file():
+            log(f"[warn] {manifest.name} lists {rel} but the file does not exist — skipped")
+            continue
+        figs.append(Figure(rel, str(entry.get("caption", "")).strip(), origin="author"))
+    if figs:
+        log(f"[raconteur] {len(figs)} author illustration(s) from {manifest.name}")
+    return figs
+
+
+def author_figure_sections(project_dir: Path) -> dict[str, str]:
+    """path → the author's requested section, for figures that name one."""
+    manifest = project_dir / "paper" / "figures" / AUTHOR_FIGURES_FILE
+    if not manifest.is_file():
+        return {}
+    try:
+        import yaml
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or []
+    except Exception:
+        return {}
+    if not isinstance(data, list):
+        return {}
+    return {str(e["path"]).strip(): str(e.get("section", "")).strip()
+            for e in data
+            if isinstance(e, dict) and e.get("path") and e.get("section")}
 
 
 def _rayleigh_captions(project_dir: Path, subdir: str) -> dict[str, str]:

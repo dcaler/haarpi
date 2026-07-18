@@ -88,6 +88,13 @@ from haarpi.redline import (  # noqa: F401
 AUTHOR = "raconteur"
 
 
+def _heading_level(style_name: str) -> int:
+    """"Heading 3" → 3. Anything unnumbered (Title, a custom style) sorts as top level,
+    which is the safe default: it opens a section rather than inheriting the previous one."""
+    m = re.search(r"(\d+)", style_name or "")
+    return int(m.group(1)) if m else 1
+
+
 def is_title_style(style_name: str) -> bool:
     """The document title is not a section heading. It must be skipped like a heading, but it
     must not become the enclosing section of the abstract that follows it."""
@@ -121,6 +128,7 @@ def body_paragraphs(doc) -> list[dict]:
     """
     out: list[dict] = []
     heading = ""
+    section_heading = ""        # the nearest Heading 2 — what decides the section's KIND
     in_references = False
     for i, p in enumerate(doc.paragraphs):
         style = _style_name(p)
@@ -131,7 +139,13 @@ def body_paragraphs(doc) -> list[dict]:
             # inside w:ins, which python-docx's .text does not see.
             if not is_title_style(style):
                 heading = _accepted_para_text(p._p).strip()
-                in_references = guards.is_references(heading)
+                # A subsection's kind is its SECTION's kind, not its own name's. "Qualitative
+                # Assessment" and "Harmonic Vocabulary" classify as "other" on their own and
+                # would draw a citation floor; they are Methods. Only the enclosing Heading 2
+                # carries that information, so track it separately from the display heading.
+                if _heading_level(style) <= 2:
+                    section_heading = heading
+                    in_references = guards.is_references(heading)
             continue
         # Accepted text, not p.text: a paragraph whose content sits wholly
         # inside live tracked markup (a full tracked replacement, a reviewer
@@ -142,7 +156,7 @@ def body_paragraphs(doc) -> list[dict]:
             "index": i,
             "para": p,
             "heading": heading,
-            "kind": guards.section_kind(heading),
+            "kind": guards.section_kind(section_heading or heading),
         })
     return out
 

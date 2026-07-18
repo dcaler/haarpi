@@ -620,3 +620,356 @@ def metrics(markdown: str, known: set[str]) -> Metrics:
         sparse=len(sparse_paragraphs(paras)),
         sections=len({p.section for p in paras if p.section >= 0}),
     )
+
+
+# ── STRUCTURE (phase: outline) ────────────────────────────────────────────────
+# An outline is a structural contract, and until now nothing checked it: outline.py
+# imported no guards at all and relied on two LLM critique passes to mark their own
+# homework. A 1.1 → 1.3 numbering gap therefore shipped through both passes and the
+# human gate, and the draft invented a §1.2 to fill it — 4.5 GPU-hours to discover a
+# defect a contiguity check finds in milliseconds. Structure is cheap to fix in an
+# outline and expensive to fix in a manuscript; that asymmetry is why these run here.
+
+# "Figure: <caption> (<path>)" — the outline's placement line. The outline is the sole
+# authority on where a figure goes; the draft renders only what its own section names.
+OUTLINE_FIGURE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?Figure\s*(?P<num>\d+)?\s*[:.]\s*(?P<caption>.+?)\s*"
+    r"\(`?(?P<path>[^`)]+)`?\)\s*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class Heading:
+    """One outline heading: its level, its text, and the number it declares (if any)."""
+    level: int
+    text: str
+    number: tuple[int, ...]        # (1, 2) for "1.2 …"; () when unnumbered
+    line: int
+    beats: int = 0                 # non-heading, non-figure content lines beneath it
+    figures: int = 0
+
+
+_NUMBER_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s")
+
+
+def parse_outline(markdown: str) -> list[Heading]:
+    """The outline's heading tree, with each heading's beat and figure counts.
+
+    Beats are what a subsection promises to argue; a heading with none is a container
+    (``## 2. Methodology``, ``### 2.1 The Model``) and a heading with some is a leaf that
+    the draft will turn into prose. The distinction is what the word budget is spent on,
+    so it has to be structural rather than guessed from bullet counts.
+    """
+    heads: list[Heading] = []
+    cur: dict | None = None
+    for i, raw in enumerate(markdown.splitlines(), start=1):
+        line = raw.rstrip()
+        if line.lstrip().startswith("#"):
+            s = line.lstrip()
+            level = len(s) - len(s.lstrip("#"))
+            text = s[level:].strip()
+            m = _NUMBER_RE.match(text)
+            num = tuple(int(x) for x in m.group(1).split(".")) if m else ()
+            cur = {"level": level, "text": text, "number": num, "line": i,
+                   "beats": 0, "figures": 0}
+            heads.append(cur)          # type: ignore[arg-type]
+            continue
+        if cur is None or not line.strip():
+            continue
+        if OUTLINE_FIGURE_RE.match(line):
+            cur["figures"] += 1
+        else:
+            cur["beats"] += 1
+    return [Heading(**h) for h in heads]      # type: ignore[arg-type]
+
+
+def leaves(heads: list[Heading]) -> list[Heading]:
+    """Headings the draft will write prose for: those carrying beats of their own.
+
+    A container's budget belongs to its children, not to itself — charging it a share
+    is how a uniform allocation quietly hands Methods 41% of a paper for having seven
+    subsections rather than for having the most to say.
+    """
+    return [h for h in heads
+            if h.beats and not (is_references(h.text) or is_acknowledgements(h.text))]
+
+
+def ancestor_kind(heads: list[Heading], leaf: Heading) -> str:
+    """A subsection's kind is its SECTION's kind, not its own name's.
+
+    "Sonic Art and Audio Translation of Visual Models" contains "model" and classifies as
+    methods on its own; it is a subsection of the Introduction. "Qualitative Assessment"
+    classifies as "other" and demands citations; it is Methods. A subsection inherits what
+    grounds it from the section it sits in — the only place that information exists.
+    """
+    # A Conclusion is a Conclusion even when the outline mis-levels it as a ### under
+    # Discussion — which happens, and would otherwise charge it to Discussion's budget.
+    if _is_conclusion(leaf.text):
+        return "conclusion"
+    top = None
+    for h in heads:
+        if h.line > leaf.line:
+            break
+        if h.level <= 2:
+            top = h
+    if top is None or top is leaf:
+        return "conclusion" if _is_conclusion(leaf.text) else section_kind(leaf.text)
+    if _is_conclusion(top.text):
+        return "conclusion"
+    return section_kind(top.text)
+
+
+def numbering_gaps(heads: list[Heading]) -> list[Finding]:
+    """Declared section numbers must run 1..N with no holes, at every level.
+
+    PHASE: outline. The defect this exists for: an outline numbered 1.1, 1.3 reads to a
+    drafting model as a missing 1.2, and it will helpfully invent one.
+    """
+    out: list[Finding] = []
+    seen: dict[tuple[int, ...], list[int]] = {}
+    for h in heads:
+        if h.number:
+            seen.setdefault(h.number[:-1], []).append(h.number[-1])
+    for parent, kids in seen.items():
+        label = ".".join(str(x) for x in parent) if parent else "top level"
+        for want, got in enumerate(kids, start=1):
+            if want != got:
+                prefix = (".".join(str(x) for x in parent) + ".") if parent else ""
+                out.append(Finding(
+                    "numbering-gap", f"section {prefix}{got}",
+                    f"Renumber the subsections under {label} so they run consecutively "
+                    f"from 1: expected {prefix}{want} but found {prefix}{got}. A gap reads "
+                    f"as a missing section and the draft will invent one to fill it."))
+                break
+    return out
+
+
+def heading_levels(heads: list[Heading]) -> list[Finding]:
+    """No level skips, and no heading that is neither container nor leaf.
+
+    PHASE: outline. A ``##`` followed by ``####`` loses a tier in the Word render, and a
+    heading with neither beats nor children promises the draft nothing to write.
+    """
+    out: list[Finding] = []
+    for i, h in enumerate(heads):
+        if i and h.level > heads[i - 1].level + 1:
+            out.append(Finding(
+                "heading-skip", f"line {h.line}: {h.text[:48]!r}",
+                f"This heading jumps from level {heads[i-1].level} to {h.level}. Use the "
+                f"next level down ({heads[i-1].level + 1}) so the hierarchy renders as "
+                f"nested Word headings rather than a flattened list."))
+        has_child = i + 1 < len(heads) and heads[i + 1].level > h.level
+        # References and Acknowledgements carry no argument of their own by design: the
+        # bibliography is generated at write time and the CRediT list passes through verbatim.
+        boilerplate = is_references(h.text) or is_acknowledgements(h.text)
+        if not h.beats and not has_child and h.level > 1 and not boilerplate:
+            out.append(Finding(
+                "empty-heading", f"line {h.line}: {h.text[:48]!r}",
+                f"This heading has neither bullets of its own nor subsections beneath it. "
+                f"Give it 3–5 bullets saying what it argues, or remove it."))
+    return out
+
+
+# The share of a paper's writable words each section carries. Not uniform: a uniform
+# per-leaf allocation hands Methods 41% of the budget for having seven subsections and
+# leaves Results — where the contribution lives — on 18%. Overridable per project.
+DEFAULT_SECTION_SHARES: dict[str, float] = {
+    "abstract": 0.06,
+    "litrev": 0.14,          # Introduction / Background
+    "methods": 0.21,
+    "results": 0.30,
+    "other": 0.22,           # Discussion
+    "conclusion": 0.07,
+}
+
+# What a rendered figure costs the venue's budget beyond its caption. CFPs that count
+# "inclusive of all figures" are counting page space, which a caption's word count alone
+# does not capture.
+FIGURE_WORD_COST = 100
+REF_WORDS_PER_ENTRY = 21
+ACK_RESERVE = 40
+
+
+# Roughly how many words of prose a paper writes per source it cites. Used to estimate the
+# bibliography's size at outline time, when what the paper WILL cite is not yet knowable.
+# The corpus is the wrong number: SchellingChords carries 86 sources in refs.bib and the
+# manuscript cited 26. Reserving the corpus starved a 5,000-word budget to 2,629 and would
+# have demanded an outline half the size the venue actually affords.
+WORDS_PER_CITATION = 175
+
+
+def expected_references(word_limit: int, corpus_size: int) -> int:
+    """How many sources a paper this long will plausibly cite.
+
+    Bounded by the corpus — you cannot cite what you have not read — but not equal to it.
+    """
+    est = round(word_limit / WORDS_PER_CITATION) if word_limit else 0
+    return min(corpus_size, est) if corpus_size else est
+
+
+def prose_budget(word_limit: int, n_refs: int, n_figures: int,
+                 caption_words: int = 0) -> int:
+    """The words left for writing, once the un-writable parts of the document are paid for.
+
+    A venue that counts "inclusive of figures, tables, notes, references and appendices"
+    is budgeting the whole document. Handing the writer the gross limit invites it to
+    spend the reference list twice.
+
+    ``n_refs`` is the count the BIBLIOGRAPHY will hold — see ``expected_references``, not
+    the size of the corpus the litreview gathered.
+    """
+    return max(0, word_limit
+               - n_refs * REF_WORDS_PER_ENTRY
+               - ACK_RESERVE
+               - n_figures * FIGURE_WORD_COST
+               - caption_words)
+
+
+def leaf_allowance(budget: int, shares: dict[str, float] | None = None,
+                   per_leaf: int = 280) -> dict[str, int]:
+    """How many subsections each section can afford at a writable length.
+
+    ``per_leaf`` is the floor of readable academic prose — below roughly this, a
+    subsection carrying a figure has no room to introduce, present and interpret it, and
+    the guard is trading an over-length paper for a vacuous one.
+    """
+    sh = shares or DEFAULT_SECTION_SHARES
+    return {k: max(1, round(budget * v / per_leaf)) for k, v in sh.items()}
+
+
+def leaf_budget(heads: list[Heading], budget: int,
+                shares: dict[str, float] | None = None,
+                per_leaf: int = 280) -> list[Finding]:
+    """Does this structure fit the venue's word budget at a writable per-subsection length?
+
+    PHASE: outline. Structure is cheap to change here and costs a full re-draft later. The
+    check that would have caught a 19-leaf outline being pointed at a 5,000-word CFP before
+    anyone spent 4.5 hours writing 6,975 words into it.
+    """
+    if budget <= 0:
+        return []
+    allow = leaf_allowance(budget, shares, per_leaf)
+    got: dict[str, list[Heading]] = {}
+    for h in leaves(heads):
+        kind = ancestor_kind(heads, h)
+        got.setdefault(kind if kind in allow else "other", []).append(h)
+
+    out: list[Finding] = []
+    total_have, total_can = len(leaves(heads)), sum(allow.values())
+    if total_have > total_can:
+        out.append(Finding(
+            "over-budget", "outline",
+            f"This outline has {total_have} subsections carrying content, but a "
+            f"{budget}-word prose budget affords about {total_can} at {per_leaf} words "
+            f"each. Merge {total_have - total_can} subsection(s) into their neighbours — "
+            f"a thinner paper at this length is worse than a shorter one."))
+    for kind, hs in sorted(got.items()):
+        cap = allow.get(kind, 0)
+        if cap and len(hs) > cap:
+            names = ", ".join(repr(h.text[:34]) for h in hs[:4])
+            out.append(Finding(
+                "section-over-budget", f"{kind} sections",
+                f"{kind.title()} has {len(hs)} subsections but affords {cap} at "
+                f"{per_leaf} words each ({names}). Merge or move detail into an appendix."))
+    return out
+
+
+_CONCLUSION_RE = re.compile(r"^\d*\.?\s*(conclusion|concluding)", re.IGNORECASE)
+
+
+def _is_conclusion(heading: str) -> bool:
+    return bool(_CONCLUSION_RE.match(heading))
+
+
+def outline_figures(heads: list[Heading], markdown: str) -> list[tuple[str, str]]:
+    """Every figure the outline places, as (path, enclosing heading), in document order."""
+    out: list[tuple[str, str]] = []
+    cur = ""
+    for raw in markdown.splitlines():
+        s = raw.lstrip()
+        if s.startswith("#"):
+            cur = s[len(s) - len(s.lstrip("#")):].strip()
+            continue
+        m = OUTLINE_FIGURE_RE.match(raw)
+        if m:
+            out.append((m.group("path").strip(), cur))
+    return out
+
+
+def figure_placement(markdown: str, heads: list[Heading],
+                     expected: dict[str, str] | None = None) -> list[Finding]:
+    """Every available figure placed exactly once, at a real path, numbered in order.
+
+    PHASE: outline. ``expected`` maps path → origin ('results' | 'author'). A results
+    figure belongs with the finding it shows; an author figure belongs where the author
+    put it, and neither may be invented, duplicated or silently dropped.
+    """
+    placed = outline_figures(heads, markdown)
+    out: list[Finding] = []
+
+    seen: dict[str, int] = {}
+    for path, where in placed:
+        seen[path] = seen.get(path, 0) + 1
+    for path, n in seen.items():
+        if n > 1:
+            out.append(Finding(
+                "figure-repeated", path,
+                f"This figure is placed {n} times. Place each figure exactly once, in the "
+                f"subsection whose argument it carries."))
+
+    if expected is not None:
+        for path in expected:
+            if path not in seen:
+                out.append(Finding(
+                    "figure-unplaced", path,
+                    f"This figure is available but the outline never places it. Add a "
+                    f'"Figure: <caption> ({path})" line to the subsection it belongs in, '
+                    f"or say nothing about it at all."))
+        for path in seen:
+            if path not in expected:
+                out.append(Finding(
+                    "figure-invented", path,
+                    f"No such figure exists. Place only figures from the available list; "
+                    f"do not invent a path."))
+
+    for i, (path, _) in enumerate(placed, start=1):
+        m = next((mm for mm in OUTLINE_FIGURE_RE.finditer(markdown)
+                  if mm.group("path").strip() == path), None)
+        if m and m.group("num") and int(m.group("num")) != i:
+            out.append(Finding(
+                "figure-misnumbered", path,
+                f'This is figure {i} in order of appearance but its line says "Figure '
+                f'{m.group("num")}". Number figures from 1, in the order they appear.'))
+    return out
+
+
+def required_sections(markdown: str, required: str) -> list[Finding]:
+    """Sections the venue's CFP demands. The field existed and nothing ever enforced it.
+
+    PHASE: outline. ``required`` is the venue's free-text list; each comma- or
+    semicolon-separated item must appear as a heading.
+    """
+    if not (required or "").strip():
+        return []
+    heads = [h.text.lower() for h in parse_outline(markdown)]
+    out: list[Finding] = []
+    for item in (x.strip() for x in re.split(r"[;,]", required) if x.strip()):
+        if not any(item.lower() in h for h in heads):
+            out.append(Finding(
+                "missing-required-section", item,
+                f'This venue requires a "{item}" section and the outline has none. '
+                f"Add it as a heading."))
+    return out
+
+
+def outline_findings(markdown: str, budget: int = 0,
+                     expected_figures: dict[str, str] | None = None,
+                     required: str = "",
+                     shares: dict[str, float] | None = None) -> list[Finding]:
+    """The whole outline battery, in the order a reader would want them fixed."""
+    heads = parse_outline(markdown)
+    return (numbering_gaps(heads)
+            + heading_levels(heads)
+            + leaf_budget(heads, budget, shares)
+            + figure_placement(markdown, heads, expected_figures)
+            + required_sections(markdown, required))

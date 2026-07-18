@@ -165,7 +165,16 @@ do not use generic names such as "Related Work", "Case Study", "Implications", \
 or "Theoretical Framework"
 - Use ## for major sections (numbered: ## 1. Introduction, ## 2. …, etc.)
 - Use ### for subsections wherever the structural analysis identifies multiple \
-distinct pillars, steps, or stages
+distinct pillars, steps, or stages, numbered within their section (### 2.1, ### 2.2)
+- Use #### for a third tier where a subsection genuinely decomposes — the parts of a \
+model, the stages of a protocol. Do NOT flatten a third tier into ### : a ### that \
+contains other ### headings renders in Word as a list of siblings and loses the \
+hierarchy the reader needs. A #### heading is not numbered
+- Never skip a level (## must not be followed directly by ####), and number \
+subsections consecutively from 1 with no gaps — a gap reads as a missing section \
+and the draft will invent one to fill it
+- A heading either carries bullets of its own or contains subsections beneath it, \
+never neither
 - Background subsections should map to the background_pillars in the analysis
 - Methods subsections should map to the method_steps in the analysis, in order
 - If empirical_elements lists named cases or datasets, each must appear as a \
@@ -180,11 +189,14 @@ from key_equations it introduces or derives
 - Results subsections must be grounded in the analysis's key_findings — cite the \
 specific values, outcomes, and patterns key_findings records; results_structure gives \
 the order
-- If key_figures is non-empty in the analysis: every figure must be PLACED in the \
-Results subsection whose finding it shows — add a bullet of the form \
-"- Figure: <that figure's caption> (`<that figure's exact path>`)". Use each figure's \
-exact path from key_figures, place every figure exactly once, and never invent a figure, \
-a path, or a caption that key_figures does not give
+- If key_figures is non-empty in the analysis: every figure must be PLACED exactly once, \
+as its own line of the form "Figure N: <that figure's caption> (<that figure's exact \
+path>)", numbered from 1 in the order the figures appear in the finished paper. A figure \
+whose origin is "results" goes in the Results subsection whose finding it shows. A figure \
+whose origin is "author" is an illustration the author placed deliberately — put it in the \
+section its "section" hint names (a model schematic belongs in Methods, not Results), and \
+never move it into Results. Use each figure's exact path; never invent a figure, a path, \
+or a caption that key_figures does not give, and never place one twice
 - If the analysis carries no key_equations or key_design, Methods describes the planned \
 approach only; if it carries no key_findings, Results describes anticipated findings only; \
 Discussion and Conclusion must not claim specific empirical outcomes not supported \
@@ -231,7 +243,9 @@ placeholders rather than named
 lacks a Limitations subsection
 7. Bullet points that describe generic academic moves rather than specific \
 claims, steps, or findings for this paper
-8. Missing ### subsections where the analysis indicates multiple distinct \
+8. Heading levels: a skipped level (## followed by ####), a third tier
+flattened into ###, a subsection numbering gap, or missing ### subsections where
+the analysis indicates multiple distinct \
 components exist
 9. Methods, Results, Discussion, or Conclusion sections that claim specific \
 empirical detail not supported by the available content noted in the analysis \
@@ -269,7 +283,7 @@ Problems to fix:
 {critique}
 
 Fix every listed problem. Preserve what is already correct. Maintain ## major \
-sections and ### subsections. All names must be derived from the paper's actual \
+sections, ### subsections and #### sub-subsections. All names must be derived from the paper's actual \
 content. Output only the revised outline. No preamble."""
 
 # ── content refresh (coordinator) ────────────────────────────────────────────
@@ -292,13 +306,13 @@ Current outline:
 
 Instructions:
 - If methods source code is provided above: identify the Methods section and rewrite \
-it and all its ### subsections grounded in the actual code — reference specific \
+it and all its ###/#### subsections grounded in the actual code — reference specific \
 algorithms, functions, parameters, and implementation choices; method_steps gives \
 structural order; each subsection must specify which equations from key_equations \
 are introduced there (if key_equations is empty, extract equations directly from \
 the source code above)
 - If results content is provided above: identify the Results section and rewrite it \
-and all its ### subsections grounded in the actual results — cite specific values, \
+and all its ###/#### subsections grounded in the actual results — cite specific values, \
 outcomes, and patterns present in the results content; results_structure gives \
 structural order; each Results subsection must cite specific findings from \
 key_findings with values where present (if key_findings is empty, extract concrete \
@@ -467,14 +481,23 @@ def _analyze_structure(
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
 
-def _critique_revise(brain: Brain, outline: str, analysis: str, n: int) -> str:
-    """One critique→revise cycle. Returns the revised outline."""
+def _critique_revise(brain: Brain, outline: str, analysis: str, n: int,
+                     structural: str = "") -> str:
+    """One critique→revise cycle. Returns the revised outline.
+
+    ``structural`` is the deterministic guard battery's verdict, prepended to the LLM's
+    critique. Two critique passes previously marked their own homework — a 1.1→1.3
+    numbering gap survived both and cost a 4.5-hour draft run. What Python can compute,
+    Python states; the model is left only what it alone can judge.
+    """
     log(f"[raconteur] critique {n}…")
     critique = brain.coordinator(
         _CRITIQUE_PROMPT.format(analysis=analysis, outline=outline),
         system=_SYSTEM,
         num_ctx=16384,     # analysis + a growing outline overran the 8k budget (5,324 tok)
     )
+    if structural:
+        critique = f"{structural}\n{critique}"
     log(f"[raconteur] critique {n} findings:\n{critique}")
 
     log(f"[raconteur] revise {n}…")
@@ -491,6 +514,60 @@ def _venue_specs_block(cfg: ProjectConfig, venue: str = "") -> str:
     return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
+def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str) -> dict:
+    """Everything the structural battery needs to judge an outline against its venue."""
+    from . import guards
+    from .context import load_bib_keys, load_figure_manifest, load_author_figures
+    v = cfg.venue(venue) if venue else None
+    figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
+            if cfg.results_dir else []) + load_author_figures(project_dir)
+    corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
+    budget = guards.prose_budget(
+        v.word_limit, guards.expected_references(v.word_limit, corpus), len(figs),
+        sum(len(f.caption.split()) for f in figs)) if (v and v.word_limit) else 0
+    return {
+        "budget": budget,
+        "expected_figures": {f.path: f.origin for f in figs} or None,
+        "required": (v.required_sections if v else "") or "",
+        "shares": cfg.section_shares or None,
+    }
+
+
+def _structural_critique(cfg: ProjectConfig, project_dir: Path, outline: str,
+                         venue: str = "") -> str:
+    """The guard battery, phrased as critique the reviser must act on."""
+    from . import guards
+    findings = guards.outline_findings(outline, **_outline_guard_inputs(cfg, project_dir, venue))
+    if not findings:
+        return ""
+    log(f"[raconteur] structural guards: {len(findings)} finding(s)")
+    for f in findings:
+        log(f"  · {f.kind} — {f.where}")
+    lines = "\n".join(f"- {f.where}: {f.imperative}" for f in findings)
+    return ("Structural defects found mechanically. These are not matters of judgement — "
+            "fix every one:\n" + lines + "\n")
+
+
+def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
+                   venue: str = "") -> None:
+    """What survived. An outline that still fails its venue is the author's call to make,
+    but they must be told before they gate it, not after a draft run discovers it."""
+    from . import guards
+    inputs = _outline_guard_inputs(cfg, project_dir, venue)
+    heads = guards.parse_outline(outline)
+    n_leaves = len(guards.leaves(heads))
+    budget = inputs["budget"]
+    if budget:
+        afford = sum(guards.leaf_allowance(budget, inputs["shares"]).values())
+        log(f"[raconteur] structure: {n_leaves} subsection(s), venue affords ~{afford} "
+            f"({budget} prose words)")
+    remaining = guards.outline_findings(outline, **inputs)
+    if remaining:
+        log(f"[warn] {len(remaining)} structural finding(s) survived the critique passes:")
+        for f in remaining:
+            log(f"[warn]   · {f.kind} — {f.where}")
+
+
 def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str:
     """What the writer is told about where this is going.
 
@@ -499,6 +576,9 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "")
     narrative belongs to the work, not to whoever might publish it.
     """
     specs = _venue_specs_block(cfg, venue)
+    budget = _budget_block(cfg, project_dir, venue)
+    if budget:
+        specs = f"{specs}\n{budget}" if specs else budget
     venue_analysis = load_venue_analysis(project_dir) if venue else ""
     if venue_analysis:
         block = f"Venue Analysis:\n{venue_analysis}\n"
@@ -506,6 +586,41 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "")
             block += f"\n{specs}\n"
         return block
     return specs
+
+
+def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str:
+    """How many subsections this venue affords, and how they divide across sections.
+
+    A venue's word limit reached the prompt as ambient fact and nothing turned it into the
+    number the writer actually plans against — so a 5,000-word CFP got a 19-subsection
+    outline, and the draft that obeyed it came in at 6,975. The limit has to arrive as an
+    affordance ("you may write this many subsections, this long") or it is not a constraint.
+    """
+    from . import guards
+    from .context import load_bib_keys, load_figure_manifest, load_author_figures
+    v = cfg.venue(venue) if venue else None
+    if not v or not v.word_limit:
+        return ""
+    corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
+    n_refs = guards.expected_references(v.word_limit, corpus)
+    figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
+            if cfg.results_dir else []) + load_author_figures(project_dir)
+    caption_words = sum(len(f.caption.split()) for f in figs)
+    budget = guards.prose_budget(v.word_limit, n_refs, len(figs), caption_words)
+    allow = guards.leaf_allowance(budget, cfg.section_shares or None)
+    per = ", ".join(f"{k} {n}" for k, n in allow.items())
+    return (
+        "Length budget (this venue counts the WHOLE document, references and figures "
+        "included):\n"
+        f"- Total limit: {v.word_limit} words. After an estimated {n_refs} references "
+        f"(of {corpus} in the corpus), "
+        f"{len(figs)} figure(s) and acknowledgements, about {budget} words remain for prose.\n"
+        f"- That affords roughly {sum(allow.values())} subsections at ~280 words each, "
+        f"divided as: {per}.\n"
+        "- Plan a structure that FITS this. Do not exceed the subsection counts above — a "
+        "thinner paper at this length is worse than a shorter, fuller one. Prefer merging "
+        "related material into one substantial subsection over splitting it across several.\n"
+    )
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -627,8 +742,11 @@ def _outline_fresh(
     )
 
     # Passes 3–4 and 5–6: two critique→revise cycles
-    outline = _critique_revise(brain, draft, analysis, n=1)
-    outline = _critique_revise(brain, outline, analysis, n=2)
+    outline = _critique_revise(brain, draft, analysis, n=1,
+                               structural=_structural_critique(cfg, project_dir, draft, venue))
+    outline = _critique_revise(brain, outline, analysis, n=2,
+                               structural=_structural_critique(cfg, project_dir, outline, venue))
+    _log_structure(cfg, project_dir, outline, venue)
 
     _write(project_dir, cfg, paper_dir, outline, venue)
     if code:

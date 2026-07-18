@@ -179,6 +179,13 @@ class ProjectConfig:
     venues: dict = field(default_factory=dict)      # slug -> VenueConfig
     brain: BrainConfig = field(default_factory=BrainConfig)
 
+    # How the venue's word budget divides across sections — kind -> share, summing to 1.0.
+    # Empty means guards.DEFAULT_SECTION_SHARES, which is Results-heavy: a uniform per-
+    # subsection allocation gives a section words for having many subsections rather than
+    # for having the most to say, and hands Methods 41% of a paper while Results writes the
+    # contribution in 18%. Set per project when a paper's balance genuinely differs.
+    section_shares: dict = field(default_factory=dict)
+
     # ── venues ────────────────────────────────────────────────────────────────
     # A venue is a facet of the DELIVERABLE, not of the project: the one-pager is the
     # narrative and belongs to nobody, but an outline and a manuscript are written for a
