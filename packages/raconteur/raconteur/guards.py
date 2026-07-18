@@ -602,14 +602,21 @@ class Metrics:
     uncited: int
     sparse: int
     sections: int
+    words: int = 0
+    budget: int = 0
 
     def __str__(self) -> str:
+        # Length was absent from this line while a 6,975-word manuscript shipped against a
+        # 5,000-word cap. A tally that cannot say "too long" is not a tally.
+        length = f" · words {self.words}"
+        if self.budget:
+            length += f"/{self.budget}{' OVER' if self.words > self.budget else ''}"
         return (f"citekeys resolved {self.citekeys_resolved}/{self.citekeys_total} · "
                 f"uncited body paragraphs {self.uncited} · sparse {self.sparse} · "
-                f"sections {self.sections}")
+                f"sections {self.sections}{length}")
 
 
-def metrics(markdown: str, known: set[str]) -> Metrics:
+def metrics(markdown: str, known: set[str], budget: int = 0) -> Metrics:
     """One line that says, mechanically, whether the deliverable met the bar."""
     paras = parse_paragraphs(markdown)
     keys = set(all_citekeys(markdown))
@@ -619,6 +626,8 @@ def metrics(markdown: str, known: set[str]) -> Metrics:
         uncited=len(uncited_paragraphs(paras)),
         sparse=len(sparse_paragraphs(paras)),
         sections=len({p.section for p in paras if p.section >= 0}),
+        words=word_count(markdown),
+        budget=budget,
     )
 
 
@@ -973,3 +982,128 @@ def outline_findings(markdown: str, budget: int = 0,
             + leaf_budget(heads, budget, shares)
             + figure_placement(markdown, heads, expected_figures)
             + required_sections(markdown, required))
+
+
+# ── CONFORMANCE + LENGTH (phase: draft) ───────────────────────────────────────
+# The outline is the human-approved contract. Nothing checked that the draft honoured it,
+# so a 1.1 → 1.3 numbering gap let the draft invent a "### 1.2 Tonal Stability Hierarchies"
+# out of nothing and ship it. And no guard anywhere measured length: a 6,975-word manuscript
+# went out against a 5,000-word cap with a clean tally line, because every section was
+# individually legal and nobody summed them.
+
+def _heading_texts(markdown: str, min_level: int = 3) -> list[str]:
+    out = []
+    for raw in markdown.splitlines():
+        s = raw.lstrip()
+        if not s.startswith("#"):
+            continue
+        level = len(s) - len(s.lstrip("#"))
+        text = s[level:].strip()
+        if level >= min_level and text:
+            out.append(text)
+    return out
+
+
+def _norm_heading(h: str) -> str:
+    """Compare headings on their words, not their numbering or punctuation — "3.1. Recovery
+    Landscape" and "3.1 Recovery Landscape" are the same section."""
+    return re.sub(r"[^a-z0-9]+", " ", h.lower()).strip()
+
+
+def outline_conformance(draft_md: str, outline_md: str) -> list[Finding]:
+    """Sections the draft invented or dropped relative to its outline.
+
+    PHASE: draft. The outline is what the author approved; a draft that adds a section has
+    written something nobody agreed to, and one that drops a section has quietly cut the
+    argument. Both are computable and neither was checked.
+    """
+    if not outline_md.strip():
+        return []
+    want = [h for h in _heading_texts(outline_md)
+            if not (is_references(h) or is_acknowledgements(h) or is_abstract(h))]
+    got = [h for h in _heading_texts(draft_md)
+           if not (is_references(h) or is_acknowledgements(h) or is_abstract(h))]
+    want_n = {_norm_heading(h): h for h in want}
+    got_n = {_norm_heading(h): h for h in got}
+
+    out: list[Finding] = []
+    for key, h in got_n.items():
+        if key not in want_n:
+            out.append(Finding(
+                "invented-section", h,
+                f'The outline has no "{h}" section. Remove it and fold anything worth '
+                f"keeping into the subsection the outline does name — the outline is what "
+                f"the author approved."))
+    for key, h in want_n.items():
+        if key not in got_n:
+            out.append(Finding(
+                "dropped-section", h,
+                f'The outline calls for a "{h}" subsection and the draft has none. Write '
+                f"it, following that subsection's bullets."))
+    return out
+
+
+def word_count(markdown: str) -> int:
+    """Prose words: headings, figure caption lines and citekey tags do not count as writing."""
+    text = FIGURE_MD_RE.sub(" ", markdown)
+    text = CITE_TAG_RE.sub(" ", text)
+    text = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    return len(text.split())
+
+
+def over_budget(markdown: str, budget: int, tolerance: float = 0.05) -> list[Finding]:
+    """The whole-document length check no section-local guard can make.
+
+    PHASE: draft. Every section can sit inside its own band and the sum still fail — that is
+    exactly what happened: 19 subsections each legal at 150–300 words, 6,975 words total,
+    40% over a 5,000-word cap, reported as clean.
+    """
+    if budget <= 0:
+        return []
+    n = word_count(markdown)
+    if n <= budget * (1 + tolerance):
+        return []
+    return [Finding(
+        "over-budget", "manuscript",
+        f"This manuscript runs {n} words of prose against a budget of {budget}. Cut "
+        f"{n - budget} words. Tighten the longest subsections first; do not drop a "
+        f"[@citekey], a figure, or a subsection the outline names.")]
+
+
+def section_target(heading: str, budget: int, leaves_here: int,
+                   shares: dict[str, float] | None = None) -> tuple[int, int]:
+    """The word band for one subsection of THIS section, from the venue budget.
+
+    ``heading`` is the SECTION heading ("3. Results"), never a subsection's own name —
+    "Recovery Landscape" contains no results keyword and would classify as "other",
+    which is how a uniform allocation quietly writes the contribution in 18% of the paper.
+    ``leaves_here`` is how many subsections this section actually has, so the section's
+    share divides over its real width rather than an estimate of it.
+
+    Returns (low, high); (0, 0) when the venue states no limit and length is the writer's
+    call — writing to an assumed length is its own failure.
+    """
+    if budget <= 0 or leaves_here <= 0:
+        return (0, 0)
+    sh = shares or DEFAULT_SECTION_SHARES
+    k = "conclusion" if _is_conclusion(heading) else section_kind(heading)
+    share = sh.get(k, sh.get("other", 0.2))
+    per = budget * share / leaves_here
+    return (max(80, int(per * 0.8)), max(120, int(per * 1.2)))
+
+
+def section_leaf_counts(outline_md: str) -> dict[str, int]:
+    """Section heading → how many subsections the outline gives it. The denominator for
+    ``section_target``, taken from the approved outline rather than guessed."""
+    heads = parse_outline(outline_md)
+    counts: dict[str, int] = {}
+    for h in leaves(heads):
+        top = None
+        for c in heads:
+            if c.line > h.line:
+                break
+            if c.level <= 2:
+                top = c
+        key = top.text if top is not None else h.text
+        counts[key] = counts.get(key, 0) + 1
+    return counts

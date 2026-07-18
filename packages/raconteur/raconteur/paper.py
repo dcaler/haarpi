@@ -51,16 +51,19 @@ Instructions:
 - Write fully developed academic prose; do not reproduce the outline bullets verbatim
 - Use ### for subsection headings and #### for sub-subsections, matching both the \
 names AND the heading levels the outline uses — do not flatten a #### into a ###
-- Each subsection should be 150–300 words of connected prose
+- Each subsection should be {words_low}–{words_high} words of connected prose. This is derived from the venue's word limit and this section's share of it — the whole manuscript must fit, so a section that overruns is taking words from another
 - For Methods sections: reference specific algorithms, functions, parameters, and \
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
 - Where the section outline names a figure — a line of the form \
-"Figure: <caption> (<path>)" — render it as a Markdown image `![<caption>](<path>)` at \
+"Figure N: <caption> (<path>)" — render it as a Markdown image `![Figure N: <caption>](<path>)` at \
 the point in the prose where it belongs, using that EXACT caption and path. Render ONLY the \
 figures THIS section's outline names: do not invent a figure or a path, do not add a figure \
 the section outline did not name here, and never repeat one
+- Keep the figure's number from the outline in its caption ("Figure 3: …") and introduce \
+every figure in the prose BEFORE it appears ("Figure 3 shows …") — a figure no sentence \
+points at is one the reader is never told to look at
 - For Background/Introduction sections: synthesise ideas from the literature into \
 argument — do not list or summarise individual papers; cite using [@citekey] format \
 from the bibliography above
@@ -98,7 +101,7 @@ parameters) when a methods writeup was available
 rendered in the prose as `![…](path)` with the exact path, or an image whose path the \
 section outline did not name here
 6. Discussion that does not address the discussion_angle or limitations from the analysis
-7. Subsections under 100 words or over 500 words
+7. Subsections under {words_low} or over {words_high} words
 
 Do not comment on citation density or on whether the prose lists rather than synthesises — \
 those are checked mechanically after this critique and reported separately.
@@ -237,6 +240,11 @@ def _venue_block(cfg: ProjectConfig, venue: str = "") -> str:
     return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
+# The band a section is written to when the venue states no word limit. A venue that
+# publishes no length is not a licence to assume one, so this is the old fixed pair kept
+# as a floor — the derived band replaces it wherever a limit actually exists.
+_DEFAULT_BAND = (150, 300)
+
 # _is_references is imported from guards at the top of this module.
 
 
@@ -247,7 +255,9 @@ def _critique_revise(
     section_outline: str,
     analysis: str,
     n: int,
+    band: tuple[int, int] = (0, 0),
 ) -> str:
+    lo, hi = band if band and band[0] else _DEFAULT_BAND
     log(f"[raconteur] critique '{heading}' ({n})…")
     critique = brain.coordinator(
         _CRITIQUE_SECTION_PROMPT.format(
@@ -255,6 +265,8 @@ def _critique_revise(
             analysis=analysis,
             section_outline=section_outline,
             text=text,
+            words_low=lo,
+            words_high=hi,
         ),
         system=_SYSTEM,
     )
@@ -293,13 +305,19 @@ preamble."""
 
 
 def _guard_section(
-    text: str, heading: str, known: set[str], have_results: bool
+    text: str, heading: str, known: set[str], have_results: bool,
+    expect_figures: int | None = None,
 ) -> list[guards.Finding]:
     """Draft-phase guards for one section.
 
     Wrapping the section body in its own heading lets ``parse_paragraphs`` classify it, so
     the citation floor is gated on section kind — a Methods paragraph is grounded in the
     writeup, not the bibliography.
+
+    ``figure_findings`` ran only in the one-pager until now, which is how sixteen figures
+    and four unnumbered captions shipped in a manuscript without a single warning. The
+    outline numbers its figures; this is what checks the draft kept the number and wrote a
+    sentence pointing at it.
     """
     md = f"## {heading}\n\n{text}"
     paras = guards.parse_paragraphs(md)
@@ -311,7 +329,14 @@ def _guard_section(
     findings += guards.sparse_paragraphs(paras)
     if have_results:
         findings += guards.unnumbered_results_paragraphs(paras)
+    findings += guards.figure_findings(text, expect=expect_figures)
     return findings
+
+
+def _outline_figure_count(section_outline: str) -> int:
+    """How many figures THIS section's outline places. The draft must render exactly that
+    many — no more (the flood) and no fewer (a figure the reader never sees)."""
+    return len(guards.OUTLINE_FIGURE_RE.findall(section_outline))
 
 
 def _guard_repair(
@@ -323,6 +348,7 @@ def _guard_repair(
     known: set[str],
     have_results: bool,
     rounds: int = 2,
+    expect_figures: int | None = None,
 ) -> str:
     """Feed mechanical findings back as imperatives until they clear or rounds run out.
 
@@ -330,7 +356,7 @@ def _guard_repair(
     survives every round is logged, not silently dropped.
     """
     for n in range(1, rounds + 1):
-        findings = _guard_section(text, heading, known, have_results)
+        findings = _guard_section(text, heading, known, have_results, expect_figures)
         if not findings:
             return text
         log(f"[raconteur] guards '{heading}' ({n}): {len(findings)} finding(s)")
@@ -348,7 +374,7 @@ def _guard_repair(
             system=_SYSTEM,
             num_ctx=16384,
         )
-    remaining = _guard_section(text, heading, known, have_results)
+    remaining = _guard_section(text, heading, known, have_results, expect_figures)
     if remaining:
         log(f"[warn] '{heading}': {len(remaining)} guard finding(s) survived "
             f"{rounds} repair round(s) — shipping anyway:")
@@ -434,6 +460,88 @@ def _bib_block(bib_summary: str) -> str:
     return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
 
 
+_CONDENSE_PROMPT = """\
+This manuscript is over its venue's word budget. Cut it down.
+
+{findings}
+
+Manuscript:
+{text}
+
+Rules:
+- Cut {excess} words. Tighten prose: remove hedging, redundant restatement, and \
+sentences that repeat what an adjacent sentence already says
+- Do NOT drop a [@citekey], a figure (`![…](…)`), a heading, or a subsection — the \
+structure was approved by the author and the citations are what ground the claims
+- Do NOT introduce new claims, values, or sources
+- Preserve every heading exactly as written, at the same level
+- Output the complete revised manuscript and nothing else — no preamble
+"""
+
+
+def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
+                  bib_keys: set[str]) -> int:
+    """The venue's whole-document limit, less what is not drafted prose.
+
+    Shares the arithmetic with the outline stage on purpose: an outline planned against one
+    budget and a draft written against another is how a structure that fits produces a
+    manuscript that does not.
+
+    Figures are counted from the OUTLINE, not from rayleigh's manifest. The outline is the
+    placement authority and names each figure exactly once, so it knows what the paper will
+    actually contain — a manifest figure the outline chose not to place costs nothing, and
+    an author illustration the manifest never held still costs its page. Reloading the
+    manifest here is also what flooded every section with every figure; see
+    ``test_the_paper_stage_does_not_reload_the_figure_manifest``.
+    """
+    v = cfg.venue(venue) if venue else None
+    if not v or not v.word_limit:
+        return 0
+    placed = list(guards.OUTLINE_FIGURE_RE.finditer(outline_text))
+    return guards.prose_budget(
+        v.word_limit,
+        guards.expected_references(v.word_limit, len(bib_keys)),
+        len(placed),
+        sum(len((m.group("caption") or "").split()) for m in placed))
+
+
+def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
+                           budget: int, bib_keys: set[str], rounds: int = 2) -> str:
+    """The checks no section can make about itself: did it follow the outline, and does the
+    sum fit the venue.
+
+    Every section can sit inside its own band and the manuscript still overrun — that is
+    exactly what happened, 19 legal subsections summing to 6,975 words against a 5,000-word
+    cap, reported clean. Conformance is the same shape of blind spot: a section the outline
+    never named is invisible to a guard that only ever reads one section at a time.
+    """
+    for n in range(1, rounds + 1):
+        findings = (guards.outline_conformance(assembled, outline_text)
+                    + guards.over_budget(assembled, budget))
+        if not findings:
+            return assembled
+        log(f"[raconteur] manuscript guards ({n}): {len(findings)} finding(s)")
+        for f in findings:
+            log(f"  · {f.kind} — {f.where}")
+        excess = max(0, guards.word_count(assembled) - budget) if budget else 0
+        assembled = brain.coordinator(
+            _CONDENSE_PROMPT.format(
+                findings="\n".join(f"- {f.imperative}" for f in findings),
+                text=assembled,
+                excess=excess),
+            system=_SYSTEM,
+            num_ctx=16384,
+        )
+    remaining = (guards.outline_conformance(assembled, outline_text)
+                 + guards.over_budget(assembled, budget))
+    if remaining:
+        log(f"[warn] {len(remaining)} manuscript finding(s) survived {rounds} round(s) "
+            f"— shipping anyway:")
+        for f in remaining:
+            log(f"[warn]   · {f.kind} — {f.where}")
+    return assembled
+
+
 def _draft_paper(
     project_dir: Path,
     cfg: ProjectConfig,
@@ -463,6 +571,11 @@ def _draft_paper(
     style_section = _style_block(style_profile)
     drafted: list[tuple[str, str]] = []
 
+    # The venue's budget, apportioned the same way the outline apportioned it — one source
+    # of arithmetic for both stages, or the outline plans a structure the draft then ignores.
+    budget = _prose_budget(cfg, venue, outline_text, bib_keys)
+    leaf_counts = guards.section_leaf_counts(outline_text)
+
     for heading, section_outline in _parse_sections(outline_text):
         if _is_references(heading) or _is_abstract(heading):
             # References render at write time; the abstract is drafted last,
@@ -475,7 +588,10 @@ def _draft_paper(
             drafted.append((heading, _ack_passthrough(section_outline)))
             continue
         ctx = _context_for_section(heading, litrev, code, results)
-        log(f"[raconteur] drafting '{heading}'…")
+        band = guards.section_target(heading, budget, leaf_counts.get(heading, 1),
+                                     cfg.section_shares or None)
+        lo, hi = band if band[0] else _DEFAULT_BAND
+        log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words per subsection)")
         text = brain.coordinator(
             _DRAFT_SECTION_PROMPT.format(
                 heading=heading,
@@ -488,14 +604,17 @@ def _draft_paper(
                 section_outline=section_outline,
                 context_section=ctx,
                 bib_section=bib_section,
+                words_low=lo,
+                words_high=hi,
             ),
             system=_SYSTEM,
             num_ctx=16384,
         )
-        text = _critique_revise(brain, heading, text, section_outline, analysis, 1)
-        text = _critique_revise(brain, heading, text, section_outline, analysis, 2)
+        text = _critique_revise(brain, heading, text, section_outline, analysis, 1, band)
+        text = _critique_revise(brain, heading, text, section_outline, analysis, 2, band)
         text = _guard_repair(brain, heading, text, section_outline, bib_section,
-                             bib_keys, bool(results))
+                             bib_keys, bool(results), expect_figures=_outline_figure_count(
+                                 section_outline))
         drafted.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
@@ -503,8 +622,9 @@ def _draft_paper(
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
     assembled = _assemble(cfg.title, abstract, drafted)
+    assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys)
     _write(project_dir, cfg, paper_dir, assembled, venue)
-    log(f"[raconteur] {guards.metrics(assembled, bib_keys)}")
+    log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
 
 # ── user-annotation revision ──────────────────────────────────────────────────
@@ -670,6 +790,11 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
         else:
             _redline_paper(project_dir, cfg, brain, paper_dir, user_rev, venue)
     else:
+        # DECLINED, not done. Exiting 0 here told trundlr the run succeeded: the task closed
+        # green in 26 seconds, the ladder advanced, and a human gate was scheduled against a
+        # draft that had never been rewritten. A stage that does no work must not report the
+        # same status as a stage that did.
         log("[raconteur] draft exists — annotate paper/*.docx with your initials and re-run")
-        return
+        log("[error] nothing to do: this run made no changes (exit 3)")
+        raise SystemExit(3)
 

@@ -17,11 +17,14 @@ from raconteur import paper
 
 def test_the_draft_prompt_instructs_figure_embedding():
     assert "![" in paper._DRAFT_SECTION_PROMPT
-    assert "Figure:" in paper._DRAFT_SECTION_PROMPT
+    # the outline numbers its figures; the draft renders that number, it does not re-invent it
+    assert "Figure N:" in paper._DRAFT_SECTION_PROMPT
     # The outline names each figure once, in its section; the draft must render ONLY the
     # figures its own section outline names — never the whole manifest in every section.
     assert "ONLY" in paper._DRAFT_SECTION_PROMPT
     assert "did not name here" in paper._DRAFT_SECTION_PROMPT
+    # a figure no sentence points at is one the reader is never told to look at
+    assert "introduce" in paper._DRAFT_SECTION_PROMPT
 
 
 def test_the_paper_stage_does_not_reload_the_figure_manifest():
