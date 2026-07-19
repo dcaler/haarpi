@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -586,11 +587,105 @@ def classify(stage: str, check: dict, cfg: dict,
     return plan
 
 
+def run_authors(root: Path, action: str = "list", name: str = "", initials: str = "",
+                affiliation: str = "", email: str = "", orcid: str = "",
+                position: int | None = None) -> int:
+    """Read and edit the project's author list.
+
+    Authorship changes mid-project — a collaborator joins after the one-pager circulates —
+    and when it does it must change in ONE place and be picked up by every document
+    generated afterwards. Typing a name into a draft makes it prose, and prose is lost on
+    the next major revision; this writes it to the manifest, above every stage.
+
+    The tool records what it is told and nothing more. It does not infer an affiliation
+    from a name, order the list, or assign CRediT roles — those are the author's calls.
+    """
+    m = project.load_manifest(root)
+    current = project.authors(m)
+
+    if action == "list":
+        if not current:
+            print("haarpi authors: none recorded — `haarpi authors add --name … "
+                  "--affiliation …`")
+            return 0
+        print(f"authors of {m.short_title or m.name} (in authorship order):")
+        for i, a in enumerate(current, 1):
+            bits = [f"  {i}. {a['name']}"]
+            if a.get("initials"):
+                bits.append(f"[{a['initials']}]")
+            print(" ".join(bits))
+            for k in ("affiliation", "email", "orcid"):
+                if a.get(k):
+                    print(f"       {k}: {a[k]}")
+        unlisted = [i for i in [m.initials] if i and i not in
+                    [a.get("initials") for a in current]]
+        if unlisted:
+            print(f"\nnote: this project's chain suffix is _{m.initials}, which is not "
+                  f"any listed author's initials.")
+        return 0
+
+    if action == "add":
+        if not name.strip():
+            print("haarpi authors add: --name is required.", file=sys.stderr)
+            return 2
+        if any(a["name"].lower() == name.strip().lower() for a in current):
+            print(f"haarpi authors: '{name}' is already listed — use `set` to edit them.",
+                  file=sys.stderr)
+            return 2
+        entry = project.normalize_author(
+            {"name": name, "initials": initials, "affiliation": affiliation,
+             "email": email, "orcid": orcid})
+        # position is 1-based authorship order; absent means append.
+        if position is None or position > len(current):
+            current.append(entry)
+        else:
+            current.insert(max(0, position - 1), entry)
+        m.authors = current
+        project.save_manifest(m, root)
+        print(f"haarpi authors: added {entry['name']} "
+              f"({len(current)} author(s) on {m.short_title or m.name})")
+        return 0
+
+    if action in ("set", "remove"):
+        match = [a for a in current if a["name"].lower() == name.strip().lower()
+                 or (initials and a.get("initials", "").lower() == initials.lower())]
+        if not match:
+            print(f"haarpi authors: no author matching '{name or initials}'.",
+                  file=sys.stderr)
+            return 2
+        target = match[0]
+        if action == "remove":
+            current = [a for a in current if a is not target]
+            m.authors = current
+            project.save_manifest(m, root)
+            print(f"haarpi authors: removed {target['name']}")
+            return 0
+        for k, v in (("name", name), ("initials", initials),
+                     ("affiliation", affiliation), ("email", email), ("orcid", orcid)):
+            if v:
+                target[k] = v.strip()
+        m.authors = current
+        project.save_manifest(m, root)
+        print(f"haarpi authors: updated {target['name']}")
+        return 0
+
+    print(f"haarpi authors: unknown action '{action}'.", file=sys.stderr)
+    return 2
+
+
 # ── the verb ─────────────────────────────────────────────────────────────────
 
 def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | None:
-    """Newest in-flight file whose chain ends in the human's initials — the
-    markup whose gate task was just marked done.
+    """Newest in-flight file a HUMAN touched last — the markup whose gate task was just
+    marked done.
+
+    "A human is done" is: the chain ends in a token that is not the tool's, and the file is
+    not a release. It is deliberately NOT "the chain ends in `m.initials`". That test asked
+    whether ONE named person went last, so a co-author with the final pass
+    (`…_ra_DCR_JR.docx`) left a fully annotated document that this function could not see —
+    `haarpi next` printed "nothing to do", exited 0, and the ladder stalled with the work
+    sitting in the directory. ``naming.find_user_revision`` already defined it this way; the
+    two definitions are now one.
 
     Scans the stage root alongside output/: raconteur's working chain lives at
     paper/ root (same convention latest_release's root-scan tier serves)."""
@@ -604,7 +699,10 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
                 if not parsed:
                     continue
                 _, chain, _ = parsed
-                if chain and chain[-1].lower() == m.initials.lower():
+                # A release's last token is a deliverable word ("…_litreview.docx") — not
+                # the tool's, and emphatically not a reviewer's; without this it reads as
+                # markup on itself.
+                if chain and chain[-1].lower() != "ra" and not naming.is_release(chain):
                     t = p.stat().st_mtime
                     if best is None or t > best[0]:
                         best = (t, stage, p)
@@ -705,8 +803,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     else:
         found = find_finished_markup(root, m)
         if found is None:
-            print("haarpi next: no finished markup found (no in-flight file ends "
-                  f"in _{m.initials}). Nothing to do.")
+            print("haarpi next: no finished markup found (no in-flight file ends in a "
+                  "reviewer's initials). Nothing to do.")
             return 0
         if stage and found[0] != stage:
             print(f"haarpi next: newest finished markup is in '{found[0]}', not "

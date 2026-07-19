@@ -54,7 +54,15 @@ class Manifest:
     name: str = ""
     short_title: str = ""
     brief: str = ""
-    initials: str = "DCR"              # the human reviewer's chain suffix
+    initials: str = "DCR"              # the chain suffix of whoever drives the pipeline
+    # Who the paper is BY. Project-level, not paper-level: a co-author who comes aboard
+    # after the one-pager is circulated may trigger a re-think that regenerates the
+    # litreview, the build, the experiments and every downstream document — the one fact
+    # that must survive all of it. Held here rather than in prose because a name and an
+    # affiliation are facts the tools must never invent, and because a venue's `anonymized`
+    # flag can only strip an author block that exists as data.
+    # Each entry: {name, initials?, affiliation?, email?, orcid?}.
+    authors: list = field(default_factory=list)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
@@ -86,8 +94,11 @@ def load_manifest(root: Path) -> Manifest:
 
 
 def save_manifest(m: Manifest, root: Path) -> Path:
+    # Enumerated, not asdict() — a new field that is not listed here loads correctly and
+    # then silently fails to persist, which looks like the edit never happened.
     data = {"name": m.name, "short_title": m.short_title, "brief": m.brief,
-            "initials": m.initials, "trundlr_project_id": m.trundlr_project_id,
+            "initials": m.initials, "authors": m.authors,
+            "trundlr_project_id": m.trundlr_project_id,
             "trundlr_priority": m.trundlr_priority, "stages": m.stages}
     fp = root / MANIFEST
     fp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
@@ -247,6 +258,36 @@ def stale_inputs(root: Path, m: Manifest, stage: str) -> list[str]:
             continue
         if bound.get(s) and bound[s] != rel.name:
             out.append(s)
+    return out
+
+
+AUTHOR_FIELDS = ("name", "initials", "affiliation", "email", "orcid")
+
+
+def normalize_author(entry: dict | str) -> dict:
+    """One author record, from a dict or a bare name. Unknown keys are dropped."""
+    if isinstance(entry, str):
+        return {"name": entry.strip()}
+    return {k: str(entry[k]).strip() for k in AUTHOR_FIELDS
+            if entry.get(k) not in (None, "")}
+
+
+def authors(m: Manifest) -> list[dict]:
+    """The author list, normalized and in order. Order is authorship order — it is the
+    author's to set and no tool's to sort."""
+    return [normalize_author(a) for a in (m.authors or []) if a]
+
+
+def reviewer_initials(m: Manifest) -> list[str]:
+    """Every human who may annotate: the authors' initials, plus the pipeline driver's.
+
+    Not used to decide whose turn it is — ``find_finished_markup`` asks only whether the
+    last token is the tool's, so an unlisted collaborator's markup is still seen. This is
+    for reporting and for catching a chain token nobody recognizes.
+    """
+    out = [a["initials"] for a in authors(m) if a.get("initials")]
+    if m.initials and m.initials not in out:
+        out.append(m.initials)
     return out
 
 

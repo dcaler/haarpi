@@ -38,6 +38,9 @@ usage:
   haarpi next [--stage S] [--file F] [--dry-run]
         read the finished markup: mint a release, or classify + queue rework
         (runs automatically as the last task of every queued chain)
+  haarpi authors [list | add | set | remove] [--name N --initials I --affiliation A
+                 --email E --orcid O --position K]
+        who the paper is by — recorded once, read by every document generated after
   haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi queue              register the trundlr project / queue the opening chain
   haarpi <tool> <args…>     run a stage tool (rabbithole | raconteur | raster | rayleigh)
@@ -80,6 +83,21 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         return planner.run_status(root)
     if cmd == "queue":
         return planner.run_queue(root)
+    if cmd == "authors":
+        ap = argparse.ArgumentParser(prog="haarpi authors")
+        ap.add_argument("action", nargs="?", default="list",
+                        choices=["list", "add", "set", "remove"])
+        ap.add_argument("--name", default="")
+        ap.add_argument("--initials", default="")
+        ap.add_argument("--affiliation", default="")
+        ap.add_argument("--email", default="")
+        ap.add_argument("--orcid", default="")
+        ap.add_argument("--position", type=int,
+                        help="1-based authorship order; appended if omitted")
+        a = ap.parse_args(rest)
+        return planner.run_authors(root, action=a.action, name=a.name,
+                                   initials=a.initials, affiliation=a.affiliation,
+                                   email=a.email, orcid=a.orcid, position=a.position)
     if cmd == "next":
         ap = argparse.ArgumentParser(prog="haarpi next")
         ap.add_argument("--stage")
@@ -137,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         return _dispatch(TOOLS[cmd], rest)
     if cmd == "doctor":
         return _doctor()
-    if cmd in ("init", "next", "status", "queue"):
+    if cmd in ("init", "next", "status", "queue", "authors"):
         return _pipeline_verb(cmd, rest)
     print(f"haarpi: unknown command '{cmd}'\n\n{_USAGE}", end="", file=sys.stderr)
     return 2
