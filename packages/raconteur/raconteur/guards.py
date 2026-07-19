@@ -842,7 +842,7 @@ def expected_references(total_words: int, corpus_size: int) -> int:
 
 
 def prose_budget(total_words: int, n_refs: int, n_figures: int,
-                 caption_words: int = 0, front_matter_words: int = 0) -> int:
+                 caption_words: int = 0) -> int:
     """The words left for writing, once the un-writable parts of the document are paid for.
 
     A venue that counts "inclusive of figures, tables, notes, references and appendices"
@@ -852,9 +852,8 @@ def prose_budget(total_words: int, n_refs: int, n_figures: int,
     ``total_words`` is the length the document should COME OUT AT — ``word_target``, not
     the venue's maximum, wherever the venue states a range.
 
-    ``front_matter_words`` is the authors-and-affiliations block: rendered at write time
-    from the manifest, never drafted, and charged to an inclusive limit exactly like the
-    reference list.
+    The title and the authors-and-affiliations block are NOT charged here and never count
+    against a venue's limit — no venue counts them, however inclusive its rule.
 
     ``n_refs`` is the count the BIBLIOGRAPHY will hold — see ``expected_references``, not
     the size of the corpus the litreview gathered.
@@ -863,8 +862,7 @@ def prose_budget(total_words: int, n_refs: int, n_figures: int,
                - n_refs * REF_WORDS_PER_ENTRY
                - ACK_RESERVE
                - n_figures * FIGURE_WORD_COST
-               - caption_words
-               - front_matter_words)
+               - caption_words)
 
 
 def leaf_allowance(budget: int, shares: dict[str, float] | None = None,
@@ -1107,9 +1105,22 @@ def outline_conformance(draft_md: str, outline_md: str) -> list[Finding]:
     return out
 
 
-def word_count(markdown: str) -> int:
-    """Prose words: headings, figure caption lines and citekey tags do not count as writing."""
+def word_count(markdown: str, front_matter: str = "") -> int:
+    """Prose words: headings, figure caption lines and citekey tags do not count as writing.
+
+    The TITLE is free because it is a heading and headings never count. The AUTHORS block
+    is free too — no venue counts a title or a byline, however inclusive its rule — but it
+    is ordinary text, so pass it as ``front_matter`` when measuring a WRITTEN document.
+
+    In-pipeline this does not arise: every guard measures the assembled manuscript, and the
+    block is rendered later, in ``paper._write``. That is an invariant of ordering rather
+    than of construction, so anything measuring a file on disk must say so explicitly.
+    """
     text = FIGURE_MD_RE.sub(" ", markdown)
+    if front_matter.strip():
+        for line in front_matter.splitlines():
+            if line.strip():
+                text = text.replace(line, " ", 1)
     text = CITE_TAG_RE.sub(" ", text)
     text = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     return len(text.split())

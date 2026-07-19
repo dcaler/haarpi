@@ -517,7 +517,7 @@ structure was approved by the author and the citations are what ground the claim
 
 
 def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
-                  bib_keys: set[str], project_dir: Path | None = None) -> int:
+                  bib_keys: set[str]) -> int:
     """The venue's whole-document limit, less what is not drafted prose.
 
     Shares the arithmetic with the outline stage on purpose: an outline planned against one
@@ -539,15 +539,12 @@ def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
     # words with Results at 17% of a 30% share, reported clean.
     target = guards.word_target(v.word_min, v.word_limit)
     placed = list(guards.OUTLINE_FIGURE_RE.finditer(outline_text))
-    from .context import load_authors_block
-    who = (load_authors_block(project_dir, anonymized=bool(v.anonymized))
-           if project_dir is not None else "")
+    # The title and the author block are not charged: no venue counts them.
     return guards.prose_budget(
         target,
         guards.expected_references(target, len(bib_keys)),
         len(placed),
-        sum(len((m.group("caption") or "").split()) for m in placed),
-        front_matter_words=len(who.split()))
+        sum(len((m.group("caption") or "").split()) for m in placed))
 
 
 def _manuscript_findings(assembled: str, outline_text: str, budget: int,
@@ -633,7 +630,7 @@ def _draft_paper(
 
     # The venue's budget, apportioned the same way the outline apportioned it — one source
     # of arithmetic for both stages, or the outline plans a structure the draft then ignores.
-    budget = _prose_budget(cfg, venue, outline_text, bib_keys, project_dir)
+    budget = _prose_budget(cfg, venue, outline_text, bib_keys)
     leaf_counts = guards.section_leaf_counts(outline_text)
 
     for heading, section_outline in _parse_sections(outline_text):
