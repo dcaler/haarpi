@@ -842,7 +842,7 @@ def expected_references(total_words: int, corpus_size: int) -> int:
 
 
 def prose_budget(total_words: int, n_refs: int, n_figures: int,
-                 caption_words: int = 0) -> int:
+                 caption_words: int = 0, front_matter_words: int = 0) -> int:
     """The words left for writing, once the un-writable parts of the document are paid for.
 
     A venue that counts "inclusive of figures, tables, notes, references and appendices"
@@ -852,6 +852,10 @@ def prose_budget(total_words: int, n_refs: int, n_figures: int,
     ``total_words`` is the length the document should COME OUT AT — ``word_target``, not
     the venue's maximum, wherever the venue states a range.
 
+    ``front_matter_words`` is the authors-and-affiliations block: rendered at write time
+    from the manifest, never drafted, and charged to an inclusive limit exactly like the
+    reference list.
+
     ``n_refs`` is the count the BIBLIOGRAPHY will hold — see ``expected_references``, not
     the size of the corpus the litreview gathered.
     """
@@ -859,7 +863,8 @@ def prose_budget(total_words: int, n_refs: int, n_figures: int,
                - n_refs * REF_WORDS_PER_ENTRY
                - ACK_RESERVE
                - n_figures * FIGURE_WORD_COST
-               - caption_words)
+               - caption_words
+               - front_matter_words)
 
 
 def leaf_allowance(budget: int, shares: dict[str, float] | None = None,
@@ -1127,6 +1132,34 @@ def over_budget(markdown: str, budget: int, tolerance: float = 0.05) -> list[Fin
         f"This manuscript runs {n} words of prose against a budget of {budget}. Cut "
         f"{n - budget} words. Tighten the longest subsections first; do not drop a "
         f"[@citekey], a figure, or a subsection the outline names.")]
+
+
+def authorship(markdown: str, expected: str, anonymized: bool = False) -> list[Finding]:
+    """The author block is present, and absent where it must be. PHASE: draft.
+
+    Two failures, opposite and both silent. An anonymized venue that receives a named
+    manuscript is a desk reject on a rule the CFP stated plainly. A named venue that
+    receives an unnamed manuscript looks like a tooling accident, because it is one.
+    """
+    names = [ln for ln in expected.splitlines() if ln.strip()][:1]
+    if anonymized:
+        leaked = [n for n in names if n and n in markdown]
+        if leaked:
+            return [Finding(
+                "identity-leak", "front matter",
+                "This venue requires an anonymized submission and the manuscript names "
+                "its authors. Remove the author block, and any self-identifying phrasing "
+                "with it.")]
+        return []
+    if not expected.strip():
+        return []
+    if names and names[0] not in markdown:
+        return [Finding(
+            "missing-authors", "front matter",
+            "The manuscript does not carry the author block recorded for this project. "
+            "It is rendered under the title at write time — check the project's author "
+            "list with `haarpi authors`.")]
+    return []
 
 
 def under_budget(markdown: str, budget: int, tolerance: float = 0.10) -> list[Finding]:

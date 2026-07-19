@@ -361,6 +361,32 @@ class Figure(NamedTuple):
 AUTHOR_FIGURES_FILE = "figures.yaml"
 
 
+def load_authors_block(project_dir: Path, anonymized: bool = False) -> str:
+    """The authors-and-affiliations block for this project, or "".
+
+    Authorship is project-level and lives in haarpi.yaml, above every stage — a co-author
+    who joins after the one-pager circulates may trigger a re-think that regenerates the
+    litreview, the build, the experiments and every document below them, and the author
+    list must outlive all of it. Read at RENDER time so that list is the only place it is
+    recorded; a name in prose is lost at the next major revision.
+
+    Returns "" outside a HAARPi project: raconteur runs standalone, and a paper written by
+    a tool with no manifest simply has no recorded authors. It never invents one.
+    """
+    try:
+        from haarpi import project as hproject
+    except ImportError:
+        return ""
+    root = hproject.find_root(project_dir)
+    if root is None:
+        return ""
+    try:
+        return hproject.authors_block(hproject.load_manifest(root), anonymized=anonymized)
+    except Exception as e:  # noqa: BLE001 — a malformed manifest must not fail the render
+        log(f"[warn] could not read the author list ({e}) — writing without one")
+        return ""
+
+
 def load_author_figures(project_dir: Path) -> list[Figure]:
     """Author-supplied illustrations from paper/figures/figures.yaml.
 

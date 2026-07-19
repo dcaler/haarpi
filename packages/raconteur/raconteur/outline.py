@@ -148,6 +148,31 @@ _CREDIT_ROLES = [
     "Writing – review & editing",
 ]
 
+def _credit_authors(project_dir: Path) -> str:
+    """The recorded authors, as the names the CRediT statement must use.
+
+    Supplies NAMES only. Role assignment stays the author's — the tool cannot know who
+    contributed what, and a plausible guess at it is worse than a blank. Before this, the
+    names lived only in prose the reviewer typed into an annotated .docx, which a major
+    revision regenerates; the list is now the one place they are recorded.
+    """
+    from .context import load_authors_block  # noqa: F401 — same module, keeps imports local
+    try:
+        from haarpi import project as hproject
+    except ImportError:
+        return ""
+    root = hproject.find_root(project_dir)
+    if root is None:
+        return ""
+    people = hproject.authors(hproject.load_manifest(root))
+    if not people:
+        return ""
+    names = "\n".join(f"  - {a['name']}: " for a in people)
+    return ("  Then, below the taxonomy, one bullet per author using EXACTLY these "
+            "names, in this order, each followed by a colon and NOTHING else — the "
+            "author assigns the roles:\n" + names)
+
+
 _DRAFT_PROMPT = """\
 Create a detailed outline for an academic paper. Use the structural analysis \
 below to derive all section and subsection structure from this paper's actual \
@@ -216,6 +241,7 @@ bullets reproduce EXACTLY the following CRediT contributor-role taxonomy, one \
 role per bullet, as the author's reference for assigning contributions. Do not \
 invent contributor names, do not assign any role, do not omit or reword a role:
 {credit_roles}
+{credit_authors}
 - End with an unnumbered "## References" heading with no bullets (the \
 bibliography is rendered at draft time)
 - Do not include appendices
@@ -754,6 +780,7 @@ def _outline_fresh(
             narrative_section=narrative_section,
             litrev_section=litrev_section,
             credit_roles="\n".join(f"  - {r}" for r in _CREDIT_ROLES),
+            credit_authors=_credit_authors(project_dir),
         ),
         system=_SYSTEM,
         num_ctx=16384,
@@ -862,7 +889,11 @@ def _revise(
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
            venue: str = "") -> None:
-    output = f"# {cfg.title}\n\n{text.strip()}\n"
+    from .context import load_authors_block
+    v = cfg.venue(venue) if venue else None
+    who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
+    head = f"# {cfg.title}\n\n" + (f"{who}\n\n" if who else "")
+    output = f"{head}{text.strip()}\n"
     out_path = paper_dir / major_outline_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(output, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")

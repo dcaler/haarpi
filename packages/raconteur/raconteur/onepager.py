@@ -371,7 +371,13 @@ def _assemble(beats: list[tuple[str, str]]) -> str:
 
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) -> None:
-    output = f"# {cfg.title} — one-pager\n\n{text.strip()}\n"
+    # The one-pager is the document that CIRCULATES — it is how a collaborator comes
+    # aboard in the first place, so it is the last document that should fail to name them.
+    # Never anonymized: it is not a submission, and it has no venue.
+    from .context import load_authors_block
+    who = load_authors_block(project_dir)
+    head = f"# {cfg.title} — one-pager\n\n" + (f"{who}\n\n" if who else "")
+    output = f"{head}{text.strip()}\n"
     out_path = paper_dir / major_onepager_name(cfg.short_title, "md")
     out_path.write_text(output, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")

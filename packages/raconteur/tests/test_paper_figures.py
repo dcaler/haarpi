@@ -51,7 +51,10 @@ def test_write_passes_a_resource_path_so_figures_resolve(tmp_path, monkeypatch):
 
     monkeypatch.setattr(paper, "to_docx", fake_to_docx)
     (tmp_path / "paper").mkdir()
-    cfg = types.SimpleNamespace(short_title="Chords", litrev_dir="")
+    # _write consults the venue to decide whether the author block is anonymized away,
+    # so the stub needs the lookup a real ProjectConfig provides.
+    cfg = types.SimpleNamespace(short_title="Chords", litrev_dir="",
+                                venue=lambda name: None)
     paper._write(tmp_path, cfg, tmp_path / "paper", "# T\n\n## Intro\n\ntext\n",
                  venue="css2026")
     assert captured["resource_path"] == tmp_path

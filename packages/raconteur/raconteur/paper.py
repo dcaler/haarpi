@@ -433,8 +433,39 @@ def _assemble(title: str, abstract: str, sections: list[tuple[str, str]]) -> str
     return "\n".join(parts)
 
 
+def _insert_authors(text: str, block: str) -> str:
+    """Put the author block directly under the title.
+
+    The manuscript arrives with its own "# Title" line, so this inserts rather than
+    prepends — a block above the title is a block in the wrong place, and a manuscript
+    with no title line gets it at the top, which is the only sensible fallback.
+    """
+    if not block:
+        return text
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            rest = lines[i + 1:]
+            while rest and not rest[0].strip():
+                rest.pop(0)
+            return "\n".join(lines[:i + 1] + ["", block, ""] + rest)
+    return f"{block}\n\n{text}"
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
            venue: str = "") -> None:
+    from .context import load_authors_block
+    v = cfg.venue(venue) if venue else None
+    # A double-blind venue gets no block at all. This is the whole reason authorship is
+    # data rather than prose: identity can be stripped on the venue's say-so, and prose
+    # written by an earlier stage cannot be.
+    anon = bool(v and v.anonymized)
+    who = load_authors_block(project_dir, anonymized=anon)
+    text = _insert_authors(text, who)
+    # Checked after insertion, not during the repair loop: the block is rendered here, so
+    # until this point the manuscript is legitimately without one.
+    for f in guards.authorship(text, load_authors_block(project_dir), anonymized=anon):
+        log(f"[warn] {f.kind} — {f.imperative}")
     out_path = paper_dir / major_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(text, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
@@ -486,7 +517,7 @@ structure was approved by the author and the citations are what ground the claim
 
 
 def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
-                  bib_keys: set[str]) -> int:
+                  bib_keys: set[str], project_dir: Path | None = None) -> int:
     """The venue's whole-document limit, less what is not drafted prose.
 
     Shares the arithmetic with the outline stage on purpose: an outline planned against one
@@ -508,11 +539,15 @@ def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
     # words with Results at 17% of a 30% share, reported clean.
     target = guards.word_target(v.word_min, v.word_limit)
     placed = list(guards.OUTLINE_FIGURE_RE.finditer(outline_text))
+    from .context import load_authors_block
+    who = (load_authors_block(project_dir, anonymized=bool(v.anonymized))
+           if project_dir is not None else "")
     return guards.prose_budget(
         target,
         guards.expected_references(target, len(bib_keys)),
         len(placed),
-        sum(len((m.group("caption") or "").split()) for m in placed))
+        sum(len((m.group("caption") or "").split()) for m in placed),
+        front_matter_words=len(who.split()))
 
 
 def _manuscript_findings(assembled: str, outline_text: str, budget: int,
@@ -598,7 +633,7 @@ def _draft_paper(
 
     # The venue's budget, apportioned the same way the outline apportioned it — one source
     # of arithmetic for both stages, or the outline plans a structure the draft then ignores.
-    budget = _prose_budget(cfg, venue, outline_text, bib_keys)
+    budget = _prose_budget(cfg, venue, outline_text, bib_keys, project_dir)
     leaf_counts = guards.section_leaf_counts(outline_text)
 
     for heading, section_outline in _parse_sections(outline_text):
