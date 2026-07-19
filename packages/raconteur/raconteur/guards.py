@@ -791,10 +791,13 @@ DEFAULT_SECTION_SHARES: dict[str, float] = {
     "conclusion": 0.07,
 }
 
-# What a rendered figure costs the venue's budget beyond its caption. CFPs that count
-# "inclusive of all figures" are counting page space, which a caption's word count alone
-# does not capture.
-FIGURE_WORD_COST = 100
+# What a rendered figure costs the venue's budget beyond its caption. Zero: a venue that
+# counts WORDS counts the caption, and the caption is charged separately already. The
+# previous 100 was an estimate of what a figure costs in page SPACE — a real cost at a
+# page-limited venue, but not one a word count measures, and across five figures it was
+# spending 12% of the document on an assumption no CFP had stated. A page limit is a
+# different calculation, not a fudge factor here.
+FIGURE_WORD_COST = 0
 REF_WORDS_PER_ENTRY = 21
 ACK_RESERVE = 40
 
@@ -1207,6 +1210,7 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
     if budget <= 0 or not outline_md.strip():
         return []
     counts = section_leaf_counts(outline_md)
+    by_kind = kind_leaf_counts(outline_md)
     out: list[Finding] = []
     for heading, body in _sections_with_bodies(draft_md):
         if is_references(heading) or is_acknowledgements(heading):
@@ -1214,7 +1218,9 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
         leaves_here = counts.get(heading)
         if not leaves_here:
             continue
-        lo, hi = section_target(heading, budget, leaves_here, shares)
+        k = "conclusion" if _is_conclusion(heading) else section_kind(heading)
+        lo, hi = section_target(heading, budget, leaves_here, shares,
+                                kind_leaves=by_kind.get(k))
         if not lo:
             continue
         n = word_count(body)
@@ -1247,8 +1253,26 @@ def _sections_with_bodies(markdown: str) -> list[tuple[str, str]]:
     return [(h, "\n".join(b)) for h, b in out]
 
 
+def kind_leaf_counts(outline_md: str) -> dict[str, int]:
+    """Section KIND → how many subsections the whole outline gives it.
+
+    The denominator ``section_target`` divides a share by. Introduction and Background are
+    both "litrev": charging each of them the full 14% share hands that kind 28% of the
+    paper, and the shares stop summing to the document. This is the arithmetic behind the
+    defect observed by hand — Introduction and Background took 36% of a manuscript
+    budgeted for 28% — which the per-section band would otherwise have called correct.
+    """
+    heads = parse_outline(outline_md)
+    counts: dict[str, int] = {}
+    for leaf in leaves(heads):
+        k = ancestor_kind(heads, leaf)
+        counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
 def section_target(heading: str, budget: int, leaves_here: int,
-                   shares: dict[str, float] | None = None) -> tuple[int, int]:
+                   shares: dict[str, float] | None = None,
+                   kind_leaves: int | None = None) -> tuple[int, int]:
     """The word band for one subsection of THIS section, from the venue budget.
 
     ``heading`` is the SECTION heading ("3. Results"), never a subsection's own name —
@@ -1256,6 +1280,11 @@ def section_target(heading: str, budget: int, leaves_here: int,
     which is how a uniform allocation quietly writes the contribution in 18% of the paper.
     ``leaves_here`` is how many subsections this section actually has, so the section's
     share divides over its real width rather than an estimate of it.
+
+    ``kind_leaves`` is how many subsections the whole document gives this KIND — see
+    ``kind_leaf_counts``. Two sections of one kind (Introduction and Background are both
+    "litrev") split that kind's share between them rather than each claiming all of it.
+    Defaults to ``leaves_here``, which is right whenever the kind has only one section.
 
     Returns (low, high); (0, 0) when the venue states no limit and length is the writer's
     call — writing to an assumed length is its own failure.
@@ -1265,7 +1294,7 @@ def section_target(heading: str, budget: int, leaves_here: int,
     sh = shares or DEFAULT_SECTION_SHARES
     k = "conclusion" if _is_conclusion(heading) else section_kind(heading)
     share = sh.get(k, sh.get("other", 0.2))
-    per = budget * share / leaves_here
+    per = budget * share / max(1, kind_leaves or leaves_here)
     return (max(80, int(per * 0.8)), max(120, int(per * 1.2)))
 
 

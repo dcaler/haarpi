@@ -632,6 +632,9 @@ def _draft_paper(
     # of arithmetic for both stages, or the outline plans a structure the draft then ignores.
     budget = _prose_budget(cfg, venue, outline_text, bib_keys)
     leaf_counts = guards.section_leaf_counts(outline_text)
+    # Two sections of one kind (Introduction and Background are both "litrev") split that
+    # kind's share rather than each claiming all of it.
+    kind_counts = guards.kind_leaf_counts(outline_text)
 
     for heading, section_outline in _parse_sections(outline_text):
         if _is_references(heading) or _is_abstract(heading):
@@ -645,8 +648,11 @@ def _draft_paper(
             drafted.append((heading, _ack_passthrough(section_outline)))
             continue
         ctx = _context_for_section(heading, litrev, code, results)
+        k = ("conclusion" if guards._is_conclusion(heading)
+             else guards.section_kind(heading))
         band = guards.section_target(heading, budget, leaf_counts.get(heading, 1),
-                                     cfg.section_shares or None)
+                                     cfg.section_shares or None,
+                                     kind_leaves=kind_counts.get(k))
         lo, hi = band if band[0] else _DEFAULT_BAND
         log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words per subsection)")
         text = brain.coordinator(

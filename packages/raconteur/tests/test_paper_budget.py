@@ -200,3 +200,34 @@ def test_a_section_with_subsections_is_not_itself_a_conformance_item():
     outline = "## 5. Discussion\n### 5.1 A\n- b\n"
     draft = "## 5. Discussion\n\n### 5.1 A\n\nprose\n"
     assert guards.outline_conformance(draft, outline) == []
+
+
+def test_two_sections_of_one_kind_split_that_kinds_share():
+    """Introduction and Background are both "litrev". Each claiming the full 14% hands that
+    kind 28% of the paper and the shares stop summing to the document — the arithmetic
+    behind Introduction and Background taking 36% of a manuscript budgeted for 28%."""
+    o = ("## 1. Introduction\n### 1.1 A\n- b\n### 1.2 B\n- b\n"
+         "## 2. Background\n### 2.1 C\n- b\n### 2.2 D\n- b\n")
+    assert guards.kind_leaf_counts(o) == {"litrev": 4}
+    intro = guards.section_target("1. Introduction", 3493, 2, kind_leaves=4)
+    bg = guards.section_target("2. Background", 3493, 2, kind_leaves=4)
+    # 14% of 3493 is 489; four leaves of one kind split it, not two lots of two
+    assert intro == bg
+    assert abs((intro[0] + intro[1]) / 2 * 4 - 3493 * 0.14) < 5
+
+
+def test_the_bands_sum_to_the_budget_not_past_it():
+    """Shares total 1.0, so the bands' midpoints must total the budget. They summed to
+    3,972 against 3,493 while each kind was charged once per section."""
+    o = ("## 1. Introduction\n### 1.1 A\n- b\n## 2. Background\n### 2.1 B\n- b\n"
+         "## 3. Methods\n### 3.1 C\n- b\n## 4. Results\n### 4.1 D\n- b\n"
+         "## 5. Discussion\n### 5.1 E\n- b\n## 6. Conclusion\n- b\n")
+    budget = 3493
+    counts, by_kind = guards.section_leaf_counts(o), guards.kind_leaf_counts(o)
+    total = 0.0
+    for h, n in counts.items():
+        k = "conclusion" if guards._is_conclusion(h) else guards.section_kind(h)
+        lo, hi = guards.section_target(h, budget, n, kind_leaves=by_kind.get(k))
+        total += (lo + hi) / 2 * n
+    # abstract's 6% share has no section here, so the rest total 94% of the budget
+    assert abs(total - budget * 0.94) < 30

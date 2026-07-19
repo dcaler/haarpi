@@ -116,13 +116,17 @@ def test_a_misleveled_conclusion_is_not_charged_to_discussion():
 
 # ── the word budget ───────────────────────────────────────────────────────────
 
-def test_the_budget_pays_for_references_and_figures_first():
+def test_the_budget_pays_for_references_and_captions_first():
     """A venue counting "inclusive of figures, tables, notes and references" is budgeting
-    the whole document; handing the writer the gross limit spends the bibliography twice."""
+    the whole document; handing the writer the gross limit spends the bibliography twice.
+
+    A figure itself costs nothing: a venue counting WORDS counts the caption, which is
+    already charged. Charging a figure for the page space it occupies was an assumption no
+    CFP had stated, and across five figures it spent 12% of the document."""
     gross = 5000
     net = guards.prose_budget(gross, n_refs=26, n_figures=4, caption_words=125)
-    assert net < gross - 26 * guards.REF_WORDS_PER_ENTRY
-    assert net == 3889
+    assert net == gross - 26 * guards.REF_WORDS_PER_ENTRY - guards.ACK_RESERVE - 125
+    assert net == 4289
 
 
 def test_an_outline_too_wide_for_its_venue_is_caught():
@@ -240,7 +244,7 @@ def test_the_reference_reserve_is_the_bibliography_not_the_corpus():
 
 
 def test_the_budget_matches_the_hand_analysis():
-    """The whole chain, on css2026's real numbers: 5,000 inclusive → 14 subsections."""
+    """The whole chain, on css2026's real numbers: 5,000 inclusive → 15 subsections."""
     budget = guards.prose_budget(5000, guards.expected_references(5000, 86), 4, 125)
-    assert 3800 <= budget <= 3900
-    assert sum(guards.leaf_allowance(budget).values()) == 14
+    assert 4200 <= budget <= 4300
+    assert sum(guards.leaf_allowance(budget).values()) == 15
