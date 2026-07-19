@@ -532,9 +532,11 @@ def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str) -> 
     figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
             if cfg.results_dir else []) + load_author_figures(project_dir)
     corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
+    # The length to AIM AT, not the venue's ceiling — see guards.word_target.
+    target = guards.word_target(v.word_min, v.word_limit) if v else 0
     budget = guards.prose_budget(
-        v.word_limit, guards.expected_references(v.word_limit, corpus), len(figs),
-        sum(len(f.caption.split()) for f in figs)) if (v and v.word_limit) else 0
+        target, guards.expected_references(target, corpus), len(figs),
+        sum(len(f.caption.split()) for f in figs)) if target else 0
     return {
         "budget": budget,
         "expected_figures": {f.path: f.origin for f in figs} or None,
@@ -612,17 +614,20 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str
     if not v or not v.word_limit:
         return ""
     corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
-    n_refs = guards.expected_references(v.word_limit, corpus)
+    target = guards.word_target(v.word_min, v.word_limit)
+    n_refs = guards.expected_references(target, corpus)
     figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
             if cfg.results_dir else []) + load_author_figures(project_dir)
     caption_words = sum(len(f.caption.split()) for f in figs)
-    budget = guards.prose_budget(v.word_limit, n_refs, len(figs), caption_words)
+    budget = guards.prose_budget(target, n_refs, len(figs), caption_words)
     allow = guards.leaf_allowance(budget, cfg.section_shares or None)
     per = ", ".join(f"{k} {n}" for k, n in allow.items())
+    stated = (f"{v.word_min}–{v.word_limit} words; aim at {target}"
+              if v.word_min else f"{v.word_limit} words")
     return (
         "Length budget (this venue counts the WHOLE document, references and figures "
         "included):\n"
-        f"- Total limit: {v.word_limit} words. After an estimated {n_refs} references "
+        f"- Total: {stated}. After an estimated {n_refs} references "
         f"(of {corpus} in the corpus), "
         f"{len(figs)} figure(s) and acknowledgements, about {budget} words remain for prose.\n"
         f"- That affords roughly {sum(allow.values())} subsections at ~280 words each, "

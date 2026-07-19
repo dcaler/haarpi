@@ -117,7 +117,86 @@ def test_a_venue_with_no_limit_falls_back_to_the_old_band():
     assert paper._DEFAULT_BAND == (150, 300)
 
 
-def test_the_condense_pass_may_not_drop_citations_figures_or_sections():
-    p = paper._CONDENSE_PROMPT
+def test_the_rebalance_pass_may_not_drop_citations_figures_or_sections():
+    p = paper._REBALANCE_PROMPT
     assert "[@citekey]" in p and "![" in p
     assert "subsection" in p and "heading" in p
+
+
+def test_the_rebalance_pass_can_grow_a_section_not_only_cut_it():
+    """It was a condense pass: it only ever knew how to remove words, so an under-written
+    Results section had no repair available to it."""
+    p = paper._REBALANCE_PROMPT
+    assert "GROW" in p and "SHRINK" in p
+    # growing must not become padding — that trades a thin paper for a verbose one
+    assert "Never pad" in p
+
+
+# ── a range is two numbers, and both of them bind ─────────────────────────────
+
+def test_the_target_sits_inside_a_stated_range():
+    """css2026 asks for 3,000–5,000. 60% of the way up is 4,200."""
+    assert guards.word_target(3000, 5000, fraction=0.6) == 4200
+
+
+def test_a_venue_with_only_a_maximum_targets_that_maximum():
+    """Most CFPs state a cap and nothing else; inventing a floor under one would write a
+    shorter paper than the venue asked for."""
+    assert guards.word_target(None, 8000) == 8000
+
+
+def test_a_manuscript_short_of_its_target_is_caught():
+    """The defect the ceiling-only budget allowed: comfortably under, and under-written."""
+    assert [f.kind for f in guards.under_budget("word " * 2000, 3000)] == ["under-budget"]
+
+
+def test_a_manuscript_at_its_target_is_silent_in_both_directions():
+    doc = "word " * 2950
+    assert guards.over_budget(doc, 3000) == [] and guards.under_budget(doc, 3000) == []
+
+
+def test_no_venue_limit_means_no_shortness_claim():
+    assert guards.under_budget("word " * 10, 0) == []
+
+
+# ── per-section shape ─────────────────────────────────────────────────────────
+
+def test_a_section_written_below_its_share_is_caught():
+    """Results at 17% of a paper that budgeted it 30% — legal on every whole-document
+    check, and the section carrying the contribution is the thinnest in the paper."""
+    outline = "## 4. Results\n### 4.1 A\n- b\n### 4.2 B\n- b\n### 4.3 C\n- b\n"
+    draft = "## 4. Results\n\n" + "word " * 300
+    assert [f.kind for f in guards.section_lengths(draft, outline, 3688)] == ["section-thin"]
+
+
+def test_a_section_written_above_its_share_is_caught():
+    outline = "## 2. Background\n### 2.1 A\n- b\n### 2.2 B\n- b\n"
+    draft = "## 2. Background\n\n" + "word " * 1200
+    assert [f.kind for f in guards.section_lengths(draft, outline, 3688)] == ["section-fat"]
+
+
+def test_boilerplate_sections_have_no_share_to_miss():
+    outline = "## 4. Results\n### 4.1 A\n- b\n"
+    draft = "## References\n\nlots\n\n## Acknowledgements\n\n" + "word " * 400
+    assert guards.section_lengths(draft, outline, 3688) == []
+
+
+# ── conformance sees whole sections, not only subsections ─────────────────────
+
+def test_a_dropped_section_with_no_subsections_is_caught():
+    """"## 6. Conclusion" carries its bullets directly. The draft stopped after 5.4 and
+    conformance reported clean, because a childless section was invisible to a check that
+    only ever compared level-3 headings."""
+    outline = "## 5. Discussion\n### 5.1 A\n- b\n## 6. Conclusion\n- a beat\n"
+    draft = "## 5. Discussion\n\n### 5.1 A\n\nprose\n"
+    findings = guards.outline_conformance(draft, outline)
+    assert [f.kind for f in findings] == ["dropped-section"]
+    assert "6. Conclusion" in findings[0].where
+
+
+def test_a_section_with_subsections_is_not_itself_a_conformance_item():
+    """Otherwise every parent heading doubles as a requirement and a draft that has all
+    the subsections still fails for the container that holds them."""
+    outline = "## 5. Discussion\n### 5.1 A\n- b\n"
+    draft = "## 5. Discussion\n\n### 5.1 A\n\nprose\n"
+    assert guards.outline_conformance(draft, outline) == []

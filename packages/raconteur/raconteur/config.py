@@ -43,7 +43,8 @@ class VenueConfig:
     origin: str = "raconteur"          # author | raconteur
     extends: str = ""                  # this venue's paper derives from that venue's paper
     page_limit: int | None = None
-    word_limit: int | None = None
+    word_limit: int | None = None      # the MAXIMUM
+    word_min: int | None = None        # the other end, where the CFP states a range
     citation_style: str = ""
     columns: int | None = None   # unknown until the CFP says
     abstract_limit: int | None = None
@@ -57,7 +58,7 @@ class VenueConfig:
     # The specs a WRITER is shown (format + mandated content). anonymized and the
     # template_* fields are handled apart: the first is a prose directive, the last
     # two feed the human template-fetch task, not the draft.
-    SPEC_FIELDS = ("page_limit", "word_limit", "citation_style", "columns",
+    SPEC_FIELDS = ("page_limit", "word_min", "word_limit", "citation_style", "columns",
                    "abstract_limit", "required_sections", "format_notes")
 
     @property

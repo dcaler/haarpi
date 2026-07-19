@@ -806,17 +806,42 @@ ACK_RESERVE = 40
 # have demanded an outline half the size the venue actually affords.
 WORDS_PER_CITATION = 175
 
+# Where in a venue's stated range the paper should land. A range is not a ceiling: a CFP
+# that says 3,000–5,000 is describing the shape of a paper it wants, and both ends carry
+# information. Writing to the maximum leaves nothing for a reference list that runs longer
+# than estimated; writing to the minimum submits a paper that looks thin next to its peers.
+TARGET_FRACTION = 0.6
 
-def expected_references(word_limit: int, corpus_size: int) -> int:
+
+def word_target(word_min: int | None, word_max: int | None,
+                fraction: float = TARGET_FRACTION) -> int:
+    """The whole-document length the paper should AIM AT, from the venue's range.
+
+    A single limit is a ceiling and stays one — with no floor there is no range to sit
+    inside, and the target is the limit. With both ends the target sits ``fraction`` of the
+    way up, so the writer is handed a number to hit rather than a bound to duck under. The
+    difference is not cosmetic: a budget derived from a ceiling is satisfied by any short
+    paper, which is how a Results section gets written at half its share and nothing
+    objects.
+    """
+    lo, hi = word_min or 0, word_max or 0
+    if not hi:
+        return lo
+    if not lo or lo >= hi:
+        return hi
+    return round(lo + (hi - lo) * fraction)
+
+
+def expected_references(total_words: int, corpus_size: int) -> int:
     """How many sources a paper this long will plausibly cite.
 
     Bounded by the corpus — you cannot cite what you have not read — but not equal to it.
     """
-    est = round(word_limit / WORDS_PER_CITATION) if word_limit else 0
+    est = round(total_words / WORDS_PER_CITATION) if total_words else 0
     return min(corpus_size, est) if corpus_size else est
 
 
-def prose_budget(word_limit: int, n_refs: int, n_figures: int,
+def prose_budget(total_words: int, n_refs: int, n_figures: int,
                  caption_words: int = 0) -> int:
     """The words left for writing, once the un-writable parts of the document are paid for.
 
@@ -824,10 +849,13 @@ def prose_budget(word_limit: int, n_refs: int, n_figures: int,
     is budgeting the whole document. Handing the writer the gross limit invites it to
     spend the reference list twice.
 
+    ``total_words`` is the length the document should COME OUT AT — ``word_target``, not
+    the venue's maximum, wherever the venue states a range.
+
     ``n_refs`` is the count the BIBLIOGRAPHY will hold — see ``expected_references``, not
     the size of the corpus the litreview gathered.
     """
-    return max(0, word_limit
+    return max(0, total_words
                - n_refs * REF_WORDS_PER_ENTRY
                - ACK_RESERVE
                - n_figures * FIGURE_WORD_COST
@@ -1010,6 +1038,37 @@ def _norm_heading(h: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", h.lower()).strip()
 
 
+def _conformance_headings(markdown: str) -> list[str]:
+    """Every heading a draft is accountable for: the subsections, plus any level-2 section
+    that has no subsections of its own.
+
+    Comparing subsections alone made childless sections invisible. "## 6. Conclusion" is a
+    whole section with its bullets directly under it; the css2026 draft simply stopped after
+    5.4 and the conformance check reported clean, because a section with nothing at level 3
+    contributed nothing to either side of the comparison.
+    """
+    out: list[str] = []
+    pending: str | None = None       # a level-2 heading not yet seen to have children
+    for raw in markdown.splitlines():
+        s = raw.lstrip()
+        if not s.startswith("#"):
+            continue
+        level = len(s) - len(s.lstrip("#"))
+        text = s[level:].strip()
+        if not text:
+            continue
+        if level <= 2:
+            if pending is not None:
+                out.append(pending)
+            pending = text if level == 2 else None
+        else:
+            pending = None
+            out.append(text)
+    if pending is not None:
+        out.append(pending)
+    return out
+
+
 def outline_conformance(draft_md: str, outline_md: str) -> list[Finding]:
     """Sections the draft invented or dropped relative to its outline.
 
@@ -1019,9 +1078,9 @@ def outline_conformance(draft_md: str, outline_md: str) -> list[Finding]:
     """
     if not outline_md.strip():
         return []
-    want = [h for h in _heading_texts(outline_md)
+    want = [h for h in _conformance_headings(outline_md)
             if not (is_references(h) or is_acknowledgements(h) or is_abstract(h))]
-    got = [h for h in _heading_texts(draft_md)
+    got = [h for h in _conformance_headings(draft_md)
            if not (is_references(h) or is_acknowledgements(h) or is_abstract(h))]
     want_n = {_norm_heading(h): h for h in want}
     got_n = {_norm_heading(h): h for h in got}
@@ -1068,6 +1127,80 @@ def over_budget(markdown: str, budget: int, tolerance: float = 0.05) -> list[Fin
         f"This manuscript runs {n} words of prose against a budget of {budget}. Cut "
         f"{n - budget} words. Tighten the longest subsections first; do not drop a "
         f"[@citekey], a figure, or a subsection the outline names.")]
+
+
+def under_budget(markdown: str, budget: int, tolerance: float = 0.10) -> list[Finding]:
+    """The other half of a range. PHASE: draft.
+
+    A venue asking for 3,000–5,000 words is not satisfied by 3,100 any more than by 5,900,
+    and a budget checked in one direction only is satisfied by any paper short enough. The
+    css2026 draft came in comfortably under its ceiling with Results written at 17% of the
+    manuscript against a 30% share — under-length in exactly the place the paper's
+    contribution lives, and nothing measured it.
+    """
+    if budget <= 0:
+        return []
+    n = word_count(markdown)
+    if n >= budget * (1 - tolerance):
+        return []
+    return [Finding(
+        "under-budget", "manuscript",
+        f"This manuscript runs {n} words of prose against a target of {budget}. Add "
+        f"{budget - n} words of substance — not padding. Expand the subsections furthest "
+        f"below their band first; do not add new claims, values, or sources.")]
+
+
+def section_lengths(draft_md: str, outline_md: str, budget: int,
+                    shares: dict[str, float] | None = None) -> list[Finding]:
+    """Sections written outside the band their share affords. PHASE: draft.
+
+    ``section_target`` already computes each section's band and the draft prompt is handed
+    it, but nothing checked the result, so the bands were advisory. They are what keeps the
+    paper's shape honest: without enforcement Introduction and Background ran to 36% of a
+    manuscript budgeted for 28% while Results took 17% of a 30% share. The whole-document
+    total can be perfectly legal while the paper is about the wrong thing.
+    """
+    if budget <= 0 or not outline_md.strip():
+        return []
+    counts = section_leaf_counts(outline_md)
+    out: list[Finding] = []
+    for heading, body in _sections_with_bodies(draft_md):
+        if is_references(heading) or is_acknowledgements(heading):
+            continue
+        leaves_here = counts.get(heading)
+        if not leaves_here:
+            continue
+        lo, hi = section_target(heading, budget, leaves_here, shares)
+        if not lo:
+            continue
+        n = word_count(body)
+        low, high = lo * leaves_here, hi * leaves_here
+        if n < low:
+            out.append(Finding(
+                "section-thin", heading,
+                f'"{heading}" runs {n} words against {low}–{high} for its share of the '
+                f"paper. Develop it by about {low - n} words, following its outline "
+                f"bullets — this section is under-written relative to its importance."))
+        elif n > high:
+            out.append(Finding(
+                "section-fat", heading,
+                f'"{heading}" runs {n} words against {low}–{high} for its share of the '
+                f"paper. Tighten it by about {n - high} words so the space goes to the "
+                f"sections carrying the contribution."))
+    return out
+
+
+def _sections_with_bodies(markdown: str) -> list[tuple[str, str]]:
+    """Level-2 sections as (heading, everything under it up to the next level-2)."""
+    out: list[tuple[str, list[str]]] = []
+    for raw in markdown.splitlines():
+        s = raw.lstrip()
+        level = len(s) - len(s.lstrip("#")) if s.startswith("#") else 0
+        if level == 2 and s[2:].strip():
+            out.append((s[2:].strip(), []))
+        elif out:
+            out[-1][1].append(raw)
+    return [(h, "\n".join(b)) for h, b in out]
 
 
 def section_target(heading: str, budget: int, leaves_here: int,

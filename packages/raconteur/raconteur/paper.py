@@ -460,20 +460,26 @@ def _bib_block(bib_summary: str) -> str:
     return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
 
 
-_CONDENSE_PROMPT = """\
-This manuscript is over its venue's word budget. Cut it down.
+_REBALANCE_PROMPT = """\
+This manuscript does not yet fit the shape its venue and outline call for. Fix it.
 
 {findings}
 
 Manuscript:
 {text}
 
+The paper is currently {actual} words of prose against a target of {budget}.
+
 Rules:
-- Cut {excess} words. Tighten prose: remove hedging, redundant restatement, and \
+- Where a section must SHRINK: tighten prose — remove hedging, redundant restatement, and \
 sentences that repeat what an adjacent sentence already says
+- Where a section must GROW: develop what its outline bullets already promise — draw out \
+the reasoning, state the mechanism, interpret the evidence already present. Never pad, \
+never restate, never introduce new claims, values, or sources
+- The total matters less than the shape: a section carrying the paper's contribution must \
+not be the thinnest one in it
 - Do NOT drop a [@citekey], a figure (`![…](…)`), a heading, or a subsection — the \
 structure was approved by the author and the citations are what ground the claims
-- Do NOT introduce new claims, values, or sources
 - Preserve every heading exactly as written, at the same level
 - Output the complete revised manuscript and nothing else — no preamble
 """
@@ -497,18 +503,39 @@ def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
     v = cfg.venue(venue) if venue else None
     if not v or not v.word_limit:
         return 0
+    # The length to AIM AT. Where the venue states a range, deriving the budget from the
+    # ceiling makes it a bound the draft can satisfy by being short — and it was: 3,552
+    # words with Results at 17% of a 30% share, reported clean.
+    target = guards.word_target(v.word_min, v.word_limit)
     placed = list(guards.OUTLINE_FIGURE_RE.finditer(outline_text))
     return guards.prose_budget(
-        v.word_limit,
-        guards.expected_references(v.word_limit, len(bib_keys)),
+        target,
+        guards.expected_references(target, len(bib_keys)),
         len(placed),
         sum(len((m.group("caption") or "").split()) for m in placed))
 
 
+def _manuscript_findings(assembled: str, outline_text: str, budget: int,
+                         shares: dict | None = None) -> list:
+    """Everything checkable about the whole document at once.
+
+    Length is checked in BOTH directions and per section, not just as a ceiling on the
+    total. A sum under budget says nothing about shape: the css2026 draft came in at 3,552
+    against 3,688 with Introduction and Background at 36% of a manuscript budgeted for 28%
+    and Results at 17% of a 30% share — every whole-document check green, the paper about
+    the wrong thing.
+    """
+    return (guards.outline_conformance(assembled, outline_text)
+            + guards.over_budget(assembled, budget)
+            + guards.under_budget(assembled, budget)
+            + guards.section_lengths(assembled, outline_text, budget, shares))
+
+
 def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
-                           budget: int, bib_keys: set[str], rounds: int = 2) -> str:
+                           budget: int, bib_keys: set[str], rounds: int = 2,
+                           shares: dict | None = None) -> str:
     """The checks no section can make about itself: did it follow the outline, and does the
-    sum fit the venue.
+    manuscript have the length and the shape the venue and the outline call for.
 
     Every section can sit inside its own band and the manuscript still overrun — that is
     exactly what happened, 19 legal subsections summing to 6,975 words against a 5,000-word
@@ -516,24 +543,22 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
     never named is invisible to a guard that only ever reads one section at a time.
     """
     for n in range(1, rounds + 1):
-        findings = (guards.outline_conformance(assembled, outline_text)
-                    + guards.over_budget(assembled, budget))
+        findings = _manuscript_findings(assembled, outline_text, budget, shares)
         if not findings:
             return assembled
         log(f"[raconteur] manuscript guards ({n}): {len(findings)} finding(s)")
         for f in findings:
             log(f"  · {f.kind} — {f.where}")
-        excess = max(0, guards.word_count(assembled) - budget) if budget else 0
         assembled = brain.coordinator(
-            _CONDENSE_PROMPT.format(
+            _REBALANCE_PROMPT.format(
                 findings="\n".join(f"- {f.imperative}" for f in findings),
                 text=assembled,
-                excess=excess),
+                actual=guards.word_count(assembled),
+                budget=budget),
             system=_SYSTEM,
             num_ctx=16384,
         )
-    remaining = (guards.outline_conformance(assembled, outline_text)
-                 + guards.over_budget(assembled, budget))
+    remaining = _manuscript_findings(assembled, outline_text, budget, shares)
     if remaining:
         log(f"[warn] {len(remaining)} manuscript finding(s) survived {rounds} round(s) "
             f"— shipping anyway:")
@@ -622,7 +647,8 @@ def _draft_paper(
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
     assembled = _assemble(cfg.title, abstract, drafted)
-    assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys)
+    assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys,
+                                       shares=cfg.section_shares or None)
     _write(project_dir, cfg, paper_dir, assembled, venue)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 

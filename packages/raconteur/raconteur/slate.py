@@ -201,12 +201,15 @@ Source page:
 
 Return ONLY a JSON object with exactly these keys, using null for anything the page does \
 not state:
-{{"page_limit": null, "word_limit": null, "abstract_limit": null, "columns": null, \
-"citation_style": null, "required_sections": null, "anonymized": null, \
+{{"page_limit": null, "word_min": null, "word_limit": null, "abstract_limit": null, \
+"columns": null, "citation_style": null, "required_sections": null, "anonymized": null, \
 "template_url": null, "template_kind": null, "format_notes": null}}
 
 - page_limit / word_limit / abstract_limit: integers, for the MAIN submission (not the \
 camera-ready, not the abstract-only track), excluding references if the page says so.
+- word_min: where the page states a RANGE ("3,000–5,000 words", "between 4,000 and 8,000"), \
+the LOWER end — word_limit takes the upper. Null when the page states only a maximum. Both \
+ends matter: a paper is written TO a range, not merely under it.
 - columns: 1 or 2.
 - citation_style: the named style (e.g. "APA", "IEEE", "Chicago author-date"), if stated.
 - required_sections: content the submission MUST contain that a writer would otherwise miss \
@@ -257,7 +260,8 @@ def fetch_specs(venue: VenueConfig, brain, email: str = "") -> VenueConfig:
         value = spec.get(field_name)
         if value in (None, "", 0):
             continue
-        if field_name in ("page_limit", "word_limit", "abstract_limit", "columns"):
+        if field_name in ("page_limit", "word_min", "word_limit", "abstract_limit",
+                          "columns"):
             try:
                 value = int(value)
             except (TypeError, ValueError):
