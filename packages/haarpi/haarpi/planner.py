@@ -587,9 +587,124 @@ def classify(stage: str, check: dict, cfg: dict,
     return plan
 
 
-def run_authors(root: Path, action: str = "list", name: str = "", initials: str = "",
+def _print_authors(m: project.Manifest) -> None:
+    people = project.authors(m)
+    if not people:
+        print("  (none recorded)")
+        return
+    corr = project.corresponding_authors(m)
+    for i, a in enumerate(people, 1):
+        tags = []
+        if a.get("initials"):
+            tags.append(f"[{a['initials']}]")
+        if a.get("corresponding"):
+            tags.append("✉ co-corresponding" if len(corr) > 1 else "✉ corresponding")
+        print(f"  {i}. {a['name']}" + (f"  {' '.join(tags)}" if tags else ""))
+        for k in ("affiliation", "orcid"):
+            if a.get(k):
+                print(f"       {k}: {a[k]}")
+        # An email is printed only where it will be published — for a non-corresponding
+        # author it is recorded but not rendered, and showing it here implies otherwise.
+        if a.get("email"):
+            shown = "published" if a.get("corresponding") else "not published"
+            print(f"       email: {a['email']} ({shown})")
+
+
+def _author_wizard(root: Path, m: project.Manifest) -> int:
+    """Edit the author list by conversation rather than by flag.
+
+    Authorship changes at moments that are ABOUT the change — a collaborator joins, an
+    affiliation moves, correspondence passes to someone else. At that moment the person
+    editing does not know this tool's flag names, and a half-remembered flag silently
+    records a half-right author. The wizard shows the list, asks, and shows it again.
+    """
+    print(f"authors of {m.short_title or m.name} (in authorship order):")
+    _print_authors(m)
+    while True:
+        print()
+        choice = _ask("[a]dd, [e]dit, [r]emove, [m]ove, [d]one", "d").lower()[:1]
+        if choice in ("d", "q", ""):
+            return 0
+        people = project.authors(m)
+        if choice == "a":
+            name = _ask("name")
+            if not name:
+                print("  no name — nothing added.")
+                continue
+            entry = {"name": name,
+                     "initials": _ask("initials (their chain suffix, e.g. JR)"),
+                     "affiliation": _ask("affiliation"),
+                     "orcid": _ask("ORCID")}
+            entry["email"] = _ask("email")
+            entry["corresponding"] = _ask("corresponding author? [y/N]", "n")\
+                .lower().startswith("y")
+            if entry["corresponding"] and not entry["email"]:
+                # The flag's whole effect is to publish the address. Recording one without
+                # the other produces a corresponding author a reader cannot correspond with.
+                print("  note: corresponding authors are published with an email, and this "
+                      "one has none.")
+            people.append(project.normalize_author(entry))
+        elif choice in ("e", "r", "m"):
+            if not people:
+                print("  no authors yet.")
+                continue
+            who = _ask("which (number or name)")
+            target = _match_author(people, who)
+            if target is None:
+                print(f"  no author matching '{who}'.")
+                continue
+            if choice == "r":
+                people = [a for a in people if a is not target]
+            elif choice == "m":
+                pos = _ask(f"new position 1..{len(people)}")
+                if not pos.isdigit():
+                    print("  not a position — unchanged.")
+                    continue
+                people = [a for a in people if a is not target]
+                people.insert(max(0, min(len(people), int(pos) - 1)), target)
+            else:
+                for key, label in (("name", "name"), ("initials", "initials"),
+                                   ("affiliation", "affiliation"), ("orcid", "ORCID"),
+                                   ("email", "email")):
+                    got = _ask(label, target.get(key, ""))
+                    if got:
+                        target[key] = got
+                    else:
+                        target.pop(key, None)
+                was = "y" if target.get("corresponding") else "n"
+                if _ask("corresponding author? [y/N]", was).lower().startswith("y"):
+                    target["corresponding"] = True
+                else:
+                    target.pop("corresponding", None)
+        else:
+            print("  didn't catch that.")
+            continue
+        m.authors = [project.normalize_author(a) for a in people]
+        project.save_manifest(m, root)
+        print(f"\nauthors of {m.short_title or m.name} (in authorship order):")
+        _print_authors(m)
+
+
+def _match_author(people: list[dict], who: str) -> dict | None:
+    """By 1-based position, initials, or name — whichever the human typed."""
+    who = (who or "").strip()
+    if not who:
+        return None
+    if who.isdigit() and 1 <= int(who) <= len(people):
+        return people[int(who) - 1]
+    for a in people:
+        if a.get("initials", "").lower() == who.lower():
+            return a
+    for a in people:
+        if a["name"].lower() == who.lower() or who.lower() in a["name"].lower():
+            return a
+    return None
+
+
+def run_authors(root: Path, action: str = "", name: str = "", initials: str = "",
                 affiliation: str = "", email: str = "", orcid: str = "",
-                position: int | None = None) -> int:
+                position: int | None = None, corresponding: bool | None = None,
+                interactive: bool | None = None) -> int:
     """Read and edit the project's author list.
 
     Authorship changes mid-project — a collaborator joins after the one-pager circulates —
@@ -603,23 +718,21 @@ def run_authors(root: Path, action: str = "list", name: str = "", initials: str 
     m = project.load_manifest(root)
     current = project.authors(m)
 
+    if not action:
+        # Bare `haarpi authors` is the wizard — but only where someone is there to answer.
+        # A queued task inheriting a non-tty must print and exit, never block the runner
+        # on input() nobody will type.
+        if interactive if interactive is not None else sys.stdin.isatty():
+            return _author_wizard(root, m)
+        action = "list"
+
     if action == "list":
         if not current:
-            print("haarpi authors: none recorded — `haarpi authors add --name … "
-                  "--affiliation …`")
+            print("haarpi authors: none recorded — run `haarpi authors` to add them.")
             return 0
         print(f"authors of {m.short_title or m.name} (in authorship order):")
-        for i, a in enumerate(current, 1):
-            bits = [f"  {i}. {a['name']}"]
-            if a.get("initials"):
-                bits.append(f"[{a['initials']}]")
-            print(" ".join(bits))
-            for k in ("affiliation", "email", "orcid"):
-                if a.get(k):
-                    print(f"       {k}: {a[k]}")
-        unlisted = [i for i in [m.initials] if i and i not in
-                    [a.get("initials") for a in current]]
-        if unlisted:
+        _print_authors(m)
+        if m.initials and m.initials not in [a.get("initials") for a in current]:
             print(f"\nnote: this project's chain suffix is _{m.initials}, which is not "
                   f"any listed author's initials.")
         return 0
@@ -634,7 +747,7 @@ def run_authors(root: Path, action: str = "list", name: str = "", initials: str 
             return 2
         entry = project.normalize_author(
             {"name": name, "initials": initials, "affiliation": affiliation,
-             "email": email, "orcid": orcid})
+             "email": email, "orcid": orcid, "corresponding": bool(corresponding)})
         # position is 1-based authorship order; absent means append.
         if position is None or position > len(current):
             current.append(entry)
@@ -664,6 +777,13 @@ def run_authors(root: Path, action: str = "list", name: str = "", initials: str 
                      ("affiliation", affiliation), ("email", email), ("orcid", orcid)):
             if v:
                 target[k] = v.strip()
+        if corresponding is not None:
+            # Explicit False must be able to REMOVE the flag; `if corresponding:` would
+            # make --no-corresponding silently do nothing.
+            if corresponding:
+                target["corresponding"] = True
+            else:
+                target.pop("corresponding", None)
         m.authors = current
         project.save_manifest(m, root)
         print(f"haarpi authors: updated {target['name']}")

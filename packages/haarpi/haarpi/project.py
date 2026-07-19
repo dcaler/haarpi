@@ -261,21 +261,69 @@ def stale_inputs(root: Path, m: Manifest, stage: str) -> list[str]:
     return out
 
 
-AUTHOR_FIELDS = ("name", "initials", "affiliation", "email", "orcid")
+AUTHOR_FIELDS = ("name", "initials", "affiliation", "email", "orcid", "corresponding")
 
 
 def normalize_author(entry: dict | str) -> dict:
     """One author record, from a dict or a bare name. Unknown keys are dropped."""
     if isinstance(entry, str):
         return {"name": entry.strip()}
-    return {k: str(entry[k]).strip() for k in AUTHOR_FIELDS
-            if entry.get(k) not in (None, "")}
+    out = {k: str(entry[k]).strip() for k in AUTHOR_FIELDS
+           if k != "corresponding" and entry.get(k) not in (None, "")}
+    if entry.get("corresponding"):
+        out["corresponding"] = True
+    return out
 
 
 def authors(m: Manifest) -> list[dict]:
     """The author list, normalized and in order. Order is authorship order — it is the
     author's to set and no tool's to sort."""
     return [normalize_author(a) for a in (m.authors or []) if a]
+
+
+def corresponding_authors(m: Manifest) -> list[dict]:
+    return [a for a in authors(m) if a.get("corresponding")]
+
+
+def authors_block(m: Manifest, anonymized: bool = False) -> str:
+    """The authors-and-affiliations block that sits under the title.
+
+    ``anonymized`` returns the empty string: a double-blind venue's submission must not
+    carry identity, and that is decided by the venue's flag rather than by whoever is
+    drafting. This is the whole reason the author list is data — prose cannot be stripped
+    on a venue's say-so.
+
+    An email appears only for a corresponding author; it is a contact address, not a
+    credential every co-author wants printed. One corresponding author is "Corresponding
+    author"; several are "Co-corresponding authors", which is the convention and also the
+    honest description — "Corresponding author: A, B" reads as one person with two names.
+    """
+    people = authors(m)
+    if anonymized or not people:
+        return ""
+    lines = [", ".join(a["name"] for a in people)]
+    affils = []
+    for a in people:
+        if a.get("affiliation") and a["affiliation"] not in affils:
+            affils.append(a["affiliation"])
+    if affils:
+        # Superscript markers only earn their keep once affiliations differ; a single
+        # shared affiliation reads better unmarked.
+        if len(affils) == 1:
+            lines[0] = ", ".join(a["name"] for a in people)
+            lines.append(affils[0])
+        else:
+            lines[0] = ", ".join(
+                f"{a['name']}^{affils.index(a['affiliation']) + 1}^"
+                if a.get("affiliation") else a["name"] for a in people)
+            lines += [f"^{i + 1}^ {aff}" for i, aff in enumerate(affils)]
+    corr = corresponding_authors(m)
+    if corr:
+        label = "Corresponding author" if len(corr) == 1 else "Co-corresponding authors"
+        contacts = ", ".join(
+            f"{a['name']} ({a['email']})" if a.get("email") else a["name"] for a in corr)
+        lines.append(f"{label}: {contacts}")
+    return "\n\n".join(lines)
 
 
 def reviewer_initials(m: Manifest) -> list[str]:

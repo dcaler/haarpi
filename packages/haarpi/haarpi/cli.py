@@ -38,9 +38,10 @@ usage:
   haarpi next [--stage S] [--file F] [--dry-run]
         read the finished markup: mint a release, or classify + queue rework
         (runs automatically as the last task of every queued chain)
+  haarpi authors            wizard: who the paper is by, in authorship order
   haarpi authors [list | add | set | remove] [--name N --initials I --affiliation A
-                 --email E --orcid O --position K]
-        who the paper is by — recorded once, read by every document generated after
+                 --email E --orcid O --position K --corresponding]
+        the same list, non-interactively — for scripts and queued tasks
   haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi queue              register the trundlr project / queue the opening chain
   haarpi <tool> <args…>     run a stage tool (rabbithole | raconteur | raster | rayleigh)
@@ -85,8 +86,9 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         return planner.run_queue(root)
     if cmd == "authors":
         ap = argparse.ArgumentParser(prog="haarpi authors")
-        ap.add_argument("action", nargs="?", default="list",
-                        choices=["list", "add", "set", "remove"])
+        # No action = the wizard (or a plain listing when nobody is at the terminal).
+        ap.add_argument("action", nargs="?", default="",
+                        choices=["", "list", "add", "set", "remove"])
         ap.add_argument("--name", default="")
         ap.add_argument("--initials", default="")
         ap.add_argument("--affiliation", default="")
@@ -94,10 +96,15 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         ap.add_argument("--orcid", default="")
         ap.add_argument("--position", type=int,
                         help="1-based authorship order; appended if omitted")
+        ap.add_argument("--corresponding", action="store_true", default=None,
+                        help="publish this author's email as the contact address")
+        ap.add_argument("--no-corresponding", dest="corresponding",
+                        action="store_false", help="drop the corresponding flag")
         a = ap.parse_args(rest)
         return planner.run_authors(root, action=a.action, name=a.name,
                                    initials=a.initials, affiliation=a.affiliation,
-                                   email=a.email, orcid=a.orcid, position=a.position)
+                                   email=a.email, orcid=a.orcid, position=a.position,
+                                   corresponding=a.corresponding)
     if cmd == "next":
         ap = argparse.ArgumentParser(prog="haarpi next")
         ap.add_argument("--stage")
