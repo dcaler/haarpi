@@ -186,6 +186,21 @@ PAPER_DELIVERABLE_TIERS: dict[str, dict[str, list[str]]] = {
 }
 PAPER_DELIVERABLE_TIERS["venue"] = PAPER_DELIVERABLE_TIERS["outline"]
 
+# The skeleton is headings only, so every structural ask is answered by re-running phase
+# one against the annotations — cheap, and the whole reason the rung exists. Without an
+# entry here it fell through to STAGE_TIERS["paper"], whose "cosmetic" tier is `revise`
+# (the manuscript drafter): a comment on a heading would have queued a full draft against
+# a structure the author had just objected to.
+PAPER_DELIVERABLE_TIERS["skeleton"] = {
+    "cosmetic":   ["skeleton", "comment"],
+    "structural": ["skeleton", "comment"],
+    # A narrative complaint about the structure is a complaint about the through-line, and
+    # the through-line is the one-pager's.
+    "narrative":  ["recut", "comment"],
+    "upstream_literature": ["litreview:gather", "litreview:collect",
+                            "litreview:report", "litreview:comment"],
+}
+
 
 def _selected_venues(root: Path) -> list[str]:
     """The venues the AUTHOR chose, read from raconteur's config.

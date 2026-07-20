@@ -163,3 +163,15 @@ def test_the_outline_is_written_in_two_gated_phases():
     # each phase is followed by a human redline before the next runs
     assert PAPER_LADDER["skeleton"][1] == "comment"
     assert STAGE_STEPS["paper"]["skeleton"].command == "haarpi raconteur skeleton"
+
+
+def test_a_skeleton_redline_is_answered_by_phase_one_not_by_a_draft():
+    """Without its own tier map the skeleton fell through to the manuscript's, whose
+    "cosmetic" tier is the drafter — so a comment on a heading would have queued a full
+    draft against a structure the author had just objected to."""
+    from haarpi.planner import PAPER_DELIVERABLE_TIERS
+    tiers = PAPER_DELIVERABLE_TIERS["skeleton"]
+    assert tiers["cosmetic"] == ["skeleton", "comment"]
+    assert tiers["structural"] == ["skeleton", "comment"]
+    # a complaint about the structure's story is a complaint about the one-pager
+    assert tiers["narrative"] == ["recut", "comment"]

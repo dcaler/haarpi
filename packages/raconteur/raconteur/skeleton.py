@@ -46,6 +46,30 @@ _SYSTEM = (
     "never bullets, never commentary."
 )
 
+_REVISE_PROMPT = """\
+Revise a paper's SECTION STRUCTURE to answer the reviewer's annotations. Headings only.
+
+Title: {title}
+{budget_section}
+Current structure:
+{current}
+
+Reviewer annotations — tracked edits they made, and comments they left:
+{annotations}
+
+Rules:
+- Answer every annotation. A comment asking for a section, a merge, a split or a rename is
+  an instruction, not a suggestion — the author owns this structure.
+- Keep every heading the annotations do not ask you to change, EXACTLY as written.
+- Use EXACTLY these top-level sections, in this order, each as a `## ` heading:
+{spine}
+- Do NOT number any heading. The document style numbers them.
+- Do NOT write bullets, beats, prose, or any body text. Headings only.
+- Do NOT add Abstract, Acknowledgements or References: they are added automatically.
+- Output only the headings, one per line, starting with the first `## `.
+"""
+
+
 _SKELETON_PROMPT = """\
 Plan the SECTION AND SUBSECTION STRUCTURE of an academic paper. Headings only.
 
@@ -216,6 +240,64 @@ def _write(project_dir: Path, cfg: ProjectConfig, work_dir: Path, text: str,
     return out
 
 
+def _revise(project_dir: Path, cfg: ProjectConfig, brain, work: Path,
+            user_rev: Path, venue: str = "") -> None:
+    """Answer a redlined skeleton — a minor version, keeping the source's datestamp.
+
+    A structural redline is cheap to answer and expensive to ignore: it is the author
+    saying the paper is organised wrongly, at the one moment when fixing that costs a
+    heading rather than a draft. Without this the gate dead-ended, and an author whose
+    markup carried a comment rather than a clean edit had nowhere to go.
+    """
+    from .naming import minor_name, parse
+    from .revise import build_revision_context, read_text
+
+    annotations = build_revision_context(user_rev)
+    if not annotations:
+        log("[warn] no annotations in the redlined skeleton — nothing to answer")
+        log("[error] nothing to do: this run made no changes (exit 3)")
+        raise SystemExit(3)
+
+    spine = spine_for(cfg, venue)
+    budget = _budget_for(cfg, venue)
+    from .outline import _budget_block
+    raw = brain.coordinator(
+        _REVISE_PROMPT.format(
+            title=cfg.title,
+            budget_section=_budget_block(cfg, project_dir, venue),
+            current=read_text(user_rev),
+            annotations=annotations,
+            spine="\n".join(f"  - {s}" for s in spine),
+        ),
+        system=_SYSTEM, num_ctx=16384)
+
+    sections = parse_headings(raw, spine)
+    for f in findings(sections, spine, budget, cfg.section_shares or None):
+        log(f"[warn] {f.kind} — {f.where}: {f.imperative}")
+    if budget:
+        log("[raconteur] word plan:")
+        for line in plan_table(sections, budget, cfg.section_shares or None).splitlines():
+            log(line)
+
+    parsed = parse(user_rev, cfg.short_title)
+    chain, datestamp = (parsed[1], parsed[0]) if parsed else ([], None)
+    out = work / minor_name(cfg.short_title, chain, "md", datestamp)
+    out.write_text(assemble(sections, cfg.title), encoding="utf-8")
+    log(f"[raconteur] wrote {out.relative_to(project_dir)}")
+    from .refdoc import render
+    docx = render(out, project_dir)
+    if docx:
+        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
+
+
+def _budget_for(cfg: ProjectConfig, venue: str) -> int:
+    """This venue's body-prose budget, or 0 where it states no length."""
+    v = cfg.venue(venue) if venue else None
+    if not v or not v.word_limit:
+        return 0
+    return guards.prose_budget(guards.word_target(v.word_min, v.word_limit))
+
+
 def run(project_dir: Path, venue: str = "") -> None:
     """Phase one: plan the paper's sections and subsections against the word budget."""
     from .brain import Brain
@@ -246,19 +328,21 @@ def run(project_dir: Path, venue: str = "") -> None:
     work.mkdir(parents=True, exist_ok=True)
     scope = ([venue] if venue else []) + ["skeleton"]
     others = [v for v in cfg.venues if v != venue]
-    if find_latest(work, cfg.short_title, "md", last_initials="ra",
-                   chain_includes=scope, chain_excludes=others):
-        if find_user_revision(work, cfg.short_title, chain_includes=scope,
-                              chain_excludes=others):
-            log("[raconteur] a redlined skeleton is waiting — answer it with "
-                "`raconteur skeleton --revise` (not yet implemented)")
-        else:
-            log("[raconteur] skeleton exists — annotate the docx with your initials, "
-                "then run `haarpi next`")
+    existing = find_latest(work, cfg.short_title, "md", last_initials="ra",
+                           chain_includes=scope, chain_excludes=others)
+    user_rev = find_user_revision(work, cfg.short_title, chain_includes=scope,
+                                  chain_excludes=others)
+    brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
+
+    if existing and user_rev:
+        log(f"[raconteur] answering annotations on {user_rev.name}")
+        _revise(project_dir, cfg, brain, work, user_rev, venue)
+        return
+    if existing:
+        log("[raconteur] skeleton exists — annotate the docx with your initials, "
+            "then run `haarpi next`")
         log("[error] nothing to do: this run made no changes (exit 3)")
         raise SystemExit(3)
-
-    brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
@@ -268,9 +352,7 @@ def run(project_dir: Path, venue: str = "") -> None:
                                   narrative, None, project_dir)
 
     spine = spine_for(cfg, venue)
-    budget = guards.prose_budget(
-        guards.word_target(cfg.venue(venue).word_min, cfg.venue(venue).word_limit)
-    ) if venue and cfg.venue(venue) and cfg.venue(venue).word_limit else 0
+    budget = _budget_for(cfg, venue)
 
     log("[raconteur] planning sections…")
     raw = brain.coordinator(

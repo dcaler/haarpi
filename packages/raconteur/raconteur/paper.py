@@ -591,34 +591,6 @@ def _bib_block(bib_summary: str) -> str:
     return f"Available citations (use [@citekey] format):\n{bib_summary}\n\n"
 
 
-_REBALANCE_PROMPT = """\
-This manuscript does not yet fit the shape its venue and outline call for. Fix it.
-
-{findings}
-
-Manuscript:
-{text}
-
-The paper is currently {actual} words of prose against a target of {budget}.
-
-Rules:
-- Where a section must SHRINK: tighten prose — remove hedging, redundant restatement, and \
-sentences that repeat what an adjacent sentence already says
-- Where a section must GROW: develop what its outline bullets already promise — draw out \
-the reasoning, state the mechanism, interpret the evidence already present. Never pad, \
-never restate, never introduce new claims, values, or sources
-- Where a paragraph COUNT is wrong: one outline bullet is one paragraph. Split the \
-paragraph that covers two bullets, or merge the paragraphs that share one — do not solve \
-it by deleting a bullet's material
-- The total matters less than the shape: a section carrying the paper's contribution must \
-not be the thinnest one in it
-- Do NOT drop a [@citekey], a figure (`![…](…)`), a heading, or a subsection — the \
-structure was approved by the author and the citations are what ground the claims
-- Preserve every heading exactly as written, at the same level
-- Output the complete revised manuscript and nothing else — no preamble
-"""
-
-
 def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str = "",
                   bib_keys: set[str] | None = None) -> int:
     """The BODY words this venue's manuscript should come out at.
@@ -658,17 +630,66 @@ def _manuscript_findings(assembled: str, outline_text: str, budget: int,
             + guards.paragraph_conformance(assembled, outline_text))
 
 
+_SECTION_REPAIR_PROMPT = """\
+Revise ONE section of a paper to fix the problems listed. Change nothing else.
+
+Section: {heading}
+
+Its outline (the approved contract — every subsection heading stays, in this order):
+{section_outline}
+
+Current text:
+{text}
+
+Problems to fix:
+{findings}
+
+Rules:
+- This section must come to {words_low}–{words_high} words in total, across all its \
+subsections together
+- One outline bullet is one paragraph. To shorten, tighten prose — remove hedging, \
+redundant restatement, sentences that repeat an adjacent one. To lengthen, develop what \
+the bullets already promise: draw out the reasoning, state the mechanism, interpret the \
+evidence already present
+- Never pad, never restate, never introduce a new claim, value, or source
+- Do NOT drop a [@citekey], a figure (`![…](…)`), or a subsection heading
+- Do NOT add or rename a subsection heading
+- Output only this section's revised text — no ## heading, no preamble
+"""
+
+
+def _findings_by_section(findings: list, headings: list[str]) -> dict[str, list]:
+    """Route each finding to the section that can fix it.
+
+    Whole-document findings (over- and under-budget) are not fixed by rewriting the whole
+    document: the total is wrong BECAUSE some section is, so they belong to whichever
+    sections are already out of band. When the total is off and every section is inside its
+    band, the arithmetic disagrees with itself and there is nothing to route.
+    """
+    by: dict[str, list] = {}
+    for f in findings:
+        if f.where in headings:
+            by.setdefault(f.where, []).append(f)
+    return by
+
+
 def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
                            budget: int, bib_keys: set[str], rounds: int = 2,
                            shares: dict | None = None) -> str:
-    """The checks no section can make about itself: did it follow the outline, and does the
-    manuscript have the length and the shape the venue and the outline call for.
+    """Fix what the whole-document checks find, SECTION BY SECTION.
 
     Every section can sit inside its own band and the manuscript still overrun — that is
     exactly what happened, 19 legal subsections summing to 6,975 words against a 5,000-word
-    cap, reported clean. Conformance is the same shape of blind spot: a section the outline
-    never named is invisible to a guard that only ever reads one section at a time.
+    cap, reported clean. So the checks have to see the whole document.
+
+    The REPAIR does not. It used to rewrite the entire manuscript in one call: 4,000 words
+    in and 4,000 out, twice, with every section re-emitted and free to drift while the model
+    attended to one. Twice now the findings fired and then survived both rounds. Rewriting
+    only the sections that are actually wrong is a smaller, better-posed problem, and it
+    cannot damage a section that was already right.
     """
+    outline_sections = dict(_parse_sections(outline_text))
+
     for n in range(1, rounds + 1):
         findings = _manuscript_findings(assembled, outline_text, budget, shares)
         if not findings:
@@ -676,15 +697,37 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
         log(f"[raconteur] manuscript guards ({n}): {len(findings)} finding(s)")
         for f in findings:
             log(f"  · {f.kind} — {f.where}")
-        assembled = brain.coordinator(
-            _REBALANCE_PROMPT.format(
-                findings="\n".join(f"- {f.imperative}" for f in findings),
-                text=assembled,
-                actual=guards.word_count(assembled),
-                budget=budget),
-            system=_SYSTEM,
-            num_ctx=16384,
-        )
+
+        parts = _parse_sections(assembled)
+        by_section = _findings_by_section(findings, [h for h, _ in parts])
+        if not by_section:
+            # Nothing routable — a conformance or arithmetic finding no single section owns.
+            log("[warn] no section owns these findings; leaving the manuscript alone "
+                "rather than rewriting it wholesale")
+            break
+
+        head, _, _ = assembled.partition("\n## ")
+        repaired: list[tuple[str, str]] = []
+        for heading, text in parts:
+            mine = by_section.get(heading)
+            if not mine:
+                repaired.append((heading, text))
+                continue
+            lo, hi = guards.section_target(heading, budget, shares)
+            if not lo:
+                lo, hi = _DEFAULT_BAND
+            log(f"[raconteur] repairing '{heading}' ({len(mine)} finding(s))")
+            repaired.append((heading, brain.coordinator(
+                _SECTION_REPAIR_PROMPT.format(
+                    heading=heading,
+                    section_outline=outline_sections.get(heading, ""),
+                    text=text,
+                    findings="\n".join(f"- {f.imperative}" for f in mine),
+                    words_low=lo, words_high=hi),
+                system=_SYSTEM, num_ctx=16384)))
+        assembled = head + "\n" + "\n".join(
+            f"## {h}\n\n{t.strip()}\n" for h, t in repaired)
+
     remaining = _manuscript_findings(assembled, outline_text, budget, shares)
     if remaining:
         log(f"[warn] {len(remaining)} manuscript finding(s) survived {rounds} round(s) "

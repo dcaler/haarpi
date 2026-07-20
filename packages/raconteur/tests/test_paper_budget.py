@@ -124,19 +124,31 @@ def test_the_fallback_band_is_section_scale_not_subsection_scale():
     assert paper._DEFAULT_BAND == (450, 900)
 
 
-def test_the_rebalance_pass_may_not_drop_citations_figures_or_sections():
-    p = paper._REBALANCE_PROMPT
+def test_the_repair_pass_may_not_drop_citations_figures_or_sections():
+    p = paper._SECTION_REPAIR_PROMPT
     assert "[@citekey]" in p and "![" in p
-    assert "subsection" in p and "heading" in p
+    assert "subsection heading" in p
 
 
-def test_the_rebalance_pass_can_grow_a_section_not_only_cut_it():
+def test_the_repair_pass_can_grow_a_section_not_only_cut_it():
     """It was a condense pass: it only ever knew how to remove words, so an under-written
     Results section had no repair available to it."""
-    p = paper._REBALANCE_PROMPT
-    assert "GROW" in p and "SHRINK" in p
+    p = paper._SECTION_REPAIR_PROMPT
+    assert "To shorten" in p and "To lengthen" in p
     # growing must not become padding — that trades a thin paper for a verbose one
     assert "Never pad" in p
+
+
+def test_repair_rewrites_only_the_sections_that_are_wrong():
+    """It used to rewrite the whole manuscript in one call — 4,000 words in and out, every
+    section free to drift while the model attended to one. Twice the findings fired and
+    then survived both rounds."""
+    from raconteur.guards import Finding
+    findings = [Finding("section-fat", "5. Discussion", "cut it"),
+                Finding("over-budget", "manuscript", "cut the paper")]
+    by = paper._findings_by_section(findings, ["4. Results", "5. Discussion"])
+    assert list(by) == ["5. Discussion"]        # the whole-document finding routes nowhere
+    assert len(by["5. Discussion"]) == 1
 
 
 # ── a range is two numbers, and both of them bind ─────────────────────────────
@@ -267,7 +279,7 @@ def test_the_draft_is_told_the_bullet_contract_it_is_guarded_on():
     bullets. Guarding on a rule nobody stated means failing, then repairing."""
     assert "ONE PARAGRAPH per outline bullet" in paper._DRAFT_SECTION_PROMPT
     assert "one bullet is one paragraph" in paper._CRITIQUE_SECTION_PROMPT
-    assert "one outline bullet is one paragraph" in paper._REBALANCE_PROMPT
+    assert "One outline bullet is one paragraph" in paper._SECTION_REPAIR_PROMPT
 
 
 def test_the_abstract_is_asked_for_the_length_we_settled_on(tmp_path, monkeypatch):

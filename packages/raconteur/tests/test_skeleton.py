@@ -153,3 +153,43 @@ def test_phase_two_is_not_told_to_merge_what_conformance_forbids(tmp_path):
     assert "APPROVED and FIXED" in got
     assert "do not add, remove, merge or rename" in got
     assert "merging related material" not in got
+
+
+# ── a redlined skeleton is answered, not dead-ended ──────────────────────────
+
+def test_the_revise_prompt_treats_annotations_as_instructions():
+    """The author owns the structure. A comment asking for a merge is an instruction."""
+    p = skeleton._REVISE_PROMPT
+    assert "instruction, not a suggestion" in p
+    assert "Keep every heading the annotations do not ask you to change" in p
+    # still headings only, still unnumbered, still no furniture from the model
+    assert "Do NOT write bullets" in p and "Do NOT number any heading" in p
+    assert "Do NOT add Abstract, Acknowledgements or References" in p
+
+
+def test_the_revise_path_exists_and_is_reached(tmp_path):
+    import inspect
+    src = inspect.getsource(skeleton.run)
+    assert "_revise(" in src
+    assert "not yet implemented" not in src
+
+
+def test_a_revision_keeps_the_source_datestamp_and_extends_the_chain():
+    """A minor version: the datestamp belongs to the revision cycle, and the chain records
+    whose turn it was."""
+    from raconteur.naming import minor_name
+    assert minor_name("Chords", ["css2026", "skeleton", "ra", "DCR"], "md",
+                      "260720") == "260720_Chords_css2026_skeleton_ra_DCR_ra.md"
+
+
+def test_a_revision_with_no_annotations_changes_nothing(tmp_path, monkeypatch):
+    """Exit 3, not a silently regenerated skeleton: nothing was asked for."""
+    import types
+    import pytest
+    monkeypatch.setattr(skeleton, "log", lambda *a: None)
+    from raconteur import revise as _revise_mod
+    monkeypatch.setattr(_revise_mod, "build_revision_context", lambda p: "")
+    with pytest.raises(SystemExit) as e:
+        skeleton._revise(tmp_path, _cfg(), types.SimpleNamespace(), tmp_path,
+                         tmp_path / "x.docx")
+    assert e.value.code == 3
