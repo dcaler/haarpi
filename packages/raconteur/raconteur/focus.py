@@ -338,7 +338,8 @@ def run(project_dir: Path, section: str) -> None:
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
     bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
-    docx = to_docx(out_path, bib_path=bib_path)
+    from .refdoc import render as _render_docx
+    docx = _render_docx(out_path, project_dir, bib_path=bib_path)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
 

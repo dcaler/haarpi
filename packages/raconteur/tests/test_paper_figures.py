@@ -49,7 +49,10 @@ def test_write_passes_a_resource_path_so_figures_resolve(tmp_path, monkeypatch):
         captured["resource_path"] = resource_path
         return None
 
-    monkeypatch.setattr(paper, "to_docx", fake_to_docx)
+    # paper renders via refdoc (numbering + track changes), which imports to_docx at call
+    # time from raconteur.render — that is the seam this behaviour actually crosses.
+    import raconteur.render
+    monkeypatch.setattr(raconteur.render, "to_docx", fake_to_docx)
     (tmp_path / "paper").mkdir()
     # _write consults the venue to decide whether the author block is anonymized away,
     # so the stub needs the lookup a real ProjectConfig provides.

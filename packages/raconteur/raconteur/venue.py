@@ -430,7 +430,8 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str) ->
     docx_name = f"{today()}_{cfg.short_title}_venue_ra.docx"
     docx_src = paper_dir / f"{today()}_{cfg.short_title}_venue_ra.md"
     docx_src.write_text(text, encoding="utf-8")
-    docx = to_docx(docx_src)
+    from .refdoc import render as _render_docx
+    docx = _render_docx(docx_src, project_dir)
     docx_src.unlink(missing_ok=True)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")

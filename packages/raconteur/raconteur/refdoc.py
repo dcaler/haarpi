@@ -74,6 +74,27 @@ def _inject_numbering(xml: str) -> str:
     return xml.replace("</w:numbering>", _abstract_num() + num + "</w:numbering>")
 
 
+def _enable_track_changes(xml: str) -> str:
+    """Turn revision recording ON for the document, idempotently.
+
+    Every human-gated document in this pipeline is answered by a redline, and the redline
+    contract rests on knowing which spans the author typed by hand: a tracked insertion is
+    an atom the tool preserves and may never author. An author who forgets to switch
+    tracking on loses that protection silently — their edits arrive as ordinary text,
+    indistinguishable from the tool's own, and the only defence left is freezing whole
+    paragraphs.
+
+    ``w:trackChanges`` records; it does not enforce. The author can still turn it off, which
+    is right — a document that refuses to let you edit it untracked is a document you fight.
+    """
+    if "<w:trackChanges" in xml:
+        return xml
+    # Order matters in w:settings — the schema is a sequence — but Word tolerates
+    # trackChanges early, and putting it first avoids guessing at the neighbours present.
+    i = xml.index(">", xml.index("<w:settings")) + 1
+    return xml[:i] + "<w:trackChanges/>" + xml[i:]
+
+
 def _bind_styles(xml: str) -> str:
     """Attach the list to each heading style, idempotently."""
     for style_id, ilvl in _BOUND.items():
@@ -124,6 +145,11 @@ def build(dest: Path) -> Path | None:
     parts["word/numbering.xml"] = _inject_numbering(numbering).encode("utf-8")
     parts["word/styles.xml"] = _bind_styles(
         parts["word/styles.xml"].decode("utf-8")).encode("utf-8")
+    settings = parts.get("word/settings.xml", b"").decode("utf-8")
+    if settings:
+        parts["word/settings.xml"] = _enable_track_changes(settings).encode("utf-8")
+    else:
+        log("[warn] reference doc has no settings part — track changes not enabled")
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
         for name, data in parts.items():
             zout.writestr(name, data)
@@ -169,6 +195,29 @@ def unnumber_furniture(docx_path: Path) -> int:
     return n
 
 
+def enable_track_changes(docx_path: Path) -> bool:
+    """Switch revision recording on in a RENDERED document.
+
+    Applied to the output rather than the reference doc: pandoc writes its own
+    settings.xml and discards the reference document's, so setting it upstream is silently
+    dropped — verified, not assumed.
+    """
+    try:
+        with zipfile.ZipFile(docx_path) as zin:
+            parts = {n: zin.read(n) for n in zin.namelist()}
+    except (zipfile.BadZipFile, OSError) as e:      # noqa: BLE001
+        log(f"[warn] could not open {docx_path.name} to enable track changes ({e})")
+        return False
+    settings = parts.get("word/settings.xml", b"").decode("utf-8")
+    if not settings or "<w:trackChanges" in settings:
+        return False
+    parts["word/settings.xml"] = _enable_track_changes(settings).encode("utf-8")
+    with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in parts.items():
+            zout.writestr(name, data)
+    return True
+
+
 def reference_for(project_dir: Path) -> Path | None:
     """This project's numbering reference doc, built on first use.
 
@@ -193,4 +242,5 @@ def render(md_path: Path, project_dir: Path, **kw) -> Path | None:
     out = to_docx(md_path, reference_doc=reference_for(project_dir), **kw)
     if out is not None:
         unnumber_furniture(out)
+        enable_track_changes(out)
     return out

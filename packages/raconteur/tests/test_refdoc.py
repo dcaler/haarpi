@@ -114,3 +114,50 @@ def test_a_hand_edited_reference_doc_is_never_overwritten(tmp_path):
     theirs.write_bytes(b"not really a docx, but it is theirs")
     assert refdoc.reference_for(tmp_path) == theirs
     assert theirs.read_bytes() == b"not really a docx, but it is theirs"
+
+
+# ── every gated document opens with revision recording on ────────────────────
+
+def test_track_changes_is_on_in_the_rendered_document(tmp_path):
+    """The redline contract rests on knowing which spans the author typed by hand: a
+    tracked insertion is an atom the tool preserves and may never author. An author who
+    forgets to switch tracking on loses that protection silently."""
+    (tmp_path / "paper").mkdir()
+    md = tmp_path / "s.md"
+    md.write_text("# T\n\n## Abstract\n\n## Introduction\n")
+    out = refdoc.render(md, tmp_path)
+    with zipfile.ZipFile(out) as z:
+        assert "<w:trackChanges/>" in z.read("word/settings.xml").decode()
+
+
+def test_it_is_applied_to_the_output_not_the_reference_doc(tmp_path):
+    """pandoc writes its own settings.xml and discards the reference document's, so setting
+    it upstream is silently dropped. Verified rather than assumed."""
+    from haarpi.render import to_docx
+    ref = refdoc.build(tmp_path / "ref.docx")
+    with zipfile.ZipFile(ref) as z:
+        assert "<w:trackChanges/>" in z.read("word/settings.xml").decode()
+    md = tmp_path / "s.md"
+    md.write_text("# T\n\n## Introduction\n")
+    plain = to_docx(md, reference_doc=ref)
+    with zipfile.ZipFile(plain) as z:
+        assert "<w:trackChanges/>" not in z.read("word/settings.xml").decode()
+
+
+def test_enabling_twice_does_not_duplicate_the_flag(tmp_path):
+    (tmp_path / "paper").mkdir()
+    md = tmp_path / "s.md"
+    md.write_text("# T\n\n## Introduction\n")
+    out = refdoc.render(md, tmp_path)
+    assert refdoc.enable_track_changes(out) is False      # already on
+    with zipfile.ZipFile(out) as z:
+        assert z.read("word/settings.xml").decode().count("<w:trackChanges") == 1
+
+
+def test_numbering_survives_the_settings_rewrite(tmp_path):
+    """The rewrite repacks the whole zip; losing styles.xml to it would be silent."""
+    (tmp_path / "paper").mkdir()
+    md = tmp_path / "s.md"
+    md.write_text("# T\n\n## Introduction\n\n### The Model\n")
+    out = refdoc.render(md, tmp_path)
+    assert f'w:numId w:val="{refdoc.NUM_ID}"' in _numpr(_styles(out), "Heading2")
