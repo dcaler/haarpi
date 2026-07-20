@@ -219,18 +219,87 @@ def _parse_sections(text: str) -> list[tuple[str, str]]:
 _MAX_DISCUSSION_RESULTS_CHARS = 4000
 
 
-def _context_for_section(heading: str, litrev: str, code: str, results: str) -> str:
-    h = heading.lower()
-    is_discussion = any(kw in h for kw in _DISCUSSION_KW)
+# The order sections are WRITTEN in, which is not the order they are read in. A section
+# that interprets or restates should see the thing it is interpreting, in the words the
+# paper actually used — not a second-hand distillation of the same source material.
+#
+#   Background    <- the literature
+#   Methods       <- the methods writeup (+ the literature, for the method's provenance)
+#   Results       <- the results digest and the figures
+#   Discussion    <- the literature + Results AS WRITTEN
+#   Conclusion    <- Results + Discussion AS WRITTEN
+#   Introduction  <- the narrative's motivation + the analysis + Conclusion AS WRITTEN
+#
+# The Introduction previews the result last, from the conclusion the paper actually
+# reached. Written first, it previewed findings it had never seen.
+WRITE_ORDER = ("litrev", "methods", "results", "other", "conclusion", "intro")
+
+# What each kind is handed from the sections already written.
+_FEEDS: dict[str, tuple[str, ...]] = {
+    "other":      ("results",),
+    "conclusion": ("results", "other"),
+    "intro":      ("conclusion",),
+}
+
+_KIND_LABEL = {"litrev": "Background", "methods": "Methods", "results": "Results",
+               "other": "Discussion", "conclusion": "Conclusion", "intro": "Introduction"}
+
+
+def _writes_as(heading: str) -> str:
+    """The kind that decides WHEN a heading is written.
+
+    ``budget_kind`` falls through to "other" for anything it does not recognise, which
+    makes a venue-mandated "Data Availability" indistinguishable from a Discussion — and a
+    Discussion is fed the Results as written. A section this codebase has never heard of
+    should not inherit a Discussion's dependencies on a keyword miss.
+    """
+    kind = guards.budget_kind(heading)
+    if kind == "other" and not any(kw in heading.lower() for kw in _DISCUSSION_KW):
+        return ""
+    return kind
+
+
+def write_order(headings: list[str]) -> list[str]:
+    """Document headings, re-ordered for writing.
+
+    A heading this codebase does not recognise is written LAST and depends on nothing —
+    predictable, and it cannot pick up another section's inputs by accident.
+    """
+    rank = {k: i for i, k in enumerate(WRITE_ORDER)}
+    return sorted(headings,
+                  key=lambda h: (rank.get(_writes_as(h), len(WRITE_ORDER)),
+                                 headings.index(h)))
+
+
+def _context_for_section(heading: str, litrev: str, code: str, results: str,
+                         written: dict[str, str] | None = None,
+                         narrative: str = "") -> str:
+    kind = _writes_as(heading)
     parts = []
-    if (is_discussion or any(kw in h for kw in _LITREV_KW)) and litrev:
+
+    if kind in ("litrev", "intro", "other") and litrev:
         parts.append(f"Literature review:\n{litrev}")
-    if any(kw in h for kw in _CODE_KW) and code:
+    elif kind == "methods" and litrev:
+        # Methods may cite where the method descends from prior work — an offshoot has a
+        # provenance, and it belongs in the text. It carries no citation FLOOR: citing is
+        # not this section's job, so an uncited paragraph here is not a defect.
+        parts.append("Literature review (cite ONLY where this project's method derives "
+                     f"from prior work; there is no requirement to cite here):\n{litrev}")
+
+    if kind == "methods" and code:
         parts.append(f"Methods (raster writeup):\n{code}")
-    if any(kw in h for kw in _RESULTS_KW) and results:
+    if kind == "results" and results:
         parts.append(f"Results Content:\n{results}")
-    elif is_discussion and results:
-        parts.append(f"Results Content:\n{results[:_MAX_DISCUSSION_RESULTS_CHARS]}")
+
+    if kind == "intro" and narrative:
+        parts.append(f"Narrative spine — the motivation, in the author's framing:\n{narrative}")
+
+    for dep in _FEEDS.get(kind, ()):
+        text = (written or {}).get(dep, "").strip()
+        if text:
+            parts.append(
+                f"{_KIND_LABEL[dep]} AS WRITTEN — this is the paper's own text. Refer to "
+                f"it, restate from it, and do not contradict it:\n{text}")
     return ("\n\n".join(parts) + "\n\n") if parts else ""
 
 
@@ -622,12 +691,20 @@ def _draft_paper(
     # The venue's budget, apportioned the same way the outline apportioned it — one source
     # of arithmetic for both stages, or the outline plans a structure the draft then ignores.
     budget = _prose_budget(cfg, venue, outline_text, bib_keys)
-    leaf_counts = guards.section_leaf_counts(outline_text)
-    # Two sections of one kind (Introduction and Background are both "litrev") split that
-    # kind's share rather than each claiming all of it.
 
+    # Sections are WRITTEN in dependency order and ASSEMBLED in document order. A
+    # Conclusion that has read the Results and Discussion restates them; one that has read
+    # only the same digests re-derives them, at three times its length. See WRITE_ORDER.
+    sections = dict(_parse_sections(outline_text))
+    written: dict[str, str] = {}
+    order = write_order(list(sections))
+    log("[raconteur] writing order: "
+        + " → ".join(h for h in order
+                     if not (_is_references(h) or _is_abstract(h)
+                             or _is_acknowledgements(h))))
 
-    for heading, section_outline in _parse_sections(outline_text):
+    for heading in order:
+        section_outline = sections[heading]
         if _is_references(heading) or _is_abstract(heading):
             # References render at write time; the abstract is drafted last,
             # from the finished paper — the outline's Abstract states its brief.
@@ -638,7 +715,7 @@ def _draft_paper(
             # cannot know who contributed what.
             drafted.append((heading, _ack_passthrough(section_outline)))
             continue
-        ctx = _context_for_section(heading, litrev, code, results)
+        ctx = _context_for_section(heading, litrev, code, results, written, narrative)
         band = guards.section_target(heading, budget, cfg.section_shares or None)
         lo, hi = band if band[0] else _DEFAULT_BAND
         log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words per subsection)")
@@ -666,8 +743,12 @@ def _draft_paper(
                              bib_keys, bool(results), expect_figures=_outline_figure_count(
                                  section_outline))
         drafted.append((heading, text))
+        written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
 
+    # Back into the order a reader meets them in.
+    doc_order = {h: i for i, h in enumerate(sections)}
+    drafted.sort(key=lambda hv: doc_order.get(hv[0], len(doc_order)))
     _ensure_acknowledgements(drafted)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)

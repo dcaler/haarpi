@@ -157,13 +157,33 @@ def budget_kind(heading: str) -> str:
 
 
 def expects_citations(kind: str) -> bool:
-    """Does the bibliography ground this kind of section?
+    """Does the bibliography GROUND this kind of section — i.e. is a paragraph without a
+    citation a defect here?
 
-    Methods and Results are grounded in the writeup and the results files. Demanding a
-    citation floor there is a category error. An abstract summarises rather than cites,
-    References are not prose at all, and Acknowledgements credit people, not literature.
+    Methods and Results are grounded in the writeup and the results files, not in the
+    literature. A Methods section may still cite — when the method is an offshoot of prior
+    work, its provenance belongs in the text — but citing is not its JOB, so an uncited
+    paragraph there is not a defect. That distinction is the difference between a floor and
+    a permission; see ``may_cite``.
+
+    A Conclusion restates what the paper has already argued and pointed forward from. The
+    claims were made, and cited, where they were first established; requiring citations
+    again is what turns two paragraphs of restatement into a third Discussion — which is
+    what it became, three drafts running.
+
+    An abstract summarises rather than cites, References are not prose, and
+    Acknowledgements credit people rather than literature.
     """
-    return kind in ("litrev", "other")
+    return kind in ("litrev", "intro", "other")
+
+
+def may_cite(kind: str) -> bool:
+    """Is the literature RELEVANT to this kind of section, whether or not it must cite?
+
+    Decides what context a section is handed, which is a different question from whether an
+    uncited paragraph is a defect. Everything except the pure boilerplate may cite.
+    """
+    return kind not in ("references", "acknowledgements", "abstract")
 
 
 def _is_body(p: "Paragraph") -> bool:
@@ -220,7 +240,10 @@ class Paragraph:
 
     @property
     def kind(self) -> str:
-        return section_kind(self.heading)
+        # budget_kind, not section_kind: the citation FLOOR differs between a Discussion
+        # and a Conclusion, and between an Introduction and a Background, and section_kind
+        # pools each pair into one label.
+        return budget_kind(self.heading)
 
     def snippet(self, n: int = 160) -> str:
         s = " ".join(self.text.split())

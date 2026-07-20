@@ -156,7 +156,9 @@ def body_paragraphs(doc) -> list[dict]:
             "index": i,
             "para": p,
             "heading": heading,
-            "kind": guards.section_kind(section_heading or heading),
+            # budget_kind tells a Conclusion from a Discussion — they carry different
+            # citation floors, and section_kind calls both "other".
+            "kind": guards.budget_kind(section_heading or heading),
         })
     return out
 
