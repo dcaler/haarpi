@@ -195,27 +195,9 @@ def unnumber_furniture(docx_path: Path) -> int:
     return n
 
 
-def enable_track_changes(docx_path: Path) -> bool:
-    """Switch revision recording on in a RENDERED document.
-
-    Applied to the output rather than the reference doc: pandoc writes its own
-    settings.xml and discards the reference document's, so setting it upstream is silently
-    dropped — verified, not assumed.
-    """
-    try:
-        with zipfile.ZipFile(docx_path) as zin:
-            parts = {n: zin.read(n) for n in zin.namelist()}
-    except (zipfile.BadZipFile, OSError) as e:      # noqa: BLE001
-        log(f"[warn] could not open {docx_path.name} to enable track changes ({e})")
-        return False
-    settings = parts.get("word/settings.xml", b"").decode("utf-8")
-    if not settings or "<w:trackChanges" in settings:
-        return False
-    parts["word/settings.xml"] = _enable_track_changes(settings).encode("utf-8")
-    with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as zout:
-        for name, data in parts.items():
-            zout.writestr(name, data)
-    return True
+# Track changes is applied by the shared converter now, for every tool with a redline
+# stage — not just this one. Re-exported so callers and tests have one name for it.
+from haarpi.render import enable_track_changes  # noqa: E402,F401
 
 
 def reference_for(project_dir: Path) -> Path | None:
@@ -241,6 +223,7 @@ def render(md_path: Path, project_dir: Path, **kw) -> Path | None:
     from .render import to_docx
     out = to_docx(md_path, reference_doc=reference_for(project_dir), **kw)
     if out is not None:
+        # to_docx already enabled track changes; unnumber_furniture re-saves via
+        # python-docx, which preserves it (verified, not assumed).
         unnumber_furniture(out)
-        enable_track_changes(out)
     return out

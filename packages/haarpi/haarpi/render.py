@@ -23,6 +23,46 @@ import sys
 from pathlib import Path
 
 
+def _with_track_changes(xml: str) -> str:
+    """Turn revision recording on in a settings.xml, idempotently."""
+    if "<w:trackChanges" in xml:
+        return xml
+    i = xml.index(">", xml.index("<w:settings")) + 1
+    return xml[:i] + "<w:trackChanges/>" + xml[i:]
+
+
+def enable_track_changes(docx_path: Path) -> bool:
+    """Switch revision recording on in a rendered .docx.
+
+    Every human-gated document in this pipeline is answered by a redline, and the redline
+    contract rests on knowing which spans the author typed by hand: a tracked insertion is
+    an atom the tool preserves and may never author. An author who forgets to switch
+    tracking on loses that protection silently — their edits arrive as ordinary text,
+    indistinguishable from the tool's own, and the only defence left is freezing whole
+    paragraphs.
+
+    Applied to the OUTPUT: pandoc writes its own settings.xml and discards a reference
+    document's, so setting it upstream looks right and is silently dropped.
+
+    It records; it does not enforce. ``w:documentProtection`` would stop the author turning
+    it off, and a document that refuses to let you edit it untracked is one you fight.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(docx_path) as zin:
+            parts = {n: zin.read(n) for n in zin.namelist()}
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return False
+    settings = parts.get("word/settings.xml", b"").decode("utf-8")
+    if not settings or "<w:trackChanges" in settings:
+        return False
+    parts["word/settings.xml"] = _with_track_changes(settings).encode("utf-8")
+    with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in parts.items():
+            zout.writestr(name, data)
+    return True
+
+
 def check_pandoc() -> bool:
     try:
         subprocess.run(["pandoc", "--version"], capture_output=True, check=True)
@@ -55,7 +95,8 @@ def _pandoc_cmd(src: Path, dst: Path, bib_path: Path | None,
 def pandoc_convert(src: Path, dst: Path, bib_path: Path | None = None,
                    resource_path: Path | None = None,
                    suppress_bibliography: bool = False,
-                   reference_doc: Path | None = None) -> bool:
+                   reference_doc: Path | None = None,
+                   track_changes: bool = True) -> bool:
     """Explicit src → dst conversion. The single pandoc invocation in the pipeline."""
     if not shutil.which("pandoc"):
         print("  [note] pandoc not found — skipping .docx (md written). "
@@ -65,6 +106,10 @@ def pandoc_convert(src: Path, dst: Path, bib_path: Path | None = None,
                       reference_doc)
     try:
         subprocess.run(cmd, check=True, capture_output=True)
+        if track_changes:
+            # Every .docx this pipeline renders is a document a human will mark up. The
+            # submission package is built by its own pandoc invocation and is unaffected.
+            enable_track_changes(dst)
         return True
     except subprocess.CalledProcessError as e:
         print(f"  [warn] pandoc failed: {e.stderr.decode()[:200]}")
@@ -77,11 +122,12 @@ def to_docx(
     resource_path: Path | None = None,
     suppress_bibliography: bool = False,
     reference_doc: Path | None = None,
+    track_changes: bool = True,
 ) -> Path | None:
     """Convert alongside the source (`x.md` → `x.docx`), optionally with a
     bibliography (citeproc), a resource path for figure resolution, and a reference
     document supplying the styles (heading numbering among them)."""
     docx_path = md_path.with_suffix(".docx")
     ok = pandoc_convert(md_path, docx_path, bib_path, resource_path,
-                        suppress_bibliography, reference_doc)
+                        suppress_bibliography, reference_doc, track_changes)
     return docx_path if ok else None

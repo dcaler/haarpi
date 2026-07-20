@@ -139,7 +139,9 @@ def test_it_is_applied_to_the_output_not_the_reference_doc(tmp_path):
         assert "<w:trackChanges/>" in z.read("word/settings.xml").decode()
     md = tmp_path / "s.md"
     md.write_text("# T\n\n## Introduction\n")
-    plain = to_docx(md, reference_doc=ref)
+    # track_changes=False isolates pandoc's own behaviour: the flag is set in the
+    # reference doc and pandoc still does not carry it into the output.
+    plain = to_docx(md, reference_doc=ref, track_changes=False)
     with zipfile.ZipFile(plain) as z:
         assert "<w:trackChanges/>" not in z.read("word/settings.xml").decode()
 
