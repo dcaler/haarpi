@@ -51,7 +51,12 @@ Instructions:
 - Write fully developed academic prose; do not reproduce the outline bullets verbatim
 - Use ### for subsection headings and #### for sub-subsections, matching both the \
 names AND the heading levels the outline uses — do not flatten a #### into a ###
-- Each subsection should be {words_low}–{words_high} words of connected prose. This is derived from the venue's word limit and this section's share of it — the whole manuscript must fit, so a section that overruns is taking words from another
+- This WHOLE section must come to {words_low}–{words_high} words of connected prose, \
+across all its subsections together — not each. It is this section's share of the venue's \
+limit, so a section that overruns is taking words from another
+- Write ONE PARAGRAPH per outline bullet, in the bullet's order. A bullet is a paragraph's \
+worth of argument, and the section's words divide across its bullets — so do not merge two \
+bullets into one paragraph, and do not spread one bullet across three
 - For Methods sections: reference specific algorithms, functions, parameters, and \
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
@@ -101,7 +106,10 @@ parameters) when a methods writeup was available
 rendered in the prose as `![…](path)` with the exact path, or an image whose path the \
 section outline did not name here
 6. Discussion that does not address the discussion_angle or limitations from the analysis
-7. Subsections under {words_low} or over {words_high} words
+7. The section as a whole (all subsections together) under {words_low} or over \
+{words_high} words
+7b. A paragraph count that does not match the outline's bullet count for a subsection — \
+one bullet is one paragraph
 
 Do not comment on citation density or on whether the prose lists rather than synthesises — \
 those are checked mechanically after this critique and reported separately.
@@ -309,10 +317,11 @@ def _venue_block(cfg: ProjectConfig, venue: str = "") -> str:
     return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
-# The band a section is written to when the venue states no word limit. A venue that
-# publishes no length is not a licence to assume one, so this is the old fixed pair kept
-# as a floor — the derived band replaces it wherever a limit actually exists.
-_DEFAULT_BAND = (150, 300)
+# The band a SECTION is written to when the venue states no word limit. A venue that
+# publishes no length is not a licence to assume one, so this stays a loose fallback — but
+# it is a section band now, not a per-subsection one. Left at per-subsection scale it told
+# a three-subsection Methods to write 150-300 words in total.
+_DEFAULT_BAND = (450, 900)
 
 # _is_references is imported from guards at the top of this module.
 
@@ -461,7 +470,9 @@ def _draft_abstract(
     venue: str = "",
 ) -> str:
     v = cfg.venue(venue) if venue else None
-    limit = str(v.abstract_limit) if v and v.abstract_limit else "150–250"
+    # The venue's own limit wins; 225 is the fallback, and the abstract is not charged to
+    # the body budget either way — no venue counts it against the paper's length.
+    limit = str(guards.abstract_words(v.abstract_limit if v else None))
     log("[raconteur] drafting abstract…")
     return brain.coordinator(
         _DRAFT_ABSTRACT_PROMPT.format(
@@ -478,20 +489,39 @@ def _draft_abstract(
     )
 
 
-def _ack_passthrough(section_outline: str) -> str:
-    """The outline's CRediT reference list, verbatim; canonical list if bare."""
+def _ack_passthrough(section_outline: str, project_dir: Path | None = None) -> str:
+    """The outline's CRediT statement, verbatim — or a skeleton of it from the author list.
+
+    Never drafted: the tool cannot know who contributed what, and a plausible guess at
+    authorship credit is worse than a blank. When the outline carries nothing, the recorded
+    authors are emitted with empty role slots for the author to fill, rather than the bare
+    taxonomy — the names are in the manifest and re-typing them is how they used to drift.
+    """
     text = section_outline.strip()
     if text:
         return text
+    people = []
+    if project_dir is not None:
+        try:
+            from haarpi import project as hproject
+            root = hproject.find_root(project_dir)
+            if root is not None:
+                people = hproject.authors(hproject.load_manifest(root))
+        except Exception:                      # noqa: BLE001 — a manifest must not fail a draft
+            people = []
+    if people:
+        return ("CRediT authorship contribution statement\n\n"
+                + "\n\n".join(f"{a['name']}: " for a in people))
     from .outline import _CREDIT_ROLES
     return "\n".join(f"- {r}" for r in _CREDIT_ROLES)
 
 
-def _ensure_acknowledgements(sections: list[tuple[str, str]]) -> None:
+def _ensure_acknowledgements(sections: list[tuple[str, str]],
+                             project_dir: Path | None = None) -> None:
     """Outlines minted before the Acknowledgements rule lack the section; the
     paper must still carry the CRediT reference list for the author."""
     if not any(_is_acknowledgements(h) for h, _ in sections):
-        sections.append(("Acknowledgements", _ack_passthrough("")))
+        sections.append(("Acknowledgements", _ack_passthrough("", project_dir)))
 
 
 def _assemble(title: str, abstract: str, sections: list[tuple[str, str]]) -> str:
@@ -578,6 +608,9 @@ sentences that repeat what an adjacent sentence already says
 - Where a section must GROW: develop what its outline bullets already promise — draw out \
 the reasoning, state the mechanism, interpret the evidence already present. Never pad, \
 never restate, never introduce new claims, values, or sources
+- Where a paragraph COUNT is wrong: one outline bullet is one paragraph. Split the \
+paragraph that covers two bullets, or merge the paragraphs that share one — do not solve \
+it by deleting a bullet's material
 - The total matters less than the shape: a section carrying the paper's contribution must \
 not be the thinnest one in it
 - Do NOT drop a [@citekey], a figure (`![…](…)`), a heading, or a subsection — the \
@@ -716,7 +749,7 @@ def _draft_paper(
             # Human-owned: the outline's CRediT role list passes through
             # verbatim for the author to assign. Never drafted — the tool
             # cannot know who contributed what.
-            drafted.append((heading, _ack_passthrough(section_outline)))
+            drafted.append((heading, _ack_passthrough(section_outline, project_dir)))
             continue
         ctx = _context_for_section(heading, litrev, code, results, written, narrative)
         band = guards.section_target(heading, budget, cfg.section_shares or None)
@@ -752,7 +785,7 @@ def _draft_paper(
     # Back into the order a reader meets them in.
     doc_order = {h: i for i, h in enumerate(sections)}
     drafted.sort(key=lambda hv: doc_order.get(hv[0], len(doc_order)))
-    _ensure_acknowledgements(drafted)
+    _ensure_acknowledgements(drafted, project_dir)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
     assembled = _assemble(cfg.title, abstract, drafted)
@@ -830,7 +863,7 @@ def _revise_paper(
         revised.append((heading, text))
         log(f"[raconteur] section complete: {heading}")
 
-    _ensure_acknowledgements(revised)
+    _ensure_acknowledgements(revised, project_dir)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
     _write(project_dir, cfg, paper_dir,

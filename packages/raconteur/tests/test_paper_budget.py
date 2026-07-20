@@ -117,9 +117,11 @@ def test_the_prompts_take_a_derived_band_not_a_constant():
     assert "150–300" not in paper._DRAFT_SECTION_PROMPT
 
 
-def test_a_venue_with_no_limit_falls_back_to_the_old_band():
-    """Most venues in a slate state no length. Writing to an assumed one is its own defect."""
-    assert paper._DEFAULT_BAND == (150, 300)
+def test_the_fallback_band_is_section_scale_not_subsection_scale():
+    """Most venues in a slate state no length, and writing to an assumed one is its own
+    defect — but the fallback must at least be in the right units. Left at per-subsection
+    scale it told a three-subsection Methods to write 150-300 words in total."""
+    assert paper._DEFAULT_BAND == (450, 900)
 
 
 def test_the_rebalance_pass_may_not_drop_citations_figures_or_sections():
@@ -246,3 +248,46 @@ def test_a_bullet_count_falls_out_of_the_word_allocation():
 def test_a_subsection_always_affords_at_least_one_paragraph():
     assert guards.bullets_for(40) == 1
     assert guards.bullets_for(0) == 0
+
+
+# ── the prompts describe the band they are actually given ────────────────────
+
+def test_the_draft_is_told_the_band_is_for_the_whole_section():
+    """section_target returns a SECTION band. The prompt used to call it a per-subsection
+    target, so a three-subsection Results was told to write its whole allocation three
+    times over — an implied manuscript of 9,120-13,680 words against a 4,000 budget."""
+    p = paper._DRAFT_SECTION_PROMPT
+    assert "WHOLE section" in p
+    assert "across all its subsections together — not each" in p
+    assert "subsection should be {words_low}" not in p
+
+
+def test_the_draft_is_told_the_bullet_contract_it_is_guarded_on():
+    """paragraph_conformance fails a draft whose paragraph count does not match its
+    bullets. Guarding on a rule nobody stated means failing, then repairing."""
+    assert "ONE PARAGRAPH per outline bullet" in paper._DRAFT_SECTION_PROMPT
+    assert "one bullet is one paragraph" in paper._CRITIQUE_SECTION_PROMPT
+    assert "one outline bullet is one paragraph" in paper._REBALANCE_PROMPT
+
+
+def test_the_abstract_is_asked_for_the_length_we_settled_on(tmp_path, monkeypatch):
+    import types
+    captured = {}
+    monkeypatch.setattr(paper, "_SYSTEM", "")
+    brain = types.SimpleNamespace(
+        coordinator=lambda prompt, **kw: captured.setdefault("p", prompt) or "abstract")
+    cfg = types.SimpleNamespace(title="T", topic="t", focus="f",
+                                venue=lambda n: None)
+    paper._draft_abstract(brain, cfg, "", "", "{}")
+    assert "- 225 words" in captured["p"]
+
+
+def test_a_venues_own_abstract_limit_wins(tmp_path, monkeypatch):
+    import types
+    captured = {}
+    brain = types.SimpleNamespace(
+        coordinator=lambda prompt, **kw: captured.setdefault("p", prompt) or "abstract")
+    cfg = types.SimpleNamespace(title="T", topic="t", focus="f",
+                                venue=lambda n: types.SimpleNamespace(abstract_limit=150))
+    paper._draft_abstract(brain, cfg, "", "", "{}", venue="css2026")
+    assert "- 150 words" in captured["p"]
