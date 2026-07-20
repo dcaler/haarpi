@@ -1464,6 +1464,76 @@ def section_target(heading: str, budget: int,
     return (round(total * (1 - tolerance)), round(total * (1 + tolerance)))
 
 
+def section_bullets(outline_md: str) -> dict[str, int]:
+    """Normalised section heading → how many bullets the outline puts under it.
+
+    Counts the section's own beats plus every descendant's, which is the number of
+    PARAGRAPHS the draft owes for that section. The title is excluded: an author block
+    under the ``# `` heading parses as beats, and charging them to a section made the
+    document's byline part of its word budget.
+    """
+    heads = parse_outline(outline_md)
+    out: dict[str, int] = {}
+    current: str | None = None
+    for h in heads:
+        if h.level < 2:
+            continue
+        if h.level == 2:
+            current = _norm_heading(h.text)
+        if current is None:
+            continue
+        out[current] = out.get(current, 0) + h.beats
+    return out
+
+
+def section_band(heading: str, outline_md: str = "", budget: int = 0,
+                 shares: dict[str, float] | None = None,
+                 tolerance: float = 0.2) -> tuple[int, int]:
+    """The word band for a SECTION. Bullets are the truth wherever the outline supplies them.
+
+    The share-based band and the bullet count are two independent answers to the same
+    question, and when they disagree the drafter is handed a contradiction it cannot
+    satisfy: css2026's Methods was told to write 1,080 words and one paragraph per bullet
+    over three bullets, so it wrote three 360-word paragraphs — obeying both instructions
+    and violating ``PARAGRAPH_BAND`` in the only way left to it. Nine paragraphs of that
+    manuscript ran over 200 words, one to 369.
+
+    So the arithmetic runs one way only. Shares decide how many BULLETS a subsection gets,
+    at the outline stage, where the author gates the result. Once gated, the bullets decide
+    the words, and a section that wants more words has to earn them with another bullet the
+    author has seen. ``section_target`` remains the fallback for a section the outline says
+    nothing about.
+    """
+    n = section_bullets(outline_md).get(_norm_heading(heading), 0) if outline_md else 0
+    if not n:
+        return section_target(heading, budget, shares, tolerance)
+    total = n * WORDS_PER_PARAGRAPH
+    return (round(total * (1 - tolerance)), round(total * (1 + tolerance)))
+
+
+def wide_paragraphs(paras: list["Paragraph"]) -> list[Finding]:
+    """A paragraph carrying more argument than a paragraph holds.
+
+    PHASE: draft. The upper half of ``PARAGRAPH_BAND``, which until now existed only in
+    the outline's arithmetic and was never once checked against finished prose. A 369-word
+    paragraph is not a style preference — it is a subsection that was handed more words
+    than it had bullets to spend them on.
+    """
+    lo, hi = PARAGRAPH_BAND
+    out: list[Finding] = []
+    for p in paras:
+        if not _is_body(p):
+            continue
+        n = len(p.text.split())
+        if n > hi:
+            out.append(Finding(
+                "wide-paragraph", f"{p.heading!r} para {p.index}",
+                f'This paragraph runs {n} words against a {lo}–{hi} band: "{p.snippet()}" '
+                f"— split it into {max(2, round(n / WORDS_PER_PARAGRAPH))} paragraphs, each "
+                f"making one point, or cut it to {hi}.", section=p.section))
+    return out
+
+
 def section_leaf_counts(outline_md: str) -> dict[str, int]:
     """Section heading → how many subsections the outline gives it. The denominator for
     ``section_target``, taken from the approved outline rather than guessed."""

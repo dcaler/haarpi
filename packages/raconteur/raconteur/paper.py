@@ -55,8 +55,13 @@ names AND the heading levels the outline uses — do not flatten a #### into a #
 across all its subsections together — not each. It is this section's share of the venue's \
 limit, so a section that overruns is taking words from another
 - Write ONE PARAGRAPH per outline bullet, in the bullet's order. A bullet is a paragraph's \
-worth of argument, and the section's words divide across its bullets — so do not merge two \
-bullets into one paragraph, and do not spread one bullet across three
+worth of argument — so do not merge two bullets into one paragraph, and do not spread one \
+bullet across three
+- EVERY paragraph must be {para_low}–{para_high} words. This is a hard bound and it is not \
+in tension with the section total: the section's words are the bullet count times \
+{para_words}, so writing one paragraph per bullet at this length lands the section on its \
+number automatically. If a paragraph is running long you are arguing something the outline \
+did not ask this bullet to argue — cut it, do not let the paragraph grow
 - For Methods sections: reference specific algorithms, functions, parameters, and \
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
@@ -110,6 +115,9 @@ section outline did not name here
 {words_high} words
 7b. A paragraph count that does not match the outline's bullet count for a subsection — \
 one bullet is one paragraph
+7c. ANY paragraph outside {para_low}–{para_high} words. Report each one by its opening \
+words. A paragraph over {para_high} is the most common defect in this pipeline and the \
+one most often missed — count before you answer
 
 Do not comment on citation density or on whether the prose lists rather than synthesises — \
 those are checked mechanically after this critique and reported separately.
@@ -344,6 +352,8 @@ def _critique_revise(
             text=text,
             words_low=lo,
             words_high=hi,
+            para_low=guards.PARAGRAPH_BAND[0],
+            para_high=guards.PARAGRAPH_BAND[1],
         ),
         system=_SYSTEM,
     )
@@ -404,6 +414,7 @@ def _guard_section(
     findings += guards.author_year_prose(text)
     findings += guards.uncited_paragraphs(paras)
     findings += guards.sparse_paragraphs(paras)
+    findings += guards.wide_paragraphs(paras)
     if have_results:
         findings += guards.unnumbered_results_paragraphs(paras)
     findings += guards.figure_findings(text, expect=expect_figures)
@@ -579,10 +590,23 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
 
 # ── fresh paper draft ─────────────────────────────────────────────────────────
 
-def _style_block(style_profile: str) -> str:
-    if not style_profile:
+def _style_block(style_profile: str, style_note: str = "") -> str:
+    """The author's measured voice, and the register THIS paper wants within it.
+
+    The note goes LAST and is stated as the tie-breaker, because it is the more specific
+    instruction and the profile is long enough to drown it. A profile trained across an
+    author's whole corpus describes their mean register; a given paper is rarely written at
+    the mean, and nothing else in the pipeline can say so.
+    """
+    if not style_profile and not style_note:
         return ""
-    return f"Writing style guidance (match this author's voice):\n{style_profile}\n\n"
+    out = ""
+    if style_profile:
+        out += f"Writing style guidance (match this author's voice):\n{style_profile}\n\n"
+    if style_note:
+        out += ("Register for THIS paper — where it and the voice guidance above pull in "
+                f"different directions, this wins:\n{style_note}\n\n")
+    return out
 
 
 def _bib_block(bib_summary: str) -> str:
@@ -647,10 +671,12 @@ Problems to fix:
 Rules:
 - This section must come to {words_low}–{words_high} words in total, across all its \
 subsections together
-- One outline bullet is one paragraph. To shorten, tighten prose — remove hedging, \
-redundant restatement, sentences that repeat an adjacent one. To lengthen, develop what \
-the bullets already promise: draw out the reasoning, state the mechanism, interpret the \
-evidence already present
+- One outline bullet is one paragraph, and every paragraph must be {para_low}–{para_high} \
+words. To shorten, tighten prose — remove hedging, redundant restatement, sentences that \
+repeat an adjacent one. To lengthen, develop what the bullets already promise: draw out \
+the reasoning, state the mechanism, interpret the evidence already present
+- A paragraph over {para_high} words is SPLIT, not trimmed, only when it is carrying two \
+bullets' worth of argument; otherwise cut it back to length
 - Never pad, never restate, never introduce a new claim, value, or source
 - Do NOT drop a [@citekey], a figure (`![…](…)`), or a subsection heading
 - Do NOT add or rename a subsection heading
@@ -713,7 +739,7 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
             if not mine:
                 repaired.append((heading, text))
                 continue
-            lo, hi = guards.section_target(heading, budget, shares)
+            lo, hi = guards.section_band(heading, outline_text, budget, shares)
             if not lo:
                 lo, hi = _DEFAULT_BAND
             log(f"[raconteur] repairing '{heading}' ({len(mine)} finding(s))")
@@ -723,7 +749,9 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
                     section_outline=outline_sections.get(heading, ""),
                     text=text,
                     findings="\n".join(f"- {f.imperative}" for f in mine),
-                    words_low=lo, words_high=hi),
+                    words_low=lo, words_high=hi,
+                    para_low=guards.PARAGRAPH_BAND[0],
+                    para_high=guards.PARAGRAPH_BAND[1]),
                 system=_SYSTEM, num_ctx=16384)))
         assembled = head + "\n" + "\n".join(
             f"## {h}\n\n{t.strip()}\n" for h, t in repaired)
@@ -763,7 +791,7 @@ def _draft_paper(
 
     venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
-    style_section = _style_block(style_profile)
+    style_section = _style_block(style_profile, cfg.style_note)
     drafted: list[tuple[str, str]] = []
 
     # The venue's budget, apportioned the same way the outline apportioned it — one source
@@ -794,9 +822,13 @@ def _draft_paper(
             drafted.append((heading, _ack_passthrough(section_outline, project_dir)))
             continue
         ctx = _context_for_section(heading, litrev, code, results, written, narrative)
-        band = guards.section_target(heading, budget, cfg.section_shares or None)
+        band = guards.section_band(heading, outline_text, budget,
+                                   cfg.section_shares or None)
         lo, hi = band if band[0] else _DEFAULT_BAND
-        log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words per subsection)")
+        n_bullets = guards.section_bullets(outline_text).get(
+            guards._norm_heading(heading), 0)
+        log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words "
+            f"across {n_bullets} paragraph(s))")
         text = brain.coordinator(
             _DRAFT_SECTION_PROMPT.format(
                 heading=heading,
@@ -811,6 +843,9 @@ def _draft_paper(
                 bib_section=bib_section,
                 words_low=lo,
                 words_high=hi,
+                para_low=guards.PARAGRAPH_BAND[0],
+                para_high=guards.PARAGRAPH_BAND[1],
+                para_words=guards.WORDS_PER_PARAGRAPH,
             ),
             system=_SYSTEM,
             num_ctx=16384,
@@ -871,7 +906,7 @@ def _revise_paper(
 
     venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
-    style_section = _style_block(style_profile)
+    style_section = _style_block(style_profile, cfg.style_note)
     existing_map = dict(_parse_sections(existing_text))
     revised: list[tuple[str, str]] = []
     bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
@@ -894,7 +929,8 @@ def _revise_paper(
             continue
         existing = existing_map.get(heading, "")
         ctx = _context_for_section(heading, litrev, code, results, written, narrative)
-        band = guards.section_target(heading, budget, cfg.section_shares or None)
+        band = guards.section_band(heading, outline_text, budget,
+                                   cfg.section_shares or None)
         log(f"[raconteur] revising '{heading}'…")
         text = brain.coordinator(
             _REVISE_WITH_ANNOTATIONS_PROMPT.format(

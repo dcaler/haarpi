@@ -93,6 +93,29 @@ def _load_existing_profile(project_dir: Path = None) -> dict:
     return {}
 
 
+def profile_is_current(meta: dict | None = None) -> bool:
+    """Whether the profile on disk is in the format the drafter can actually use.
+
+    A profile written by an older version parses, loads, and reaches the prompt looking
+    healthy — and is silently degraded: with no ``signature`` the measured palette and the
+    rhythm line are empty, ``_exemplars`` finds no ``## Voice — exemplars`` section so the
+    per-section ``kind`` is ignored, ``style_block`` returns "" on both counts, and
+    ``load_style_profile`` falls back to dumping the raw body. Every section then gets the
+    same generic block and ``load_style_signature`` returns {}, so no style guard can fire.
+
+    The staleness check upstream compares PAPER KEYS, which are unchanged by a format
+    change — so the one profile that most needs retraining is the one that reports itself
+    up to date. That is why this is a separate question from "are there new papers".
+    """
+    if meta is None:
+        meta = _load_existing_profile()
+    if not meta.get("signature"):
+        return False
+    body = STYLE_PROFILE_PATH.read_text(encoding="utf-8") if STYLE_PROFILE_PATH.exists() \
+        else ""
+    return "## Voice — exemplars" in body
+
+
 def _write_profile(project_dir: Path, author: str, paper_keys: list[str],
                    papers_used: list[str], analysis: str,
                    signature: dict | None = None,
@@ -232,20 +255,27 @@ def run(project_dir: Path) -> None:
     existing = _load_existing_profile()
     existing_keys: set[str] = set(existing.get("paper_keys", []))
     last_updated = existing.get("last_updated", "")
+    current_format = profile_is_current(existing)
 
     zotero = ZoteroClient(zcfg)
 
-    # Use keys confirmed during init if available — no prompts needed.
-    if cfg.style_paper_keys:
-        confirmed_keys = cfg.style_paper_keys
+    # The profile's own key list is as good a source as the project's, and better when the
+    # project never recorded one — a global voice does not need re-confirming per project,
+    # and falling to the interactive search here is what made a trained profile look absent.
+    confirmed_keys = cfg.style_paper_keys or sorted(existing_keys)
+    if confirmed_keys:
         new_keys = set(confirmed_keys) - existing_keys
-        if existing_keys and not new_keys:
+        if existing_keys and not new_keys and current_format:
             log(
                 f"[raconteur] style profile is up to date "
                 f"({len(existing_keys)} paper(s), last trained {last_updated})"
             )
             zotero.close()
             return
+        if existing_keys and not new_keys:
+            log(f"[raconteur] no new papers, but the profile on disk predates the measured "
+                f"signature and the kind-tagged exemplars — retraining from the same "
+                f"{len(confirmed_keys)} paper(s)")
         log(f"[raconteur] fetching {len(confirmed_keys)} confirmed paper(s) from Zotero…")
         confirmed = zotero.items_by_keys(confirmed_keys)
         zotero.close()

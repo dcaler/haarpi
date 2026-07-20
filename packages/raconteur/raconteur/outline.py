@@ -253,6 +253,46 @@ Rules:
 - Write only these headings — no others, no prose, no commentary
 """
 
+_TOPUP_PROMPT = """\
+Add the MISSING outline bullets for these subsections of an academic paper, and nothing \
+else.
+
+Title: {title}
+
+Structural analysis:
+{analysis}
+
+Each heading below states how many further bullets it needs, followed by the bullets it \
+already has. Write ONLY the new ones — each stating what one further paragraph of that \
+subsection argues, and none of them restating a bullet already listed.
+
+{headings}
+
+Rules:
+- Use `### <heading>` exactly as given, then `- ` bullets beneath it
+- Write EXACTLY the number of new bullets each heading asks for
+- Do not repeat the existing bullets in your output
+- Write only these headings — no others, no prose, no commentary
+"""
+
+
+def _topup(brain: Brain, short: list[tuple[str, int, list[str]]],
+           title: str, analysis: str) -> str:
+    """Ask for the bullets the plan affords and the outline did not supply."""
+    blocks = []
+    for heading, need, got in short:
+        lines = [f"### {heading}", f"  NEEDS {need} more bullet(s)."]
+        lines.append("  Already has: " + ("; ".join(g.lstrip('- ').strip() for g in got)
+                                          if got else "nothing — it is empty."))
+        blocks.append("\n".join(lines))
+    log(f"[raconteur] {len(short)} heading(s) under-planned — asking for "
+        f"{sum(n for _, n, _ in short)} more bullet(s): "
+        + ", ".join(h for h, _, _ in short))
+    return brain.coordinator(
+        _TOPUP_PROMPT.format(title=title, analysis=analysis,
+                             headings="\n\n".join(blocks)),
+        system=_SYSTEM, num_ctx=8192)
+
 
 def _fill_empty(brain: Brain, empty: list[str], title: str, analysis: str,
                 skeleton: str, plan: str) -> str:
@@ -787,21 +827,19 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
     )
 
 
-def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str:
-    """The exact words and bullets each APPROVED subsection gets.
+def planned_bullets(skeleton: str, budget: int,
+                    shares: dict | None) -> list[tuple[str, str, int, int]]:
+    """What every writable heading in the APPROVED skeleton is owed.
 
-    Phase two is handed a structure the author has already gated, so every one of these
-    numbers is computable — and leaving the model to derive them across seventeen
-    subsections is how a bullet count comes out wrong and `bullet_budget` then fails it.
-
-    The merge advice this replaces belongs to the SKELETON stage, where the structure is
-    still up for revision. Here it told the model to do the one thing skeleton_conformance
-    rejects.
+    Returns (label, heading, words, bullets) in document order — ``label`` for the prompt,
+    ``heading`` for matching against what came back. One function, because the number the
+    model is ASKED for and the number it is CHECKED against being computed in two places is
+    exactly how the css2026 outline came back with five subsections at half their bullets
+    and nothing objected.
     """
     from . import guards
     heads = guards.parse_outline(skeleton)
-    rows, current, kids = [], None, {}
-    order = []
+    current, kids, order = None, {}, []
     for h in heads:
         if h.level == 2:
             current = h.text
@@ -813,16 +851,52 @@ def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str
             order.append(current)
         elif h.level >= 3 and current is not None:
             kids[current].append(h.text)
+
+    out: list[tuple[str, str, int, int]] = []
     for sec in order:
         words = guards.section_words(sec, budget, shares)
         subs = kids[sec]
         if not subs:
-            rows.append(f"  - {sec}: {words} words, {guards.bullets_for(words)} bullet(s)")
+            out.append((sec, sec, words, guards.bullets_for(words)))
             continue
         each = words // len(subs)
         for sub in subs:
-            rows.append(f"  - {sec} / {sub}: {each} words, "
-                        f"{guards.bullets_for(each)} bullet(s)")
+            out.append((f"{sec} / {sub}", sub, each, guards.bullets_for(each)))
+    return out
+
+
+def bullet_shortfall(outline_md: str, skeleton_md: str, budget: int,
+                     shares: dict | None) -> list[tuple[str, int, list[str]]]:
+    """Headings the outline under-plans: (heading, bullets still owed, bullets it has).
+
+    An empty heading is the extreme case of this, not a different problem — so the same
+    re-ask covers both, and a subsection that came back with one bullet where the plan
+    afforded two is no longer allowed to reach the drafter, where it becomes a 360-word
+    paragraph.
+    """
+    have = _bullets_by_heading(outline_md)
+    from . import guards
+    out: list[tuple[str, int, list[str]]] = []
+    for _, heading, _, want in planned_bullets(skeleton_md, budget, shares):
+        got = [b for b in have.get(guards._norm_heading(heading), []) if b.strip()]
+        if len(got) < want:
+            out.append((heading, want - len(got), got))
+    return out
+
+
+def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str:
+    """The exact words and bullets each APPROVED subsection gets.
+
+    Phase two is handed a structure the author has already gated, so every one of these
+    numbers is computable — and leaving the model to derive them across seventeen
+    subsections is how a bullet count comes out wrong and `bullet_budget` then fails it.
+
+    The merge advice this replaces belongs to the SKELETON stage, where the structure is
+    still up for revision. Here it told the model to do the one thing skeleton_conformance
+    rejects.
+    """
+    rows = [f"  - {label}: {words} words, {n} bullet(s)"
+            for label, _, words, n in planned_bullets(skeleton, budget, shares)]
     if not rows:
         return ""
     return ("- The structure below is APPROVED and FIXED. Write exactly this many bullets "
@@ -986,18 +1060,30 @@ def _outline_fresh(
         # or duplicated simply has nowhere to land. See lock_to_skeleton.
         from .context import load_authors_block
         v = cfg.venue(venue) if venue else None
-        outline, empty = lock_to_skeleton(
-            outline, skeleton, cfg.title,
-            load_authors_block(project_dir, anonymized=bool(v and v.anonymized)))
-        if empty:
-            outline, still = lock_to_skeleton(
-                outline + "\n" + _fill_empty(brain, empty, cfg.title, analysis,
-                                              skeleton, ""),
-                skeleton, cfg.title,
-                load_authors_block(project_dir, anonymized=bool(v and v.anonymized)))
-            if still:
-                log(f"[warn] {len(still)} heading(s) still unplanned after a second ask: "
-                    + ", ".join(still))
+        authors_block = load_authors_block(
+            project_dir, anonymized=bool(v and v.anonymized))
+        outline, _ = lock_to_skeleton(outline, skeleton, cfg.title, authors_block)
+
+        # Bullets are the manuscript's paragraphs, so a shortfall here is not a cosmetic
+        # gap in a plan — it is the drafter being handed a section's whole word share and
+        # too few paragraphs to spend it across. Ask until the plan is met, then stop.
+        from . import guards
+        gi = _outline_guard_inputs(cfg, project_dir, venue, skeleton)
+        budget, shares = gi["budget"], gi["shares"]
+        for attempt in (1, 2):
+            short = bullet_shortfall(outline, skeleton, budget, shares)
+            if not short:
+                break
+            outline, _ = lock_to_skeleton(
+                outline + "\n" + _topup(brain, short, cfg.title, analysis),
+                skeleton, cfg.title, authors_block)
+        short = bullet_shortfall(outline, skeleton, budget, shares)
+        if short:
+            log(f"[warn] {len(short)} heading(s) still under-planned after two asks "
+                f"— the draft will run short by about "
+                f"{sum(n for _, n, _ in short) * guards.WORDS_PER_PARAGRAPH} words:")
+            for heading, need, _ in short:
+                log(f"  · {heading}: {need} bullet(s) short")
 
     _log_structure(cfg, project_dir, outline, venue, skeleton)
 

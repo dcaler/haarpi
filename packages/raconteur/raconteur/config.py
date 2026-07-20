@@ -180,6 +180,12 @@ class ProjectConfig:
     style_author: str = ""
     use_style: bool = False
     style_paper_keys: list = field(default_factory=list)
+    # A sentence of register direction for THIS paper, on top of the trained profile. The
+    # profile is one global voice measured across every paper the author has written, so it
+    # steers every project toward the same register — on SchellingChords it faithfully
+    # reproduced the author's energy-policy voice in a paper whose own brief asked for
+    # "rigorous but playful". An author has a range; the profile has a mean.
+    style_note: str = ""
     venues: dict = field(default_factory=dict)      # slug -> VenueConfig
     brain: BrainConfig = field(default_factory=BrainConfig)
 

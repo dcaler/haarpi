@@ -117,7 +117,7 @@ def test_the_revise_path_uses_the_same_ordering_and_helpers():
     import inspect
     src = inspect.getsource(paper._revise_paper)
     assert "write_order(" in src
-    assert "section_target(" in src
+    assert "section_band(" in src
     assert "_guard_repair(" in src
     assert "_context_for_section(heading, litrev, code, results, written, narrative)" in src
 
