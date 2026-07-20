@@ -32,8 +32,13 @@ def check_pandoc() -> bool:
 
 
 def _pandoc_cmd(src: Path, dst: Path, bib_path: Path | None,
-                resource_path: Path | None, suppress_bibliography: bool) -> list[str]:
+                resource_path: Path | None, suppress_bibliography: bool,
+                reference_doc: Path | None = None) -> list[str]:
     cmd = ["pandoc", str(src), "-o", str(dst)]
+    if reference_doc is not None and Path(reference_doc).exists():
+        # Styles come from the reference doc — including the outline numbering bound to the
+        # heading styles, which is why the markdown carries no numbers of its own.
+        cmd += ["--reference-doc", str(reference_doc)]
     if bib_path is not None and Path(bib_path).exists():
         cmd += ["--bibliography", str(bib_path), "--citeproc"]
         if suppress_bibliography:
@@ -49,13 +54,15 @@ def _pandoc_cmd(src: Path, dst: Path, bib_path: Path | None,
 
 def pandoc_convert(src: Path, dst: Path, bib_path: Path | None = None,
                    resource_path: Path | None = None,
-                   suppress_bibliography: bool = False) -> bool:
+                   suppress_bibliography: bool = False,
+                   reference_doc: Path | None = None) -> bool:
     """Explicit src → dst conversion. The single pandoc invocation in the pipeline."""
     if not shutil.which("pandoc"):
         print("  [note] pandoc not found — skipping .docx (md written). "
               "Install pandoc to get .docx output.")
         return False
-    cmd = _pandoc_cmd(src, dst, bib_path, resource_path, suppress_bibliography)
+    cmd = _pandoc_cmd(src, dst, bib_path, resource_path, suppress_bibliography,
+                      reference_doc)
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         return True
@@ -69,10 +76,12 @@ def to_docx(
     bib_path: Path | None = None,
     resource_path: Path | None = None,
     suppress_bibliography: bool = False,
+    reference_doc: Path | None = None,
 ) -> Path | None:
     """Convert alongside the source (`x.md` → `x.docx`), optionally with a
-    bibliography (citeproc) and a resource path for figure resolution."""
+    bibliography (citeproc), a resource path for figure resolution, and a reference
+    document supplying the styles (heading numbering among them)."""
     docx_path = md_path.with_suffix(".docx")
     ok = pandoc_convert(md_path, docx_path, bib_path, resource_path,
-                        suppress_bibliography)
+                        suppress_bibliography, reference_doc)
     return docx_path if ok else None

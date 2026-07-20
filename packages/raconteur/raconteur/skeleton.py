@@ -200,7 +200,7 @@ def _write(project_dir: Path, cfg: ProjectConfig, work_dir: Path, text: str,
            venue: str = "") -> Path:
     from .context import load_authors_block
     from .naming import major_skeleton_name
-    from .render import to_docx
+    from .refdoc import render
     v = cfg.venue(venue) if venue else None
     who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
     if who:
@@ -210,7 +210,7 @@ def _write(project_dir: Path, cfg: ProjectConfig, work_dir: Path, text: str,
     out = work_dir / major_skeleton_name(cfg.short_title, "md", venue=venue)
     out.write_text(text, encoding="utf-8")
     log(f"[raconteur] wrote {out.relative_to(project_dir)}")
-    docx = to_docx(out)
+    docx = render(out, project_dir)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
     return out

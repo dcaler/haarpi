@@ -935,6 +935,7 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
     out_path.write_text(output, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
-    docx = to_docx(out_path)
+    from .refdoc import render as _render_docx
+    docx = _render_docx(out_path, project_dir)
     if docx:
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
