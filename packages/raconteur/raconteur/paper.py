@@ -224,7 +224,6 @@ def _parse_sections(text: str) -> list[tuple[str, str]]:
 # wall of uncited findings the repair rounds could not clear. It gets the litreview in full
 # (the citations it was missing) plus a bounded results slice: the analysis already carries
 # key_findings, so full litrev + full results would overrun the num_ctx budget for no gain.
-_MAX_DISCUSSION_RESULTS_CHARS = 4000
 
 
 # The order sections are WRITTEN in, which is not the order they are read in. A section
@@ -832,18 +831,27 @@ def _revise_paper(
     style_section = _style_block(style_profile)
     existing_map = dict(_parse_sections(existing_text))
     revised: list[tuple[str, str]] = []
+    bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
+    budget = _prose_budget(cfg, venue)
 
-    for heading, section_outline in _parse_sections(outline_text):
+    # The same dependency order as a fresh draft: a Conclusion revised without seeing the
+    # revised Results restates a version of the paper that no longer exists.
+    sections = dict(_parse_sections(outline_text))
+    written: dict[str, str] = {}
+
+    for heading in write_order(list(sections)):
+        section_outline = sections[heading]
         if _is_references(heading) or _is_abstract(heading):
             continue
         if _is_acknowledgements(heading):
-            # Keep whatever the author has filled in; fall back to the
-            # outline's CRediT reference list if the section is still bare.
+            # Keep whatever the author has filled in; fall back to the recorded authors
+            # if the section is still bare.
             revised.append((heading, existing_map.get(heading, "").strip()
-                            or _ack_passthrough(section_outline)))
+                            or _ack_passthrough(section_outline, project_dir)))
             continue
         existing = existing_map.get(heading, "")
-        ctx = _context_for_section(heading, litrev, code, results)
+        ctx = _context_for_section(heading, litrev, code, results, written, narrative)
+        band = guards.section_target(heading, budget, cfg.section_shares or None)
         log(f"[raconteur] revising '{heading}'…")
         text = brain.coordinator(
             _REVISE_WITH_ANNOTATIONS_PROMPT.format(
@@ -858,16 +866,37 @@ def _revise_paper(
             system=_SYSTEM,
             num_ctx=16384,
         )
-        text = _critique_revise(brain, heading, text, section_outline, analysis, 1)
-        text = _critique_revise(brain, heading, text, section_outline, analysis, 2)
+        text = _critique_revise(brain, heading, text, section_outline, analysis, 1, band)
+        text = _critique_revise(brain, heading, text, section_outline, analysis, 2, band)
+        text = _guard_repair(brain, heading, text, section_outline, bib_section,
+                             bib_keys, bool(results),
+                             expect_figures=_outline_figure_count(section_outline))
         revised.append((heading, text))
+        written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
+
+    doc_order = {h: i for i, h in enumerate(sections)}
+    revised.sort(key=lambda hv: doc_order.get(hv[0], len(doc_order)))
 
     _ensure_acknowledgements(revised, project_dir)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
-    _write(project_dir, cfg, paper_dir,
-           _assemble(cfg.title, abstract, revised), venue)
+    assembled = _assemble(cfg.title, abstract, revised)
+
+    # MEASURED, not repaired. The fresh path hands these findings to a whole-document
+    # rewrite; here the manuscript has just incorporated the author's annotations, and a
+    # wholesale rewrite is exactly how those get undone. The author is told what drifted
+    # and decides — the same reason accepting and resolving are human-only.
+    findings = _manuscript_findings(assembled, outline_text, budget,
+                                    cfg.section_shares or None)
+    if findings:
+        log(f"[warn] {len(findings)} manuscript finding(s) after revision — NOT repaired "
+            f"automatically, so your annotations are not rewritten:")
+        for f in findings:
+            log(f"[warn]   · {f.kind} — {f.where}")
+
+    _write(project_dir, cfg, paper_dir, assembled, venue)
+    log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

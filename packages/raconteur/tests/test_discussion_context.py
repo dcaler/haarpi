@@ -105,3 +105,29 @@ def test_a_section_written_before_its_dependency_simply_has_none():
 
 def test_a_section_with_no_material_is_empty():
     assert paper._context_for_section("5. Discussion", "", "", "", {}, "") == ""
+
+
+# ── the revise path is not a second, weaker pipeline ─────────────────────────
+
+def test_the_revise_path_uses_the_same_ordering_and_helpers():
+    """A fresh draft got dependency ordering, section bands and the guard repair; the
+    revise path — the one the ladder actually takes after your markup — silently kept the
+    old behaviour: document order, no band (so every section fell back to 450-900), no
+    guard repair, and no whole-document checks at all."""
+    import inspect
+    src = inspect.getsource(paper._revise_paper)
+    assert "write_order(" in src
+    assert "section_target(" in src
+    assert "_guard_repair(" in src
+    assert "_context_for_section(heading, litrev, code, results, written, narrative)" in src
+
+
+def test_the_revise_path_measures_but_does_not_rewrite():
+    """The fresh path hands its findings to a whole-document rewrite. Here the manuscript
+    has just incorporated the author's annotations, and a wholesale rewrite is how those
+    get undone — so the findings are reported and the author decides."""
+    import inspect
+    src = inspect.getsource(paper._revise_paper)
+    assert "_manuscript_findings(" in src
+    assert "_whole_document_repair(" not in src
+    assert "NOT repaired" in src
