@@ -119,3 +119,89 @@ def test_a_figure_is_not_a_paragraph():
 
 def test_no_outline_means_no_paragraph_claim():
     assert guards.paragraph_conformance("### A\n\nprose\n", "") == []
+
+
+# ── the structure is assembled, not negotiated ───────────────────────────────
+
+SKELETON = ("# A Title\n## Abstract\n## Introduction\n## Background\n### A\n### B\n"
+            "## Results\n### C\n## Acknowledgements\n## References\n")
+
+
+def _locked(outline_md, **kw):
+    from raconteur.outline import lock_to_skeleton
+    return lock_to_skeleton(outline_md, SKELETON, "A Title", **kw)
+
+
+def test_a_section_the_model_invented_has_nowhere_to_land():
+    """"Almost honoured the structure" is not a pass. The run that prompted this obeyed
+    "APPROVED and FIXED" for sixteen of seventeen subsections and invented one anyway."""
+    locked, _ = _locked("## Results\n### C\n- a beat\n### Future Work\n- a beat\n")
+    assert "Future Work" not in locked
+    assert "### C" in locked
+
+
+def test_a_section_the_model_renamed_keeps_the_approved_name():
+    locked, empty = _locked("## Background\n### A prime\n- a beat\n")
+    assert "### A prime" not in locked and "### A" in locked
+    assert "A" in empty            # its bullets went nowhere, and that is reported
+
+
+def test_the_title_cannot_be_duplicated():
+    """The model is shown a skeleton containing a title and told to reproduce headings
+    exactly, so it emitted one — and _write added another."""
+    locked, _ = _locked("# A Title\n## Introduction\n- a beat\n")
+    assert [ln for ln in locked.splitlines() if ln.startswith("# ")] == ["# A Title"]
+
+
+def test_the_author_block_comes_from_config_not_from_the_model():
+    locked, _ = _locked("## Introduction\n- a beat\n", authors_block="A. One^1^")
+    assert locked.count("A. One^1^") == 1
+    assert locked.splitlines()[0] == "# A Title"
+
+
+def test_bullets_land_under_the_heading_they_were_written_for():
+    locked, _ = _locked("## Background\n### B\n- second\n### A\n- first\n")
+    body = locked.split("### A")[1]
+    assert "- first" in body.split("### B")[0]
+    assert "- second" in locked.split("### B")[1]
+
+
+def test_a_parent_section_is_not_reported_as_unplanned():
+    """Background carries its bullets in its subsections; reporting it as empty would
+    train the reader to ignore the list."""
+    _, empty = _locked("## Abstract\n- w\n## Introduction\n- w\n"
+                       "## Background\n### A\n- x\n### B\n- y\n## Results\n### C\n- z\n")
+    assert empty == []
+
+
+def test_a_leaf_with_no_bullets_is_reported():
+    _, empty = _locked("## Abstract\n- w\n## Introduction\n- w\n"
+                       "## Background\n### A\n- x\n## Results\n### C\n- z\n")
+    assert empty == ["B"]
+
+
+def test_the_furniture_is_never_reported_as_unplanned():
+    _, empty = _locked("## Abstract\n- w\n## Introduction\n- x\n"
+                       "## Background\n### A\n- x\n### B\n- y\n## Results\n### C\n- z\n")
+    assert empty == []
+
+
+def test_conformance_holds_by_construction():
+    from raconteur import guards
+    locked, _ = _locked("## Results\n### C\n- a\n### Invented\n- b\n")
+    assert guards.skeleton_conformance(locked, SKELETON) == []
+
+
+# ── the abstract has a target, so its bullets are checkable ──────────────────
+
+def test_a_three_bullet_abstract_is_caught():
+    """225 words across three bullets is 75-word paragraphs."""
+    from raconteur import guards
+    findings = guards.bullet_budget("## Abstract\n- a\n- b\n- c\n", 4000)
+    assert [f.kind for f in findings] == ["bullet-count"]
+    assert "225 words" in findings[0].imperative
+
+
+def test_a_two_bullet_abstract_is_right():
+    from raconteur import guards
+    assert guards.bullet_budget("## Abstract\n- a\n- b\n", 4000) == []

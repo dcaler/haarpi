@@ -1069,7 +1069,11 @@ def bullet_budget(markdown: str, budget: int,
     for leaf in leaves(heads):
         counts.setdefault(ancestor_kind(heads, leaf, for_budget=True), []).append(leaf)
     for kind, kids in counts.items():
-        words = round(budget * (shares or DEFAULT_SECTION_SHARES).get(kind, 0))
+        # The abstract sits outside the body budget but is not unbounded: it has its own
+        # target, so its bullet count is checkable too. A 225-word abstract carrying three
+        # bullets is asking for 75-word paragraphs.
+        words = (abstract_words() if kind == "abstract"
+                 else round(budget * (shares or DEFAULT_SECTION_SHARES).get(kind, 0)))
         if not words:
             continue
         each = words // max(1, len(kids))

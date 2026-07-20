@@ -173,6 +173,103 @@ def _credit_authors(project_dir: Path) -> str:
             "author assigns the roles:\n" + names)
 
 
+def _bullets_by_heading(outline_md: str) -> dict[str, list[str]]:
+    """heading -> its bullet lines, keyed by normalised heading text."""
+    from . import guards
+    out: dict[str, list[str]] = {}
+    current = None
+    for raw in outline_md.splitlines():
+        st = raw.lstrip()
+        if st.startswith("#"):
+            lvl = len(st) - len(st.lstrip("#"))
+            text = st[lvl:].strip()
+            current = guards._norm_heading(text) if text and lvl >= 2 else None
+            if current is not None:
+                out.setdefault(current, [])
+            continue
+        if current is not None and st:
+            out[current].append(raw.rstrip())
+    return out
+
+
+def lock_to_skeleton(outline_md: str, skeleton_md: str, title: str,
+                     authors_block: str = "") -> tuple[str, list[str]]:
+    """Rebuild the outline from the APPROVED skeleton, keeping only the model's bullets.
+
+    Conformance stops being something the model is asked for and then checked on. The
+    headings, their order, their levels, the title, the author block and the furniture are
+    all already known — from the skeleton the author gated, and from the project config —
+    so none of them is worth a token of inference, and every one of them was a way to
+    deviate. Phase two supplies bullets; this supplies everything else.
+
+    "Almost honoured the structure" is not a pass. The run that prompted this obeyed
+    "APPROVED and FIXED — do not add, remove, merge or rename" for sixteen of seventeen
+    subsections, dropped one, invented another, and duplicated the title because it had
+    been shown a document containing one.
+
+    Returns the locked outline and any headings the model left with no bullets.
+    """
+    from . import guards
+    bullets = _bullets_by_heading(outline_md)
+    heads = [(len(st) - len(st.lstrip("#")), st[len(st) - len(st.lstrip("#")):].strip())
+             for st in (r.lstrip() for r in skeleton_md.splitlines())
+             if st.startswith("#") and st[len(st) - len(st.lstrip("#")):].strip()]
+    heads = [(lvl, text) for lvl, text in heads if lvl >= 2]
+
+    lines = [f"# {title}", ""]
+    if authors_block:
+        lines += [authors_block, ""]
+    empty: list[str] = []
+    for i, (lvl, text) in enumerate(heads):
+        lines += [f"{'#' * lvl} {text}", ""]
+        got = bullets.get(guards._norm_heading(text), [])
+        if got:
+            lines += got + [""]
+            continue
+        # A section with subsections carries its bullets in them; only a LEAF that came
+        # back empty is a heading the model failed to plan.
+        has_child = i + 1 < len(heads) and heads[i + 1][0] > lvl
+        if not has_child and not (guards.is_references(text)
+                                  or guards.is_acknowledgements(text)):
+            empty.append(text)
+    return "\n".join(lines).rstrip() + "\n", empty
+
+
+_FILL_PROMPT = """\
+Write the outline bullets for these subsections of an academic paper, and nothing else.
+
+Title: {title}
+
+Structural analysis:
+{analysis}
+
+For each heading below, write its bullets — one bullet per paragraph the manuscript will \
+contain, each stating what that paragraph argues. Reproduce the heading exactly, then its \
+bullets:
+{headings}
+
+Rules:
+- Use `### <heading>` exactly as given, then `- ` bullets beneath it
+- Write only these headings — no others, no prose, no commentary
+"""
+
+
+def _fill_empty(brain: Brain, empty: list[str], title: str, analysis: str,
+                skeleton: str, plan: str) -> str:
+    """Ask again for just the headings that came back with no bullets.
+
+    Cheaper than another whole-outline pass, and it cannot disturb what already landed:
+    only the named headings are asked for, and the result is merged by heading.
+    """
+    log(f"[raconteur] {len(empty)} heading(s) came back unplanned — asking again: "
+        + ", ".join(empty))
+    return brain.coordinator(
+        _FILL_PROMPT.format(
+            title=title, analysis=analysis,
+            headings="\n".join(f"### {h}" for h in empty)),
+        system=_SYSTEM, num_ctx=8192)
+
+
 def _skeleton_section(skeleton: str) -> str:
     """The approved structure phase two writes bullets onto.
 
@@ -882,6 +979,26 @@ def _outline_fresh(
     outline = _critique_revise(brain, outline, analysis, n=2,
                                structural=_structural_critique(cfg, project_dir, outline,
                                                               venue, skeleton))
+
+    if skeleton.strip():
+        # The structure is not negotiated — it is the skeleton the author gated. Rebuild
+        # from it and keep only the bullets; a heading the model renamed, dropped, invented
+        # or duplicated simply has nowhere to land. See lock_to_skeleton.
+        from .context import load_authors_block
+        v = cfg.venue(venue) if venue else None
+        outline, empty = lock_to_skeleton(
+            outline, skeleton, cfg.title,
+            load_authors_block(project_dir, anonymized=bool(v and v.anonymized)))
+        if empty:
+            outline, still = lock_to_skeleton(
+                outline + "\n" + _fill_empty(brain, empty, cfg.title, analysis,
+                                              skeleton, ""),
+                skeleton, cfg.title,
+                load_authors_block(project_dir, anonymized=bool(v and v.anonymized)))
+            if still:
+                log(f"[warn] {len(still)} heading(s) still unplanned after a second ask: "
+                    + ", ".join(still))
+
     _log_structure(cfg, project_dir, outline, venue, skeleton)
 
     _write(project_dir, cfg, paper_dir, outline, venue)
@@ -982,9 +1099,12 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
            venue: str = "") -> None:
     from .context import load_authors_block
     v = cfg.venue(venue) if venue else None
-    who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
-    head = f"# {cfg.title}\n\n" + (f"{who}\n\n" if who else "")
-    output = f"{head}{text.strip()}\n"
+    if text.lstrip().startswith("# "):
+        output = text.strip() + "\n"      # already assembled from the skeleton
+    else:
+        who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
+        head = f"# {cfg.title}\n\n" + (f"{who}\n\n" if who else "")
+        output = f"{head}{text.strip()}\n"
     out_path = paper_dir / major_outline_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(output, encoding="utf-8")
     log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
