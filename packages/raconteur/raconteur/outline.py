@@ -626,7 +626,8 @@ def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
             log(f"[warn]   · {f.kind} — {f.where}")
 
 
-def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str:
+def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
+                         skeleton: str = "") -> str:
     """What the writer is told about where this is going.
 
     An outline is written FOR a venue — its length, its columns, what it publishes — so the
@@ -634,7 +635,7 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "")
     narrative belongs to the work, not to whoever might publish it.
     """
     specs = _venue_specs_block(cfg, venue)
-    budget = _budget_block(cfg, project_dir, venue)
+    budget = _budget_block(cfg, project_dir, venue, skeleton)
     if budget:
         specs = f"{specs}\n{budget}" if specs else budget
     venue_analysis = load_venue_analysis(project_dir) if venue else ""
@@ -646,7 +647,8 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "")
     return specs
 
 
-def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str:
+def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
+                  skeleton: str = "") -> str:
     """How many subsections this venue affords, and how they divide across sections.
 
     A venue's word limit reached the prompt as ambient fact and nothing turned it into the
@@ -681,9 +683,54 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str
         f"{guards.WORDS_PER_PARAGRAPH} words in the manuscript. So a subsection's bullet "
         f"count is set by its share of its section's words, not by how much there is to "
         f"say: four bullets under a 200-word subsection is a 50-word paragraph.\n"
-        "- Plan a structure that FITS this. Prefer merging related material into one "
-        "substantial subsection over splitting it across several thin ones.\n"
+        + (_per_subsection_plan(skeleton, budget, shares)
+           if skeleton.strip() else
+           "- Plan a structure that FITS this. Prefer merging related material into one "
+           "substantial subsection over splitting it across several thin ones.\n")
     )
+
+
+def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str:
+    """The exact words and bullets each APPROVED subsection gets.
+
+    Phase two is handed a structure the author has already gated, so every one of these
+    numbers is computable — and leaving the model to derive them across seventeen
+    subsections is how a bullet count comes out wrong and `bullet_budget` then fails it.
+
+    The merge advice this replaces belongs to the SKELETON stage, where the structure is
+    still up for revision. Here it told the model to do the one thing skeleton_conformance
+    rejects.
+    """
+    from . import guards
+    heads = guards.parse_outline(skeleton)
+    rows, current, kids = [], None, {}
+    order = []
+    for h in heads:
+        if h.level == 2:
+            current = h.text
+            if guards.is_abstract(current) or guards.is_references(current) \
+                    or guards.is_acknowledgements(current):
+                current = None
+                continue
+            kids[current] = []
+            order.append(current)
+        elif h.level >= 3 and current is not None:
+            kids[current].append(h.text)
+    for sec in order:
+        words = guards.section_words(sec, budget, shares)
+        subs = kids[sec]
+        if not subs:
+            rows.append(f"  - {sec}: {words} words, {guards.bullets_for(words)} bullet(s)")
+            continue
+        each = words // len(subs)
+        for sub in subs:
+            rows.append(f"  - {sec} / {sub}: {each} words, "
+                        f"{guards.bullets_for(each)} bullet(s)")
+    if not rows:
+        return ""
+    return ("- The structure below is APPROVED and FIXED. Write exactly this many bullets "
+            "under each heading — do not add, remove, merge or rename a heading:\n"
+            + "\n".join(rows) + "\n")
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -800,7 +847,7 @@ def _outline_fresh(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
                                   narrative, figures, project_dir)
 
-    venue_section = _build_venue_section(cfg, project_dir, venue)
+    venue_section = _build_venue_section(cfg, project_dir, venue, skeleton)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     # The raw methods writeup and results digest are NOT re-sent here — the analysis above

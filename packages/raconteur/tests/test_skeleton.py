@@ -125,3 +125,31 @@ def test_the_word_plan_is_computable_from_headings_alone():
 def test_one_bullet_is_one_paragraph():
     assert guards.bullets_for(300) == 2
     assert guards.WORDS_PER_PARAGRAPH == 150
+
+
+# ── phase two is handed the plan, not asked to derive it ─────────────────────
+
+def test_the_outline_is_given_each_subsections_words_and_bullets(tmp_path):
+    """Phase two writes onto a structure the author has already gated, so every allocation
+    is computable. Leaving the model to derive them across seventeen subsections is how a
+    bullet count comes out wrong and bullet_budget then fails it."""
+    from raconteur.outline import _per_subsection_plan
+    sk = ("# T\n## Abstract\n## Introduction\n## Background\n### A\n### B\n"
+          "## Results\n### C\n## Acknowledgements\n## References\n")
+    got = _per_subsection_plan(sk, 4000, None)
+    assert "Introduction: 300 words, 2 bullet(s)" in got
+    assert "Background / A: 300 words, 2 bullet(s)" in got
+    assert "Results / C: 1000 words, 7 bullet(s)" in got
+    # the furniture carries no allocation
+    assert "Abstract" not in got and "References" not in got
+
+
+def test_phase_two_is_not_told_to_merge_what_conformance_forbids(tmp_path):
+    """The merge advice belongs to the skeleton stage, where the structure is still up for
+    revision. At the outline stage it instructed the model to do the one thing
+    skeleton_conformance rejects."""
+    from raconteur.outline import _per_subsection_plan
+    got = _per_subsection_plan("# T\n## Results\n### A\n", 4000, None)
+    assert "APPROVED and FIXED" in got
+    assert "do not add, remove, merge or rename" in got
+    assert "merging related material" not in got
