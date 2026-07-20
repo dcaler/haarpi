@@ -137,6 +137,25 @@ def section_kind(heading: str) -> str:
     return "other"
 
 
+def budget_kind(heading: str) -> str:
+    """Classify a heading for BUDGET purposes — as ``section_kind``, but Introduction and
+    Background are told apart and a Conclusion is named.
+
+    ``section_kind`` pools both into "litrev" because for citation and redline purposes
+    they behave alike. For allocation they do not: an Introduction is motivation, preview
+    and roadmap — inherently brief — while a Background must give the reader every
+    literature they need. Sharing one share made them compete, so whichever had more
+    subsections took more of it, and collapsing a section's subsections cut its own budget.
+    """
+    if _is_conclusion(heading):
+        return "conclusion"
+    k = section_kind(heading)
+    if k != "litrev":
+        return k
+    # "Introduction" names itself; everything else in the litrev family is background.
+    return "intro" if "introduction" in heading.lower() else "litrev"
+
+
 def expects_citations(kind: str) -> bool:
     """Does the bibliography ground this kind of section?
 
@@ -779,41 +798,40 @@ def heading_levels(heads: list[Heading]) -> list[Finding]:
     return out
 
 
-# The share of a paper's writable words each section carries. Not uniform: a uniform
-# per-leaf allocation hands Methods 41% of the budget for having seven subsections and
-# leaves Results — where the contribution lives — on 18%. Overridable per project.
+# The share of the BODY word budget each section carries, by what the section is FOR.
+# Not uniform, and not arithmetic: an Introduction states the motivation, previews the
+# result and lays out the paper — inherently brief, ~2 paragraphs. A Background must give
+# the reader every literature they need to follow the work, so it can and should be longer.
+# Results carries the contribution. Derived per section rather than per KIND: Introduction
+# and Background sharing one "litrev" share meant whichever had more subsections took more
+# of it, so collapsing a section's subsections cut its own budget.
+# Overridable per project (ProjectConfig.section_shares). Sums to 1.0.
 DEFAULT_SECTION_SHARES: dict[str, float] = {
-    "abstract": 0.06,
-    "litrev": 0.14,          # Introduction / Background
-    "methods": 0.21,
-    "results": 0.30,
-    "other": 0.22,           # Discussion
-    "conclusion": 0.07,
+    "intro":      0.075,     # motivation, preview, roadmap
+    "litrev":     0.150,     # Background — the literature the reader needs
+    "methods":    0.225,     # what was built, and how
+    "results":    0.250,     # the contribution
+    "other":      0.225,     # Discussion — what it means
+    "conclusion": 0.075,     # restate, point forward
 }
 
-# What a rendered figure costs the venue's budget beyond its caption. Zero: a venue that
-# counts WORDS counts the caption, and the caption is charged separately already. The
-# previous 100 was an estimate of what a figure costs in page SPACE — a real cost at a
-# page-limited venue, but not one a word count measures, and across five figures it was
-# spending 12% of the document on an assumption no CFP had stated. A page limit is a
-# different calculation, not a fudge factor here.
-FIGURE_WORD_COST = 0
-REF_WORDS_PER_ENTRY = 21
-ACK_RESERVE = 40
+# The abstract is NOT in the shares and is not charged to the body budget: no venue counts
+# it against the paper's length. Where a CFP states its own limit that wins; this is the
+# fallback when it says nothing.
+DEFAULT_ABSTRACT_WORDS = 225
 
-
-# Roughly how many words of prose a paper writes per source it cites. Used to estimate the
-# bibliography's size at outline time, when what the paper WILL cite is not yet knowable.
-# The corpus is the wrong number: SchellingChords carries 86 sources in refs.bib and the
-# manuscript cited 26. Reserving the corpus starved a 5,000-word budget to 2,629 and would
-# have demanded an outline half the size the venue actually affords.
-WORDS_PER_CITATION = 175
+# A paragraph of academic prose, and therefore what one outline bullet expands to. Anchored
+# on the author's own figure: an Introduction is ~300 words across 2 paragraphs. The size
+# flexes to fill its subsection — this is the divisor that turns a word allocation into a
+# bullet count, not a target in itself.
+WORDS_PER_PARAGRAPH = 150
+PARAGRAPH_BAND = (100, 200)
 
 # Where in a venue's stated range the paper should land. A range is not a ceiling: a CFP
 # that says 3,000–5,000 is describing the shape of a paper it wants, and both ends carry
 # information. Writing to the maximum leaves nothing for a reference list that runs longer
 # than estimated; writing to the minimum submits a paper that looks thin next to its peers.
-TARGET_FRACTION = 0.6
+TARGET_FRACTION = 0.5
 
 
 def word_target(word_min: int | None, word_max: int | None,
@@ -835,37 +853,37 @@ def word_target(word_min: int | None, word_max: int | None,
     return round(lo + (hi - lo) * fraction)
 
 
-def expected_references(total_words: int, corpus_size: int) -> int:
-    """How many sources a paper this long will plausibly cite.
+def prose_budget(total_words: int) -> int:
+    """The BODY words the manuscript should come out at. No reserves.
 
-    Bounded by the corpus — you cannot cite what you have not read — but not equal to it.
+    Nothing is deducted, because nothing that would be deducted is counted in the first
+    place: ``word_count`` excludes section labels, figure captions and ``[@citekey]`` tags;
+    the bibliography is rendered by pandoc at write time and never appears in the markdown
+    being measured; and the abstract, the title and the author block are all outside the
+    body. Deducting reserves for them charged the budget twice for material that costs it
+    nothing — 707 words of a 4,200-word target on SchellingChords, a section and a half.
+
+    Aiming at ``word_target`` rather than the venue's maximum is what leaves room for the
+    uncounted material: css2026's 3,000–5,000 range targets 4,000 of body prose, and the
+    abstract, reference list and captions ride in the headroom below the cap.
     """
-    est = round(total_words / WORDS_PER_CITATION) if total_words else 0
-    return min(corpus_size, est) if corpus_size else est
+    return max(0, total_words)
 
 
-def prose_budget(total_words: int, n_refs: int, n_figures: int,
-                 caption_words: int = 0) -> int:
-    """The words left for writing, once the un-writable parts of the document are paid for.
+def abstract_words(venue_limit: int | None = None) -> int:
+    """How long the abstract should be. The venue's own limit wins where it states one."""
+    return venue_limit or DEFAULT_ABSTRACT_WORDS
 
-    A venue that counts "inclusive of figures, tables, notes, references and appendices"
-    is budgeting the whole document. Handing the writer the gross limit invites it to
-    spend the reference list twice.
 
-    ``total_words`` is the length the document should COME OUT AT — ``word_target``, not
-    the venue's maximum, wherever the venue states a range.
+def bullets_for(words: int, per_paragraph: int = WORDS_PER_PARAGRAPH) -> int:
+    """How many bullets a subsection's word allocation affords.
 
-    The title and the authors-and-affiliations block are NOT charged here and never count
-    against a venue's limit — no venue counts them, however inclusive its rule.
-
-    ``n_refs`` is the count the BIBLIOGRAPHY will hold — see ``expected_references``, not
-    the size of the corpus the litreview gathered.
+    One bullet is one paragraph in the manuscript — that is the contract phase two writes
+    to and the draft is held to. So a bullet count is not a stylistic choice: four bullets
+    under a 200-word subsection is a 50-word paragraph, and that is computable before a
+    word of prose exists.
     """
-    return max(0, total_words
-               - n_refs * REF_WORDS_PER_ENTRY
-               - ACK_RESERVE
-               - n_figures * FIGURE_WORD_COST
-               - caption_words)
+    return max(1, round(words / per_paragraph)) if words > 0 else 0
 
 
 def leaf_allowance(budget: int, shares: dict[str, float] | None = None,
@@ -1209,22 +1227,17 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
     """
     if budget <= 0 or not outline_md.strip():
         return []
-    counts = section_leaf_counts(outline_md)
-    by_kind = kind_leaf_counts(outline_md)
+    planned = {h for h, _ in _sections_with_bodies(outline_md)}
     out: list[Finding] = []
     for heading, body in _sections_with_bodies(draft_md):
-        if is_references(heading) or is_acknowledgements(heading):
+        if is_references(heading) or is_acknowledgements(heading) or is_abstract(heading):
             continue
-        leaves_here = counts.get(heading)
-        if not leaves_here:
+        if heading not in planned:
             continue
-        k = "conclusion" if _is_conclusion(heading) else section_kind(heading)
-        lo, hi = section_target(heading, budget, leaves_here, shares,
-                                kind_leaves=by_kind.get(k))
-        if not lo:
+        low, high = section_target(heading, budget, shares)
+        if not low:
             continue
         n = word_count(body)
-        low, high = lo * leaves_here, hi * leaves_here
         if n < low:
             out.append(Finding(
                 "section-thin", heading,
@@ -1270,32 +1283,33 @@ def kind_leaf_counts(outline_md: str) -> dict[str, int]:
     return counts
 
 
-def section_target(heading: str, budget: int, leaves_here: int,
+def section_words(heading: str, budget: int,
+                  shares: dict[str, float] | None = None) -> int:
+    """This SECTION's slice of the body budget."""
+    if budget <= 0:
+        return 0
+    sh = shares or DEFAULT_SECTION_SHARES
+    return round(budget * sh.get(budget_kind(heading), sh.get("other", 0.2)))
+
+
+def section_target(heading: str, budget: int,
                    shares: dict[str, float] | None = None,
-                   kind_leaves: int | None = None) -> tuple[int, int]:
-    """The word band for one subsection of THIS section, from the venue budget.
+                   tolerance: float = 0.2) -> tuple[int, int]:
+    """The word band for a SECTION, from the venue budget and the section's purpose.
 
-    ``heading`` is the SECTION heading ("3. Results"), never a subsection's own name —
-    "Recovery Landscape" contains no results keyword and would classify as "other",
-    which is how a uniform allocation quietly writes the contribution in 18% of the paper.
-    ``leaves_here`` is how many subsections this section actually has, so the section's
-    share divides over its real width rather than an estimate of it.
-
-    ``kind_leaves`` is how many subsections the whole document gives this KIND — see
-    ``kind_leaf_counts``. Two sections of one kind (Introduction and Background are both
-    "litrev") split that kind's share between them rather than each claiming all of it.
-    Defaults to ``leaves_here``, which is right whenever the kind has only one section.
+    The band stops at the section. It used to divide the share by the subsection count and
+    hand each subsection a target, which produced every allocation bug this file records:
+    a Methods with seven subsections got a thinner band than one with three, and collapsing
+    a section's subsections CUT its budget. How the section's words distribute across its
+    subsections is the outline's business — one bullet, one paragraph — not a band's.
 
     Returns (low, high); (0, 0) when the venue states no limit and length is the writer's
     call — writing to an assumed length is its own failure.
     """
-    if budget <= 0 or leaves_here <= 0:
+    total = section_words(heading, budget, shares)
+    if not total:
         return (0, 0)
-    sh = shares or DEFAULT_SECTION_SHARES
-    k = "conclusion" if _is_conclusion(heading) else section_kind(heading)
-    share = sh.get(k, sh.get("other", 0.2))
-    per = budget * share / max(1, kind_leaves or leaves_here)
-    return (max(80, int(per * 0.8)), max(120, int(per * 1.2)))
+    return (round(total * (1 - tolerance)), round(total * (1 + tolerance)))
 
 
 def section_leaf_counts(outline_md: str) -> dict[str, int]:

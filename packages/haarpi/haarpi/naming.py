@@ -36,7 +36,8 @@ def _tokens(value: str | list[str] | None) -> list[str]:
 # Chain tokens that name a KIND of document. Everything else in a chain is either an author
 # (initials, or `ra`) or a VENUE — which is how a venue rides in a filename without the
 # parser, the gate, the redline or the release logic needing to know venues exist.
-DELIVERABLE_WORDS = ("onepager", "venue", "outline", "litreview", "methods", "results")
+DELIVERABLE_WORDS = ("onepager", "venue", "skeleton", "outline",
+                     "litreview", "methods", "results")
 
 
 def venue_of(path: Path, short_title: str, known: list[str] | None = None) -> str:

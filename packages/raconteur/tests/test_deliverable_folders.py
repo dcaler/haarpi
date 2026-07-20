@@ -215,3 +215,33 @@ def test_a_template_for_an_unknown_venue_is_left_alone(tmp_path):
     (paper / "templates" / "mystery" / "x.cls").write_text("x")
     migrate.run(tmp_path)
     assert (paper / "templates" / "mystery" / "x.cls").is_file()
+
+
+# ── the skeleton is a deliverable in its own right ───────────────────────────
+
+def test_the_skeleton_has_its_own_folder(tmp_path):
+    """Phase one is redlined before phase two writes a bullet, so it is a rung on the
+    ladder with its own working chain, releases and discards."""
+    p = tmp_path / "paper"
+    assert deliverable_dir(p, "skeleton", "css2026") == p / "css2026" / "skeleton"
+
+
+def test_a_skeleton_chain_parses_and_keeps_its_venue():
+    f = Path("260720_Chords_css2026_skeleton_ra_DCR.docx")
+    assert hnaming.parse(f, "Chords")[1] == ["css2026", "skeleton", "ra", "DCR"]
+    # `skeleton` must be a deliverable word, or venue_of would read it as a venue slug
+    assert hnaming.venue_of(f, "Chords") == "css2026"
+    assert "skeleton" in hnaming.DELIVERABLE_WORDS
+
+
+def test_a_released_skeleton_is_nobodys_turn():
+    f = Path("260720_Chords_css2026_skeleton.docx")
+    assert hnaming.is_release(hnaming.parse(f, "Chords")[1])
+
+
+def test_a_skeleton_migrates_to_its_folder(tmp_path):
+    paper = _flat(tmp_path)
+    (paper / "260720_Chords_css2026_skeleton_ra.docx").write_text("x")
+    moves = dict(migrate.plan(paper, "Chords", ["css2026"]))
+    got = {s.name: str(d.relative_to(paper).parent) for s, d in moves.items()}
+    assert got["260720_Chords_css2026_skeleton_ra.docx"] == "css2026/skeleton"

@@ -130,12 +130,13 @@ STAGE_REFRESH: dict[str, list[str]] = {
 # deliverable's release and queues the next rung; only the bare manuscript (no
 # deliverable word) mints the stage release and advances downstream stages.
 
-_PAPER_DELIVERABLE_WORDS = ("onepager", "outline", "venue")
+_PAPER_DELIVERABLE_WORDS = ("onepager", "skeleton", "outline", "venue")
 
 _DELIVERABLE_LABEL = {
     "":         "full manuscript draft",
     "onepager": "one-pager (the narrative through-line)",
     "venue":    "venue analysis",
+    "skeleton": "section skeleton (phase one — headings only)",
     "outline":  "outline",
 }
 

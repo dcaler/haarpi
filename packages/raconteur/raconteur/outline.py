@@ -560,9 +560,7 @@ def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str) -> 
     corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
     # The length to AIM AT, not the venue's ceiling — see guards.word_target.
     target = guards.word_target(v.word_min, v.word_limit) if v else 0
-    budget = guards.prose_budget(
-        target, guards.expected_references(target, corpus), len(figs),
-        sum(len(f.caption.split()) for f in figs)) if target else 0
+    budget = guards.prose_budget(target) if target else 0
     return {
         "budget": budget,
         "expected_figures": {f.path: f.origin for f in figs} or None,
@@ -639,28 +637,30 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "") -> str
     v = cfg.venue(venue) if venue else None
     if not v or not v.word_limit:
         return ""
-    corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
     target = guards.word_target(v.word_min, v.word_limit)
-    n_refs = guards.expected_references(target, corpus)
-    figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
-            if cfg.results_dir else []) + load_author_figures(project_dir)
-    caption_words = sum(len(f.caption.split()) for f in figs)
-    budget = guards.prose_budget(target, n_refs, len(figs), caption_words)
-    allow = guards.leaf_allowance(budget, cfg.section_shares or None)
-    per = ", ".join(f"{k} {n}" for k, n in allow.items())
+    budget = guards.prose_budget(target)
+    shares = cfg.section_shares or guards.DEFAULT_SECTION_SHARES
+    label = {"intro": "Introduction", "litrev": "Background", "methods": "Methods",
+             "results": "Results", "other": "Discussion", "conclusion": "Conclusion"}
+    per = "\n".join(
+        f"  - {label.get(k, k)}: {round(budget * v_):d} words"
+        for k, v_ in shares.items())
     stated = (f"{v.word_min}–{v.word_limit} words; aim at {target}"
               if v.word_min else f"{v.word_limit} words")
     return (
-        "Length budget (this venue counts the WHOLE document, references and figures "
-        "included):\n"
-        f"- Total: {stated}. After an estimated {n_refs} references "
-        f"(of {corpus} in the corpus), "
-        f"{len(figs)} figure(s) and acknowledgements, about {budget} words remain for prose.\n"
-        f"- That affords roughly {sum(allow.values())} subsections at ~280 words each, "
-        f"divided as: {per}.\n"
-        "- Plan a structure that FITS this. Do not exceed the subsection counts above — a "
-        "thinner paper at this length is worse than a shorter, fuller one. Prefer merging "
-        "related material into one substantial subsection over splitting it across several.\n"
+        "Length budget:\n"
+        f"- The venue asks for {stated}. That is {budget} words of BODY PROSE. Section "
+        f"headings, figure captions, [@citekey] tags, the reference list and the abstract "
+        f"are NOT counted — the headroom below the venue's maximum is what they occupy.\n"
+        f"- Each section carries a share of those {budget} words, by what the section is "
+        f"FOR:\n{per}\n"
+        f"- The abstract is {guards.abstract_words(v.abstract_limit)} words, separately.\n"
+        f"- One outline bullet becomes ONE PARAGRAPH of about "
+        f"{guards.WORDS_PER_PARAGRAPH} words in the manuscript. So a subsection's bullet "
+        f"count is set by its share of its section's words, not by how much there is to "
+        f"say: four bullets under a 200-word subsection is a 50-word paragraph.\n"
+        "- Plan a structure that FITS this. Prefer merging related material into one "
+        "substantial subsection over splitting it across several thin ones.\n"
     )
 
 

@@ -516,35 +516,26 @@ structure was approved by the author and the citations are what ground the claim
 """
 
 
-def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str,
-                  bib_keys: set[str]) -> int:
-    """The venue's whole-document limit, less what is not drafted prose.
+def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str = "",
+                  bib_keys: set[str] | None = None) -> int:
+    """The BODY words this venue's manuscript should come out at.
 
     Shares the arithmetic with the outline stage on purpose: an outline planned against one
     budget and a draft written against another is how a structure that fits produces a
     manuscript that does not.
 
-    Figures are counted from the OUTLINE, not from rayleigh's manifest. The outline is the
-    placement authority and names each figure exactly once, so it knows what the paper will
-    actually contain — a manifest figure the outline chose not to place costs nothing, and
-    an author illustration the manifest never held still costs its page. Reloading the
-    manifest here is also what flooded every section with every figure; see
-    ``test_the_paper_stage_does_not_reload_the_figure_manifest``.
+    Nothing is deducted. Section labels, figure captions and [@citekey] tags are not
+    counted as prose; the bibliography is rendered by pandoc at write time and never
+    appears in the markdown being measured; the abstract, the title and the author block
+    sit outside the body. See ``guards.prose_budget``.
     """
     v = cfg.venue(venue) if venue else None
     if not v or not v.word_limit:
         return 0
-    # The length to AIM AT. Where the venue states a range, deriving the budget from the
-    # ceiling makes it a bound the draft can satisfy by being short — and it was: 3,552
-    # words with Results at 17% of a 30% share, reported clean.
-    target = guards.word_target(v.word_min, v.word_limit)
-    placed = list(guards.OUTLINE_FIGURE_RE.finditer(outline_text))
-    # The title and the author block are not charged: no venue counts them.
-    return guards.prose_budget(
-        target,
-        guards.expected_references(target, len(bib_keys)),
-        len(placed),
-        sum(len((m.group("caption") or "").split()) for m in placed))
+    # The length to AIM AT, not the venue's ceiling: a budget derived from a maximum is
+    # satisfied by any short paper, and it was — 3,552 words with Results at 17% of its
+    # share, every whole-document check green.
+    return guards.prose_budget(guards.word_target(v.word_min, v.word_limit))
 
 
 def _manuscript_findings(assembled: str, outline_text: str, budget: int,
@@ -634,7 +625,7 @@ def _draft_paper(
     leaf_counts = guards.section_leaf_counts(outline_text)
     # Two sections of one kind (Introduction and Background are both "litrev") split that
     # kind's share rather than each claiming all of it.
-    kind_counts = guards.kind_leaf_counts(outline_text)
+
 
     for heading, section_outline in _parse_sections(outline_text):
         if _is_references(heading) or _is_abstract(heading):
@@ -648,11 +639,7 @@ def _draft_paper(
             drafted.append((heading, _ack_passthrough(section_outline)))
             continue
         ctx = _context_for_section(heading, litrev, code, results)
-        k = ("conclusion" if guards._is_conclusion(heading)
-             else guards.section_kind(heading))
-        band = guards.section_target(heading, budget, leaf_counts.get(heading, 1),
-                                     cfg.section_shares or None,
-                                     kind_leaves=kind_counts.get(k))
+        band = guards.section_target(heading, budget, cfg.section_shares or None)
         lo, hi = band if band[0] else _DEFAULT_BAND
         log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words per subsection)")
         text = brain.coordinator(

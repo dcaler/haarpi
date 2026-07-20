@@ -25,7 +25,7 @@ from .naming import MANUSCRIPT, deliverable_dir
 # Files that belong to the stage, not to any one deliverable.
 _STAY = {"raconteur.yaml"}
 _STAY_DIRS = {"figures"}
-_DELIVERABLE_WORDS = ("onepager", "venue", "outline")
+_DELIVERABLE_WORDS = ("onepager", "venue", "skeleton", "outline")
 
 
 def classify(path: Path, short_title: str, known_venues: list[str]) -> tuple[str, str, bool]:

@@ -75,23 +75,28 @@ def test_headings_figures_and_citekeys_are_not_prose():
 
 # ── the band follows the section's share, not its sibling count ───────────────
 
-def test_results_subsections_get_more_words_than_methods_subsections():
-    """A uniform band is how Results ends up written in 18% of the paper."""
-    results = guards.section_target("3. Results", 3688, leaves_here=3)
-    methods = guards.section_target("2. Methodology", 3688, leaves_here=3)
-    assert results[0] > methods[0]
+def test_results_gets_more_words_than_methods():
+    """Results carries the contribution; a uniform allocation is how it ends up written in
+    18% of the paper."""
+    assert guards.section_words("Results", 4000) > guards.section_words("Methods", 4000)
 
 
-def test_a_wide_section_gets_a_thinner_band():
-    """Seven Methods subsections divide the same share seven ways — the arithmetic that
-    says the structure is too wide, surfaced as the number the writer is handed."""
-    narrow = guards.section_target("2. Methodology", 3688, leaves_here=3)
-    wide = guards.section_target("2. Methodology", 3688, leaves_here=7)
-    assert wide[1] < narrow[0]
+def test_background_gets_more_words_than_the_introduction():
+    """Purpose, not arithmetic: an Introduction is motivation, preview and roadmap — two
+    paragraphs — while a Background must carry every literature the reader needs."""
+    assert guards.section_words("Background", 4000) > guards.section_words("Introduction", 4000)
+
+
+def test_a_sections_band_does_not_depend_on_its_subsection_count():
+    """The bug this replaces: the band divided a share by the subsection count, so a wide
+    Methods got a thinner band than a narrow one — and collapsing a section's subsections
+    CUT its budget, punishing the very edit the guard had asked for."""
+    assert guards.section_target("Methods", 4000) == guards.section_target("Methods", 4000)
+    assert guards.section_target("Methods", 4000)[0] > 0
 
 
 def test_no_venue_limit_means_the_writer_chooses():
-    assert guards.section_target("3. Results", 0, leaves_here=3) == (0, 0)
+    assert guards.section_target("Results", 0) == (0, 0)
 
 
 def test_the_band_is_keyed_off_the_section_not_the_subsection_name():
@@ -162,23 +167,25 @@ def test_no_venue_limit_means_no_shortness_claim():
 # ── per-section shape ─────────────────────────────────────────────────────────
 
 def test_a_section_written_below_its_share_is_caught():
-    """Results at 17% of a paper that budgeted it 30% — legal on every whole-document
+    """Results at 17% of a paper that budgeted it 25% — legal on every whole-document
     check, and the section carrying the contribution is the thinnest in the paper."""
-    outline = "## 4. Results\n### 4.1 A\n- b\n### 4.2 B\n- b\n### 4.3 C\n- b\n"
-    draft = "## 4. Results\n\n" + "word " * 300
-    assert [f.kind for f in guards.section_lengths(draft, outline, 3688)] == ["section-thin"]
+    outline = "## Results\n### A\n- b\n### B\n- b\n### C\n- b\n"
+    draft = "## Results\n\n" + "word " * 300
+    assert [f.kind for f in guards.section_lengths(draft, outline, 4000)] == ["section-thin"]
 
 
 def test_a_section_written_above_its_share_is_caught():
-    outline = "## 2. Background\n### 2.1 A\n- b\n### 2.2 B\n- b\n"
-    draft = "## 2. Background\n\n" + "word " * 1200
-    assert [f.kind for f in guards.section_lengths(draft, outline, 3688)] == ["section-fat"]
+    outline = "## Background\n### A\n- b\n### B\n- b\n"
+    draft = "## Background\n\n" + "word " * 1200
+    assert [f.kind for f in guards.section_lengths(draft, outline, 4000)] == ["section-fat"]
 
 
 def test_boilerplate_sections_have_no_share_to_miss():
-    outline = "## 4. Results\n### 4.1 A\n- b\n"
+    """References and Acknowledgements are permanent furniture — never planned, never
+    deleted, and never charged a word."""
+    outline = "## Results\n### A\n- b\n"
     draft = "## References\n\nlots\n\n## Acknowledgements\n\n" + "word " * 400
-    assert guards.section_lengths(draft, outline, 3688) == []
+    assert guards.section_lengths(draft, outline, 4000) == []
 
 
 # ── conformance sees whole sections, not only subsections ─────────────────────
@@ -194,40 +201,48 @@ def test_a_dropped_section_with_no_subsections_is_caught():
     assert "6. Conclusion" in findings[0].where
 
 
-def test_a_section_with_subsections_is_not_itself_a_conformance_item():
-    """Otherwise every parent heading doubles as a requirement and a draft that has all
-    the subsections still fails for the container that holds them."""
-    outline = "## 5. Discussion\n### 5.1 A\n- b\n"
-    draft = "## 5. Discussion\n\n### 5.1 A\n\nprose\n"
-    assert guards.outline_conformance(draft, outline) == []
+# ── shares follow purpose, and the abstract is outside the body ──────────────
+
+def test_the_target_is_the_middle_of_the_range():
+    """50% of css2026's 3,000–5,000."""
+    assert guards.word_target(3000, 5000) == 4000
+    assert guards.TARGET_FRACTION == 0.5
 
 
-def test_two_sections_of_one_kind_split_that_kinds_share():
-    """Introduction and Background are both "litrev". Each claiming the full 14% hands that
-    kind 28% of the paper and the shares stop summing to the document — the arithmetic
-    behind Introduction and Background taking 36% of a manuscript budgeted for 28%."""
-    o = ("## 1. Introduction\n### 1.1 A\n- b\n### 1.2 B\n- b\n"
-         "## 2. Background\n### 2.1 C\n- b\n### 2.2 D\n- b\n")
-    assert guards.kind_leaf_counts(o) == {"litrev": 4}
-    intro = guards.section_target("1. Introduction", 3493, 2, kind_leaves=4)
-    bg = guards.section_target("2. Background", 3493, 2, kind_leaves=4)
-    # 14% of 3493 is 489; four leaves of one kind split it, not two lots of two
-    assert intro == bg
-    assert abs((intro[0] + intro[1]) / 2 * 4 - 3493 * 0.14) < 5
+def test_the_abstract_is_not_charged_to_the_body():
+    """No venue counts it against the paper's length, so it is neither in the shares nor
+    deducted from the budget."""
+    assert "abstract" not in guards.DEFAULT_SECTION_SHARES
+    assert guards.abstract_words() == 225
+    assert guards.abstract_words(150) == 150      # the CFP's own limit wins
 
 
-def test_the_bands_sum_to_the_budget_not_past_it():
-    """Shares total 1.0, so the bands' midpoints must total the budget. They summed to
-    3,972 against 3,493 while each kind was charged once per section."""
-    o = ("## 1. Introduction\n### 1.1 A\n- b\n## 2. Background\n### 2.1 B\n- b\n"
-         "## 3. Methods\n### 3.1 C\n- b\n## 4. Results\n### 4.1 D\n- b\n"
-         "## 5. Discussion\n### 5.1 E\n- b\n## 6. Conclusion\n- b\n")
-    budget = 3493
-    counts, by_kind = guards.section_leaf_counts(o), guards.kind_leaf_counts(o)
-    total = 0.0
-    for h, n in counts.items():
-        k = "conclusion" if guards._is_conclusion(h) else guards.section_kind(h)
-        lo, hi = guards.section_target(h, budget, n, kind_leaves=by_kind.get(k))
-        total += (lo + hi) / 2 * n
-    # abstract's 6% share has no section here, so the rest total 94% of the budget
-    assert abs(total - budget * 0.94) < 30
+def test_the_purpose_shares_distribute_the_whole_budget():
+    got = {h: guards.section_words(h, 4000) for h in
+           ("Introduction", "Background", "Methods", "Results", "Discussion", "Conclusion")}
+    assert got == {"Introduction": 300, "Background": 600, "Methods": 900,
+                   "Results": 1000, "Discussion": 900, "Conclusion": 300}
+    assert sum(got.values()) == 4000
+
+
+def test_an_introduction_is_told_apart_from_a_background():
+    """They are one kind for citation purposes and two sections for budget purposes."""
+    assert guards.budget_kind("1. Introduction") == "intro"
+    assert guards.budget_kind("2. Background") == "litrev"
+    assert guards.budget_kind("2. Related Work") == "litrev"
+    assert guards.section_kind("1. Introduction") == guards.section_kind("2. Background")
+
+
+# ── one bullet, one paragraph ────────────────────────────────────────────────
+
+def test_a_bullet_count_falls_out_of_the_word_allocation():
+    """One bullet is one manuscript paragraph, so a bullet count is not a stylistic choice:
+    four bullets under a 200-word subsection is a 50-word paragraph."""
+    assert guards.bullets_for(300) == 2       # the author's own figure: 300 words, 2 paras
+    assert guards.bullets_for(450) == 3
+    assert guards.bullets_for(200) == 1
+
+
+def test_a_subsection_always_affords_at_least_one_paragraph():
+    assert guards.bullets_for(40) == 1
+    assert guards.bullets_for(0) == 0

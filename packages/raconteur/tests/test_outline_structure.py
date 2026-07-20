@@ -116,17 +116,12 @@ def test_a_misleveled_conclusion_is_not_charged_to_discussion():
 
 # ── the word budget ───────────────────────────────────────────────────────────
 
-def test_the_budget_pays_for_references_and_captions_first():
-    """A venue counting "inclusive of figures, tables, notes and references" is budgeting
-    the whole document; handing the writer the gross limit spends the bibliography twice.
-
-    A figure itself costs nothing: a venue counting WORDS counts the caption, which is
-    already charged. Charging a figure for the page space it occupies was an assumption no
-    CFP had stated, and across five figures it spent 12% of the document."""
-    gross = 5000
-    net = guards.prose_budget(gross, n_refs=26, n_figures=4, caption_words=125)
-    assert net == gross - 26 * guards.REF_WORDS_PER_ENTRY - guards.ACK_RESERVE - 125
-    assert net == 4289
+def test_the_budget_deducts_nothing():
+    """Nothing that would be deducted is counted in the first place: word_count already
+    excludes headings, captions and [@citekeys], the bibliography is rendered by pandoc and
+    never appears in the markdown, and the abstract sits outside the body. Reserving for
+    them charged the budget twice — 707 words of a 4,200-word target on SchellingChords."""
+    assert guards.prose_budget(4000) == 4000
 
 
 def test_an_outline_too_wide_for_its_venue_is_caught():
@@ -154,7 +149,11 @@ def test_the_shares_are_not_uniform():
     rather than for having the most to say — Methods 41%, Results 18%."""
     sh = guards.DEFAULT_SECTION_SHARES
     assert sh["results"] > sh["methods"]
+    # Background gives the reader the literature they need and can be long; an Introduction
+    # is motivation, preview and roadmap, which is inherently brief.
+    assert sh["litrev"] > sh["intro"]
     assert abs(sum(sh.values()) - 1.0) < 1e-9
+    assert "abstract" not in sh          # not charged to the body budget
 
 
 # ── figure placement ──────────────────────────────────────────────────────────
@@ -232,19 +231,15 @@ def test_no_required_sections_means_silence():
     assert guards.required_sections("## 1. Introduction\n- a beat\n", "") == []
 
 
-def test_the_reference_reserve_is_the_bibliography_not_the_corpus():
-    """Caught by driving the real project: SchellingChords carries 86 sources in refs.bib
-    and the manuscript cited 26. Reserving the corpus starved a 5,000-word budget to 2,629
-    and afforded 10 subsections where the venue really affords 14."""
-    assert guards.expected_references(5000, corpus_size=86) == 29
-    # you cannot cite what you have not gathered
-    assert guards.expected_references(5000, corpus_size=12) == 12
-    # no venue limit, no estimate to make
-    assert guards.expected_references(0, corpus_size=86) == 0
-
-
 def test_the_budget_matches_the_hand_analysis():
-    """The whole chain, on css2026's real numbers: 5,000 inclusive → 15 subsections."""
-    budget = guards.prose_budget(5000, guards.expected_references(5000, 86), 4, 125)
-    assert 4200 <= budget <= 4300
-    assert sum(guards.leaf_allowance(budget).values()) == 15
+    """css2026's real numbers, end to end: a 3,000-5,000 range targets 4,000 of body
+    prose, and the purpose shares distribute it as agreed."""
+    budget = guards.prose_budget(guards.word_target(3000, 5000))
+    assert budget == 4000
+    got = {k: guards.section_words(h, budget)
+           for k, h in (("intro", "Introduction"), ("litrev", "Background"),
+                        ("methods", "Methods"), ("results", "Results"),
+                        ("other", "Discussion"), ("conclusion", "Conclusion"))}
+    assert got == {"intro": 300, "litrev": 600, "methods": 900,
+                   "results": 1000, "other": 900, "conclusion": 300}
+    assert sum(got.values()) == budget
