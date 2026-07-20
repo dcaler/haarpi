@@ -89,7 +89,7 @@ def test_authors_persist_through_a_save_load_round_trip(tmp_path):
     planner.run_authors(tmp_path, "add", name="D. Cale Reeves", initials="DCR",
                         affiliation="UT Austin")
     assert project.authors(project.load_manifest(tmp_path)) == [
-        {"name": "D. Cale Reeves", "initials": "DCR", "affiliation": "UT Austin"}]
+        {"name": "D. Cale Reeves", "initials": "DCR", "affiliations": ["UT Austin"]}]
 
 
 def test_a_co_author_joins_without_disturbing_authorship_order(tmp_path):
@@ -127,7 +127,7 @@ def test_an_affiliation_can_be_corrected_without_retyping_the_author(tmp_path):
                         affiliation="Wrong")
     planner.run_authors(tmp_path, "set", initials="JR", affiliation="Right")
     a = project.authors(project.load_manifest(tmp_path))[0]
-    assert a["affiliation"] == "Right" and a["name"] == "J. Rodenberg"
+    assert a["affiliations"] == ["Right"] and a["name"] == "J. Rodenberg"
 
 
 def test_an_author_can_be_removed(tmp_path):
@@ -160,7 +160,7 @@ def test_unknown_keys_in_a_hand_edited_manifest_are_dropped(tmp_path):
     """The manifest is a file a human edits. A stray key must not reach a render step."""
     assert project.normalize_author(
         {"name": "X", "affiliation": "Y", "twitter": "@z"}) == {"name": "X",
-                                                               "affiliation": "Y"}
+                                                               "affiliations": ["Y"]}
 
 
 # ── correspondence ───────────────────────────────────────────────────────────
@@ -262,9 +262,79 @@ def test_the_wizard_writes_after_each_change(tmp_path, monkeypatch):
     """Add one author, then quit. The manifest must already hold them — a wizard that
     saves only on a clean exit loses the work when the terminal closes."""
     m = _project(tmp_path)
-    answers = iter(["a", "J. Rodenberg", "JR", "Beta", "", "jr@y.edu", "y", "d"])
+    # name, initials, affiliation 1, blank to finish, ORCID, email, corresponding, done
+    answers = iter(["a", "J. Rodenberg", "JR", "Beta", "", "", "jr@y.edu", "y", "d"])
     monkeypatch.setattr(planner, "_ask", lambda *a, **k: next(answers))
     planner._author_wizard(tmp_path, m)
     saved = project.authors(project.load_manifest(tmp_path))
-    assert saved == [{"name": "J. Rodenberg", "initials": "JR", "affiliation": "Beta",
+    assert saved == [{"name": "J. Rodenberg", "initials": "JR", "affiliations": ["Beta"],
                       "email": "jr@y.edu", "corresponding": True}]
+
+
+# ── more than one affiliation ────────────────────────────────────────────────
+
+def test_an_author_can_hold_a_joint_appointment(tmp_path):
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One",
+                        affiliation=["Alpha", "Beta"])
+    a = project.authors(project.load_manifest(tmp_path))[0]
+    assert a["affiliations"] == ["Alpha", "Beta"]
+
+
+def test_a_manifest_written_before_this_still_loads(tmp_path):
+    """The singular `affiliation:` key predates multiple affiliations and is still in every
+    manifest written so far. Reading only `affiliations` would silently drop them all."""
+    assert project.author_affiliations({"affiliation": "Alpha"}) == ["Alpha"]
+    assert project.author_affiliations({"affiliations": ["Alpha", "Beta"]}) == ["Alpha", "Beta"]
+    assert project.author_affiliations({}) == []
+
+
+def test_the_same_institution_twice_is_a_typo_not_a_joint_appointment(tmp_path):
+    assert project.author_affiliations(
+        {"affiliations": ["Alpha", "Alpha "]}) == ["Alpha"]
+
+
+def test_setting_affiliations_replaces_rather_than_appends(tmp_path):
+    """`set` states what the affiliations ARE. Appending would leave a corrected typo in
+    place beside its correction."""
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One", affiliation=["Alpha", "Wrong"])
+    planner.run_authors(tmp_path, "set", name="A. One", affiliation=["Alpha", "Right"])
+    assert project.authors(project.load_manifest(tmp_path))[0]["affiliations"] == [
+        "Alpha", "Right"]
+
+
+def test_a_joint_appointment_carries_both_markers(tmp_path):
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One", affiliation=["Alpha", "Beta"])
+    planner.run_authors(tmp_path, "add", name="B. Two", affiliation="Beta")
+    block = project.authors_block(project.load_manifest(tmp_path))
+    assert "A. One^1,2^, B. Two^2^" in block
+    assert "^1^ Alpha" in block and "^2^ Beta" in block
+
+
+def test_affiliations_are_numbered_in_the_order_first_mentioned(tmp_path):
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One", affiliation="Zeta")
+    planner.run_authors(tmp_path, "add", name="B. Two", affiliation=["Alpha", "Zeta"])
+    block = project.authors_block(project.load_manifest(tmp_path))
+    # Zeta is 1 because the first author names it first — not alphabetised
+    assert "A. One^1^, B. Two^2,1^" in block
+
+
+def test_one_affiliation_shared_by_everyone_stays_unmarked(tmp_path):
+    """Markers disambiguate. With nothing to disambiguate they are noise."""
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One", affiliation="Alpha")
+    planner.run_authors(tmp_path, "add", name="B. Two", affiliation="Alpha")
+    block = project.authors_block(project.load_manifest(tmp_path))
+    assert "A. One, B. Two" in block and "^1^" not in block
+
+
+def test_one_author_with_two_affiliations_still_gets_markers(tmp_path):
+    """A single distinct pair is not the shared-affiliation case: without markers the
+    reader cannot tell the second line belongs to the same person."""
+    _project(tmp_path)
+    planner.run_authors(tmp_path, "add", name="A. One", affiliation=["Alpha", "Beta"])
+    block = project.authors_block(project.load_manifest(tmp_path))
+    assert "A. One^1,2^" in block

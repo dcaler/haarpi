@@ -40,7 +40,7 @@ usage:
         (runs automatically as the last task of every queued chain)
   haarpi authors            wizard: who the paper is by, in authorship order
   haarpi authors [list | add | set | remove] [--name N --initials I --affiliation A
-                 --email E --orcid O --position K --corresponding]
+                 (repeatable) --email E --orcid O --position K --corresponding]
         the same list, non-interactively — for scripts and queued tasks
   haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi queue              register the trundlr project / queue the opening chain
@@ -91,7 +91,10 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
                         choices=["", "list", "add", "set", "remove"])
         ap.add_argument("--name", default="")
         ap.add_argument("--initials", default="")
-        ap.add_argument("--affiliation", default="")
+        # Repeatable: a joint appointment is ordinary. On `set` the flags state what the
+        # affiliations ARE and replace the list wholesale.
+        ap.add_argument("--affiliation", action="append", default=[],
+                        help="repeat for a second affiliation")
         ap.add_argument("--email", default="")
         ap.add_argument("--orcid", default="")
         ap.add_argument("--position", type=int,

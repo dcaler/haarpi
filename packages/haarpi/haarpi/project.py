@@ -261,7 +261,30 @@ def stale_inputs(root: Path, m: Manifest, stage: str) -> list[str]:
     return out
 
 
-AUTHOR_FIELDS = ("name", "initials", "affiliation", "email", "orcid", "corresponding")
+AUTHOR_FIELDS = ("name", "initials", "affiliations", "email", "orcid", "corresponding")
+
+# Written as `affiliations`, read from either. A joint appointment is ordinary — and an
+# author who moves institution mid-project may need both for the duration.
+_AFFIL_KEYS = ("affiliations", "affiliation")
+
+
+def author_affiliations(entry: dict) -> list[str]:
+    """An author's affiliations, in the order they should be printed.
+
+    Accepts a list, a single string, or the older singular ``affiliation`` key, so a
+    manifest written before multiple affiliations existed still loads. Duplicates are
+    dropped: the same institution twice on one author is a typo, not a joint appointment.
+    """
+    raw = next((entry[k] for k in _AFFIL_KEYS if entry.get(k) not in (None, "", [])), None)
+    if raw is None:
+        return []
+    items = [raw] if isinstance(raw, str) else list(raw)
+    out: list[str] = []
+    for a in items:
+        s = str(a).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 def normalize_author(entry: dict | str) -> dict:
@@ -269,10 +292,14 @@ def normalize_author(entry: dict | str) -> dict:
     if isinstance(entry, str):
         return {"name": entry.strip()}
     out = {k: str(entry[k]).strip() for k in AUTHOR_FIELDS
-           if k != "corresponding" and entry.get(k) not in (None, "")}
+           if k not in ("corresponding", "affiliations") and entry.get(k) not in (None, "")}
+    affils = author_affiliations(entry)
+    if affils:
+        out["affiliations"] = affils
     if entry.get("corresponding"):
         out["corresponding"] = True
-    return out
+    # Key order follows AUTHOR_FIELDS so the manifest reads the same way every save.
+    return {k: out[k] for k in AUTHOR_FIELDS if k in out}
 
 
 def authors(m: Manifest) -> list[dict]:
@@ -302,20 +329,25 @@ def authors_block(m: Manifest, anonymized: bool = False) -> str:
     if anonymized or not people:
         return ""
     lines = [", ".join(a["name"] for a in people)]
-    affils = []
+    # Distinct affiliations, numbered in the order the author list first mentions them —
+    # the convention, and stable across edits that do not change the ordering.
+    affils: list[str] = []
     for a in people:
-        if a.get("affiliation") and a["affiliation"] not in affils:
-            affils.append(a["affiliation"])
+        for aff in a.get("affiliations", []):
+            if aff not in affils:
+                affils.append(aff)
     if affils:
-        # Superscript markers only earn their keep once affiliations differ; a single
-        # shared affiliation reads better unmarked.
-        if len(affils) == 1:
-            lines[0] = ", ".join(a["name"] for a in people)
+        # Markers only earn their keep once there is something to disambiguate: one
+        # affiliation shared by everyone reads better unmarked. An author with a joint
+        # appointment carries several markers ("A. One^1,2^").
+        shared_single = len(affils) == 1 and all(
+            a.get("affiliations") == affils for a in people)
+        if shared_single:
             lines.append(affils[0])
         else:
             lines[0] = ", ".join(
-                f"{a['name']}^{affils.index(a['affiliation']) + 1}^"
-                if a.get("affiliation") else a["name"] for a in people)
+                f"{a['name']}^{','.join(str(affils.index(x) + 1) for x in a['affiliations'])}^"
+                if a.get("affiliations") else a["name"] for a in people)
             lines += [f"^{i + 1}^ {aff}" for i, aff in enumerate(affils)]
     corr = corresponding_authors(m)
     if corr:

@@ -600,14 +600,35 @@ def _print_authors(m: project.Manifest) -> None:
         if a.get("corresponding"):
             tags.append("✉ co-corresponding" if len(corr) > 1 else "✉ corresponding")
         print(f"  {i}. {a['name']}" + (f"  {' '.join(tags)}" if tags else ""))
-        for k in ("affiliation", "orcid"):
-            if a.get(k):
-                print(f"       {k}: {a[k]}")
+        for aff in a.get("affiliations", []):
+            print(f"       affiliation: {aff}")
+        if a.get("orcid"):
+            print(f"       orcid: {a['orcid']}")
         # An email is printed only where it will be published — for a non-corresponding
         # author it is recorded but not rendered, and showing it here implies otherwise.
         if a.get("email"):
             shown = "published" if a.get("corresponding") else "not published"
             print(f"       email: {a['email']} ({shown})")
+
+
+def _ask_affiliations(current: list[str] | None = None) -> list[str]:
+    """Affiliations, one per prompt until a blank line.
+
+    Asked as a list rather than a field because a joint appointment is ordinary and an
+    author mid-move between institutions needs both. Offering only one, then asking the
+    author to jam two into a string, records something no renderer can number.
+    """
+    out: list[str] = []
+    for i, existing in enumerate(list(current or []) + [""], start=1):
+        got = _ask(f"affiliation {i} (blank to finish)", existing)
+        if not got:
+            break
+        out.append(got)
+    while True:
+        got = _ask(f"affiliation {len(out) + 1} (blank to finish)")
+        if not got:
+            return out
+        out.append(got)
 
 
 def _author_wizard(root: Path, m: project.Manifest) -> int:
@@ -633,7 +654,7 @@ def _author_wizard(root: Path, m: project.Manifest) -> int:
                 continue
             entry = {"name": name,
                      "initials": _ask("initials (their chain suffix, e.g. JR)"),
-                     "affiliation": _ask("affiliation"),
+                     "affiliations": _ask_affiliations(),
                      "orcid": _ask("ORCID")}
             entry["email"] = _ask("email")
             entry["corresponding"] = _ask("corresponding author? [y/N]", "n")\
@@ -663,9 +684,14 @@ def _author_wizard(root: Path, m: project.Manifest) -> int:
                 people = [a for a in people if a is not target]
                 people.insert(max(0, min(len(people), int(pos) - 1)), target)
             else:
-                for key, label in (("name", "name"), ("initials", "initials"),
-                                   ("affiliation", "affiliation"), ("orcid", "ORCID"),
-                                   ("email", "email")):
+                for key, label in (("name", "name"), ("initials", "initials")):
+                    got = _ask(label, target.get(key, ""))
+                    if got:
+                        target[key] = got
+                    else:
+                        target.pop(key, None)
+                target["affiliations"] = _ask_affiliations(target.get("affiliations"))
+                for key, label in (("orcid", "ORCID"), ("email", "email")):
                     got = _ask(label, target.get(key, ""))
                     if got:
                         target[key] = got
@@ -702,7 +728,7 @@ def _match_author(people: list[dict], who: str) -> dict | None:
 
 
 def run_authors(root: Path, action: str = "", name: str = "", initials: str = "",
-                affiliation: str = "", email: str = "", orcid: str = "",
+                affiliation: str | list[str] = "", email: str = "", orcid: str = "",
                 position: int | None = None, corresponding: bool | None = None,
                 interactive: bool | None = None) -> int:
     """Read and edit the project's author list.
@@ -746,7 +772,7 @@ def run_authors(root: Path, action: str = "", name: str = "", initials: str = ""
                   file=sys.stderr)
             return 2
         entry = project.normalize_author(
-            {"name": name, "initials": initials, "affiliation": affiliation,
+            {"name": name, "initials": initials, "affiliations": affiliation,
              "email": email, "orcid": orcid, "corresponding": bool(corresponding)})
         # position is 1-based authorship order; absent means append.
         if position is None or position > len(current):
@@ -774,9 +800,14 @@ def run_authors(root: Path, action: str = "", name: str = "", initials: str = ""
             print(f"haarpi authors: removed {target['name']}")
             return 0
         for k, v in (("name", name), ("initials", initials),
-                     ("affiliation", affiliation), ("email", email), ("orcid", orcid)):
+                     ("email", email), ("orcid", orcid)):
             if v:
                 target[k] = v.strip()
+        if affiliation:
+            # Replaces the whole list: `set --affiliation A --affiliation B` states what
+            # the affiliations ARE, so a correction cannot silently leave a stale one behind.
+            target["affiliations"] = project.author_affiliations(
+                {"affiliations": affiliation})
         if corresponding is not None:
             # Explicit False must be able to REMOVE the flag; `if corresponding:` would
             # make --no-corresponding silently do nothing.
