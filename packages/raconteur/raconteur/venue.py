@@ -12,7 +12,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig, VenueConfig, venue_slug
 from .context import load_litreview, load_onepager
-from .naming import parse, today
+from .naming import parse, today, deliverable_dir
 from .render import to_docx
 from .revise import read_text, build_revision_context
 
@@ -604,8 +604,8 @@ def run(project_dir: Path, refresh: bool = False) -> None:
 
     cfg = ProjectConfig.load(project_dir)
     gcfg = GlobalConfig.load()
-    paper_dir = project_dir / "paper"
-    paper_dir.mkdir(exist_ok=True)
+    paper_dir = deliverable_dir(project_dir / "paper", "venue")
+    paper_dir.mkdir(parents=True, exist_ok=True)
 
     if not cfg.description:
         log("[error] no research description — run 'raconteur init' first")

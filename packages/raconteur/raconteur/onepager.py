@@ -15,7 +15,8 @@ from .context import (
     load_bib_keys, load_style_profile, load_style_signature,
     load_figure_manifest, check_prerequisites,
 )
-from .naming import major_onepager_name, find_latest, find_user_revision
+from .naming import (major_onepager_name, find_latest, find_user_revision,
+                     deliverable_dir)
 from .render import to_docx
 
 # The one-pager is the first deliverable: the most concise path through the
@@ -1516,8 +1517,8 @@ def run(project_dir: Path, resynth: bool = False) -> None:
 
     cfg = ProjectConfig.load(project_dir)
     gcfg = GlobalConfig.load()
-    paper_dir = project_dir / "paper"
-    paper_dir.mkdir(exist_ok=True)
+    paper_dir = deliverable_dir(project_dir / "paper", "onepager")
+    paper_dir.mkdir(parents=True, exist_ok=True)
 
     if not cfg.description:
         log("[error] no research description — run 'raconteur init' first")

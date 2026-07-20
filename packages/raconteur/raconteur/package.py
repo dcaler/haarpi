@@ -34,7 +34,13 @@ from haarpi import naming as hnaming
 
 
 def _template_dir(project_dir: Path, venue: str) -> Path:
-    return project_dir / "paper" / "templates" / venue
+    """A venue's submission template, inside that venue's folder.
+
+    Venue-specific by nature — a template IS the venue's house style — so it sits with the
+    rest of that venue's work rather than in a shared templates/ that then has to re-state
+    the venue in a subfolder name.
+    """
+    return project_dir / "paper" / (venue or "") / "templates"
 
 
 def _classify_template(tdir: Path) -> tuple[str, dict]:
@@ -62,7 +68,8 @@ def _find_manuscript(project_dir: Path, cfg: ProjectConfig, venue: str) -> Path 
 
     A release with the venue token but NO deliverable word (onepager/venue/outline are
     rungs, not the manuscript). Newest wins."""
-    out = project_dir / "paper" / "output"
+    from .naming import deliverable_dir
+    out = deliverable_dir(project_dir / "paper", "manuscript", venue) / "output"
     best: tuple[float, Path] | None = None
     for p in out.glob("*.docx") if out.is_dir() else []:
         parsed = hnaming.parse(p, cfg.short_title)

@@ -529,9 +529,9 @@ def load_onepager(project_dir: Path, short_title: str) -> str:
     A gate-minted release (paper/output/*_onepager.md) is the author-approved
     text and outranks the working chain; the newest paper/*_onepager_*ra.md is
     the fallback for projects that haven't gated the one-pager."""
-    from .naming import find_latest
+    from .naming import find_latest, deliverable_dir
     from haarpi.naming import find_latest_release
-    paper_dir = project_dir / "paper"
+    paper_dir = deliverable_dir(project_dir / "paper", "onepager")
     path = find_latest_release(
         paper_dir / "output", short_title, "md", chain_includes="onepager",
     ) or find_latest(
@@ -546,8 +546,9 @@ def load_onepager(project_dir: Path, short_title: str) -> str:
 
 
 def load_venue_analysis(project_dir: Path) -> str:
-    """Read paper/venue_analysis.md if present."""
-    path = project_dir / "paper" / "venue_analysis.md"
+    """Read paper/venue/venue_analysis.md if present."""
+    from .naming import deliverable_dir
+    path = deliverable_dir(project_dir / "paper", "venue") / "venue_analysis.md"
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")

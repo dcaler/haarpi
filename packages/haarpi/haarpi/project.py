@@ -159,12 +159,71 @@ def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
 
 # ── releases and in-flight work ──────────────────────────────────────────────
 
+# Spent or reference material — never live work, never a stage's consumable. `@eaDir` is
+# Synology's metadata sidecar: thousands of files, none of them ours.
+_ARCHIVE_DIRS = {"old", "archive", "templates", "figures", "@eaDir", ".git",
+                 "__pycache__", ".venv", "venv", "node_modules", "data"}
+
+
+def live_dirs(base: Path, skip: set[str] = _ARCHIVE_DIRS) -> list[Path]:
+    """`base` and every live directory beneath it, PRUNING as it walks.
+
+    Not rglob-then-filter: rglob enumerates the whole tree first, so a paper/ holding a
+    LaTeX template package (and its Synology @eaDir sidecars) took long enough to look like
+    a hang. Pruning never descends into what it is going to discard.
+    """
+    out, stack = [], [base]
+    while stack:
+        d = stack.pop()
+        out.append(d)
+        try:
+            for c in d.iterdir():
+                if c.is_dir() and c.name not in skip:
+                    stack.append(c)
+        except OSError:
+            continue
+    return out
+
+
+def stage_search_dirs(root: Path, m: Manifest, stage: str) -> list[Path]:
+    """Every live directory under a stage, deepest layout included.
+
+    raconteur gives each paper deliverable its own folder (paper/onepager/,
+    paper/css2026/outline/, …), so looking only at the stage root and its output/ misses
+    the work entirely — and a stage that reports no release when it has one stalls the
+    ladder silently."""
+    base = m.stage_dir(root, stage)
+    if not base.is_dir():
+        return []
+    # Only the paper stage nests: raconteur gives each deliverable a folder. `code/` and
+    # `results/` are a source repo and a data tree — walking them took long enough to look
+    # like a hang, and there is nothing down there a naming chain would match anyway.
+    if m.stages[stage].get("tool") != "raconteur":
+        return [d for d in (base, base / "output") if d.is_dir()]
+    out = live_dirs(base)
+    seen, uniq = set(), []
+    for d in out:
+        if d not in seen and d.is_dir():
+            seen.add(d)
+            uniq.append(d)
+    return uniq
+
+
 def latest_release(root: Path, m: Manifest, stage: str) -> Path | None:
-    """The stage's consumable. Searches output/, then the stage dir, then the
+    """The stage's consumable. Searches every live directory under the stage, then the
     project root (raster's methods digest historically lands at the root)."""
     from . import naming
     infix = m.stages[stage].get("infix") or None
-    for d in (m.output_dir(root, stage), m.stage_dir(root, stage), root):
+    best: tuple[float, Path] | None = None
+    for d in stage_search_dirs(root, m, stage):
+        for ext in ("docx", "md"):
+            got = naming.find_latest_release(d, m.short_title, ext=ext,
+                                             chain_includes=infix)
+            if got and (best is None or got.stat().st_mtime > best[0]):
+                best = (got.stat().st_mtime, got)
+    if best:
+        return best[1]
+    for d in (root,):
         if not d.is_dir():
             continue
         for ext in ("docx", "md"):
@@ -178,14 +237,12 @@ def latest_release(root: Path, m: Manifest, stage: str) -> Path | None:
 def in_flight(root: Path, m: Manifest, stage: str) -> Path | None:
     """Newest chain file still carrying author tokens — the work in play."""
     from . import naming
-    d = m.output_dir(root, stage)
-    if not d.is_dir():
-        return None
     candidates = []
-    for p in list(d.glob("*.docx")) + list(d.glob("*.md")):
-        parsed = naming.parse(p, m.short_title)
-        if parsed and not naming.is_release(parsed[1]):
-            candidates.append(p)
+    for d in stage_search_dirs(root, m, stage):
+        for p in list(d.glob("*.docx")) + list(d.glob("*.md")):
+            parsed = naming.parse(p, m.short_title)
+            if parsed and not naming.is_release(parsed[1]):
+                candidates.append(p)
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 

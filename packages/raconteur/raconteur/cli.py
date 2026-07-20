@@ -102,6 +102,11 @@ def main() -> None:
              "required when several are selected)",
     )
 
+    migrate_p = sub.add_parser(
+        "migrate", help="move a flat paper/ into a folder per deliverable (one-time)")
+    migrate_p.add_argument("--dry-run", action="store_true",
+                           help="list the moves without making them")
+
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
@@ -140,6 +145,9 @@ def main() -> None:
         case "package":
             from .package import run
             run(project_dir, venue=args.venue)
+        case "migrate":
+            from .migrate import run
+            sys.exit(run(project_dir, dry_run=args.dry_run))
         case _:
             parser.print_help()
             sys.exit(1)

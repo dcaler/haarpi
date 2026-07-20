@@ -4,7 +4,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import load_litreview, load_methods, load_results, load_venue_analysis
-from .naming import major_name, find_latest, find_user_revision
+from .naming import major_name, find_latest, find_user_revision, deliverable_dir
 from .render import to_docx
 
 _SYSTEM = (
@@ -54,8 +54,8 @@ def run(project_dir: Path) -> None:
 
     cfg = ProjectConfig.load(project_dir)
     gcfg = GlobalConfig.load()
-    paper_dir = project_dir / "paper"
-    paper_dir.mkdir(exist_ok=True)
+    paper_dir = deliverable_dir(project_dir / "paper", "manuscript")
+    paper_dir.mkdir(parents=True, exist_ok=True)
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)
 

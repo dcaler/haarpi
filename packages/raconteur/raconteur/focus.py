@@ -11,7 +11,7 @@ from .guards import (
     RESULTS_KW as _RESULTS_KW,
 )
 from .log import log
-from .naming import find_latest, minor_name, parse
+from .naming import find_latest, minor_name, parse, deliverable_dir
 from .render import to_docx
 
 # ── system ────────────────────────────────────────────────────────────────────
@@ -251,7 +251,7 @@ def run(project_dir: Path, section: str) -> None:
 
     cfg = ProjectConfig.load(project_dir)
     gcfg = GlobalConfig.load()
-    paper_dir = project_dir / "paper"
+    paper_dir = deliverable_dir(project_dir / "paper", "manuscript")
 
     paper_path = find_latest(
         paper_dir, cfg.short_title, "md",

@@ -47,7 +47,7 @@ class TestClassifyTemplate:
 
 class TestFindManuscript:
     def test_the_bare_per_venue_release_is_the_manuscript(self, tmp_path):
-        out = tmp_path / "paper" / "output"
+        out = tmp_path / "paper" / "css2026" / "manuscript" / "output"
         out.mkdir(parents=True)
         for name in ("260717_Chords_css2026.docx",          # the manuscript itself
                      "260717_Chords_css2026_outline.docx",   # a ladder rung, not it
@@ -59,7 +59,7 @@ class TestFindManuscript:
         assert got is not None and got.name == "260717_Chords_css2026.docx"
 
     def test_no_manuscript_is_none(self, tmp_path):
-        (tmp_path / "paper" / "output").mkdir(parents=True)
+        (tmp_path / "paper" / "css2026" / "manuscript" / "output").mkdir(parents=True)
         cfg = types.SimpleNamespace(short_title="Chords")
         assert package._find_manuscript(tmp_path, cfg, "css2026") is None
 
@@ -80,7 +80,7 @@ class TestLatexWrapper:
 
 
 def _seed_project(tmp_path: Path) -> Path:
-    (tmp_path / "paper" / "output").mkdir(parents=True)
+    (tmp_path / "paper" / "css2026" / "manuscript" / "output").mkdir(parents=True)
     (tmp_path / "litReview" / "output").mkdir(parents=True)
     (tmp_path / "litReview" / "output" / "refs.bib").write_text(
         "@misc{k, title={T}, author={A}, year={2020}}\n", encoding="utf-8")
@@ -91,9 +91,9 @@ def _seed_project(tmp_path: Path) -> Path:
     md.write_text("# My Title\n\n**Abstract**\n\nAbs.\n\n## Intro\n\nBody text.\n",
                   encoding="utf-8")
     subprocess.run(["pandoc", str(md), "-o",
-                    str(tmp_path / "paper" / "output" / "260717_Chords_css2026.docx")],
+                    str(tmp_path / "paper" / "css2026" / "manuscript" / "output" / "260717_Chords_css2026.docx")],
                    check=True, capture_output=True)
-    _cls(tmp_path / "paper" / "templates" / "css2026")
+    _cls(tmp_path / "paper" / "css2026" / "templates")
     return tmp_path
 
 

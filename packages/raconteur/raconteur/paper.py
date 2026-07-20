@@ -18,7 +18,7 @@ from .context import (
     load_bib_keys, load_style_profile, load_onepager,
 )
 from .log import log
-from .naming import major_name, find_latest, find_user_revision
+from .naming import major_name, find_latest, find_user_revision, deliverable_dir
 from .render import to_docx
 from .revise import read_text, build_revision_context
 
@@ -820,25 +820,34 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
     scope = [venue] if venue else []
     others = [v for v in cfg.venues if v != venue]
 
+    # One folder per deliverable per venue: this venue's manuscript, and the outline it is
+    # written from. The chain tokens still scope the search inside them — belt and braces,
+    # and the filenames stay self-describing when read outside their folder.
+    work = deliverable_dir(paper_dir, "manuscript", venue)
+    work.mkdir(parents=True, exist_ok=True)
+    outline_home = deliverable_dir(paper_dir, "outline", venue)
+
     from haarpi.naming import find_latest_release
     outline_path = find_latest_release(
-        paper_dir / "output", cfg.short_title, "md",
+        outline_home / "output", cfg.short_title, "md",
         chain_includes=scope + ["outline"],
-    ) or find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
+    ) or find_latest(outline_home, cfg.short_title, "md", last_initials="ra",
                      chain_includes=scope + ["outline"])
     if outline_path is None:
         where = f" for {venue}" if venue else ""
-        log(f"[error] no outline{where} found in paper/ — run 'raconteur outline"
+        log(f"[error] no outline{where} found in {outline_home.relative_to(project_dir)}/ "
+            f"— run 'raconteur outline"
             + (f" --venue {venue}'" if venue else "'") + " first")
         raise SystemExit(1)
     outline_text = outline_path.read_text(encoding="utf-8")
     log(f"[raconteur] using outline: {outline_path.name}")
 
     excludes = ["outline", "venue", "onepager"] + others
-    user_rev = find_user_revision(paper_dir, cfg.short_title,
+    user_rev = find_user_revision(work, cfg.short_title,
                                   chain_includes=scope, chain_excludes=excludes)
-    existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
+    existing = find_latest(work, cfg.short_title, "md", last_initials="ra",
                            chain_includes=scope, chain_excludes=excludes)
+    paper_dir = work
 
     if not existing:
         _draft_paper(project_dir, cfg, brain, paper_dir, outline_text, venue)

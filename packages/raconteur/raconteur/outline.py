@@ -11,7 +11,7 @@ from .context import (
     load_author_figures, author_figure_sections,
 )
 from .naming import (
-    major_name, major_outline_name, find_latest, find_user_revision,
+    major_name, major_outline_name, find_latest, find_user_revision, deliverable_dir,
 )
 from .render import to_docx
 
@@ -719,6 +719,9 @@ def run(project_dir: Path, venue: str = "") -> None:
     # outline sits beside the ISMIR one and neither sees the other's markup.
     scope = ([venue] if venue else []) + ["outline"]
     others = [v for v in cfg.venues if v != venue]
+    # This venue's outline has its own folder: paper/css2026/outline/.
+    paper_dir = deliverable_dir(paper_dir, "outline", venue)
+    paper_dir.mkdir(parents=True, exist_ok=True)
     user_rev = find_user_revision(paper_dir, cfg.short_title, chain_includes=scope,
                                   chain_excludes=others)
     existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",

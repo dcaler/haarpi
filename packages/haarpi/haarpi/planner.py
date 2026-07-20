@@ -826,6 +826,24 @@ def run_authors(root: Path, action: str = "", name: str = "", initials: str = ""
 
 # ── the verb ─────────────────────────────────────────────────────────────────
 
+# Directories that hold spent or reference copies rather than live work. `old/` is where a
+# discard goes (moved, never deleted), and a file there must never read as this turn's markup.
+_NOT_LIVE = {"old", "templates", "figures"}
+
+
+def _markup_dirs(root: Path, m: project.Manifest, stage: str) -> list[Path]:
+    """Every directory under a stage that may hold live markup.
+
+    raconteur gives each deliverable its own folder — paper/onepager/,
+    paper/css2026/outline/, paper/css2026/manuscript/ — so a scan of the stage root and its
+    output/ no longer sees the work. Walks instead, skipping the archive: the alternative
+    is a planner that reports "nothing to do" for a stage full of finished markup, which is
+    the exact silent success this function was fixed for once already.
+    """
+    base = m.stage_dir(root, stage)
+    return project.live_dirs(base) if base.is_dir() else []
+
+
 def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | None:
     """Newest in-flight file a HUMAN touched last — the markup whose gate task was just
     marked done.
@@ -842,9 +860,7 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
     paper/ root (same convention latest_release's root-scan tier serves)."""
     best: tuple[float, str, Path] | None = None
     for stage in m.stages:
-        for d in {m.output_dir(root, stage), m.stage_dir(root, stage)}:
-            if not d.is_dir():
-                continue
+        for d in _markup_dirs(root, m, stage):
             for p in d.glob("*.docx"):
                 parsed = naming.parse(p, m.short_title)
                 if not parsed:
@@ -860,10 +876,24 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
     return (best[1], best[2]) if best else None
 
 
+def _release_dir(root: Path, m: project.Manifest, stage: str, markup: Path) -> Path:
+    """Where a release lands: the markup's own deliverable folder, under output/.
+
+    Falls back to the stage's output/ when the markup sits at the stage root (every stage
+    but paper, which is the only one with per-deliverable folders)."""
+    base = m.stage_dir(root, stage)
+    if markup.parent == base or base not in markup.parents:
+        return m.output_dir(root, stage)
+    home = markup.parent
+    if home.name == "output":
+        home = home.parent
+    return home / "output"
+
+
 def _archive_chain(root: Path, m: project.Manifest, stage: str, release: Path) -> int:
     """Move the spent chain files aside so output/ holds releases + live work only."""
-    d = m.output_dir(root, stage)
-    dest = m.stage_dir(root, stage) / "archive" / release.stem
+    d = release.parent
+    dest = d.parent / "archive" / release.stem
     n = 0
     for p in list(d.glob("*.docx")) + list(d.glob("*.md")):
         parsed = naming.parse(p, m.short_title)
@@ -977,7 +1007,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                                  (m.stages[stage].get("infix") or "")) if p)
     if check["clean"]:
         rel_name = naming.release_name(m.short_title, "docx", infix=infix)
-        dst = m.output_dir(root, stage) / rel_name
+        # Beside the markup it was minted from: raconteur gives each deliverable its own
+        # folder, so paper/css2026/outline/output/ — not one shared paper/output/.
+        dst = _release_dir(root, m, stage, markup) / rel_name
         if dry_run:
             rung = f" ({deliverable} rung)" if deliverable else ""
             for_v = f" for {venue}" if venue else ""
