@@ -1067,6 +1067,11 @@ def bullet_budget(markdown: str, budget: int,
     out: list[Finding] = []
     counts: dict[str, list[Heading]] = {}
     for leaf in leaves(heads):
+        # The document TITLE is not a subsection. The author block sits beneath it as
+        # ordinary prose, which parse_outline reads as beats — so the title came back
+        # carrying four "bullets" and was charged a Discussion's share.
+        if leaf.level < 2:
+            continue
         counts.setdefault(ancestor_kind(heads, leaf, for_budget=True), []).append(leaf)
     for kind, kids in counts.items():
         # The abstract sits outside the body budget but is not unbounded: it has its own
