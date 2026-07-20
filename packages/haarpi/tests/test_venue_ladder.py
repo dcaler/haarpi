@@ -113,8 +113,10 @@ def test_the_venue_gate_forks_one_chain_per_selected_venue(tmp_path):
 
     assert "ismir" in note and "jasss" in note and "cmj" not in note
     titles = [t["title"] for t in client.tasks]
-    assert "paper ismir outline 1" in titles
-    assert "paper jasss outline 1" in titles
+    # The venue gate now forks to phase ONE of the outline: headings only, redlined before
+    # a bullet is written.
+    assert "paper ismir skeleton 1" in titles
+    assert "paper jasss skeleton 1" in titles
     assert not any("cmj" in t for t in titles), "a candidate is not a decision"
 
 
@@ -149,3 +151,15 @@ def test_rework_on_one_venues_paper_stays_in_that_venues_lane(tmp_path):
 ])
 def test_the_gate_knows_which_venue_a_markup_belongs_to(fname, venue, tmp_path):
     assert naming.venue_of(tmp_path / fname, "Chords") == venue
+
+
+def test_the_outline_is_written_in_two_gated_phases():
+    """Phase one is headings only — enough to compute the whole word plan, and cheap to fix.
+    Discovering the structure is wrong after a draft has been written from it costs hours."""
+    from haarpi.planner import PAPER_LADDER, STAGE_STEPS
+    assert PAPER_LADDER["venue"][0] == "skeleton"
+    assert PAPER_LADDER["skeleton"][0] == "outline"
+    assert PAPER_LADDER["outline"][0] == "draft"
+    # each phase is followed by a human redline before the next runs
+    assert PAPER_LADDER["skeleton"][1] == "comment"
+    assert STAGE_STEPS["paper"]["skeleton"].command == "haarpi raconteur skeleton"

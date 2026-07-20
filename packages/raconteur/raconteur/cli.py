@@ -68,6 +68,11 @@ def main() -> None:
         help="re-derive the analysis from scratch, discarding the existing one "
              "(default: keep it and re-put its slate to you)",
     )
+    skeleton_p = sub.add_parser(
+        "skeleton", help="phase one: plan the paper's sections and subsections")
+    skeleton_p.add_argument("--venue", metavar="SLUG", default="",
+                            help="which venue to plan for")
+
     outline_p = sub.add_parser(
         "outline", help="generate a paper outline from the approved one-pager")
     outline_p.add_argument(
@@ -110,7 +115,8 @@ def main() -> None:
     args = parser.parse_args()
     project_dir = Path(args.dir).resolve()
 
-    if args.command in ("style", "venue", "onepager", "outline", "paper", "draft", "focus"):
+    if args.command in ("style", "venue", "onepager", "skeleton", "outline",
+                        "paper", "draft", "focus"):
         from .config import GlobalConfig
         gcfg = GlobalConfig.load()
         if not _check_ollama(gcfg.ollama_url):
@@ -133,6 +139,9 @@ def main() -> None:
         case "venue":
             from .venue import run
             run(project_dir, refresh=args.refresh)
+        case "skeleton":
+            from .skeleton import run
+            run(project_dir, venue=args.venue)
         case "outline":
             from .outline import run
             run(project_dir, venue=args.venue)

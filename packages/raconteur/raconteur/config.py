@@ -49,6 +49,8 @@ class VenueConfig:
     columns: int | None = None   # unknown until the CFP says
     abstract_limit: int | None = None
     required_sections: str = ""        # content the venue mandates: CCS, keywords, ethics…
+    section_structure: str = ""        # the venue's own section ORDER, if it states one;
+                                       # empty means IBMRDC (see raconteur.skeleton)
     anonymized: bool | None = None     # double-blind — strips authorship from the writing
     template_url: str = ""             # best-effort link to the template / author kit
     template_kind: str = ""            # latex-acm | latex-ieee | latex | word | overleaf | ""
@@ -59,7 +61,8 @@ class VenueConfig:
     # template_* fields are handled apart: the first is a prose directive, the last
     # two feed the human template-fetch task, not the draft.
     SPEC_FIELDS = ("page_limit", "word_min", "word_limit", "citation_style", "columns",
-                   "abstract_limit", "required_sections", "format_notes")
+                   "abstract_limit", "required_sections", "section_structure",
+                   "format_notes")
 
     @property
     def by_author(self) -> bool:

@@ -74,8 +74,11 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                          "Re-cut the narrative from scratch; the annotations are the brief."),
         "venue":    Step("haarpi raconteur venue", 1.0,
                          "Analyse candidate venues from the narrative."),
+        "skeleton": Step("haarpi raconteur skeleton", 0.6,
+                         "Phase one: plan the sections and subsections, and the words "
+                         "each can afford."),
         "outline":  Step("haarpi raconteur outline", 1.0,
-                         "Re-design the paper's structure from the approved one-pager."),
+                         "Phase two: add the content beats to the approved skeleton."),
         "draft":    Step("haarpi raconteur draft", 3.0,
                          "Write the full paper from the outline and upstream releases."),
         "comment":  Step(None, 0.25, "Review the new draft and annotate it."),
@@ -151,7 +154,12 @@ _DELIVERABLE_LABEL = {
 # come from somewhere.
 PAPER_LADDER: dict[str, list[str]] = {
     "onepager": ["venue", "comment"],
-    "venue":    ["outline", "comment"],     # queued once per SELECTED venue
+    "venue":    ["skeleton", "comment"],    # queued once per SELECTED venue
+    # The outline is written in two passes with a redline between them. Phase one is
+    # headings only, which is enough to compute the whole word plan — each section's share,
+    # and therefore how many paragraphs each subsection can afford. Approving THAT is cheap;
+    # discovering it after a draft has been written from it costs 4.5 GPU-hours.
+    "skeleton": ["outline", "comment"],
     "outline":  ["draft", "comment"],
 }
 

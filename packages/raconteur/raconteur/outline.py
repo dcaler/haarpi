@@ -173,9 +173,26 @@ def _credit_authors(project_dir: Path) -> str:
             "author assigns the roles:\n" + names)
 
 
+def _skeleton_section(skeleton: str) -> str:
+    """The approved structure phase two writes bullets onto.
+
+    It is a CONTRACT, not a suggestion: the author redlined these headings and gated them.
+    Phase two adds beats; it does not get to rename a section, add one, or drop one.
+    """
+    if not skeleton.strip():
+        return ""
+    return (
+        "APPROVED STRUCTURE (the author gated this — reproduce every heading EXACTLY, at "
+        "the same level, in this order; add none, drop none, rename none):\n"
+        f"{skeleton.strip()}\n\n")
+
+
 _DRAFT_PROMPT = """\
-Create a detailed outline for an academic paper. Use the structural analysis \
-below to derive all section and subsection structure from this paper's actual \
+Add the content beats to an APPROVED paper structure. The headings are fixed; you are \
+writing what each subsection must argue.
+
+{skeleton_section}\
+Use the structural analysis below to derive the beats from this paper's actual \
 intellectual content.
 
 Title: {title}
@@ -728,7 +745,23 @@ def run(project_dir: Path, venue: str = "") -> None:
                            chain_includes=scope, chain_excludes=others)
 
     if not existing:
-        _outline_fresh(project_dir, cfg, brain, paper_dir, venue)
+        # Phase two writes bullets ONTO the author-approved skeleton. Without one there is
+        # no approved structure to write to, and generating a structure here silently
+        # bypasses the redline that phase one exists to get.
+        from haarpi.naming import find_latest_release
+        sk_home = deliverable_dir(project_dir / "paper", "skeleton", venue)
+        skeleton_path = find_latest_release(
+            sk_home / "output", cfg.short_title, "md",
+            chain_includes=([venue] if venue else []) + ["skeleton"])
+        if skeleton_path is None:
+            where = f" for {venue}" if venue else ""
+            log(f"[error] no approved skeleton{where} — run 'raconteur skeleton"
+                + (f" --venue {venue}'" if venue else "'")
+                + " and gate it first")
+            raise SystemExit(1)
+        log(f"[raconteur] building on skeleton: {skeleton_path.name}")
+        _outline_fresh(project_dir, cfg, brain, paper_dir, venue,
+                       skeleton=skeleton_path.read_text(encoding="utf-8"))
     elif user_rev:
         log(f"[raconteur] found revision: {user_rev.name}")
         _revise(project_dir, cfg, brain, paper_dir, user_rev, venue)
@@ -747,7 +780,7 @@ def run(project_dir: Path, venue: str = "") -> None:
 
 def _outline_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path,
-    venue: str = "",
+    venue: str = "", skeleton: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
@@ -784,6 +817,7 @@ def _outline_fresh(
             litrev_section=litrev_section,
             credit_roles="\n".join(f"  - {r}" for r in _CREDIT_ROLES),
             credit_authors=_credit_authors(project_dir),
+            skeleton_section=_skeleton_section(skeleton),
         ),
         system=_SYSTEM,
         num_ctx=16384,

@@ -79,6 +79,11 @@ def major_outline_name(short_title: str, ext: str, venue: str = "") -> str:
     return _core.major_name(short_title, ext, infix=_infix(venue, "outline"))
 
 
+def major_skeleton_name(short_title: str, ext: str, venue: str = "") -> str:
+    """Fresh skeleton file — chain is [venue_]skeleton_ra."""
+    return _core.major_name(short_title, ext, infix=_infix(venue, "skeleton"))
+
+
 def major_onepager_name(short_title: str, ext: str) -> str:
     """Fresh one-pager file — chain is onepager_ra.
 

@@ -202,7 +202,8 @@ Source page:
 Return ONLY a JSON object with exactly these keys, using null for anything the page does \
 not state:
 {{"page_limit": null, "word_min": null, "word_limit": null, "abstract_limit": null, \
-"columns": null, "citation_style": null, "required_sections": null, "anonymized": null, \
+"columns": null, "citation_style": null, "required_sections": null, "section_structure": null, \
+"anonymized": null, \
 "template_url": null, "template_kind": null, "format_notes": null}}
 
 - page_limit / word_limit / abstract_limit: integers, for the MAIN submission (not the \
@@ -221,6 +222,9 @@ if it explicitly permits author names / is single-blind; null if the page does n
 .zip, an Overleaf project, a .cls or .docx template). The link itself, or null.
 - template_kind: "latex-acm", "latex-ieee", "latex", "word", or "overleaf" if identifiable, \
 else null.
+- section_structure: the venue's own MANDATED section order, as a comma-separated list \
+("Introduction, Results, Discussion, Methods"), ONLY where the page states one. Null \
+otherwise — most venues do not, and the default structure is used.
 - format_notes: anything else an author must obey — section limits, supplementary rules. \
 One short paragraph, or null."""
 
