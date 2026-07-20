@@ -567,7 +567,8 @@ def _venue_specs_block(cfg: ProjectConfig, venue: str = "") -> str:
     return slate.specs_block(cfg.venue(venue) if venue else None)
 
 
-def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str) -> dict:
+def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str,
+                          skeleton: str = "") -> dict:
     """Everything the structural battery needs to judge an outline against its venue."""
     from . import guards
     from .context import load_bib_keys, load_figure_manifest, load_author_figures
@@ -583,14 +584,18 @@ def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str) -> 
         "expected_figures": {f.path: f.origin for f in figs} or None,
         "required": (v.required_sections if v else "") or "",
         "shares": cfg.section_shares or None,
+        # The approved structure. Without it phase two can rename, add or drop a section
+        # and the author's redline is discarded in silence.
+        "skeleton": skeleton,
     }
 
 
 def _structural_critique(cfg: ProjectConfig, project_dir: Path, outline: str,
-                         venue: str = "") -> str:
+                         venue: str = "", skeleton: str = "") -> str:
     """The guard battery, phrased as critique the reviser must act on."""
     from . import guards
-    findings = guards.outline_findings(outline, **_outline_guard_inputs(cfg, project_dir, venue))
+    findings = guards.outline_findings(
+        outline, **_outline_guard_inputs(cfg, project_dir, venue, skeleton))
     if not findings:
         return ""
     log(f"[raconteur] structural guards: {len(findings)} finding(s)")
@@ -602,11 +607,11 @@ def _structural_critique(cfg: ProjectConfig, project_dir: Path, outline: str,
 
 
 def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
-                   venue: str = "") -> None:
+                   venue: str = "", skeleton: str = "") -> None:
     """What survived. An outline that still fails its venue is the author's call to make,
     but they must be told before they gate it, not after a draft run discovers it."""
     from . import guards
-    inputs = _outline_guard_inputs(cfg, project_dir, venue)
+    inputs = _outline_guard_inputs(cfg, project_dir, venue, skeleton)
     heads = guards.parse_outline(outline)
     n_leaves = len(guards.leaves(heads))
     budget = inputs["budget"]
@@ -825,10 +830,12 @@ def _outline_fresh(
 
     # Passes 3–4 and 5–6: two critique→revise cycles
     outline = _critique_revise(brain, draft, analysis, n=1,
-                               structural=_structural_critique(cfg, project_dir, draft, venue))
+                               structural=_structural_critique(cfg, project_dir, draft,
+                                                              venue, skeleton))
     outline = _critique_revise(brain, outline, analysis, n=2,
-                               structural=_structural_critique(cfg, project_dir, outline, venue))
-    _log_structure(cfg, project_dir, outline, venue)
+                               structural=_structural_critique(cfg, project_dir, outline,
+                                                              venue, skeleton))
+    _log_structure(cfg, project_dir, outline, venue, skeleton)
 
     _write(project_dir, cfg, paper_dir, outline, venue)
     if code:

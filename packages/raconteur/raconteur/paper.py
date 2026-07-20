@@ -620,7 +620,8 @@ def _manuscript_findings(assembled: str, outline_text: str, budget: int,
     return (guards.outline_conformance(assembled, outline_text)
             + guards.over_budget(assembled, budget)
             + guards.under_budget(assembled, budget)
-            + guards.section_lengths(assembled, outline_text, budget, shares))
+            + guards.section_lengths(assembled, outline_text, budget, shares)
+            + guards.paragraph_conformance(assembled, outline_text))
 
 
 def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,

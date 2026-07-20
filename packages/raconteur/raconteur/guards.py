@@ -745,8 +745,12 @@ def leaves(heads: list[Heading]) -> list[Heading]:
             if h.beats and not (is_references(h.text) or is_acknowledgements(h.text))]
 
 
-def ancestor_kind(heads: list[Heading], leaf: Heading) -> str:
+def ancestor_kind(heads: list[Heading], leaf: Heading, for_budget: bool = False) -> str:
     """A subsection's kind is its SECTION's kind, not its own name's.
+
+    ``for_budget`` classifies with ``budget_kind`` instead, which tells an Introduction
+    from a Background and a Conclusion from a Discussion — two distinctions allocation
+    needs and citation floors do not.
 
     "Sonic Art and Audio Translation of Visual Models" contains "model" and classifies as
     methods on its own; it is a subsection of the Introduction. "Qualitative Assessment"
@@ -763,11 +767,12 @@ def ancestor_kind(heads: list[Heading], leaf: Heading) -> str:
             break
         if h.level <= 2:
             top = h
+    classify = budget_kind if for_budget else section_kind
     if top is None or top is leaf:
-        return "conclusion" if _is_conclusion(leaf.text) else section_kind(leaf.text)
+        return "conclusion" if _is_conclusion(leaf.text) else classify(leaf.text)
     if _is_conclusion(top.text):
         return "conclusion"
-    return section_kind(top.text)
+    return classify(top.text)
 
 
 def numbering_gaps(heads: list[Heading]) -> list[Finding]:
@@ -1046,15 +1051,73 @@ def required_sections(markdown: str, required: str) -> list[Finding]:
     return out
 
 
+def bullet_budget(markdown: str, budget: int,
+                  shares: dict[str, float] | None = None) -> list[Finding]:
+    """Subsections whose bullet count does not fit the words they are given. PHASE: outline.
+
+    One bullet is one paragraph in the manuscript. That makes a bullet count arithmetic
+    rather than taste: a 200-word subsection carrying four bullets is asking for 50-word
+    paragraphs, and one carrying a single bullet is asking for a 200-word one. Both are
+    computable the moment the bullets exist, and neither was checked — the rule lived only
+    in a prompt.
+    """
+    if budget <= 0:
+        return []
+    heads = parse_outline(markdown)
+    out: list[Finding] = []
+    counts: dict[str, list[Heading]] = {}
+    for leaf in leaves(heads):
+        counts.setdefault(ancestor_kind(heads, leaf, for_budget=True), []).append(leaf)
+    for kind, kids in counts.items():
+        words = round(budget * (shares or DEFAULT_SECTION_SHARES).get(kind, 0))
+        if not words:
+            continue
+        each = words // max(1, len(kids))
+        want = bullets_for(each)
+        lo, hi = PARAGRAPH_BAND
+        for leaf in kids:
+            if not leaf.beats:
+                continue                      # an empty heading is heading_levels' business
+            per = each // leaf.beats
+            if per < lo or per > hi:
+                out.append(Finding(
+                    "bullet-count", leaf.text,
+                    f'"{leaf.text}" has {leaf.beats} bullet(s) for {each} words — '
+                    f"{per} words a paragraph, outside {lo}–{hi}. Use about {want}: one "
+                    f"bullet becomes one paragraph in the manuscript."))
+    return out
+
+
+def skeleton_conformance(outline_md: str, skeleton_md: str) -> list[Finding]:
+    """The outline reproduces the approved skeleton's headings. PHASE: outline.
+
+    Phase one's structure is gated by the author. Phase two adds beats to it and may not
+    rename a section, add one, drop one, or change its level — but nothing checked, so the
+    contract lived in a prompt and a redline could be discarded in silence. Same shape of
+    failure as a co-author's name surviving only in prose.
+    """
+    return outline_conformance(outline_md, skeleton_md)
+
+
 def outline_findings(markdown: str, budget: int = 0,
                      expected_figures: dict[str, str] | None = None,
                      required: str = "",
-                     shares: dict[str, float] | None = None) -> list[Finding]:
-    """The whole outline battery, in the order a reader would want them fixed."""
+                     shares: dict[str, float] | None = None,
+                     skeleton: str = "") -> list[Finding]:
+    """The whole outline battery, in the order a reader would want them fixed.
+
+    No ``numbering_gaps``: headings carry no numbers now — the .docx style supplies them —
+    so it can never fire, and a guard that cannot fire is one whose silence means nothing.
+
+    No ``leaf_budget`` either. It flags a structure too wide for its budget, which is the
+    SKELETON's business (see ``skeleton.findings``). Here the structure is an approved
+    contract phase two may not alter, so the finding would name a fix the reader is
+    forbidden to make — which teaches them to ignore the battery.
+    """
     heads = parse_outline(markdown)
-    return (numbering_gaps(heads)
+    return (skeleton_conformance(markdown, skeleton)
             + heading_levels(heads)
-            + leaf_budget(heads, budget, shares)
+            + bullet_budget(markdown, budget, shares)
             + figure_placement(markdown, heads, expected_figures)
             + required_sections(markdown, required))
 
@@ -1274,6 +1337,63 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
                 f"paper. Tighten it by about {n - high} words so the space goes to the "
                 f"sections carrying the contribution."))
     return out
+
+
+def paragraph_conformance(draft_md: str, outline_md: str,
+                          tolerance: int = 1) -> list[Finding]:
+    """Subsections whose paragraph count does not match their bullet count. PHASE: draft.
+
+    One bullet is one paragraph. That is the contract phase two writes to and the whole
+    reason a bullet count can be derived from a word allocation — but it lived only in a
+    prompt, so a bullet silently folded into its neighbour, or expanded into three, was
+    invisible. Both change the paper's shape without changing any heading, which is
+    precisely the kind of drift the section bands were too coarse to see.
+
+    ``tolerance`` allows one paragraph either way: a subsection that opens with a framing
+    sentence, or closes by handing off to the next, is not a defect.
+    """
+    if not outline_md.strip():
+        return []
+    want: dict[str, int] = {}
+    for leaf in leaves(parse_outline(outline_md)):
+        if leaf.beats:
+            want[_norm_heading(leaf.text)] = leaf.beats
+    if not want:
+        return []
+
+    out: list[Finding] = []
+    for heading, body in _subsections_with_bodies(draft_md):
+        key = _norm_heading(heading)
+        if key not in want:
+            continue
+        got = len([b for b in re.split(r"\n\s*\n", body.strip())
+                   if b.strip() and not b.lstrip().startswith(("#", "!["))])
+        expected = want[key]
+        if abs(got - expected) <= tolerance:
+            continue
+        out.append(Finding(
+            "paragraph-count", heading,
+            f'"{heading}" has {got} paragraph(s) for {expected} outline bullet(s). '
+            f"Write one paragraph per bullet: "
+            + ("split the paragraph that covers two bullets."
+               if got < expected else
+               "merge the paragraphs that cover one bullet between them.")))
+    return out
+
+
+def _subsections_with_bodies(markdown: str) -> list[tuple[str, str]]:
+    """Level-3+ subsections as (heading, its prose up to the next heading of any level)."""
+    out: list[tuple[str, list[str]]] = []
+    for raw in markdown.splitlines():
+        s = raw.lstrip()
+        level = len(s) - len(s.lstrip("#")) if s.startswith("#") else 0
+        if level >= 3 and s[level:].strip():
+            out.append((s[level:].strip(), []))
+        elif level and level <= 2:
+            out.append(("", []))          # a new section closes the previous subsection
+        elif out:
+            out[-1][1].append(raw)
+    return [(h, "\n".join(b)) for h, b in out if h]
 
 
 def _sections_with_bodies(markdown: str) -> list[tuple[str, str]]:
