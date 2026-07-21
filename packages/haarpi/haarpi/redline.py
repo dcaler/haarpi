@@ -1270,8 +1270,51 @@ def _clear_comment_parts(path: Path) -> None:
                 z.writestr(n, b)
 
 
+_LIST_STYLE_RE = re.compile(r"^(list\b|compact$)", re.IGNORECASE)
+
+
+def _list_level(p) -> int | None:
+    """How deeply this paragraph is nested in a list, or None if it is not in one.
+
+    Two spellings, because two producers. Word and pandoc put ``w:numPr`` on the PARAGRAPH,
+    with ``w:ilvl`` for depth. python-docx's built-in "List Bullet" styles put the numbering
+    on the STYLE and leave the paragraph bare, so numPr alone reports a hand-built list as
+    prose. Accept either; take the depth from ilvl when it is there and from the style's
+    trailing digit ("List Bullet 2") when it is not.
+
+    Headings carry numPr too — the reference document numbers them that way — so heading
+    paragraphs must be classified before this is consulted, never by it.
+    """
+    pPr = p._p.find(qn("w:pPr"))
+    numPr = pPr.find(qn("w:numPr")) if pPr is not None else None
+    if numPr is not None:
+        ilvl = numPr.find(qn("w:ilvl"))
+        try:
+            return int(ilvl.get(qn("w:val"))) if ilvl is not None else 0
+        except (TypeError, ValueError):
+            return 0
+    style = p.style.name if p.style is not None else ""
+    if not _LIST_STYLE_RE.match(style.strip()):
+        return None
+    tail = style.strip().split()[-1]
+    return int(tail) - 1 if tail.isdigit() and int(tail) > 0 else 0
+
+
 def release_markdown(doc) -> str:
-    """A plain markdown rendering of the (already accepted) document body."""
+    """A plain markdown rendering of the (already accepted) document body.
+
+    Bullets must come back as bullets. This used to emit every non-heading paragraph flat,
+    so an outline the author had redlined — where each bullet is a real Word list item —
+    was released as running prose, and the whole ladder below it lost the one structure it
+    is built on. raconteur's draft prompt says "write ONE PARAGRAPH per outline bullet"; the
+    css2026 release it said that against contained no bullets at all, only paragraphs, and
+    the guards that count beats and the model that counts bullets were reading different
+    documents.
+
+    Any list becomes a ``-`` list: an outline's items are beats, never an ordinal sequence,
+    and re-deriving ``1.`` from ``w:numFmt`` would only invite a numbering to drift from the
+    heading numbers around it.
+    """
     lines: list[str] = []
     for p in doc.paragraphs:
         text = p.text.strip()
@@ -1281,8 +1324,9 @@ def release_markdown(doc) -> str:
         if is_heading_style(style):
             level = "".join(ch for ch in style if ch.isdigit()) or "1"
             lines.append("#" * int(level) + " " + text)
-        else:
-            lines.append(text)
+            continue
+        depth = _list_level(p)
+        lines.append(text if depth is None else "  " * depth + "- " + text)
     return "\n\n".join(lines) + "\n"
 
 

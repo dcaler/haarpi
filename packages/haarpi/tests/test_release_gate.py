@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from lxml import etree
 
@@ -124,3 +125,42 @@ def test_release_markdown_renders_headings(tmp_path):
     doc.add_paragraph("Body text.")
     md = redline.release_markdown(doc)
     assert "## Results" in md and "Body text." in md
+
+
+def test_release_markdown_keeps_bullets_as_bullets():
+    """The release is what the next stage READS, and for an outline the bullets are the
+    whole contract: raconteur's draft prompt says "write ONE PARAGRAPH per outline bullet".
+    Emitting every non-heading paragraph flat released the css2026 outline as running prose
+    with zero bullet markers — the author's approved beats, handed to the drafter as a
+    summary to infer them from."""
+    doc = Document()
+    doc.add_heading("Methods", level=2)
+    doc.add_paragraph("Introduce the simulation.", style="List Bullet")
+    doc.add_paragraph("Define the metric.", style="List Bullet")
+    doc.add_paragraph("Not a list item.")
+    md = redline.release_markdown(doc)
+    assert "- Introduce the simulation." in md
+    assert "- Define the metric." in md
+    assert "\nNot a list item." in md and "- Not a list item." not in md
+
+
+def test_a_nested_list_item_keeps_its_depth():
+    doc = Document()
+    doc.add_paragraph("top", style="List Bullet")
+    doc.add_paragraph("under", style="List Bullet 2")
+    md = redline.release_markdown(doc)
+    assert "- top" in md
+    assert "  - under" in md
+
+
+def test_a_numbered_heading_is_not_mistaken_for_a_list_item():
+    """Headings carry w:numPr too — the reference document numbers them that way. Classify
+    the heading first or every section title comes back as a bullet."""
+    doc = Document()
+    doc.add_paragraph("Results", style="Heading 2")
+    p = doc.paragraphs[-1]
+    pPr = p._p.get_or_add_pPr()
+    numPr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl"); ilvl.set(qn("w:val"), "0"); numPr.append(ilvl)
+    pPr.append(numPr)
+    assert redline.release_markdown(doc).strip() == "## Results"
