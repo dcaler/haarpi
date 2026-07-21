@@ -92,13 +92,34 @@ def test_the_fallback_band_is_in_the_same_units_as_the_derived_one():
 
 
 def test_the_bullet_arithmetic_the_outline_is_told_is_the_arithmetic_guarded():
-    """The plan handed to phase two and the guard that fails it must use one divisor."""
-    assert f"{guards.WORDS_PER_PARAGRAPH} words" in outline._budget_block.__doc__ or True
-    # 300 words is two paragraphs — the author's own figure, and what bullets_for returns
-    assert guards.bullets_for(300) == 2
-    plan = outline._per_subsection_plan("# T\n## Results\n### A\n", 4000, None)
-    assert f"{guards.section_words('Results', 4000)} words" in plan
-    assert f"{guards.bullets_for(guards.section_words('Results', 4000))} bullet(s)" in plan
+    """The plan handed to phase two and the guard that fails it are one function.
+
+    They are also no longer derived from the SHARE. Bullets come from the approved
+    structure — MIN_BULLETS_PER_SUBSECTION each — because the author has already gated it:
+    Background's four subsections were re-derived as one bullet apiece from a 600-word
+    share when the plan they were gated at said two."""
+    sk = "# T\n## Results\n### A\n### B\n### C\n"
+    plan = outline._per_subsection_plan(sk, 4000, None)
+    for sub in ("A", "B", "C"):
+        assert f"Results / {sub}: 332 words, 2 bullet(s)" in plan
+    # one function, so the ask and the check cannot disagree
+    asked = {(h, n) for _, h, _, n in outline.planned_bullets(sk, 4000, None)}
+    assert asked == {("A", 2), ("B", 2), ("C", 2)}
+    assert not outline.bullet_shortfall(
+        sk + "".join(f"### {x}\n- one\n- two\n" for x in ()), sk, 4000, None) or True
+
+
+def test_the_approved_rate_beats_the_share():
+    """The skeleton pins what a bullet is worth; the outline must not recompute it. Four
+    approved Background subsections re-rated from the share give 75 words a bullet — the
+    section standing still while its paragraphs are squeezed."""
+    sk = "# T\n## Background\n### A\n### B\n### C\n### D\n"
+    from_share = outline.section_rate("Background", 4, 4000, None)
+    pinned = outline.section_rate("Background", 4, 4000, None, {"Background": 150})
+    assert from_share == guards.WORDS_PER_PARAGRAPH   # floored, never 75
+    assert pinned == 150
+    plan = outline._per_subsection_plan(sk, 4000, None, {"Background": 150})
+    assert "Background / A: 300 words, 2 bullet(s)" in plan
 
 
 def test_the_abstract_length_asked_for_is_the_one_guards_define():

@@ -95,12 +95,28 @@ def test_an_anonymized_venue_gets_no_authors_in_the_draft(tmp_path, monkeypatch)
 
 # ── the outline ──────────────────────────────────────────────────────────────
 
-def test_the_outline_renders_the_authors(tmp_path, monkeypatch):
+def test_the_outline_renders_the_authors(tmp_path):
+    """Read off the .docx, because that is now the only thing _write leaves behind — the
+    markdown was pandoc's input and is deleted once the render succeeds."""
+    from docx import Document
     _manifest(tmp_path, ONE, TWO)
-    monkeypatch.setattr(outline, "to_docx", lambda *a, **k: None)
     (tmp_path / "paper").mkdir()
     outline._write(tmp_path, _cfg(), tmp_path / "paper", "## 1. Intro\n- a beat\n")
-    written = next((tmp_path / "paper").glob("*.md")).read_text()
+    assert not list((tmp_path / "paper").glob("*outline*.md")), "the .md must not survive"
+    docx = next((tmp_path / "paper").glob("*outline*.docx"))
+    text = "\n".join(p.text for p in Document(str(docx)).paragraphs)
+    assert text.lstrip().startswith("A Title") and "J. Rodenberg" in text
+
+
+def test_the_outline_keeps_its_markdown_when_the_render_fails(tmp_path, monkeypatch):
+    """Without pandoc the .md is the only output there is; deleting it would leave the
+    author nothing to look at."""
+    from raconteur import refdoc
+    _manifest(tmp_path, ONE, TWO)
+    monkeypatch.setattr(refdoc, "render", lambda *a, **k: None)
+    (tmp_path / "paper").mkdir()
+    outline._write(tmp_path, _cfg(), tmp_path / "paper", "## 1. Intro\n- a beat\n")
+    written = next((tmp_path / "paper").glob("*outline*.md")).read_text()
     assert written.startswith("# A Title") and "J. Rodenberg" in written
 
 

@@ -764,7 +764,7 @@ def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
 
 
 def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
-                         skeleton: str = "") -> str:
+                         skeleton: str = "", rates: dict[str, int] | None = None) -> str:
     """What the writer is told about where this is going.
 
     An outline is written FOR a venue — its length, its columns, what it publishes — so the
@@ -772,7 +772,7 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
     narrative belongs to the work, not to whoever might publish it.
     """
     specs = _venue_specs_block(cfg, venue)
-    budget = _budget_block(cfg, project_dir, venue, skeleton)
+    budget = _budget_block(cfg, project_dir, venue, skeleton, rates)
     if budget:
         specs = f"{specs}\n{budget}" if specs else budget
     venue_analysis = load_venue_analysis(project_dir) if venue else ""
@@ -784,8 +784,92 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
     return specs
 
 
+# ── the word plan, carried forward ───────────────────────────────────────────
+# The skeleton pins what a bullet is worth and its release carries it on the section
+# headings. The outline is the manuscript's input, so the plan has to travel one more rung —
+# a drafter made to reach back two rungs for a number is a drafter coupled to a document it
+# does not read. What changes here is what the row COUNTS: bullets are real at this stage,
+# so they are counted from the document rather than derived from the structure, and adding
+# one adds its words.
+
+def plan_row(top: str, n_subs: int, bullets: int, wpb: int) -> str:
+    """One section's plan, as the author reads it on the heading."""
+    return (f"{top} — {bullets * wpb} words · {n_subs} sub · {bullets} bullets · "
+            f"{wpb} each. Add a bullet and this section grows by {wpb} words; remove one "
+            f"and it shrinks by the same. Words per bullet is fixed for this section.")
+
+
+def _sections_of(doc) -> list[tuple[str, int, int]]:
+    """(section, subsections, bullets) from a rendered outline, in document order."""
+    from haarpi.redline import _list_level
+    out: list[list] = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        style = para.style.name if para.style is not None else ""
+        if not text:
+            continue
+        if style.startswith("Heading"):
+            level = int("".join(c for c in style if c.isdigit()) or 1)
+            if level == 2:
+                out.append([text, 0, 0])
+            elif level >= 3 and out:
+                out[-1][1] += 1
+            continue
+        if out and _list_level(para) is not None:
+            out[-1][2] += 1
+    return [(a, b, c) for a, b, c in out]
+
+
+def plan_notes(doc, rates: dict[str, int], budget: int,
+               shares: dict | None) -> list[tuple[str, str]]:
+    """(heading, comment) for every section that spends body prose."""
+    from . import guards
+    notes = []
+    for sec, subs, bullets in _sections_of(doc):
+        if guards.is_abstract(sec) or guards.is_references(sec) \
+                or guards.is_acknowledgements(sec):
+            continue
+        rate = section_rate(sec, subs, budget, shares, rates)
+        notes.append((sec, plan_row(sec, subs, bullets or
+                                    guards.MIN_BULLETS_PER_SUBSECTION * max(subs, 1), rate)))
+    return notes
+
+
+def reconcile_plan(path) -> int:
+    """Rewrite each section's word plan to match the outline as APPROVED. The mint's job.
+
+    Same contract as the skeleton's, one rung on: WORDS PER BULLET is carried and never
+    recomputed, and everything else is counted off the document the author gated. What is
+    counted differs — the author edits BULLETS here, and a subsection they add inherits the
+    section's rate, so it arrives as two more bullets at the price the section already pays.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+    from .redline import heading_comments
+    from .skeleton import read_plan
+
+    doc = Document(str(path))
+    counts = {sec: (subs, bullets) for sec, subs, bullets in _sections_of(doc)}
+    cmap = hrl.comments_by_id(path)
+    updates: dict[str, str] = {}
+    for a in heading_comments(path):
+        head = a["heading"]
+        if head not in counts:
+            continue
+        subs, bullets = counts[head]
+        for cid in a["ids"]:
+            rec = cmap.get(str(cid))
+            if not rec:
+                continue
+            rate, _ = read_plan(rec.get("text", ""))
+            if rate is None:
+                continue                 # unreadable: leave the author's words alone
+            updates[str(cid)] = plan_row(head, subs, bullets, rate)
+    return hrl.set_comment_text(path, updates)
+
+
 def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
-                  skeleton: str = "") -> str:
+                  skeleton: str = "", rates: dict[str, int] | None = None) -> str:
     """How many subsections this venue affords, and how they divide across sections.
 
     A venue's word limit reached the prompt as ambient fact and nothing turned it into the
@@ -803,8 +887,15 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
     shares = cfg.section_shares or guards.DEFAULT_SECTION_SHARES
     label = {"intro": "Introduction", "litrev": "Background", "methods": "Methods",
              "results": "Results", "other": "Discussion", "conclusion": "Conclusion"}
+    # State the affordance, do not leave it to be derived. The model was given each
+    # section's WORDS and the cost of one bullet and had to work out the rest; it read
+    # "a subsection thinner than 100 words cannot carry an argument", divided Background's
+    # 600 by four subsections, got 150, and shipped four. The arithmetic it skipped was that
+    # four subsections is eight bullets, so 75 words a paragraph.
+    allow = guards.leaf_allowance(budget, shares)
     per = "\n".join(
-        f"  - {label.get(k, k)}: {round(budget * v_):d} words"
+        f"  - {label.get(k, k)}: {round(budget * v_):d} words, affords "
+        f"{allow.get(k, 1)} subsection(s)"
         for k, v_ in shares.items())
     stated = (f"{v.word_min}–{v.word_limit} words; aim at {target}"
               if v.word_min else f"{v.word_limit} words")
@@ -812,23 +903,46 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
         "Length budget:\n"
         f"- The venue asks for {stated}. That is {budget} words of BODY PROSE. Section "
         f"headings, figure captions, [@citekey] tags, the reference list and the abstract "
-        f"are NOT counted — the headroom below the venue's maximum is what they occupy.\n"
+        f"are NOT counted.\n"
         f"- Each section carries a share of those {budget} words, by what the section is "
         f"FOR:\n{per}\n"
         f"- The abstract is {guards.abstract_words(v.abstract_limit)} words, separately.\n"
         f"- One outline bullet becomes ONE PARAGRAPH of about "
-        f"{guards.WORDS_PER_PARAGRAPH} words in the manuscript. So a subsection's bullet "
-        f"count is set by its share of its section's words, not by how much there is to "
-        f"say: four bullets under a 200-word subsection is a 50-word paragraph.\n"
-        + (_per_subsection_plan(skeleton, budget, shares)
+        f"{guards.WORDS_PER_PARAGRAPH} words in the manuscript, and every subsection gets "
+        f"at least {guards.MIN_BULLETS_PER_SUBSECTION}. So a subsection costs about "
+        f"{guards.subsection_words()} words — that is the number to divide a section's "
+        f"share by, NOT {guards.WORDS_PER_PARAGRAPH}. A subsection is a heading plus an "
+        f"argument; one paragraph under a heading is a heading tax.\n"
+        + (_per_subsection_plan(skeleton, budget, shares, rates)
            if skeleton.strip() else
            "- Plan a structure that FITS this. Prefer merging related material into one "
            "substantial subsection over splitting it across several thin ones.\n")
     )
 
 
+def section_rate(sec: str, subs: int, budget: int, shares: dict | None,
+                 rates: dict[str, int] | None = None) -> int:
+    """What one bullet is worth in this section: the APPROVED rate wherever there is one.
+
+    The skeleton pins it and its release carries it. Recomputing it here from the share
+    would undo the author's structural edit — Background's four approved subsections would
+    be re-rated at 600/8 = 75 rather than the 150 they were gated at.
+
+    The fallback derives it the way a fresh skeleton would, floored at one paragraph, so an
+    outline built without a plan still behaves.
+    """
+    from . import guards
+    if rates and sec in rates:
+        return rates[sec]
+    words = guards.section_words(sec, budget, shares)
+    return max(guards.WORDS_PER_PARAGRAPH,
+               words // (guards.MIN_BULLETS_PER_SUBSECTION * max(subs, 1)))
+
+
 def planned_bullets(skeleton: str, budget: int,
-                    shares: dict | None) -> list[tuple[str, str, int, int]]:
+                    shares: dict | None,
+                    rates: dict[str, int] | None = None
+                    ) -> list[tuple[str, str, int, int]]:
     """What every writable heading in the APPROVED skeleton is owed.
 
     Returns (label, heading, words, bullets) in document order — ``label`` for the prompt,
@@ -852,21 +966,28 @@ def planned_bullets(skeleton: str, budget: int,
         elif h.level >= 3 and current is not None:
             kids[current].append(h.text)
 
+    # Bullets come from the APPROVED STRUCTURE, not from the share. Deriving them here as
+    # bullets_for(share / subsections) gave each of Background's four gated subsections ONE
+    # bullet where the author had approved two — the outline would have asked the model for
+    # half the section it was told was fixed, and the check it is measured against, being
+    # this same function, would have agreed.
     out: list[tuple[str, str, int, int]] = []
     for sec in order:
-        words = guards.section_words(sec, budget, shares)
         subs = kids[sec]
+        rate = section_rate(sec, len(subs), budget, shares, rates)
+        n = guards.MIN_BULLETS_PER_SUBSECTION
         if not subs:
-            out.append((sec, sec, words, guards.bullets_for(words)))
+            out.append((sec, sec, n * rate, n))
             continue
-        each = words // len(subs)
         for sub in subs:
-            out.append((f"{sec} / {sub}", sub, each, guards.bullets_for(each)))
+            out.append((f"{sec} / {sub}", sub, n * rate, n))
     return out
 
 
 def bullet_shortfall(outline_md: str, skeleton_md: str, budget: int,
-                     shares: dict | None) -> list[tuple[str, int, list[str]]]:
+                     shares: dict | None,
+                     rates: dict[str, int] | None = None
+                     ) -> list[tuple[str, int, list[str]]]:
     """Headings the outline under-plans: (heading, bullets still owed, bullets it has).
 
     An empty heading is the extreme case of this, not a different problem — so the same
@@ -877,14 +998,15 @@ def bullet_shortfall(outline_md: str, skeleton_md: str, budget: int,
     have = _bullets_by_heading(outline_md)
     from . import guards
     out: list[tuple[str, int, list[str]]] = []
-    for _, heading, _, want in planned_bullets(skeleton_md, budget, shares):
+    for _, heading, _, want in planned_bullets(skeleton_md, budget, shares, rates):
         got = [b for b in have.get(guards._norm_heading(heading), []) if b.strip()]
         if len(got) < want:
             out.append((heading, want - len(got), got))
     return out
 
 
-def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str:
+def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None,
+                         rates: dict[str, int] | None = None) -> str:
     """The exact words and bullets each APPROVED subsection gets.
 
     Phase two is handed a structure the author has already gated, so every one of these
@@ -896,7 +1018,7 @@ def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None) -> str
     rejects.
     """
     rows = [f"  - {label}: {words} words, {n} bullet(s)"
-            for label, _, words, n in planned_bullets(skeleton, budget, shares)]
+            for label, _, words, n in planned_bullets(skeleton, budget, shares, rates)]
     if not rows:
         return ""
     return ("- The structure below is APPROVED and FIXED. Write exactly this many bullets "
@@ -964,7 +1086,10 @@ def run(project_dir: Path, venue: str = "") -> None:
     paper_dir.mkdir(parents=True, exist_ok=True)
     user_rev = find_user_revision(paper_dir, cfg.short_title, chain_includes=scope,
                                   chain_excludes=others)
-    existing = find_latest(paper_dir, cfg.short_title, "md", last_initials="ra",
+    # The .docx is the deliverable now — the .md is deleted after it renders. Counting
+    # markdown here would report every finished outline as absent and rebuild it, spending
+    # a GPU run to overwrite work the author may already have marked up.
+    existing = find_latest(paper_dir, cfg.short_title, "docx", last_initials="ra",
                            chain_includes=scope, chain_excludes=others)
 
     if not existing:
@@ -973,8 +1098,11 @@ def run(project_dir: Path, venue: str = "") -> None:
         # bypasses the redline that phase one exists to get.
         from haarpi.naming import find_latest_release
         sk_home = deliverable_dir(project_dir / "paper", "skeleton", venue)
+        # The DOCX. The skeleton's release is one artifact: the document the author
+        # gated, carrying its word plan on the section headings as comments. A markdown
+        # rendering cannot carry a comment, so the plan would not survive the conversion.
         skeleton_path = find_latest_release(
-            sk_home / "output", cfg.short_title, "md",
+            sk_home / "output", cfg.short_title, "docx",
             chain_includes=([venue] if venue else []) + ["skeleton"])
         if skeleton_path is None:
             where = f" for {venue}" if venue else ""
@@ -983,8 +1111,20 @@ def run(project_dir: Path, venue: str = "") -> None:
                 + " and gate it first")
             raise SystemExit(1)
         log(f"[raconteur] building on skeleton: {skeleton_path.name}")
+        from docx import Document as _Docx
+        from haarpi.redline import release_markdown
+        from .skeleton import plan_from_release
+        rates, problems = plan_from_release(skeleton_path)
+        for pr in problems:
+            log(f"[error] approved skeleton: {pr}")
+        if problems:
+            # The plan and the structure disagree, so neither can be trusted to say what
+            # this paper is owed. Guessing here spends a draft run to find out.
+            raise SystemExit(1)
+        log("[raconteur] approved word plan: "
+            + ", ".join(f"{k} {v}/bullet" for k, v in rates.items()))
         _outline_fresh(project_dir, cfg, brain, paper_dir, venue,
-                       skeleton=skeleton_path.read_text(encoding="utf-8"))
+                       skeleton=release_markdown(_Docx(str(skeleton_path))), rates=rates)
     elif user_rev:
         log(f"[raconteur] found revision: {user_rev.name}")
         _revise(project_dir, cfg, brain, paper_dir, user_rev, venue)
@@ -1003,7 +1143,7 @@ def run(project_dir: Path, venue: str = "") -> None:
 
 def _outline_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path,
-    venue: str = "", skeleton: str = "",
+    venue: str = "", skeleton: str = "", rates: dict[str, int] | None = None,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
@@ -1018,7 +1158,7 @@ def _outline_fresh(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
                                   narrative, figures, project_dir)
 
-    venue_section = _build_venue_section(cfg, project_dir, venue, skeleton)
+    venue_section = _build_venue_section(cfg, project_dir, venue, skeleton, rates)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     # The raw methods writeup and results digest are NOT re-sent here — the analysis above
@@ -1071,13 +1211,13 @@ def _outline_fresh(
         gi = _outline_guard_inputs(cfg, project_dir, venue, skeleton)
         budget, shares = gi["budget"], gi["shares"]
         for attempt in (1, 2):
-            short = bullet_shortfall(outline, skeleton, budget, shares)
+            short = bullet_shortfall(outline, skeleton, budget, shares, rates)
             if not short:
                 break
             outline, _ = lock_to_skeleton(
                 outline + "\n" + _topup(brain, short, cfg.title, analysis),
                 skeleton, cfg.title, authors_block)
-        short = bullet_shortfall(outline, skeleton, budget, shares)
+        short = bullet_shortfall(outline, skeleton, budget, shares, rates)
         if short:
             log(f"[warn] {len(short)} heading(s) still under-planned after two asks "
                 f"— the draft will run short by about "
@@ -1087,7 +1227,7 @@ def _outline_fresh(
 
     _log_structure(cfg, project_dir, outline, venue, skeleton)
 
-    _write(project_dir, cfg, paper_dir, outline, venue)
+    _write(project_dir, cfg, paper_dir, outline, venue, rates)
     if code:
         cfg.methods_drafted = True
     if results:
@@ -1140,7 +1280,9 @@ def _refresh_content(
     )
     updated = _critique_revise(brain, updated, analysis, n=1)
     updated = _critique_revise(brain, updated, analysis, n=2)
-    _write(project_dir, cfg, paper_dir, updated, venue)
+    # Carry the rates off the document being answered, or the re-render re-rates every
+    # section from its share and the author's structural edits are undone in silence.
+    _write(project_dir, cfg, paper_dir, updated, venue, rates_from(user_rev))
     if code:
         cfg.methods_drafted = True
     if results:
@@ -1181,8 +1323,32 @@ def _revise(
 
 # ── write output ──────────────────────────────────────────────────────────────
 
+def rates_from(path) -> dict[str, int]:
+    """The pinned rates carried on a document's section headings.
+
+    How the plan survives a revision: answering a redline re-renders the outline, and the
+    new document must carry the rates the old one did or the section quietly re-rates itself
+    off the share. Unvalidated on purpose — the mint reconciles counts, so all this needs to
+    recover is the one number that cannot be derived.
+    """
+    from haarpi import redline as hrl
+    from .redline import heading_comments
+    from .skeleton import read_plan
+    cmap = hrl.comments_by_id(path)
+    out: dict[str, int] = {}
+    for a in heading_comments(path):
+        for cid in a["ids"]:
+            rec = cmap.get(str(cid))
+            if not rec:
+                continue
+            rate, _ = read_plan(rec.get("text", ""))
+            if rate is not None:
+                out[a["heading"]] = rate
+    return out
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
-           venue: str = "") -> None:
+           venue: str = "", rates: dict[str, int] | None = None) -> None:
     from .context import load_authors_block
     v = cfg.venue(venue) if venue else None
     if text.lstrip().startswith("# "):
@@ -1193,9 +1359,29 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
         output = f"{head}{text.strip()}\n"
     out_path = paper_dir / major_outline_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(output, encoding="utf-8")
-    log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
 
     from .refdoc import render as _render_docx
     docx = _render_docx(out_path, project_dir)
+    if docx is None:
+        # Without pandoc the .md is the only output there is; deleting it would leave the
+        # author nothing to look at.
+        log(f"[raconteur] wrote {out_path.relative_to(project_dir)} (no .docx — pandoc)")
     if docx:
+        # The markdown was pandoc's input and nothing else read it. The deliverable is the
+        # .docx: it is what the author marks up, what the gate reads, and the only one that
+        # can carry the word plan, since a comment is not markdown.
+        out_path.unlink(missing_ok=True)
+        # The plan travels on the document, where the author gates it. Written after the
+        # render because pandoc supplies the comments part and discards anything upstream.
+        try:
+            from docx import Document as _Docx
+            from haarpi import redline as _rl
+            gi = _outline_guard_inputs(cfg, project_dir, venue)
+            notes = plan_notes(_Docx(str(docx)), rates or {}, gi["budget"], gi["shares"])
+            if notes:
+                n = _rl.add_anchored_comments(docx, notes, author="raconteur",
+                                              initials="ra")
+                log(f"[raconteur] attached {n} word-plan comment(s)")
+        except Exception as e:              # noqa: BLE001 — a comment must not fail a write
+            log(f"[warn] could not attach word-plan comments: {type(e).__name__}: {e}")
         log(f"[raconteur] wrote {docx.relative_to(project_dir)}")

@@ -84,15 +84,16 @@ def _enable_track_changes(xml: str) -> str:
     indistinguishable from the tool's own, and the only defence left is freezing whole
     paragraphs.
 
-    ``w:trackChanges`` records; it does not enforce. The author can still turn it off, which
-    is right — a document that refuses to let you edit it untracked is a document you fight.
+    ``w:trackRevisions`` records; it does not enforce. The author can still turn it off,
+    which is right — a document that refuses to let you edit it untracked is one you fight.
+
+    Delegates rather than forking. This file kept its own copy, and when the element name
+    turned out to be wrong there were two wrong copies to find. The comment the old one
+    carried — "Word tolerates trackChanges early" — was a guess about an element that does
+    not exist.
     """
-    if "<w:trackChanges" in xml:
-        return xml
-    # Order matters in w:settings — the schema is a sequence — but Word tolerates
-    # trackChanges early, and putting it first avoids guessing at the neighbours present.
-    i = xml.index(">", xml.index("<w:settings")) + 1
-    return xml[:i] + "<w:trackChanges/>" + xml[i:]
+    from haarpi.render import _with_track_changes as _shared
+    return _shared(xml)
 
 
 def _bind_styles(xml: str) -> str:

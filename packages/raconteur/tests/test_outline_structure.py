@@ -124,24 +124,26 @@ def test_the_budget_deducts_nothing():
     assert guards.prose_budget(4000) == 4000
 
 
-def test_an_outline_too_wide_for_its_venue_is_caught():
-    """The real shape of the defect: a 5,000-word CFP (3,889 prose) affords ~14 subsections,
-    and the css2026 outline carried 18. The draft that obeyed it came in at 6,975 words."""
-    md = _outline("## 2. Methodology\n" + "\n".join(
-        f"### 2.{i} Sub {i}\n- a beat\n" for i in range(1, 19)))
-    heads = guards.parse_outline(md)
-    assert len(guards.leaves(heads)) == 18
-    findings = guards.leaf_budget(heads, budget=3889)
-    assert any(f.kind == "over-budget" for f in findings)
-    # and it must say WHICH section is too wide, not just that the total is
-    assert any(f.kind == "section-over-budget" for f in findings)
+def test_a_structure_too_wide_for_its_venue_is_caught_at_the_skeleton():
+    """The real shape of the defect: a 5,000-word CFP (3,889 prose) and 18 subsections under
+    one section. The draft that obeyed it came in at 6,975 words.
+
+    ``leaf_budget`` used to ask this at the outline, on a third threshold (280 words a
+    subsection) that agreed with neither the skeleton's plan table nor PARAGRAPH_BAND. It is
+    asked once now, at the skeleton, in the plan table's own units — and the outline no
+    longer re-litigates a structure the author has approved."""
+    from raconteur import skeleton
+    sections = [(2, "Methods")] + [(3, f"Sub {i}") for i in range(18)]
+    kinds = [f.kind for f in skeleton.findings(sections, ("Methods",), 3889)]
+    assert "subsections-too-thin" in kinds
 
 
 def test_no_venue_limit_means_no_budget_findings():
     """Most venues in a slate state no word limit. The guard must stay silent rather than
     invent a cap — writing to an assumed length is the failure it exists to prevent."""
-    md = _outline("## 1. Introduction\n### 1.1 Sub\n- a beat\n")
-    assert guards.leaf_budget(guards.parse_outline(md), budget=0) == []
+    from raconteur import skeleton
+    sections = [(2, "Methods"), (3, "Sub")]
+    assert skeleton.findings(sections, ("Methods",), 0) == []
 
 
 def test_the_shares_are_not_uniform():

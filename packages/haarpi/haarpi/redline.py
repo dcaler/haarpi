@@ -827,13 +827,22 @@ def open_asks(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
 
 
 def unresolved_comments(path: Path, tool_authors=TOOL_AUTHORS) -> list[dict]:
-    """Top-level, human-authored comments not marked done — what blocks a gate.
+    """Top-level comments not marked done — what blocks a gate. THE TOOL'S COUNT TOO.
 
     Replies are conversation, not asks: the ask lives in the parent, and resolving the
-    thread marks the parent done. Tool-authored comments never block a gate.
+    thread marks the parent done.
+
+    Tool comments used to be exempt, on the reasoning that the gate exists to adjudicate the
+    tool's work and the tool cannot instruct itself. That holds for ``open_asks``, which is
+    what a revision ACTS on and still excludes them. It does not hold for the gate: the
+    skeleton's word plan rides on a tool comment, and a plan nobody read is a plan nobody
+    approved. Resolving it is the acknowledgement — and resolved is not deleted, so the
+    comment carries that state into the release.
     """
-    return [{"id": a["id"], "author": a["author"], "text": a["text"]}
-            for a in open_asks(path, tool_authors)]
+    threads = comment_threads(path, tool_authors)
+    out = [{"id": r["id"], "author": r["author"], "text": r["text"]}
+           for r in threads.values() if not r["parent"] and not r["done"]]
+    return sorted(out, key=lambda r: int(r["id"]) if str(r["id"]).isdigit() else 0)
 
 
 def pending_reviewer_changes(path: Path, tool_authors=TOOL_AUTHORS) -> int:
@@ -1211,14 +1220,32 @@ def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
 
 
 def accept_all_changes(doc) -> dict:
-    """Accept every tracked change: unwrap <w:ins>, drop <w:del>.
+    """Accept every tracked change: unwrap <w:ins>, drop <w:del>, remove deleted paragraphs.
 
-    Paragraph-mark change markers (w:pPr/w:rPr/w:ins|w:del) are removed without
-    merging paragraphs — the redline never authors those, so this only defends
-    against an exotic reviewer edit, keeping the text correct if not the exact
-    paragraphation Word would produce."""
+    A deleted paragraph MARK (w:pPr/w:rPr/w:del) is how Word records "this paragraph ends
+    here no longer" — it is what you get for deleting a heading, and it is not exotic. This
+    used to strip the marker and keep the paragraph, on the reasoning that the tool never
+    authors one; the AUTHOR does, every time they cut a section. The css2026 skeleton
+    release carried eleven empty Heading 3 paragraphs from eleven headings the author had
+    deleted, each still occupying a number in a numbered document.
+
+    A mark-deleted paragraph whose text is also fully deleted is removed outright. One that
+    still has text is left in place with the marker stripped: Word would merge it into its
+    successor, and dropping surviving prose to imitate that would lose content, which is the
+    worse error of the two.
+    """
     body = doc.element.body
-    counts = {"ins": 0, "del": 0}
+    counts = {"ins": 0, "del": 0, "paras": 0}
+    # FIRST, while the markers still exist: a paragraph-mark deletion lives in
+    # w:pPr/w:rPr/w:del, and the sweep below removes every w:del in the body — including
+    # those. Collecting after it would find nothing, which is what the first version of
+    # this fix did.
+    def _mark_deleted(p) -> bool:
+        pPr = p.find(qn("w:pPr"))
+        rPr = pPr.find(qn("w:rPr")) if pPr is not None else None
+        return rPr is not None and rPr.find(qn("w:del")) is not None
+
+    marked = [p for p in body.iter(qn("w:p")) if _mark_deleted(p)]
     for ins in list(body.iter(qn("w:ins"))):
         parent = ins.getparent()
         idx = list(parent).index(ins)
@@ -1230,6 +1257,13 @@ def accept_all_changes(doc) -> dict:
     for d in list(body.iter(qn("w:del"))):
         d.getparent().remove(d)
         counts["del"] += 1
+    for p in marked:
+        # Deletions are gone now, so what remains is what the author kept.
+        if not "".join(t.text or "" for t in p.iter(qn("w:t"))).strip():
+            parent = p.getparent()
+            if parent is not None:
+                parent.remove(p)
+                counts["paras"] += 1
     for rpr in list(body.iter(qn("w:rPr"))):
         for tag in ("w:ins", "w:del"):
             m = rpr.find(qn(tag))
@@ -1322,15 +1356,198 @@ def release_markdown(doc) -> str:
             continue
         style = p.style.name if p.style is not None else ""
         if is_heading_style(style):
-            level = "".join(ch for ch in style if ch.isdigit()) or "1"
-            lines.append("#" * int(level) + " " + text)
+            level = int("".join(ch for ch in style if ch.isdigit()) or "1")
+            lines.append("#" * level + " " + text)
             continue
         depth = _list_level(p)
         lines.append(text if depth is None else "  " * depth + "- " + text)
     return "\n\n".join(lines) + "\n"
 
 
-def mint_release(src: Path, dst: Path, md_sibling: bool = True) -> dict:
+# ── the release says one thing ───────────────────────────────────────────────
+# A release is TWO files: the .docx the author reads and the .md the next stage reads.
+# They are supposed to be the same contract in two renderings, and nothing checked that
+# they were. They were not. The css2026 skeleton released 38 docx paragraphs against 27
+# markdown lines, and its outline released 33 docx bullets against zero markdown ones —
+# a human approving one document while the machine was handed another.
+#
+# Derivation was supposed to make that impossible: the .md is generated FROM the .docx.
+# But derivation is exactly where structure is lost, so it guarantees nothing on its own.
+# What guarantees it is reading the same shape back out of both and refusing to ship a
+# release where they differ.
+
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+_MD_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+_MD_IMAGE_RE = re.compile(r"^!\[[^\]]*\]\([^)]*\)\s*$")
+
+
+class ReleaseMismatch(RuntimeError):
+    """The .docx and the .md of one release do not carry the same structure."""
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def structure_of_docx(doc) -> list[tuple[str, int, str]]:
+    """A release document reduced to (kind, level, text), in order.
+
+    Paragraphs holding only a drawing are skipped — an image is a figure in the .docx and
+    a ``![…](path)`` line in the .md, and comparing those two spellings would fail on every
+    manuscript while proving nothing. Empty paragraphs are skipped on both sides.
+    """
+    out: list[tuple[str, int, str]] = []
+    for p in doc.paragraphs:
+        text = _norm(p.text)
+        if not text:
+            continue
+        style = p.style.name if p.style is not None else ""
+        if is_heading_style(style):
+            level = int("".join(ch for ch in style if ch.isdigit()) or "1")
+            out.append(("heading", level, text))
+            continue
+        depth = _list_level(p)
+        out.append(("para", 0, text) if depth is None else ("bullet", depth, text))
+    return out
+
+
+def structure_of_markdown(text: str) -> list[tuple[str, int, str]]:
+    """The same reduction, read out of the markdown rendering."""
+    out: list[tuple[str, int, str]] = []
+    for line in text.splitlines():
+        if not line.strip() or _MD_IMAGE_RE.match(line.strip()):
+            continue
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            out.append(("heading", len(m.group(1)), _norm(m.group(2))))
+            continue
+        m = _MD_BULLET_RE.match(line)
+        if m:
+            out.append(("bullet", len(m.group(1)) // 2, _norm(m.group(2))))
+            continue
+        out.append(("para", 0, _norm(line)))
+    return out
+
+
+def release_divergence(doc, markdown: str) -> list[str]:
+    """Where the two renderings of one release stop agreeing. Empty means they agree."""
+    a, b = structure_of_docx(doc), structure_of_markdown(markdown)
+    if a == b:
+        return []
+    out: list[str] = []
+    for line in difflib.unified_diff(
+            [f"{k}{lv} {t}" for k, lv, t in a],
+            [f"{k}{lv} {t}" for k, lv, t in b],
+            "docx", "md", lineterm="", n=0):
+        if line[:3] in ("---", "+++") or line.startswith("@@"):
+            continue
+        out.append(line[:160])
+    return out
+
+
+_CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_SIDE_PARTS = re.compile(r"^word/(comments\w*\.xml|people\.xml)$")
+
+
+def _carry_comment_parts(src: Path, dst: Path) -> list[str]:
+    """Copy the comment side-parts python-docx does not understand from src into dst.
+
+    python-docx round-trips ``comments.xml`` and silently drops ``commentsExtended.xml`` —
+    the part holding the RESOLVED flags. A release minted without it carries every comment
+    as though it were still open, so a gate run on the release blocks on a conversation
+    settled before the mint. Verified rather than assumed: the flags were gone and
+    ``gate_check`` on the release returned False.
+
+    Relationship ids are re-minted rather than copied. The source's rId may already mean
+    something else in the saved document, and a rels file with two of the same id is a
+    document Word offers to repair.
+    """
+    with zipfile.ZipFile(src) as zs:
+        src_parts = {n: zs.read(n) for n in zs.namelist()}
+    with zipfile.ZipFile(dst) as zd:
+        dst_parts = {n: zd.read(n) for n in zd.namelist()}
+    missing = [n for n in src_parts if _SIDE_PARTS.match(n) and n not in dst_parts]
+    if not missing:
+        return []
+
+    ct_name = "[Content_Types].xml"
+    ct = etree.fromstring(dst_parts[ct_name])
+    have_ct = {o.get("PartName") for o in ct.findall(f"{{{_CT_NS}}}Override")}
+    src_ct = etree.fromstring(src_parts[ct_name])
+    src_over = {o.get("PartName"): o.get("ContentType")
+                for o in src_ct.findall(f"{{{_CT_NS}}}Override")}
+
+    rels_name = "word/_rels/document.xml.rels"
+    rels = etree.fromstring(dst_parts[rels_name])
+    used = {r.get("Id") for r in rels}
+    src_rels = etree.fromstring(src_parts[rels_name])
+    src_by_target = {r.get("Target"): r.get("Type") for r in src_rels}
+    next_id = max([int(i[3:]) for i in used if i.startswith("rId") and i[3:].isdigit()]
+                  or [0]) + 1
+
+    for name in missing:
+        dst_parts[name] = src_parts[name]
+        part = "/" + name
+        if part not in have_ct and part in src_over:
+            o = etree.SubElement(ct, f"{{{_CT_NS}}}Override")
+            o.set("PartName", part)
+            o.set("ContentType", src_over[part])
+        target = name.split("/", 1)[1]
+        if target in src_by_target:
+            r = etree.SubElement(rels, f"{{{_REL_NS}}}Relationship")
+            r.set("Id", f"rId{next_id}"); next_id += 1
+            r.set("Type", src_by_target[target])
+            r.set("Target", target)
+    dst_parts[ct_name] = etree.tostring(ct, xml_declaration=True, encoding="UTF-8",
+                                        standalone=True)
+    dst_parts[rels_name] = etree.tostring(rels, xml_declaration=True, encoding="UTF-8",
+                                          standalone=True)
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in dst_parts.items():
+            z.writestr(n, b)
+    return missing
+
+
+def set_comment_text(path: Path, updates: dict[str, str]) -> int:
+    """Rewrite the text of existing comments, in place, keyed by comment id.
+
+    Author, date, anchor and the ``w14:paraId`` that carries the resolved flag are all left
+    alone: this changes what a comment SAYS, never whose it is or whether it is settled.
+    """
+    if not updates:
+        return 0
+    doc = Document(str(path))
+    n = 0
+    for rel in doc.part.rels.values():
+        if not rel.reltype.lower().endswith("/comments"):
+            continue
+        root = rel.target_part._element
+        for c in root.findall(".//" + qn("w:comment")):
+            new = updates.get(c.get(qn("w:id")))
+            if new is None:
+                continue
+            runs = [r for r in c.iter(qn("w:r")) if r.find(qn("w:t")) is not None]
+            if not runs:
+                continue
+            first, rest = runs[0], runs[1:]
+            for extra in first.findall(qn("w:t"))[1:]:
+                first.remove(extra)
+            t = first.find(qn("w:t"))
+            t.set(_XML_SPACE, "preserve")
+            t.text = new
+            for r in rest:
+                parent = r.getparent()
+                if parent is not None:
+                    parent.remove(r)
+            n += 1
+    if n:
+        doc.save(str(path))
+    return n
+
+
+def mint_release(src: Path, dst: Path, md_sibling: bool = True,
+                 post=None) -> dict:
     """Consolidate a gate-passed markup into a release: accept every tracked
     change, strip the comment threads, write the bare-name docx (and its .md
     sibling — what downstream LLM consumers actually read).
@@ -1342,12 +1559,31 @@ def mint_release(src: Path, dst: Path, md_sibling: bool = True) -> dict:
     """
     doc = Document(str(src))
     counts = accept_all_changes(doc)
-    anchors = strip_comment_anchors(doc)
     dst.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dst))
-    _clear_comment_parts(dst)
+    # Comments SURVIVE. The gate guarantees every one of them is resolved, so what the
+    # release carries is a settled conversation and the acknowledgement that closed it —
+    # and the next rung reads its predecessor's word plan off exactly that. Erasing them
+    # was a coherence pair with strip_comment_anchors (anchors gone, so the threads had to
+    # go too or dangle), not a policy; nothing in the pipeline ever read a release's
+    # comments, and now something does.
+    anchors = _carry_comment_parts(src, dst)
+    # A rung may need the release reconciled with what the author actually approved. The
+    # skeleton does: its word-plan comments were written against the structure as generated,
+    # and the author has since moved subsections around. Runs AFTER the side-parts are
+    # carried, so the resolved flags are in place before anything rewrites a comment.
+    if post is not None:
+        post(dst)
     md_path = None
     if md_sibling:
+        released = Document(str(dst))
+        markdown = release_markdown(released)
+        divergence = release_divergence(released, markdown)
+        if divergence:
+            raise ReleaseMismatch(
+                f"{dst.name} and its .md do not carry the same structure — the author "
+                f"would approve one document and the next stage read another. "
+                f"Refusing to mint.\n" + "\n".join(divergence[:20]))
         md_path = dst.with_suffix(".md")
-        md_path.write_text(release_markdown(Document(str(dst))), encoding="utf-8")
+        md_path.write_text(markdown, encoding="utf-8")
     return {**counts, "anchors": anchors, "docx": dst, "md": md_path}

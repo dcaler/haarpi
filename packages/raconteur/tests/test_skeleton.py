@@ -116,10 +116,12 @@ def test_no_venue_budget_means_no_width_claim():
 # ── the plan the author is really approving ──────────────────────────────────
 
 def test_the_word_plan_is_computable_from_headings_alone():
+    """Columns read left to right and multiply out: 4 bullets x 250 = the 1000 words."""
     sections = [(2, "Results"), (3, "A"), (3, "B")]
     table = skeleton.plan_table(sections, 4000)
-    assert "1000 words" in table and " 2 sub" in table and "500 each" in table
-    assert "3 bullets" in table          # 500 words at ~150 a paragraph
+    assert "1000 words" in table and " 2 sub" in table
+    assert "4 bullets" in table          # MIN_BULLETS_PER_SUBSECTION x 2 subsections
+    assert "250 each" in table           # words per PARAGRAPH, not per subsection
 
 
 def test_one_bullet_is_one_paragraph():
@@ -139,7 +141,11 @@ def test_the_outline_is_given_each_subsections_words_and_bullets(tmp_path):
     got = _per_subsection_plan(sk, 4000, None)
     assert "Introduction: 300 words, 2 bullet(s)" in got
     assert "Background / A: 300 words, 2 bullet(s)" in got
-    assert "Results / C: 1000 words, 7 bullet(s)" in got
+    # Two bullets at the section's rate — not seven derived from the share. A single
+    # subsection carrying a 1000-word share is a structure skeleton.findings rejects
+    # (two 500-word paragraphs, far over PARAGRAPH_BAND); the outline reproduces what the
+    # skeleton would have pinned rather than quietly planning something else.
+    assert "Results / C: 1000 words, 2 bullet(s)" in got
     # the furniture carries no allocation
     assert "Abstract" not in got and "References" not in got
 
@@ -193,3 +199,109 @@ def test_a_revision_with_no_annotations_changes_nothing(tmp_path, monkeypatch):
         skeleton._revise(tmp_path, _cfg(), types.SimpleNamespace(), tmp_path,
                          tmp_path / "x.docx")
     assert e.value.code == 3
+
+
+# ── the contract: two bullets a subsection ───────────────────────────────────
+# Set by the author, 2026-07-21. A subsection is a heading plus an argument, and an
+# argument needs more than one paragraph. Everything else follows: a subsection costs
+# MIN_BULLETS_PER_SUBSECTION x WORDS_PER_PARAGRAPH, so how many a section affords is
+# derived from its word share rather than asserted by a per-leaf constant.
+
+def _plan(pairs):
+    out = []
+    for name, n in pairs:
+        out.append((2, name))
+        out += [(3, f"{name} {i}") for i in range(n)]
+    return out
+
+
+APPROVED = [("Introduction", 0), ("Background", 2), ("Methods", 3),
+            ("Results", 3), ("Discussion", 3), ("Conclusion", 0)]
+
+
+def test_the_approved_word_plan_is_clean_and_adds_up():
+    """The plan the author accepted for css2026, pinned. 26 bullets, 4,000 body words,
+    every paragraph inside PARAGRAPH_BAND."""
+    sections = _plan(APPROVED)
+    assert skeleton.findings(sections, tuple(n for n, _ in APPROVED), 4000) == []
+    bullets = sum(guards.MIN_BULLETS_PER_SUBSECTION * max(n, 1) for _, n in APPROVED)
+    assert bullets == 26
+    words = sum(guards.section_words(n, 4000) for n, _ in APPROVED)
+    assert words == 4000
+    for name, n in APPROVED:
+        each = guards.section_words(name, 4000) // (
+            guards.MIN_BULLETS_PER_SUBSECTION * max(n, 1))
+        assert guards.PARAGRAPH_BAND[0] <= each <= guards.PARAGRAPH_BAND[1], (name, each)
+
+
+def test_too_few_subsections_commits_you_to_fat_paragraphs():
+    """Two subsections in a 900-word Methods is four 225-word paragraphs — over the 200 a
+    paragraph may run, and the exact defect draft 8 shipped. Said at the skeleton, where
+    splitting a heading is free, not at the draft where it costs a re-run."""
+    sections = _plan([("Methods", 2)])
+    f = skeleton.findings(sections, ("Methods",), 4000)
+    assert [x.kind for x in f] == ["subsections-too-few"]
+    assert "225 words" in f[0].imperative and "3 subsection(s)" in f[0].imperative
+
+
+def test_too_many_subsections_starves_the_paragraphs():
+    """The 260721 skeleton as generated: Background's four subsections are 75-word
+    paragraphs."""
+    sections = _plan([("Background", 4)])
+    f = skeleton.findings(sections, ("Background",), 4000)
+    assert [x.kind for x in f] == ["subsections-too-thin"]
+    assert "75 words" in f[0].imperative and "2 subsection(s)" in f[0].imperative
+
+
+def test_the_allowance_is_derived_from_the_paragraph_constant():
+    """No static per-leaf number. Move WORDS_PER_PARAGRAPH and the whole plan moves with
+    it — the 280 that used to sit here agreed with nothing else in the pipeline."""
+    assert guards.subsection_words() == (guards.MIN_BULLETS_PER_SUBSECTION
+                                         * guards.WORDS_PER_PARAGRAPH)
+    allow = guards.leaf_allowance(4000)
+    assert (allow["litrev"], allow["methods"], allow["results"], allow["other"]) == (2, 3, 3, 3)
+
+
+def test_the_plan_table_columns_multiply_out():
+    row = [r for r in skeleton.plan_table(_plan(APPROVED), 4000).splitlines()
+           if "Methods" in r][0]
+    assert "900 words" in row and " 3 sub" in row and "6 bullets" in row and "150 each" in row
+
+
+# ── the word plan travels on the document ────────────────────────────────────
+# A log line is seen once, by whoever was watching the terminal. The .docx is what gets
+# opened, marked up and gated, so the plan rides there — one comment per section heading.
+# WORDS PER BULLET is the invariant: pinned at generation, carried forward, and the reason
+# adding a subsection ADDS words instead of thinning the paragraphs already written.
+
+def test_words_per_bullet_is_pinned_from_the_generated_structure():
+    secs = _plan(APPROVED)
+    wpb = skeleton.words_per_bullet(secs, 4000)
+    assert wpb["Methods"] == 150 and wpb["Results"] == 166
+    assert "Abstract" not in wpb and "References" not in wpb   # furniture spends no prose
+
+
+def test_a_new_subsection_adds_words_rather_than_thinning_the_others():
+    """The correction that shaped this design. Recomputing the rate from the share would
+    hold Methods at 900 and drop every paragraph to 112 words; pinning it grows the
+    section, which is what a structural edit means."""
+    wpb = skeleton.words_per_bullet(_plan(APPROVED), 4000)
+    before = skeleton.document_words(_plan(APPROVED), wpb)
+    wider = [(n, s + 1 if n == "Methods" else s) for n, s in APPROVED]
+    after = skeleton.document_words(_plan(wider), wpb)
+    assert after - before == guards.MIN_BULLETS_PER_SUBSECTION * wpb["Methods"] == 300
+    assert before == 3996 and after == 4296
+
+
+def test_the_plan_comment_states_the_rate_and_what_an_edit_costs():
+    notes = dict(skeleton.plan_notes(_plan(APPROVED), 4000))
+    assert "150 each" in notes["Methods"] and "3 sub" in notes["Methods"]
+    assert "grows by 300 words" in notes["Methods"]
+    assert "Abstract" not in notes
+
+
+def test_reading_a_plan_back_is_forgiving_of_your_own_notes():
+    """You edit these by hand and will annotate the reasoning beside the number."""
+    assert skeleton.read_plan("Methods — 900 words · 3 sub · 6 bullets · 150 each") == (150, 3)
+    assert skeleton.read_plan("3 sub, 150 each (leaving room for the ablation)") == (150, 3)
+    assert skeleton.read_plan("no numbers here") == (None, None)

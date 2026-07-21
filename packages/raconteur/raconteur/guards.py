@@ -899,6 +899,13 @@ DEFAULT_ABSTRACT_WORDS = 225
 # flexes to fill its subsection — this is the divisor that turns a word allocation into a
 # bullet count, not a target in itself.
 WORDS_PER_PARAGRAPH = 150
+
+# A subsection is a heading plus an argument, and an argument needs more than one paragraph.
+# At one bullet a subsection is a heading tax: it spends a heading to say one thing. Two is
+# the floor the author set, and it is what makes a subsection's cost derivable rather than
+# assumed — a subsection costs MIN_BULLETS_PER_SUBSECTION * WORDS_PER_PARAGRAPH, so how many
+# a section affords falls out of its word share instead of a static per-leaf constant.
+MIN_BULLETS_PER_SUBSECTION = 2
 PARAGRAPH_BAND = (100, 200)
 
 # Where in a venue's stated range the paper should land. A range is not a ceiling: a CFP
@@ -937,9 +944,8 @@ def prose_budget(total_words: int) -> int:
     body. Deducting reserves for them charged the budget twice for material that costs it
     nothing — 707 words of a 4,200-word target on SchellingChords, a section and a half.
 
-    Aiming at ``word_target`` rather than the venue's maximum is what leaves room for the
-    uncounted material: css2026's 3,000–5,000 range targets 4,000 of body prose, and the
-    abstract, reference list and captions ride in the headroom below the cap.
+    The target is a target for BODY PROSE and that is the whole of it. What else a rendered
+    document weighs is not this function's business and is not modelled here.
     """
     return max(0, total_words)
 
@@ -960,53 +966,23 @@ def bullets_for(words: int, per_paragraph: int = WORDS_PER_PARAGRAPH) -> int:
     return max(1, round(words / per_paragraph)) if words > 0 else 0
 
 
+def subsection_words() -> int:
+    """What one subsection costs: its minimum bullets, at a paragraph each."""
+    return MIN_BULLETS_PER_SUBSECTION * WORDS_PER_PARAGRAPH
+
+
 def leaf_allowance(budget: int, shares: dict[str, float] | None = None,
-                   per_leaf: int = 280) -> dict[str, int]:
+                   per_leaf: int | None = None) -> dict[str, int]:
     """How many subsections each section can afford at a writable length.
 
-    ``per_leaf`` is the floor of readable academic prose — below roughly this, a
-    subsection carrying a figure has no room to introduce, present and interpret it, and
-    the guard is trading an over-length paper for a vacuous one.
+    ``per_leaf`` defaults to ``subsection_words()`` — derived, not asserted. It used to be a
+    static 280, which agreed with nothing else in the pipeline: the skeleton's own plan
+    table said a 4,000-word paper afforded 27 paragraphs while this said 14 subsections, and
+    the author was shown both numbers one rung apart.
     """
+    per_leaf = per_leaf or subsection_words()
     sh = shares or DEFAULT_SECTION_SHARES
     return {k: max(1, round(budget * v / per_leaf)) for k, v in sh.items()}
-
-
-def leaf_budget(heads: list[Heading], budget: int,
-                shares: dict[str, float] | None = None,
-                per_leaf: int = 280) -> list[Finding]:
-    """Does this structure fit the venue's word budget at a writable per-subsection length?
-
-    PHASE: outline. Structure is cheap to change here and costs a full re-draft later. The
-    check that would have caught a 19-leaf outline being pointed at a 5,000-word CFP before
-    anyone spent 4.5 hours writing 6,975 words into it.
-    """
-    if budget <= 0:
-        return []
-    allow = leaf_allowance(budget, shares, per_leaf)
-    got: dict[str, list[Heading]] = {}
-    for h in leaves(heads):
-        kind = ancestor_kind(heads, h)
-        got.setdefault(kind if kind in allow else "other", []).append(h)
-
-    out: list[Finding] = []
-    total_have, total_can = len(leaves(heads)), sum(allow.values())
-    if total_have > total_can:
-        out.append(Finding(
-            "over-budget", "outline",
-            f"This outline has {total_have} subsections carrying content, but a "
-            f"{budget}-word prose budget affords about {total_can} at {per_leaf} words "
-            f"each. Merge {total_have - total_can} subsection(s) into their neighbours — "
-            f"a thinner paper at this length is worse than a shorter one."))
-    for kind, hs in sorted(got.items()):
-        cap = allow.get(kind, 0)
-        if cap and len(hs) > cap:
-            names = ", ".join(repr(h.text[:34]) for h in hs[:4])
-            out.append(Finding(
-                "section-over-budget", f"{kind} sections",
-                f"{kind.title()} has {len(hs)} subsections but affords {cap} at "
-                f"{per_leaf} words each ({names}). Merge or move detail into an appendix."))
-    return out
 
 
 _CONCLUSION_RE = re.compile(r"^\d*\.?\s*(conclusion|concluding)", re.IGNORECASE)
@@ -1164,10 +1140,9 @@ def outline_findings(markdown: str, budget: int = 0,
     No ``numbering_gaps``: headings carry no numbers now — the .docx style supplies them —
     so it can never fire, and a guard that cannot fire is one whose silence means nothing.
 
-    No ``leaf_budget`` either. It flags a structure too wide for its budget, which is the
-    SKELETON's business (see ``skeleton.findings``). Here the structure is an approved
-    contract phase two may not alter, so the finding would name a fix the reader is
-    forbidden to make — which teaches them to ignore the battery.
+    Structure is not re-litigated here: it is an approved contract phase two may not alter,
+    so a finding naming a fix the reader is forbidden to make only teaches them to ignore
+    the battery. ``skeleton.findings`` owns it, at the rung where merging a heading is free.
     """
     heads = parse_outline(markdown)
     return (skeleton_conformance(markdown, skeleton)
@@ -1439,7 +1414,8 @@ def under_budget(markdown: str, budget: int, tolerance: float = 0.10) -> list[Fi
 
 
 def section_lengths(draft_md: str, outline_md: str, budget: int,
-                    shares: dict[str, float] | None = None) -> list[Finding]:
+                    shares: dict[str, float] | None = None,
+                    rates: dict[str, int] | None = None) -> list[Finding]:
     """Sections written outside the band their share affords. PHASE: draft.
 
     ``section_band`` already computes each section's band and the draft prompt is handed
@@ -1465,7 +1441,8 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
     for heading, body in _sections_with_bodies(draft_md):
         if heading not in planned:
             continue
-        out += section_size(heading, body, section_band(heading, outline_md, budget, shares))
+        out += section_size(heading, body,
+                            section_band(heading, outline_md, budget, shares, rates=rates))
     return out
 
 
@@ -1546,8 +1523,16 @@ def kind_leaf_counts(outline_md: str) -> dict[str, int]:
 
 def section_words(heading: str, budget: int,
                   shares: dict[str, float] | None = None) -> int:
-    """This SECTION's slice of the body budget."""
-    if budget <= 0:
+    """This SECTION's slice of the body budget. Furniture gets none.
+
+    The Abstract is drafted by its own prompt against its own limit, the Acknowledgements
+    are a CRediT passthrough the tool may not write, and the References are rendered by
+    pandoc. None of them spends body prose. Falling through to the "other" share gave each
+    of them 22.5% of the budget, so the word plan the author approves at the skeleton stage
+    claimed 2,700 words of material that will never be written — three of its nine rows.
+    """
+    if budget <= 0 or is_abstract(heading) or is_references(heading) \
+            or is_acknowledgements(heading):
         return 0
     sh = shares or DEFAULT_SECTION_SHARES
     return round(budget * sh.get(budget_kind(heading), sh.get("other", 0.2)))
@@ -1597,7 +1582,8 @@ def section_bullets(outline_md: str) -> dict[str, int]:
 
 def section_band(heading: str, outline_md: str = "", budget: int = 0,
                  shares: dict[str, float] | None = None,
-                 tolerance: float = 0.2) -> tuple[int, int]:
+                 tolerance: float = 0.2,
+                 rates: dict[str, int] | None = None) -> tuple[int, int]:
     """The word band for a SECTION. Bullets are the truth wherever the outline supplies them.
 
     The share-based band and the bullet count are two independent answers to the same
@@ -1622,7 +1608,12 @@ def section_band(heading: str, outline_md: str = "", budget: int = 0,
     n = section_bullets(outline_md).get(_norm_heading(heading), 0) if outline_md else 0
     if not n:
         return section_target(heading, budget, shares, tolerance)
-    total = n * WORDS_PER_PARAGRAPH
+    # WORDS PER BULLET is the section's own, pinned at the skeleton and carried on every
+    # release since. Assuming a flat WORDS_PER_PARAGRAPH here reads Results — gated at 166
+    # a bullet — as 900 words against a contract of 996, and makes Methods and Results
+    # indistinguishable to the drafter when the rate is the only thing telling them apart.
+    by_head = {_norm_heading(k): v for k, v in (rates or {}).items()}
+    total = n * by_head.get(_norm_heading(heading), WORDS_PER_PARAGRAPH)
     return (round(total * (1 - tolerance)), round(total * (1 + tolerance)))
 
 

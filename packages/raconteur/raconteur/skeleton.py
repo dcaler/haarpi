@@ -24,6 +24,7 @@ Two conventions the skeleton carries:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import guards
@@ -88,9 +89,10 @@ Rules:
 background_pillars, method_steps and results_structure in the analysis above. A section \
 whose material is one continuous argument takes NO subsections; an Introduction of ~2 \
 paragraphs never needs them.
-- Give each section only as many subsections as its word share affords. The budget above \
-states each section's words and what one bullet costs — a subsection thinner than about \
-{min_words} words cannot carry an argument, so merge rather than split.
+- Give each section only as many subsections as its word share affords — the budget above \
+states that number outright for each one. Do not exceed it. A subsection costs about \
+{min_words} words, because it is at least two paragraphs; one thinner than that is a \
+heading with nothing under it, so merge rather than split.
 - Do NOT number any heading. The document style numbers them: `## Methods` renders as \
 "3 Methods" and `### The Model` as "3.1 The Model". A number you write yourself renders \
 twice.
@@ -184,17 +186,31 @@ def findings(sections: list[tuple[int, str]], spine: tuple[str, ...],
                 counts.setdefault(current, 0)
             elif current is not None:
                 counts[current] += 1
+        lo, hi = guards.PARAGRAPH_BAND
         for top, n in counts.items():
             words = guards.section_words(top, budget, shares)
-            if not words or n == 0:
+            if not words:
                 continue
-            each = words // n
-            if each < guards.PARAGRAPH_BAND[0]:
+            # One row of the word plan, checked. A subsection costs MIN_BULLETS_PER_SUBSECTION
+            # paragraphs, so the section's paragraph width follows from how many subsections
+            # it has — and the author is choosing that width whether or not they know it.
+            bullets = guards.MIN_BULLETS_PER_SUBSECTION * max(n, 1)
+            each = words // bullets
+            want = max(1, round(words / guards.subsection_words()))
+            if each > hi:
+                out.append(guards.Finding(
+                    "subsections-too-few", top,
+                    f'"{top}" carries {words} words across {n or 1} subsection(s) — at '
+                    f"{guards.MIN_BULLETS_PER_SUBSECTION} bullets each that is {bullets} "
+                    f"paragraphs of {each} words, over the {hi} a paragraph may run. Split "
+                    f"it into {want} subsection(s)."))
+            elif each < lo:
                 out.append(guards.Finding(
                     "subsections-too-thin", top,
-                    f'"{top}" carries {words} words across {n} subsections — {each} each, '
-                    f"below the {guards.PARAGRAPH_BAND[0]} words a paragraph needs. Merge "
-                    f"to at most {max(1, words // guards.PARAGRAPH_BAND[0])}."))
+                    f'"{top}" carries {words} words across {n} subsections — at '
+                    f"{guards.MIN_BULLETS_PER_SUBSECTION} bullets each that is {bullets} "
+                    f"paragraphs of {each} words, under the {lo} a paragraph needs. Merge "
+                    f"to {want} subsection(s)."))
     return out
 
 
@@ -212,32 +228,289 @@ def plan_table(sections: list[tuple[int, str]], budget: int,
             subs.append(text)
     for top, kids in ordered:
         words = guards.section_words(top, budget, shares)
-        n = len(kids) or 1
+        if not words:
+            continue          # furniture: no body-prose share, so nothing to plan
+        bullets = guards.MIN_BULLETS_PER_SUBSECTION * max(len(kids), 1)
         rows.append(f"  {top:<28}{words:>6} words  {len(kids):>2} sub  "
-                    f"{words // n:>4} each  {guards.bullets_for(words // n):>2} bullets")
+                    f"{bullets:>3} bullets  {words // bullets:>4} each")
     return "\n".join(rows)
 
 
 # ── the verb ─────────────────────────────────────────────────────────────────
 
+def _render_docx(md_path: Path, project_dir: Path,
+                 notes: list[tuple[str, str]] | None = None) -> Path | None:
+    """Render the .docx and drop the markdown behind it.
+
+    The skeleton's deliverable is the .docx. It is what the author marks up, what the gate
+    reads, and what every later stage reads. The .md was pandoc's input and this stage's
+    "have I run?" marker, and nothing else ever read it — ``outline`` reads the RELEASE, and
+    ``_revise`` reads the annotated .docx. A second file per rung that nothing consumes can
+    only drift from the one that matters.
+
+    The .md survives a FAILED render: without pandoc it is the only output there is, and
+    deleting it would leave the author nothing to look at.
+    """
+    from .refdoc import render
+    docx = render(md_path, project_dir)
+    if docx is None:
+        log(f"[raconteur] wrote {md_path.relative_to(project_dir)} (no .docx — pandoc)")
+        return None
+    md_path.unlink(missing_ok=True)
+    if notes:
+        from haarpi import redline as _rl
+        try:
+            n = _rl.add_anchored_comments(docx, notes, author="raconteur", initials="ra")
+            log(f"[raconteur] attached {n} word-plan comment(s)")
+        except Exception as e:                # noqa: BLE001 — a comment must not fail a render
+            log(f"[warn] could not attach word-plan comments: {type(e).__name__}: {e}")
+    log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
+    return docx
+
+
+# ── the word plan, carried on the document ───────────────────────────────────
+# The plan the author approves has to live where they approve it. A log line is seen once,
+# at generation, by whoever was watching the terminal; the .docx is what gets opened, marked
+# up and gated. So each section heading carries a comment stating its row of the plan.
+#
+# WORDS PER BULLET is the invariant, pinned here from the section's share and the structure
+# as generated. Everything else derives from it and the headings, which is why adding a
+# subsection ADDS words rather than thinning the paragraphs already there: a new subsection
+# is two more bullets at this section's established rate. Recomputing the rate from the
+# share instead would hold the section still and starve it, which is the opposite of what a
+# structural edit means.
+
+_PLAN_RE = re.compile(r"(\d+)\s*(?:words\s*)?each", re.IGNORECASE)
+_PLAN_SUB_RE = re.compile(r"(\d+)\s*sub\b", re.IGNORECASE)
+
+
+def words_per_bullet(sections: list[tuple[int, str]], budget: int,
+                     shares: dict | None = None) -> dict[str, int]:
+    """Each section's pinned rate: its share divided by the bullets its structure affords."""
+    out: dict[str, int] = {}
+    for top, kids in _by_section(sections):
+        words = guards.section_words(top, budget, shares)
+        if not words:
+            continue
+        # Floored at one paragraph. A section generated wider than its share affords would
+        # otherwise pin a rate below what a paragraph needs — Background came back with four
+        # subsections on a 600-word share and pinned 75 — and that rate then outlives the
+        # mistake, so merging back to two would HALVE the section instead of restoring it.
+        # Flooring lets the section state its true cost and makes merging the fix it should
+        # be: two subsections at 150 is exactly the 600 the share intended.
+        out[top] = max(guards.WORDS_PER_PARAGRAPH,
+                       words // (guards.MIN_BULLETS_PER_SUBSECTION * max(len(kids), 1)))
+    return out
+
+
+def _by_section(sections: list[tuple[int, str]]) -> list[tuple[str, list[str]]]:
+    ordered: list[tuple[str, list[str]]] = []
+    current, subs = None, []
+    for lvl, text in sections:
+        if lvl == 2:
+            current, subs = text, []
+            ordered.append((current, subs))
+        elif current is not None:
+            subs.append(text)
+    return ordered
+
+
+def plan_row(top: str, n_subs: int, wpb: int) -> str:
+    """One section's plan, as the author reads it on the heading."""
+    bullets = guards.MIN_BULLETS_PER_SUBSECTION * max(n_subs, 1)
+    return (f"{top} — {bullets * wpb} words · {n_subs} sub · {bullets} bullets · "
+            f"{wpb} each. Add a subsection and this section grows by "
+            f"{guards.MIN_BULLETS_PER_SUBSECTION * wpb} words; remove one and it shrinks by "
+            f"the same. Words per bullet is fixed for this section.")
+
+
+def plan_notes(sections: list[tuple[int, str]], budget: int,
+               shares: dict | None = None) -> list[tuple[str, str]]:
+    """(heading, comment) for every section that spends body prose."""
+    wpb = words_per_bullet(sections, budget, shares)
+    return [(top, plan_row(top, len(kids), wpb[top]))
+            for top, kids in _by_section(sections) if top in wpb]
+
+
+def read_plan(text: str) -> tuple[int | None, int | None]:
+    """(words per bullet, subsections) as a plan comment states them.
+
+    Forgiving on purpose: the author edits these by hand and will annotate their reasoning
+    beside the number. The first "N each" and "N sub" win; anything else in the comment is
+    theirs. Returns (None, None) when there is no number to find, which the caller reports
+    as an instruction rather than guessing.
+    """
+    w = _PLAN_RE.search(text or "")
+    n = _PLAN_SUB_RE.search(text or "")
+    return (int(w.group(1)) if w else None, int(n.group(1)) if n else None)
+
+
+def document_words(sections: list[tuple[int, str]], wpb: dict[str, int]) -> int:
+    """Body prose the structure now implies, at each section's pinned rate."""
+    return sum(guards.MIN_BULLETS_PER_SUBSECTION * max(len(kids), 1) * wpb[top]
+               for top, kids in _by_section(sections) if top in wpb)
+
+
+def plan_from_release(path) -> tuple[dict[str, int], list[str]]:
+    """The word plan the author gated, read back off the minted skeleton.
+
+    Returns (words-per-bullet by section, problems). The comment is authoritative for ONE
+    number — the rate — because it is the only one that cannot be recovered from the
+    document. Recomputing it from the share after a subsection was added would hold the
+    section still and thin its paragraphs, when adding a subsection is meant to add words.
+
+    Everything else in the comment is CHECKED against the document, never trusted. The
+    comment states how many subsections the plan was written for; the headings state how
+    many there are now. When they disagree the author edited one and not the other, and the
+    only safe move is to stop and say so — a plan describing a structure that no longer
+    exists is worse than no plan, because it looks like one.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+    # heading_comments, not comment_anchors: the latter omits headings by design, because a
+    # comment on one asks for a section to be added or split rather than for prose to be
+    # rewritten. The word plan is exactly that kind of comment.
+    from .redline import heading_comments
+
+    doc = Document(str(path))
+    paras = doc.paragraphs
+    subs: dict[str, int] = {}
+    current = None
+    for para in paras:
+        text = para.text.strip()
+        style = para.style.name if para.style is not None else ""
+        if not text or not style.startswith("Heading"):
+            continue
+        level = int("".join(c for c in style if c.isdigit()) or 1)
+        if level == 2:
+            current = text
+            subs.setdefault(current, 0)
+        elif level >= 3 and current is not None:
+            subs[current] = subs.get(current, 0) + 1
+
+    cmap = hrl.comments_by_id(path)
+    wpb: dict[str, int] = {}
+    problems: list[str] = []
+    for a in heading_comments(path):
+        head = a["heading"]
+        if head not in subs:
+            continue
+        for cid in a["ids"]:
+            rec = cmap.get(str(cid))
+            if not rec:
+                continue
+            rate, stated = read_plan(rec.get("text", ""))
+            if rate is None:
+                problems.append(
+                    f'"{head}": its word-plan comment states no rate. It must contain '
+                    f'"N each" — the words one bullet is worth in this section.')
+            elif stated is not None and stated != subs[head]:
+                problems.append(
+                    f'"{head}": its word plan was written for {stated} subsection(s) and '
+                    f"the skeleton now has {subs[head]}. Whichever you changed, the other "
+                    f"was not updated — fix the comment or the headings so they agree.")
+            else:
+                wpb[head] = rate
+    for head, n in subs.items():
+        if head in wpb:
+            continue
+        if guards.is_abstract(head) or guards.is_references(head) \
+                or guards.is_acknowledgements(head):
+            continue
+        if not any(head in pr for pr in problems):
+            problems.append(
+                f'"{head}" carries no word plan. Every section that spends body prose is '
+                f"planned at the skeleton; one that is not has no gated length.")
+    return wpb, problems
+
+
+def strip_plan_comments(path) -> int:
+    """Consume the plan: the outline has read it, so it stops travelling.
+
+    The comments describe a skeleton. Carried into the outline they would describe a
+    document that has moved on, and a stale plan beside live content is the drift this
+    whole mechanism exists to prevent.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+    doc = Document(str(path))
+    n = hrl.strip_comment_anchors(doc)
+    doc.save(str(path))
+    hrl._clear_comment_parts(path)
+    return n
+
+
+def reconcile_plan(path) -> int:
+    """Rewrite each section's word plan to match the structure as APPROVED. The mint's job.
+
+    The comments were written against the structure as GENERATED. The author then moved
+    subsections around, and a plan describing a shape the document no longer has is worse
+    than no plan, because it looks like one. Rather than make the next rung refuse — which
+    would turn a routine structural edit into an error the author has to clear by hand-
+    editing six comments — the mint reconciles: the release always agrees with itself.
+
+    WORDS PER BULLET is carried, never recomputed. That is the whole invariant: re-deriving
+    it from the share after a subsection was added would hold the section still and thin its
+    paragraphs, when adding a subsection is supposed to add words. It is read back off the
+    comment the author approved — and if they edited that number, theirs is the one that
+    survives. A section they added outright has no pinned rate, so it takes one from its
+    share, exactly as a fresh skeleton would.
+    """
+    from docx import Document
+    from haarpi import redline as hrl
+    from .redline import heading_comments
+
+    doc = Document(str(path))
+    subs: dict[str, int] = {}
+    current = None
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        style = para.style.name if para.style is not None else ""
+        if not text or not style.startswith("Heading"):
+            continue
+        level = int("".join(c for c in style if c.isdigit()) or 1)
+        if level == 2:
+            current = text
+            subs.setdefault(current, 0)
+        elif level >= 3 and current is not None:
+            subs[current] = subs.get(current, 0) + 1
+
+    cmap = hrl.comments_by_id(path)
+    updates: dict[str, str] = {}
+    for a in heading_comments(path):
+        head = a["heading"]
+        if head not in subs:
+            continue
+        for cid in a["ids"]:
+            rec = cmap.get(str(cid))
+            if not rec:
+                continue
+            rate, _ = read_plan(rec.get("text", ""))
+            if rate is None:
+                continue                 # unreadable: leave the author's words alone
+            updates[str(cid)] = plan_row(head, subs[head], rate)
+    return hrl.set_comment_text(path, updates)
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, work_dir: Path, text: str,
            venue: str = "") -> Path:
-    from .context import load_authors_block
     from .naming import major_skeleton_name
     from .refdoc import render
-    v = cfg.venue(venue) if venue else None
-    who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
-    if who:
-        lines = text.split("\n")
-        lines.insert(1, f"\n{who}")
-        text = "\n".join(lines)
+    # No byline. A skeleton is a title and a heading structure; authors, affiliations and
+    # the corresponding address are derived from the project manifest by
+    # ``load_authors_block`` and regenerated at every stage that needs them. Writing a copy
+    # here gave authorship a second, older home that rode the whole ladder: the css2026
+    # skeleton released two affiliations and a gmail address against the manifest's three
+    # and an institutional one, and the author had touched none of those paragraphs,
+    # because there is nothing in them to review. An edit made to them would have been
+    # silently overwritten downstream — the one span the redline contract could not keep
+    # its promise about.
     out = work_dir / major_skeleton_name(cfg.short_title, "md", venue=venue)
     out.write_text(text, encoding="utf-8")
-    log(f"[raconteur] wrote {out.relative_to(project_dir)}")
-    docx = render(out, project_dir)
-    if docx:
-        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
-    return out
+    sections = [(len(h) - len(h.lstrip("#")), h.lstrip("# ").strip())
+                for h in text.splitlines() if h.startswith("##")]
+    notes = plan_notes(sections, _budget_for(cfg, venue), cfg.section_shares or None)
+    return _render_docx(out, project_dir, notes) or out
 
 
 def _revise(project_dir: Path, cfg: ProjectConfig, brain, work: Path,
@@ -283,11 +556,8 @@ def _revise(project_dir: Path, cfg: ProjectConfig, brain, work: Path,
     chain, datestamp = (parsed[1], parsed[0]) if parsed else ([], None)
     out = work / minor_name(cfg.short_title, chain, "md", datestamp)
     out.write_text(assemble(sections, cfg.title), encoding="utf-8")
-    log(f"[raconteur] wrote {out.relative_to(project_dir)}")
-    from .refdoc import render
-    docx = render(out, project_dir)
-    if docx:
-        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
+    _render_docx(out, project_dir,
+                 plan_notes(sections, budget, cfg.section_shares or None))
 
 
 def _budget_for(cfg: ProjectConfig, venue: str) -> int:
@@ -328,7 +598,10 @@ def run(project_dir: Path, venue: str = "") -> None:
     work.mkdir(parents=True, exist_ok=True)
     scope = ([venue] if venue else []) + ["skeleton"]
     others = [v for v in cfg.venues if v != venue]
-    existing = find_latest(work, cfg.short_title, "md", last_initials="ra",
+    # The .docx is the deliverable now — the .md is deleted after it renders. Counting
+    # markdown here would report every completed skeleton as absent and re-draft it,
+    # spending a GPU run to overwrite work the author may already have marked up.
+    existing = find_latest(work, cfg.short_title, "docx", last_initials="ra",
                            chain_includes=scope, chain_excludes=others)
     user_rev = find_user_revision(work, cfg.short_title, chain_includes=scope,
                                   chain_excludes=others)
@@ -363,7 +636,7 @@ def run(project_dir: Path, venue: str = "") -> None:
             narrative_section=f"Narrative spine (author-approved):\n{narrative}\n",
             budget_section=_budget_block(cfg, project_dir, venue),
             spine="\n".join(f"  - {s}" for s in spine),
-            min_words=guards.PARAGRAPH_BAND[0],
+            min_words=guards.subsection_words(),
         ),
         system=_SYSTEM, num_ctx=16384)
 

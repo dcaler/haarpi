@@ -35,7 +35,7 @@ haarpi — Human Authored Agentic Research Pipeline
 usage:
   haarpi init [--name N --short-title S --brief B --initials I --priority 1-4 --no-trundlr]
         one interview -> haarpi.yaml, stage skeleton, trundlr project + first chain
-  haarpi next [--stage S] [--file F] [--dry-run]
+  haarpi next [--stage S] [--file F] [--dry-run] [--no-queue]
         read the finished markup: mint a release, or classify + queue rework
         (runs automatically as the last task of every queued chain)
   haarpi authors            wizard: who the paper is by, in authorship order
@@ -113,8 +113,11 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
         ap.add_argument("--stage")
         ap.add_argument("--file", type=Path)
         ap.add_argument("--dry-run", action="store_true")
+        ap.add_argument("--no-queue", action="store_true",
+                        help="mint and record the gate, but queue nothing in trundlr")
         a = ap.parse_args(rest)
-        return planner.run_next(root, stage=a.stage, file=a.file, dry_run=a.dry_run)
+        return planner.run_next(root, stage=a.stage, file=a.file,
+                                dry_run=a.dry_run, no_queue=a.no_queue)
     return 2
 
 

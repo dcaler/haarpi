@@ -998,10 +998,21 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
 
 
 def run_next(root: Path, stage: str | None = None, file: Path | None = None,
-             dry_run: bool = False) -> int:
+             dry_run: bool = False, no_queue: bool = False) -> int:
+    """Read the finished markup: mint a release, or classify and queue rework.
+
+    ``no_queue`` mints and records the gate but queues nothing. For iterating on a rung —
+    regenerate, redline, mint, look at it — without a chain appearing in trundlr each time
+    and having to be cancelled. The gate record is still written, so the ladder's own state
+    stays truthful; only the scheduler is left alone.
+    """
     m = project.load_manifest(root)
     cfg = pipeline_config()
     tr_cfg = cfg.get("trundlr", {})
+    # One place decides. Three branches below queue, and they must agree — a mint that
+    # skipped the rung queue while rework still fired would be worse than no flag at all.
+    queueing = bool(m.trundlr_project_id) and not no_queue
+    skipped = " ; queueing skipped (--no-queue)" if m.trundlr_project_id and no_queue else ""
 
     if file is not None:
         found = (stage or "litreview", Path(file))
@@ -1044,7 +1055,24 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             elif not deliverable and stage == "paper" and venue:
                 print(f"[dry-run] would queue packaging for {venue} (package -> submission)")
             return 0
-        result = redline.mint_release(markup, dst)
+        # A rung may need its release reconciled with what the author actually approved.
+        # The skeleton does: its word-plan comments were written against the structure as
+        # generated, and the author has since moved subsections. Reconciling at the mint is
+        # what keeps a routine structural edit from becoming an error the next rung refuses.
+        post = None
+        if deliverable in ("skeleton", "outline"):
+            try:
+                if deliverable == "skeleton":
+                    from raconteur.skeleton import reconcile_plan as post
+                else:
+                    from raconteur.outline import reconcile_plan as post
+            except ImportError:               # raconteur not installed in this stack
+                post = None
+        # The skeleton releases ONE artifact. Its word plan rides on the document as
+        # comments, which no markdown rendering can carry, so a .md sibling would be a
+        # partial copy of the contract sitting beside the whole one.
+        result = redline.mint_release(markup, dst, post=post,
+                                      md_sibling=deliverable != "skeleton")
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and
@@ -1055,8 +1083,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                 "type": "gate", "stage": stage, "deliverable": deliverable,
                 "venue": venue, "annotation_hash": ahash, "markup": markup.name,
                 "release": dst.name})
-            queued_note = ""
-            if m.trundlr_project_id:
+            queued_note = skipped
+            if queueing:
                 try:
                     client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
                     queued_note = _queue_next_rung(
@@ -1075,7 +1103,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             "type": "gate", "stage": stage, "annotation_hash": ahash,
             "markup": markup.name, "release": dst.name, "archived": archived})
         opened, refreshed, packaged = [], [], ""
-        if m.trundlr_project_id:
+        if queueing:
             try:
                 client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
                 opened = _advance(root, m, client, tr_cfg)
@@ -1087,7 +1115,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         msg = (f"{stage}: gate PASSED — released {dst.name}"
                + (f"; opened {', '.join(opened)}" if opened else "")
                + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else "")
-               + packaged)
+               + packaged + skipped)
         print(f"haarpi next: {msg}")
         _email(cfg, f"haarpi: {m.name} — {stage} gate passed", msg)
         return 0
@@ -1119,9 +1147,10 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
              "bindings": _current_bindings(root, m, stage)}
-    if not m.trundlr_project_id:
+    if not queueing:
         project.record_plan(root, entry)
-        print("\n".join(summary + ["  [trundlr] no project id — run the chain manually:"]
+        why = ("--no-queue" if m.trundlr_project_id else "no project id")
+        print("\n".join(summary + [f"  [trundlr] {why} — run the chain manually:"]
                         + [f"    {_step_of(stage, s).command or '(you) ' + s}" for s in steps]))
         return 0
     try:

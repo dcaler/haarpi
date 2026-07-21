@@ -127,7 +127,7 @@ def test_track_changes_is_on_in_the_rendered_document(tmp_path):
     md.write_text("# T\n\n## Abstract\n\n## Introduction\n")
     out = refdoc.render(md, tmp_path)
     with zipfile.ZipFile(out) as z:
-        assert "<w:trackChanges/>" in z.read("word/settings.xml").decode()
+        assert "<w:trackRevisions/>" in z.read("word/settings.xml").decode()
 
 
 def test_it_is_applied_to_the_output_not_the_reference_doc(tmp_path):
@@ -136,14 +136,14 @@ def test_it_is_applied_to_the_output_not_the_reference_doc(tmp_path):
     from haarpi.render import to_docx
     ref = refdoc.build(tmp_path / "ref.docx")
     with zipfile.ZipFile(ref) as z:
-        assert "<w:trackChanges/>" in z.read("word/settings.xml").decode()
+        assert "<w:trackRevisions/>" in z.read("word/settings.xml").decode()
     md = tmp_path / "s.md"
     md.write_text("# T\n\n## Introduction\n")
     # track_changes=False isolates pandoc's own behaviour: the flag is set in the
     # reference doc and pandoc still does not carry it into the output.
     plain = to_docx(md, reference_doc=ref, track_changes=False)
     with zipfile.ZipFile(plain) as z:
-        assert "<w:trackChanges/>" not in z.read("word/settings.xml").decode()
+        assert "<w:trackRevisions/>" not in z.read("word/settings.xml").decode()
 
 
 def test_enabling_twice_does_not_duplicate_the_flag(tmp_path):
@@ -153,7 +153,7 @@ def test_enabling_twice_does_not_duplicate_the_flag(tmp_path):
     out = refdoc.render(md, tmp_path)
     assert refdoc.enable_track_changes(out) is False      # already on
     with zipfile.ZipFile(out) as z:
-        assert z.read("word/settings.xml").decode().count("<w:trackChanges") == 1
+        assert z.read("word/settings.xml").decode().count("<w:trackRevisions") == 1
 
 
 def test_numbering_survives_the_settings_rewrite(tmp_path):

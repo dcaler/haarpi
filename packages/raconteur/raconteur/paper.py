@@ -670,7 +670,8 @@ def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str = "",
 
 def _manuscript_findings(assembled: str, outline_text: str, budget: int,
                          shares: dict | None = None,
-                         abstract_limit: int | None = None) -> list:
+                         abstract_limit: int | None = None,
+                         rates: dict[str, int] | None = None) -> list:
     """Everything checkable about the whole document at once.
 
     Length is checked in BOTH directions and per section, not just as a ceiling on the
@@ -687,7 +688,7 @@ def _manuscript_findings(assembled: str, outline_text: str, budget: int,
     return (guards.outline_conformance(assembled, outline_text)
             + guards.over_budget(assembled, budget)
             + guards.under_budget(assembled, budget)
-            + guards.section_lengths(assembled, outline_text, budget, shares)
+            + guards.section_lengths(assembled, outline_text, budget, shares, rates)
             + guards.paragraph_conformance(assembled, outline_text)
             + guards.figure_findings(assembled)
             + guards.abstract_length(assembled, abstract_limit)
@@ -742,7 +743,8 @@ def _findings_by_section(findings: list, headings: list[str]) -> dict[str, list]
 def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
                            budget: int, bib_keys: set[str], rounds: int = 2,
                            shares: dict | None = None,
-                           abstract_limit: int | None = None) -> str:
+                           abstract_limit: int | None = None,
+                           rates: dict[str, int] | None = None) -> str:
     """Fix what the whole-document checks find, SECTION BY SECTION.
 
     Every section can sit inside its own band and the manuscript still overrun — that is
@@ -759,7 +761,7 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
 
     for n in range(1, rounds + 1):
         findings = _manuscript_findings(assembled, outline_text, budget, shares,
-                                        abstract_limit)
+                                        abstract_limit, rates)
         if not findings:
             return assembled
         log(f"[raconteur] manuscript guards ({n}): {len(findings)} finding(s)")
@@ -781,7 +783,8 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
             if not mine:
                 repaired.append((heading, text))
                 continue
-            lo, hi = guards.section_band(heading, outline_text, budget, shares)
+            lo, hi = guards.section_band(heading, outline_text, budget, shares,
+                                         rates=rates)
             if not lo:
                 lo, hi = _DEFAULT_BAND
             log(f"[raconteur] repairing '{heading}' ({len(mine)} finding(s))")
@@ -799,7 +802,7 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
             f"## {h}\n\n{t.strip()}\n" for h, t in repaired)
 
     remaining = _manuscript_findings(assembled, outline_text, budget, shares,
-                                     abstract_limit)
+                                     abstract_limit, rates)
     if remaining:
         log(f"[warn] {len(remaining)} manuscript finding(s) survived {rounds} round(s) "
             f"— shipping anyway:")
@@ -815,6 +818,7 @@ def _draft_paper(
     paper_dir: Path,
     outline_text: str,
     venue: str = "",
+    rates: dict[str, int] | None = None,
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
@@ -875,7 +879,7 @@ def _draft_paper(
             continue
         ctx = _context_for_section(heading, litrev, code, results, written, narrative)
         band = guards.section_band(heading, outline_text, budget,
-                                   cfg.section_shares or None)
+                                   cfg.section_shares or None, rates=rates)
         lo, hi = band if band[0] else _DEFAULT_BAND
         n_bullets = guards.section_bullets(outline_text).get(
             guards._norm_heading(heading), 0)
@@ -926,7 +930,7 @@ def _draft_paper(
     assembled = _assemble(cfg.title, abstract, drafted)
     assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys,
                                        shares=cfg.section_shares or None,
-                                       abstract_limit=abstract_limit)
+                                       abstract_limit=abstract_limit, rates=rates)
     _write(project_dir, cfg, paper_dir, assembled, venue)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
@@ -940,6 +944,7 @@ def _revise_paper(
     paper_dir: Path,
     user_rev: Path,
     outline_text: str,
+    rates: dict[str, int] | None = None,
     venue: str = "",
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
@@ -989,7 +994,7 @@ def _revise_paper(
         existing = existing_map.get(heading, "")
         ctx = _context_for_section(heading, litrev, code, results, written, narrative)
         band = guards.section_band(heading, outline_text, budget,
-                                   cfg.section_shares or None)
+                                   cfg.section_shares or None, rates=rates)
         log(f"[raconteur] revising '{heading}'…")
         text = brain.coordinator(
             _REVISE_WITH_ANNOTATIONS_PROMPT.format(
@@ -1027,7 +1032,7 @@ def _revise_paper(
     # and decides — the same reason accepting and resolving are human-only.
     findings = _manuscript_findings(assembled, outline_text, budget,
                                     cfg.section_shares or None,
-                                    _abstract_limit(cfg, venue))
+                                    _abstract_limit(cfg, venue), rates)
     if findings:
         log(f"[warn] {len(findings)} manuscript finding(s) after revision — NOT repaired "
             f"automatically, so your annotations are not rewritten:")
@@ -1113,6 +1118,26 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
         raise SystemExit(1)
     outline_text = outline_path.read_text(encoding="utf-8")
     log(f"[raconteur] using outline: {outline_path.name}")
+    # The approved rates ride on the outline RELEASE, on its section headings. Looked up in
+    # its own right, not derived from wherever the prose came from: `outline_path` may have
+    # fallen back to the pre-redline working file, and taking the rates off that document's
+    # sibling would read a plan the author never gated. A release or nothing.
+    outline_rates: dict[str, int] = {}
+    sibling = find_latest_release(
+        outline_home / "output", cfg.short_title, "docx",
+        chain_includes=scope + ["outline"])
+    if sibling is not None:
+        try:
+            from .outline import rates_from
+            outline_rates = rates_from(sibling)
+            if outline_rates:
+                log("[raconteur] approved word plan: "
+                    + ", ".join(f"{k} {v}/bullet" for k, v in outline_rates.items()))
+        except Exception as e:              # noqa: BLE001 — a rate must not fail a draft
+            log(f"[warn] could not read the approved word plan: {type(e).__name__}: {e}")
+    if not outline_rates:
+        log("[warn] no approved word plan on the outline release — every section will be "
+            f"banded at a flat {guards.WORDS_PER_PARAGRAPH} words a bullet")
 
     excludes = ["outline", "venue", "onepager"] + others
     user_rev = find_user_revision(work, cfg.short_title,
@@ -1122,7 +1147,8 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
     paper_dir = work
 
     if not existing:
-        _draft_paper(project_dir, cfg, brain, paper_dir, outline_text, venue)
+        _draft_paper(project_dir, cfg, brain, paper_dir, outline_text, venue,
+                     rates=outline_rates)
     elif user_rev:
         log(f"[raconteur] found revision: {user_rev.name}")
         if resynth:
@@ -1131,7 +1157,7 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
             # against. Major version — new datestamp, chain reset.
             log("[raconteur] --resynth: regenerating the whole draft (no redline)")
             _revise_paper(project_dir, cfg, brain, paper_dir, user_rev, outline_text,
-                          venue)
+                          venue, rates=outline_rates)
         else:
             _redline_paper(project_dir, cfg, brain, paper_dir, user_rev, venue)
     else:

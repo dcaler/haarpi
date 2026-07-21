@@ -23,12 +23,36 @@ import sys
 from pathlib import Path
 
 
+# Word's flag for "record revisions" is w:trackRevisions. w:trackChanges is not an element
+# of CT_Settings at all, so Word ignored it in silence — which is why every document this
+# pipeline ever rendered opened with tracking OFF and every author had to switch it on by
+# hand, and why the check that reported it "on" was reading its own invention back.
+# Ground truth, from settings.xml as Word itself wrote it on a redlined skeleton:
+#     … stylePaneFormatFilter, trackRevisions, defaultTabStop …
+_TRACK = "<w:trackRevisions/>"
+
+# CT_Settings is a strict sequence, so the flag cannot simply go first. These are the
+# elements that FOLLOW trackRevisions in that sequence, nearest first: the flag goes before
+# whichever of them the document actually has. pandoc emits doNotTrackMoves, Word emits
+# defaultTabStop, and both land in the right slot.
+_AFTER_TRACK = ("w:doNotTrackMoves", "w:doNotTrackFormatting", "w:documentProtection",
+                "w:autoFormatOverride", "w:styleLockTheme", "w:styleLockQFSet",
+                "w:defaultTabStop")
+
+
 def _with_track_changes(xml: str) -> str:
     """Turn revision recording on in a settings.xml, idempotently."""
-    if "<w:trackChanges" in xml:
+    if "<w:trackRevisions" in xml:
         return xml
+    for tag in _AFTER_TRACK:
+        i = xml.find("<" + tag)
+        if i != -1:
+            return xml[:i] + _TRACK + xml[i:]
+    i = xml.rfind("</w:settings>")
+    if i != -1:
+        return xml[:i] + _TRACK + xml[i:]
     i = xml.index(">", xml.index("<w:settings")) + 1
-    return xml[:i] + "<w:trackChanges/>" + xml[i:]
+    return xml[:i] + _TRACK + xml[i:]
 
 
 def enable_track_changes(docx_path: Path) -> bool:
@@ -54,7 +78,7 @@ def enable_track_changes(docx_path: Path) -> bool:
     except (zipfile.BadZipFile, OSError, KeyError):
         return False
     settings = parts.get("word/settings.xml", b"").decode("utf-8")
-    if not settings or "<w:trackChanges" in settings:
+    if not settings or "<w:trackRevisions" in settings:
         return False
     parts["word/settings.xml"] = _with_track_changes(settings).encode("utf-8")
     with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as zout:
