@@ -16,15 +16,26 @@ from raconteur import paper
 
 
 def test_the_draft_prompt_instructs_figure_embedding():
-    assert "![" in paper._DRAFT_SECTION_PROMPT
-    # the outline numbers its figures; the draft renders that number, it does not re-invent it
-    assert "Figure N:" in paper._DRAFT_SECTION_PROMPT
+    p = paper._DRAFT_SECTION_PROMPT
+    assert "![" in p
+    assert "Figure N:" in p
     # The outline names each figure once, in its section; the draft must render ONLY the
     # figures its own section outline names — never the whole manifest in every section.
-    assert "ONLY" in paper._DRAFT_SECTION_PROMPT
-    assert "did not name here" in paper._DRAFT_SECTION_PROMPT
+    assert "ONLY" in p
+    assert "did not name here" in p
     # a figure no sentence points at is one the reader is never told to look at
-    assert "introduce" in paper._DRAFT_SECTION_PROMPT
+    assert "introduce" in p.lower()
+
+
+def test_the_draft_prompt_numbers_figures_across_the_document():
+    """The outline's figure lines carry no number, so "keep the outline's number" left the
+    model to choose — and it chose 1 in every section. css2026 shipped two Figure 1s, the
+    lattice diagram in Methods and the recovery landscape in Results, with three prose
+    references resolving to the wrong plot."""
+    p = paper._DRAFT_SECTION_PROMPT
+    assert "{figure_start}" in p
+    assert "Do not start at 1" in p
+    assert "across the whole paper" in p
 
 
 def test_the_paper_stage_does_not_reload_the_figure_manifest():

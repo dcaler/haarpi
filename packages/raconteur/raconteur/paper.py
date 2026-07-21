@@ -67,13 +67,18 @@ equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
 - Where the section outline names a figure — a line of the form \
-"Figure N: <caption> (<path>)" — render it as a Markdown image `![Figure N: <caption>](<path>)` at \
+"Figure: <caption> (<path>)" — render it as a Markdown image `![Figure N: <caption>](<path>)` at \
 the point in the prose where it belongs, using that EXACT caption and path. Render ONLY the \
 figures THIS section's outline names: do not invent a figure or a path, do not add a figure \
 the section outline did not name here, and never repeat one
-- Keep the figure's number from the outline in its caption ("Figure 3: …") and introduce \
-every figure in the prose BEFORE it appears ("Figure 3 shows …") — a figure no sentence \
-points at is one the reader is never told to look at
+- NUMBER THE FIGURES FROM {figure_start}. Figures are numbered across the whole paper, not \
+within a section, and earlier sections have already used every number below {figure_start}. \
+This section's first figure is Figure {figure_start}, its second is Figure {figure_start} + 1, \
+and so on. Do not start at 1
+- Introduce every figure in the prose BEFORE it appears ("Figure {figure_start} shows …"), \
+using the same number as its caption — a figure no sentence points at is one the reader is \
+never told to look at, and a sentence pointing at the wrong number sends them to someone \
+else's plot
 - For Background/Introduction sections: synthesise ideas from the literature into \
 argument — do not list or summarise individual papers; cite using [@citekey] format \
 from the bibliography above
@@ -394,6 +399,9 @@ preamble."""
 def _guard_section(
     text: str, heading: str, known: set[str], have_results: bool,
     expect_figures: int | None = None,
+    band: tuple[int, int] | None = None,
+    bullets: int = 0,
+    figure_start: int = 1,
 ) -> list[guards.Finding]:
     """Draft-phase guards for one section.
 
@@ -405,6 +413,14 @@ def _guard_section(
     and four unnumbered captions shipped in a manuscript without a single warning. The
     outline numbers its figures; this is what checks the draft kept the number and wrote a
     sentence pointing at it.
+
+    ``band`` and ``bullets`` are the section's SHAPE, and they belong here rather than only
+    in the whole-document pass. A section is repaired against its own outline in two cheap
+    rounds; the manuscript is repaired once every section already exists, when the same
+    correction is a larger and worse-posed rewrite. Length was checked only in the second
+    place, so css2026's Background reached 1,046 words against a 480-720 band having passed
+    every round of the loop that could have caught it cheaply — that loop was never told
+    what the section was supposed to weigh.
     """
     md = f"## {heading}\n\n{text}"
     paras = guards.parse_paragraphs(md)
@@ -414,10 +430,14 @@ def _guard_section(
     findings += guards.author_year_prose(text)
     findings += guards.uncited_paragraphs(paras)
     findings += guards.sparse_paragraphs(paras)
+    findings += guards.padded_citations(paras)
     findings += guards.wide_paragraphs(paras)
+    if band:
+        findings += guards.section_size(heading, text, band)
+    findings += guards.paragraph_count(heading, text, bullets)
     if have_results:
         findings += guards.unnumbered_results_paragraphs(paras)
-    findings += guards.figure_findings(text, expect=expect_figures)
+    findings += guards.figure_findings(text, expect=expect_figures, start=figure_start)
     return findings
 
 
@@ -437,14 +457,19 @@ def _guard_repair(
     have_results: bool,
     rounds: int = 2,
     expect_figures: int | None = None,
+    band: tuple[int, int] | None = None,
+    bullets: int = 0,
+    figure_start: int = 1,
 ) -> str:
     """Feed mechanical findings back as imperatives until they clear or rounds run out.
 
     Python decides THAT something is wrong; the LLM decides how to fix it. A finding that
     survives every round is logged, not silently dropped.
     """
+    kw = dict(expect_figures=expect_figures, band=band, bullets=bullets,
+              figure_start=figure_start)
     for n in range(1, rounds + 1):
-        findings = _guard_section(text, heading, known, have_results, expect_figures)
+        findings = _guard_section(text, heading, known, have_results, **kw)
         if not findings:
             return text
         log(f"[raconteur] guards '{heading}' ({n}): {len(findings)} finding(s)")
@@ -462,13 +487,19 @@ def _guard_repair(
             system=_SYSTEM,
             num_ctx=16384,
         )
-    remaining = _guard_section(text, heading, known, have_results, expect_figures)
+    remaining = _guard_section(text, heading, known, have_results, **kw)
     if remaining:
         log(f"[warn] '{heading}': {len(remaining)} guard finding(s) survived "
             f"{rounds} repair round(s) — shipping anyway:")
         for f in remaining:
             log(f"[warn]   · {f.kind} — {f.where}")
     return text
+
+
+def _abstract_limit(cfg: ProjectConfig, venue: str = "") -> int | None:
+    """The venue's abstract limit, or None where it states none."""
+    v = cfg.venue(venue) if venue else None
+    return v.abstract_limit if v else None
 
 
 def _draft_abstract(
@@ -482,7 +513,7 @@ def _draft_abstract(
     v = cfg.venue(venue) if venue else None
     # The venue's own limit wins; 225 is the fallback, and the abstract is not charged to
     # the body budget either way — no venue counts it against the paper's length.
-    limit = str(guards.abstract_words(v.abstract_limit if v else None))
+    limit = str(guards.abstract_words(_abstract_limit(cfg, venue)))
     log("[raconteur] drafting abstract…")
     return brain.coordinator(
         _DRAFT_ABSTRACT_PROMPT.format(
@@ -638,7 +669,8 @@ def _prose_budget(cfg: ProjectConfig, venue: str, outline_text: str = "",
 
 
 def _manuscript_findings(assembled: str, outline_text: str, budget: int,
-                         shares: dict | None = None) -> list:
+                         shares: dict | None = None,
+                         abstract_limit: int | None = None) -> list:
     """Everything checkable about the whole document at once.
 
     Length is checked in BOTH directions and per section, not just as a ceiling on the
@@ -646,12 +678,20 @@ def _manuscript_findings(assembled: str, outline_text: str, budget: int,
     against 3,688 with Introduction and Background at 36% of a manuscript budgeted for 28%
     and Results at 17% of a 30% share — every whole-document check green, the paper about
     the wrong thing.
+
+    Three of these can only be seen from up here. Figures are numbered across the document
+    but drafted section by section, so a per-section check counting from 1 called two Figure
+    1s correct. A sentence is only an echo relative to the OTHER section that also has it.
+    And the abstract is written last, by its own prompt, outside every section band.
     """
     return (guards.outline_conformance(assembled, outline_text)
             + guards.over_budget(assembled, budget)
             + guards.under_budget(assembled, budget)
             + guards.section_lengths(assembled, outline_text, budget, shares)
-            + guards.paragraph_conformance(assembled, outline_text))
+            + guards.paragraph_conformance(assembled, outline_text)
+            + guards.figure_findings(assembled)
+            + guards.abstract_length(assembled, abstract_limit)
+            + guards.echoed_sentences(assembled))
 
 
 _SECTION_REPAIR_PROMPT = """\
@@ -701,7 +741,8 @@ def _findings_by_section(findings: list, headings: list[str]) -> dict[str, list]
 
 def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
                            budget: int, bib_keys: set[str], rounds: int = 2,
-                           shares: dict | None = None) -> str:
+                           shares: dict | None = None,
+                           abstract_limit: int | None = None) -> str:
     """Fix what the whole-document checks find, SECTION BY SECTION.
 
     Every section can sit inside its own band and the manuscript still overrun — that is
@@ -717,7 +758,8 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
     outline_sections = dict(_parse_sections(outline_text))
 
     for n in range(1, rounds + 1):
-        findings = _manuscript_findings(assembled, outline_text, budget, shares)
+        findings = _manuscript_findings(assembled, outline_text, budget, shares,
+                                        abstract_limit)
         if not findings:
             return assembled
         log(f"[raconteur] manuscript guards ({n}): {len(findings)} finding(s)")
@@ -756,7 +798,8 @@ def _whole_document_repair(brain: Brain, assembled: str, outline_text: str,
         assembled = head + "\n" + "\n".join(
             f"## {h}\n\n{t.strip()}\n" for h, t in repaired)
 
-    remaining = _manuscript_findings(assembled, outline_text, budget, shares)
+    remaining = _manuscript_findings(assembled, outline_text, budget, shares,
+                                     abstract_limit)
     if remaining:
         log(f"[warn] {len(remaining)} manuscript finding(s) survived {rounds} round(s) "
             f"— shipping anyway:")
@@ -809,6 +852,15 @@ def _draft_paper(
                      if not (_is_references(h) or _is_abstract(h)
                              or _is_acknowledgements(h))))
 
+    # Figures are numbered across the DOCUMENT but drafted one section at a time, and
+    # `write_order` is not document order — so each section has to be told the number its
+    # first figure carries. Taken from the outline, in the order a reader meets them.
+    figure_start: dict[str, int] = {}
+    running = 1
+    for heading in sections:
+        figure_start[heading] = running
+        running += _outline_figure_count(sections[heading])
+
     for heading in order:
         section_outline = sections[heading]
         if _is_references(heading) or _is_abstract(heading):
@@ -827,6 +879,7 @@ def _draft_paper(
         lo, hi = band if band[0] else _DEFAULT_BAND
         n_bullets = guards.section_bullets(outline_text).get(
             guards._norm_heading(heading), 0)
+        fig_start = figure_start.get(heading, 1)
         log(f"[raconteur] drafting '{heading}'… ({lo}–{hi} words "
             f"across {n_bullets} paragraph(s))")
         text = brain.coordinator(
@@ -846,6 +899,7 @@ def _draft_paper(
                 para_low=guards.PARAGRAPH_BAND[0],
                 para_high=guards.PARAGRAPH_BAND[1],
                 para_words=guards.WORDS_PER_PARAGRAPH,
+                figure_start=fig_start,
             ),
             system=_SYSTEM,
             num_ctx=16384,
@@ -853,8 +907,11 @@ def _draft_paper(
         text = _critique_revise(brain, heading, text, section_outline, analysis, 1, band)
         text = _critique_revise(brain, heading, text, section_outline, analysis, 2, band)
         text = _guard_repair(brain, heading, text, section_outline, bib_section,
-                             bib_keys, bool(results), expect_figures=_outline_figure_count(
-                                 section_outline))
+                             bib_keys, bool(results),
+                             expect_figures=_outline_figure_count(section_outline),
+                             band=band if band[0] else None,
+                             bullets=n_bullets,
+                             figure_start=fig_start)
         drafted.append((heading, text))
         written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
@@ -865,9 +922,11 @@ def _draft_paper(
     _ensure_acknowledgements(drafted, project_dir)
     abstract = _draft_abstract(brain, cfg, venue_section, style_section, analysis,
                                venue=venue)
+    abstract_limit = _abstract_limit(cfg, venue)
     assembled = _assemble(cfg.title, abstract, drafted)
     assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys,
-                                       shares=cfg.section_shares or None)
+                                       shares=cfg.section_shares or None,
+                                       abstract_limit=abstract_limit)
     _write(project_dir, cfg, paper_dir, assembled, venue)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
@@ -967,7 +1026,8 @@ def _revise_paper(
     # wholesale rewrite is exactly how those get undone. The author is told what drifted
     # and decides — the same reason accepting and resolving are human-only.
     findings = _manuscript_findings(assembled, outline_text, budget,
-                                    cfg.section_shares or None)
+                                    cfg.section_shares or None,
+                                    _abstract_limit(cfg, venue))
     if findings:
         log(f"[warn] {len(findings)} manuscript finding(s) after revision — NOT repaired "
             f"automatically, so your annotations are not rewritten:")

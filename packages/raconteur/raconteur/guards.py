@@ -349,6 +349,43 @@ def sparse_paragraphs(paras: list[Paragraph],
     return out
 
 
+_CITE_GROUP_RE = re.compile(r"\[@[^\]]+\]")
+
+
+def padded_citations(paras: list[Paragraph]) -> list[Finding]:
+    """The same source list re-cited sentence after sentence inside one paragraph.
+
+    PHASE: draft. ``sparse_paragraphs`` sets a FLOOR on how many sources a paragraph rests
+    on, and a model that cannot find more sources satisfies it the only other way available:
+    by appending the sources it already has to every remaining sentence. css2026 shipped 48
+    bracket groups of which 26 were this — one three-key group repeated eight times in a
+    single subsection, its keys shuffled between occurrences so the text looked varied.
+
+    A citation earns its place by introducing a source to its paragraph. Re-citing the same
+    set adds no grounding, and the reader, who cannot see the guard being satisfied, reads
+    it as padding.
+    """
+    out: list[Finding] = []
+    for p in paras:
+        if not _is_body(p):
+            continue
+        seen: set[frozenset[str]] = set()
+        repeats = 0
+        for m in _CITE_GROUP_RE.finditer(p.text):
+            keys = frozenset(k.strip(" ;@") for k in m.group(0)[1:-1].split(";"))
+            if keys in seen:
+                repeats += 1
+            seen.add(keys)
+        if repeats:
+            out.append(Finding(
+                "padded-citation", f"{p.heading!r} para {p.index}",
+                f"This paragraph re-cites the same source list {repeats} more time(s) after "
+                f'first citing it: "{p.snippet()}" — keep the first citation of each source '
+                f"and delete the repeats. Re-ordering the keys inside the brackets does not "
+                f"make it a different citation.", section=p.section))
+    return out
+
+
 def unnumbered_results_paragraphs(paras: list[Paragraph]) -> list[Finding]:
     """A Results paragraph reporting no value at all.
 
@@ -431,7 +468,8 @@ FIGURE_REF_RE = re.compile(r"\bFig(?:ure)?\.?\s*(\d+)", re.IGNORECASE)
 _MIN_CAPTION_WORDS = 8
 
 
-def figure_findings(text: str, expect: int | None = None) -> list[Finding]:
+def figure_findings(text: str, expect: int | None = None,
+                    start: int = 1) -> list[Finding]:
     """A figure the prose never introduces is a figure the reader is never told to look at.
 
     Three things a figure owes its reader, all checkable:
@@ -448,6 +486,13 @@ def figure_findings(text: str, expect: int | None = None) -> list[Finding]:
     no figure markdown leaves them unnumbered, uncaptioned and unintroduced. Without
     ``expect`` this guard would call that clean, because it only ever inspected figures the
     prose DECLARED — never the ones the document HAD.
+
+    ``start`` is the number this text's FIRST figure carries. Figures are numbered across
+    the document, but sections are drafted one at a time, so a guard that always counted
+    from 1 pronounced every section correct and let css2026 ship two Figure 1s — the lattice
+    diagram in Methods and the recovery landscape in Results — with three prose references
+    pointing at the wrong plot. The caller knows the offset: it is how many figures the
+    outline places in the sections that precede this one.
     """
     figs = list(FIGURE_MD_RE.finditer(text))
     if expect is not None and len(figs) != expect:
@@ -464,7 +509,7 @@ def figure_findings(text: str, expect: int | None = None) -> list[Finding]:
     referenced = {int(n) for n in FIGURE_REF_RE.findall(prose)}
 
     out: list[Finding] = []
-    for i, m in enumerate(figs, start=1):
+    for i, m in enumerate(figs, start=start):
         caption = (m.group("caption") or "").strip()
         num = FIGURE_NUM_RE.match(caption)
         if not num:
@@ -477,8 +522,9 @@ def figure_findings(text: str, expect: int | None = None) -> list[Finding]:
         if n != i:
             out.append(Finding(
                 "misnumbered-figure", f"figure {i}",
-                f'This is figure {i} in order of appearance but its caption says "Figure '
-                f'{n}". Number figures from 1, in the order they appear.'))
+                f'This is figure {i} in the document\'s order of appearance but its caption '
+                f'says "Figure {n}". Renumber it to "Figure {i}: " and change every prose '
+                f"reference to it accordingly."))
         body = caption[num.end():].strip()
         if len(body.split()) < _MIN_CAPTION_WORDS:
             out.append(Finding(
@@ -1261,6 +1307,88 @@ def over_budget(markdown: str, budget: int, tolerance: float = 0.05) -> list[Fin
         f"[@citekey], a figure, or a subsection the outline names.")]
 
 
+def abstract_length(markdown: str, limit: int | None = None) -> list[Finding]:
+    """The abstract against the limit the abstract was asked for. PHASE: draft.
+
+    The abstract is drafted by its own prompt, after the body, and it is the one block of
+    prose ``section_lengths`` deliberately skips — so its stated limit was the only thing
+    holding it and nothing checked whether it held. css2026's came back at 358 words against
+    the 225 it was asked for, in 44 sentences averaging 8 words, and shipped.
+    """
+    want = abstract_words(limit)
+    if not want:
+        return []
+    body = abstract_body(markdown)
+    n = word_count(body) if body else 0
+    if not n or n <= round(want * 1.1):
+        return []
+    return [Finding(
+        "abstract-long", "Abstract",
+        f"The abstract runs {n} words against a limit of {want}. Cut {n - want} words. "
+        f"Keep the contribution, the result, and the limitation; drop implications the "
+        f"paper does not demonstrate.")]
+
+
+_ABSTRACT_LABEL_RE = re.compile(r"^\s*\*\*\s*abstract\s*\*\*\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def abstract_body(markdown: str) -> str:
+    """The abstract's prose, however the assembler labelled it.
+
+    ``_assemble`` writes the abstract as a BOLD LABEL under the title — ``**Abstract**`` —
+    not as a ``## Abstract`` heading, because a numbered-heading reference doc would
+    otherwise number it "1. Abstract". So a check that looked for it among the document's
+    sections found nothing and reported clean, which is how a 358-word abstract passed a
+    guard written to catch it. Both spellings are accepted; a hand-edited manuscript may
+    legitimately carry either.
+    """
+    for heading, body in _sections_with_bodies(markdown):
+        if is_abstract(heading):
+            return body
+    m = _ABSTRACT_LABEL_RE.search(markdown)
+    if not m:
+        return ""
+    rest = markdown[m.end():]
+    stop = re.search(r"^##\s", rest, re.MULTILINE)
+    return rest[:stop.start()] if stop else rest
+
+
+_ECHO_MIN_WORDS = 8
+
+
+def echoed_sentences(markdown: str) -> list[Finding]:
+    """A sentence written once and pasted into a second section. PHASE: draft.
+
+    Sections are drafted one at a time against a shared context, and each is handed what the
+    earlier ones said — which is what keeps a Discussion anchored to its Results, and also
+    what lets it quote them. css2026 repeated five sentences of eight words or more verbatim
+    across Results, Discussion and Conclusion, and restated the same three numbers in all
+    three, spending roughly 150 words of a manuscript already over its cap saying nothing
+    twice.
+
+    Restating a FINDING in the Discussion is legitimate; restating the SENTENCE is not.
+    """
+    where: dict[str, list[str]] = {}
+    for heading, body in _sections_with_bodies(markdown):
+        if is_references(heading) or is_acknowledgements(heading):
+            continue
+        for s in sentence_units(FIGURE_MD_RE.sub(" ", body)):
+            key = " ".join(s.lower().split())
+            if len(key.split()) >= _ECHO_MIN_WORDS:
+                where.setdefault(key, []).append(heading)
+    out: list[Finding] = []
+    for key, heads in where.items():
+        if len(heads) < 2:
+            continue
+        out.append(Finding(
+            "echoed-sentence", " / ".join(dict.fromkeys(heads)),
+            f'This sentence appears verbatim in {len(heads)} places '
+            f'({", ".join(dict.fromkeys(heads))}): "{key[:120]}" — keep it where it is '
+            f"first earned and rewrite or cut the other(s). A finding may be restated; a "
+            f"sentence may not."))
+    return out
+
+
 def authorship(markdown: str, expected: str, anonymized: bool = False) -> list[Finding]:
     """The author block is present, and absent where it must be. PHASE: draft.
 
@@ -1314,37 +1442,30 @@ def section_lengths(draft_md: str, outline_md: str, budget: int,
                     shares: dict[str, float] | None = None) -> list[Finding]:
     """Sections written outside the band their share affords. PHASE: draft.
 
-    ``section_target`` already computes each section's band and the draft prompt is handed
+    ``section_band`` already computes each section's band and the draft prompt is handed
     it, but nothing checked the result, so the bands were advisory. They are what keeps the
     paper's shape honest: without enforcement Introduction and Background ran to 36% of a
     manuscript budgeted for 28% while Results took 17% of a 30% share. The whole-document
     total can be perfectly legal while the paper is about the wrong thing.
+
+    It must be ``section_band`` and not ``section_target``. Reading the band off the SHARE
+    here while the draft prompt reads it off the BULLETS is the contradiction
+    ``section_band`` exists to remove, reintroduced one level up: the two agree only while
+    an outline's bullet count happens to match its section's share, and the whole point of
+    bullets-as-truth is that the author may make them disagree.
+
+    (On css2026 they happened to agree — Background's four bullets and its 15% share both
+    give 480–720 — so this was a latent inconsistency there rather than the cause of that
+    draft's 1,046-word Background. It is still two answers to one question.)
     """
     if budget <= 0 or not outline_md.strip():
         return []
     planned = {h for h, _ in _sections_with_bodies(outline_md)}
     out: list[Finding] = []
     for heading, body in _sections_with_bodies(draft_md):
-        if is_references(heading) or is_acknowledgements(heading) or is_abstract(heading):
-            continue
         if heading not in planned:
             continue
-        low, high = section_target(heading, budget, shares)
-        if not low:
-            continue
-        n = word_count(body)
-        if n < low:
-            out.append(Finding(
-                "section-thin", heading,
-                f'"{heading}" runs {n} words against {low}–{high} for its share of the '
-                f"paper. Develop it by about {low - n} words, following its outline "
-                f"bullets — this section is under-written relative to its importance."))
-        elif n > high:
-            out.append(Finding(
-                "section-fat", heading,
-                f'"{heading}" runs {n} words against {low}–{high} for its share of the '
-                f"paper. Tighten it by about {n - high} words so the space goes to the "
-                f"sections carrying the contribution."))
+        out += section_size(heading, body, section_band(heading, outline_md, budget, shares))
     return out
 
 
@@ -1373,20 +1494,8 @@ def paragraph_conformance(draft_md: str, outline_md: str,
     out: list[Finding] = []
     for heading, body in _subsections_with_bodies(draft_md):
         key = _norm_heading(heading)
-        if key not in want:
-            continue
-        got = len([b for b in re.split(r"\n\s*\n", body.strip())
-                   if b.strip() and not b.lstrip().startswith(("#", "!["))])
-        expected = want[key]
-        if abs(got - expected) <= tolerance:
-            continue
-        out.append(Finding(
-            "paragraph-count", heading,
-            f'"{heading}" has {got} paragraph(s) for {expected} outline bullet(s). '
-            f"Write one paragraph per bullet: "
-            + ("split the paragraph that covers two bullets."
-               if got < expected else
-               "merge the paragraphs that cover one bullet between them.")))
+        if key in want:
+            out += paragraph_count(heading, body, want[key], tolerance)
     return out
 
 
@@ -1503,12 +1612,73 @@ def section_band(heading: str, outline_md: str = "", budget: int = 0,
     the words, and a section that wants more words has to earn them with another bullet the
     author has seen. ``section_target`` remains the fallback for a section the outline says
     nothing about.
+
+    Furniture is exempt. An Acknowledgements section carries its CRediT role list as
+    bullets — three of them on css2026 — and charging those to prose demanded 450 words of a
+    36-word passthrough the tool is forbidden to draft at all.
     """
+    if is_references(heading) or is_acknowledgements(heading) or is_abstract(heading):
+        return (0, 0)
     n = section_bullets(outline_md).get(_norm_heading(heading), 0) if outline_md else 0
     if not n:
         return section_target(heading, budget, shares, tolerance)
     total = n * WORDS_PER_PARAGRAPH
     return (round(total * (1 - tolerance)), round(total * (1 + tolerance)))
+
+
+def section_size(heading: str, body: str, band: tuple[int, int]) -> list[Finding]:
+    """One section measured against one band. PHASE: draft.
+
+    Split out of ``section_lengths`` so the SECTION loop can run it too. Length used to be
+    checked only once the whole manuscript existed, which is the most expensive moment to
+    discover it: the section repair is a well-posed rewrite of one section against its own
+    outline, while the manuscript repair is the same rewrite with the paper already
+    assembled around it. css2026's Background reached 1,046 words against a 540 ceiling
+    without ever being told, because nothing measured a section until every section was
+    written.
+    """
+    low, high = band
+    if not low:
+        return []
+    n = word_count(body)
+    if n < low:
+        return [Finding(
+            "section-thin", heading,
+            f'"{heading}" runs {n} words against {low}–{high} for its share of the '
+            f"paper. Develop it by about {low - n} words, following its outline "
+            f"bullets — this section is under-written relative to its importance.")]
+    if n > high:
+        return [Finding(
+            "section-fat", heading,
+            f'"{heading}" runs {n} words against {low}–{high} for its share of the '
+            f"paper. Tighten it by about {n - high} words so the space goes to the "
+            f"sections carrying the contribution.")]
+    return []
+
+
+def paragraph_count(heading: str, body: str, bullets: int,
+                    tolerance: int = 1) -> list[Finding]:
+    """One subsection's paragraph count against its bullet count. PHASE: draft.
+
+    The other half of what the section loop could not see. A section can sit inside its
+    band with every paragraph inside ``PARAGRAPH_BAND`` and still be the wrong shape, and
+    conversely a section with four paragraphs where the outline gave three bullets will
+    overrun its band no matter how well-behaved each paragraph is — which is exactly how
+    css2026's Background reached 260-word paragraphs while obeying every rule it was given.
+    """
+    if bullets <= 0:
+        return []
+    got = len([b for b in re.split(r"\n\s*\n", body.strip())
+               if b.strip() and not b.lstrip().startswith(("#", "!["))])
+    if abs(got - bullets) <= tolerance:
+        return []
+    return [Finding(
+        "paragraph-count", heading,
+        f'"{heading}" has {got} paragraph(s) for {bullets} outline bullet(s). '
+        f"Write one paragraph per bullet: "
+        + ("split the paragraph that covers two bullets."
+           if got < bullets else
+           "merge the paragraphs that cover one bullet between them."))]
 
 
 def wide_paragraphs(paras: list["Paragraph"]) -> list[Finding]:
