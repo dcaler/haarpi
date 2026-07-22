@@ -188,10 +188,10 @@ def test_the_planner_reconciles_only_the_skeleton_rung():
     assert "from raconteur.skeleton import reconcile_plan as post" in src
     assert "from raconteur.outline import reconcile_plan as post" in src
     assert "mint_release(" in src
-    # Rungs move off the markdown sibling one at a time, as their consumers learn to read
-    # the .docx. A rung whose consumers still read markdown must keep getting it, or they
-    # fall back in silence to the tool's own pre-redline draft.
-    assert 'md_sibling=deliverable not in ("skeleton", "outline")' in src
+    # The whole paper ladder is off the markdown sibling now — package reads the release
+    # .docx through read_release, and takes the abstract off the same file. A second copy
+    # of an approved contract can only drift from the one that matters.
+    assert 'md_sibling=stage != "paper"' in src
 
 
 # ── the rate reaches the draft ───────────────────────────────────────────────
@@ -347,7 +347,12 @@ def test_the_draft_prompt_reads_the_bracketed_form():
     p = paper._DRAFT_SECTION_PROMPT
     assert "[[Figure: <caption> (<path>)]]" in p
     assert "a line of the form" not in p
-    assert "immediately AFTER the paragraph you write for that bullet" in p
+    # The marker is a REFERENCE, not a placement instruction: the image follows the
+    # paragraph that first points at the figure, which is not always the bullet's own.
+    # One bullet in the css2026 outline carries two figures.
+    assert "is a REFERENCE to that figure" in p
+    assert "immediately \\\nAFTER the paragraph containing its FIRST reference" in p \
+        or "AFTER the paragraph containing its FIRST reference" in p
 
 
 # ── a figure is evidence, and evidence is not optional ───────────────────────

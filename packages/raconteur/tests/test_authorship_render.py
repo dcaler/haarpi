@@ -72,24 +72,62 @@ def test_an_empty_block_changes_nothing():
     assert paper._insert_authors(text, "") == text
 
 
+def _drafted(tmp_path, monkeypatch, cfg, text, venue=""):
+    """The markdown paper._write hands pandoc.
+
+    It is no longer a file to read afterwards: the deliverable is the .docx and the
+    markdown is unlinked once it renders. paper renders through refdoc, which imports
+    to_docx at call time from raconteur.render — that is the seam this crosses.
+    """
+    seen = {}
+    import raconteur.render
+
+    def fake_to_docx(md_path, **kw):
+        seen["text"] = Path(md_path).read_text(encoding="utf-8")
+        return None                     # no toolchain: the markdown survives, unrendered
+
+    monkeypatch.setattr(raconteur.render, "to_docx", fake_to_docx)
+    (tmp_path / "paper").mkdir(exist_ok=True)
+    paper._write(tmp_path, cfg, tmp_path / "paper", text, venue=venue)
+    return seen["text"]
+
+
 def test_the_draft_renders_the_authors(tmp_path, monkeypatch):
     _manifest(tmp_path, ONE)
-    monkeypatch.setattr(paper, "to_docx", lambda *a, **k: None)
-    (tmp_path / "paper").mkdir()
-    paper._write(tmp_path, _cfg(), tmp_path / "paper", "# A Title\n\n## 1. Intro\n\nx\n")
-    written = next((tmp_path / "paper").glob("*.md")).read_text()
+    written = _drafted(tmp_path, monkeypatch, _cfg(), "# A Title\n\n## 1. Intro\n\nx\n")
     assert "D. Cale Reeves" in written and "Corresponding author" in written
+
+
+def test_a_rendered_draft_leaves_no_markdown_behind(tmp_path, monkeypatch):
+    """The deliverable is the .docx and it is the only file this stage leaves. A second
+    copy of an approved contract goes stale the moment its deriver is fixed — an outline
+    release sat carrying zero bullets for a day after release_markdown learned to keep
+    them."""
+    _manifest(tmp_path, ONE)
+    (tmp_path / "paper").mkdir()
+    import raconteur.render
+    monkeypatch.setattr(raconteur.render, "to_docx",
+                        lambda md_path, **kw: Path(md_path).with_suffix(".docx"))
+    monkeypatch.setattr("raconteur.refdoc.unnumber_furniture", lambda p: None)
+    monkeypatch.setattr(paper, "_flag_figure_numbers", lambda *a, **k: None)
+    paper._write(tmp_path, _cfg(), tmp_path / "paper", "# A Title\n\n## 1. Intro\n\nx\n")
+    assert list((tmp_path / "paper").glob("*.md")) == []
+
+
+def test_the_markdown_survives_a_failed_render(tmp_path, monkeypatch):
+    """Without pandoc it is the only output there is, and deleting it would leave the
+    author nothing to look at."""
+    _manifest(tmp_path, ONE)
+    _drafted(tmp_path, monkeypatch, _cfg(), "# A Title\n\n## 1. Intro\n\nx\n")
+    assert len(list((tmp_path / "paper").glob("*.md"))) == 1
 
 
 def test_an_anonymized_venue_gets_no_authors_in_the_draft(tmp_path, monkeypatch):
     """A desk reject on a rule the CFP stated plainly — and the reason authorship is data."""
     _manifest(tmp_path, ONE)
-    monkeypatch.setattr(paper, "to_docx", lambda *a, **k: None)
-    (tmp_path / "paper").mkdir()
     blind = types.SimpleNamespace(anonymized=True)
-    paper._write(tmp_path, _cfg(acm=blind), tmp_path / "paper",
-                 "# A Title\n\n## 1. Intro\n\nx\n", venue="acm")
-    written = next((tmp_path / "paper").glob("*.md")).read_text()
+    written = _drafted(tmp_path, monkeypatch, _cfg(acm=blind),
+                       "# A Title\n\n## 1. Intro\n\nx\n", venue="acm")
     assert "Reeves" not in written and "a@x.edu" not in written
 
 
@@ -179,3 +217,59 @@ def test_an_anonymous_manuscript_at_an_anonymized_venue_is_silent():
 
 def test_a_project_with_no_recorded_authors_makes_no_claim():
     assert guards.authorship("# T\n\nprose", "") == []
+
+
+# ── the contribution statement, at the stage that owns it ────────────────────
+
+class TestCreditStatement:
+    """It was asked of the outline and came back as fourteen role bullets with both
+    authors' names on every one, against a prompt that said "do not assign any role". So it
+    is WRITTEN, from the manifest, at the paper stage — an outline is a plan for prose, and
+    a contribution statement is neither. Names only: who did what is a thing only the
+    authors know, and a plausible guess at authorship credit is worse than a blank."""
+
+    def test_it_names_the_recorded_authors_and_assigns_nothing(self, tmp_path):
+        _manifest(tmp_path, ONE, TWO)
+        block = paper._credit_statement(tmp_path)
+        assert block.splitlines()[0] == "- CRediT authorship contribution statement"
+        assert "- D. Cale Reeves: [Choose from below]" in block
+        assert "- J. Rodenberg: [Choose from below]" in block
+
+    def test_the_taxonomy_is_the_last_line_and_complete(self, tmp_path):
+        from raconteur.outline import _CREDIT_ROLES
+        _manifest(tmp_path, ONE)
+        last = paper._credit_statement(tmp_path).rstrip().splitlines()[-1]
+        assert last == ", ".join(_CREDIT_ROLES) + ";"
+        assert len(_CREDIT_ROLES) == 14
+
+    def test_an_anonymized_venue_gets_none_of_it(self, tmp_path):
+        """The block is a byline by another name."""
+        _manifest(tmp_path, ONE, TWO)
+        assert paper._credit_statement(tmp_path, anonymized=True) == ""
+
+    def test_no_recorded_authors_means_no_block(self, tmp_path):
+        _manifest(tmp_path)
+        assert paper._credit_statement(tmp_path) == ""
+
+    def test_a_malformed_manifest_does_not_cost_the_draft(self, tmp_path):
+        (tmp_path / "haarpi.yaml").write_text("authors: [oh no: [\n")
+        assert paper._credit_statement(tmp_path) == ""
+
+    def test_it_replaces_whatever_the_model_put_under_acknowledgements(self, tmp_path):
+        _manifest(tmp_path, ONE)
+        text = ("# T\n\n## Acknowledgements\n\nWe thank the reviewers.\n\n"
+                "## References\n\nrefs\n")
+        out = paper._with_credit_statement(text, tmp_path)
+        assert "We thank the reviewers." not in out
+        assert "CRediT authorship contribution statement" in out
+        assert out.index("CRediT") < out.index("## References")
+
+    def test_it_adds_the_heading_before_references_when_there_is_none(self, tmp_path):
+        _manifest(tmp_path, ONE)
+        out = paper._with_credit_statement("# T\n\n## References\n\nrefs\n", tmp_path)
+        assert out.index("## Acknowledgements") < out.index("## References")
+
+    def test_a_draft_with_no_authors_is_left_exactly_as_it_was(self, tmp_path):
+        _manifest(tmp_path)
+        text = "# T\n\n## Acknowledgements\n\nkeep me\n"
+        assert paper._with_credit_statement(text, tmp_path) == text

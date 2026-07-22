@@ -1131,13 +1131,13 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # the headings. A markdown sibling was a second copy of an approved contract, and a
         # derived one — it went stale the moment its deriver was fixed, and could not carry
         # a comment at all.
-        # Rungs move off the markdown sibling one at a time, as their consumers learn to
-        # read the .docx. skeleton and outline have; the rest still need it, and a rung whose
-        # consumers still read markdown must keep getting it or they fall back in silence to
-        # the tool's own pre-redline draft.
+        # The paper ladder is off the markdown sibling entirely now. skeleton and outline
+        # went first; the manuscript followed once package stopped reading one — it takes
+        # the release .docx through read_release, and the abstract off the same file. What
+        # remains on markdown is the litreview stage, whose consumers still read it.
         result = redline.mint_release(
             markup, dst, post=post,
-            md_sibling=deliverable not in ("skeleton", "outline"))
+            md_sibling=stage != "paper")
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and

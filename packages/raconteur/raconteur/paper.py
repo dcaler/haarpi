@@ -66,20 +66,23 @@ did not ask this bullet to argue — cut it, do not let the paragraph grow
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
-- Where a bullet in the section outline carries a figure — appended in double square \
-brackets, "[[Figure: <caption> (<path>)]]" — render it as a Markdown image \
-`![Figure N: <caption>](<path>)` immediately AFTER the paragraph you write for that bullet, \
-using that EXACT caption and path. The brackets bind the figure to the paragraph that \
-introduces it; do not move it elsewhere and do not reproduce the brackets in your prose. Render ONLY the \
-figures THIS section's outline names: do not invent a figure or a path, do not add a figure \
-the section outline did not name here, and never repeat one
+- A figure appended to a bullet in double square brackets — "[[Figure: <caption> \
+(<path>)]]" — is a REFERENCE to that figure, not an instruction about where the image \
+goes. It says this section shows that figure and that the bullet's argument is what \
+first calls on it. Never reproduce the brackets in your prose
+- REFER TO EVERY SUCH FIGURE BY NUMBER in the prose ("Figure {figure_start} shows …"), \
+then place the image as a Markdown image `![Figure N: <caption>](<path>)` immediately \
+AFTER the paragraph containing its FIRST reference, using that EXACT caption and path. \
+Where one paragraph first refers to two figures, both images follow it, in the order the \
+paragraph names them. A figure no sentence points at is one the reader is never told to \
+look at
+- Render ONLY the figures THIS section's outline names: do not invent a figure or a path, \
+do not add a figure the section outline did not name here, and never repeat one
 - NUMBER THE FIGURES FROM {figure_start}. Figures are numbered across the whole paper, not \
 within a section, and earlier sections have already used every number below {figure_start}. \
 This section's first figure is Figure {figure_start}, its second is Figure {figure_start} + 1, \
-and so on. Do not start at 1
-- Introduce every figure in the prose BEFORE it appears ("Figure {figure_start} shows …"), \
-using the same number as its caption — a figure no sentence points at is one the reader is \
-never told to look at, and a sentence pointing at the wrong number sends them to someone \
+and so on. Do not start at 1. The number in a caption and the number the prose points at \
+must be the same — a sentence pointing at the wrong number sends the reader to someone \
 else's plot
 - For Background/Introduction sections: synthesise ideas from the literature into \
 argument — do not list or summarise individual papers; cite using [@citekey] format \
@@ -114,9 +117,12 @@ Check for:
 4. Methods text that does not reference specific details (algorithms, equations, \
 parameters) when a methods writeup was available
 5. Results text that does not cite specific values or findings when results were available
-5b. A figure the section outline names (a "Figure: … (<path>)" line) that is not \
-rendered in the prose as `![…](path)` with the exact path, or an image whose path the \
-section outline did not name here
+5b. A figure the section outline names — appended to one of its bullets as \
+"[[Figure: … (<path>)]]" — that is not rendered as `![…](path)` with the exact path, or \
+an image whose path the section outline did not name here
+5c. A figure whose image does not sit immediately after the paragraph that FIRST refers to \
+it by number, or that no sentence refers to at all, or whose caption number and the number \
+the prose points at disagree
 6. Discussion that does not address the discussion_angle or limitations from the analysis
 7. The section as a whole (all subsections together) under {words_low} or over \
 {words_high} words
@@ -200,10 +206,12 @@ Instructions:
 - Maintain academic prose register and subsection structure
 - If methods source code is provided: update Methods to reference it specifically
 - If results content is provided: update Results to cite specific values and findings
-- Preserve any figures (`![…](…)`) the section outline names; if the section outline names a \
-figure the text lacks — a "Figure: <caption> (<path>)" line — add it as \
-`![<caption>](<path>)` with that exact path. Remove any image whose path the section \
-outline did not name here
+- Preserve any figures (`![…](…)`) the section outline names, with their captions and \
+numbers unchanged. If the section outline names a figure the text lacks — appended to one \
+of its bullets as "[[Figure: <caption> (<path>)]]" — refer to it by number in the prose \
+and add `![Figure N: <caption>](<path>)` with that exact path, immediately after the \
+paragraph that first refers to it. Remove any image whose path the section outline did \
+not name here
 - Output only the revised section text — no heading, no preamble
 """
 
@@ -597,6 +605,89 @@ def _insert_authors(text: str, block: str) -> str:
     return f"{block}\n\n{text}"
 
 
+def _credit_statement(project_dir: Path, anonymized: bool = False) -> str:
+    """The CRediT contribution statement, from the manifest. Names only; roles blank.
+
+    It lives HERE, at the paper stage, and not in the outline: an outline is a plan for
+    prose, and a contribution statement is neither. Asked of the model it produced fourteen
+    role bullets with both authors' names on every one, against a prompt that said "do not
+    assign any role" — so it is written, not requested. Who did what is a thing only the
+    authors know, and a plausible guess at authorship credit is worse than a blank.
+
+    Empty at an anonymized venue and empty with no recorded authors: this stage never
+    invents a name.
+    """
+    if anonymized:
+        return ""
+    try:
+        from haarpi import project as hproject
+        root = hproject.find_root(project_dir)
+        people = hproject.authors(hproject.load_manifest(root)) if root else []
+    except Exception as e:  # noqa: BLE001 — a manifest must not fail a finished draft
+        log(f"[warn] could not read the author list ({e}) — no contribution statement")
+        return ""
+    if not people:
+        return ""
+    from .outline import _CREDIT_ROLES
+    lines = ["- CRediT authorship contribution statement"]
+    lines += [f"- {a['name']}: [Choose from below]" for a in people]
+    lines += ["", ", ".join(_CREDIT_ROLES) + ";"]
+    return "\n".join(lines)
+
+
+def _with_credit_statement(text: str, project_dir: Path, anonymized: bool = False) -> str:
+    """The statement placed under Acknowledgements, replacing whatever is there."""
+    block = _credit_statement(project_dir, anonymized)
+    if not block:
+        return text
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        st = line.strip()
+        if st.startswith("#") and guards.is_acknowledgements(
+                st[len(st) - len(st.lstrip("#")):].strip()):
+            j = i + 1
+            while j < len(lines) and not lines[j].lstrip().startswith("## "):
+                j += 1
+            return "\n".join(lines[:i + 1] + ["", block, ""] + lines[j:])
+    # No Acknowledgements heading: add one before References, or at the end.
+    for i, line in enumerate(lines):
+        st = line.strip()
+        if st.startswith("## ") and guards.is_references(st[3:].strip()):
+            return "\n".join(lines[:i] + ["## Acknowledgements", "", block, ""] + lines[i:])
+    return text.rstrip() + f"\n\n## Acknowledgements\n\n{block}\n"
+
+
+_FIGURE_NUMBER_ASK = (
+    "CHECK THE FIGURE NUMBERS. This caption carries a number and so does the sentence that "
+    "introduces the figure, and the two are written independently — moving a figure changes "
+    "where it sits but not either number. Confirm the caption number, the number the prose "
+    "points at, and the figure's position in the document all agree."
+)
+
+
+def _flag_figure_numbers(docx: Path, text: str, project_dir: Path) -> None:
+    """Ask the author to verify each figure's number against the prose pointing at it.
+
+    A figure's number lives in two places on purpose: Word writes no automatic caption for
+    a pandoc image, so the reader needs a visible "Figure 3:", and the prose needs the same
+    number to send them there. Two independently written copies of one fact drift, and no
+    guard can adjudicate them — which number is right depends on where the figure ought to
+    be, and that is the author's judgement. So the tool does not guess: it points.
+    """
+    caps = [m.group("caption").strip()
+            for m in guards.FIGURE_MD_RE.finditer(text) if m.group("caption").strip()]
+    if not caps:
+        return
+    from haarpi import redline as _rl
+    try:
+        n = _rl.add_anchored_comments(docx, [(c, _FIGURE_NUMBER_ASK) for c in caps],
+                                      author="raconteur", initials="ra")
+        if n:
+            log(f"[raconteur] flagged {n} figure caption(s) to check the numbering")
+    except Exception as e:  # noqa: BLE001 — a comment must never cost the draft
+        log(f"[warn] could not attach the figure-number checks ({e})")
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
            venue: str = "") -> None:
     from .context import load_authors_block
@@ -611,17 +702,28 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
     # until this point the manuscript is legitimately without one.
     for f in guards.authorship(text, load_authors_block(project_dir), anonymized=anon):
         log(f"[warn] {f.kind} — {f.imperative}")
+    text = _with_credit_statement(text, project_dir, anonymized=anon)
     out_path = paper_dir / major_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(text, encoding="utf-8")
-    log(f"[raconteur] wrote {out_path.relative_to(project_dir)}")
     bib_path = (project_dir / cfg.litrev_dir / "output" / "refs.bib") if cfg.litrev_dir else None
     # resource_path lets pandoc resolve project-relative figure paths (results/figures/x.png)
-    # embedded in the prose — the .md lives in paper/, the figures do not.
+    # embedded in the prose — the markdown lives in paper/, the figures do not.
     from .refdoc import render as _render_docx
     docx = _render_docx(out_path, project_dir, bib_path=bib_path,
                         resource_path=project_dir)
-    if docx:
-        log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
+    if docx is None:
+        # Without pandoc the markdown is the only output there is; deleting it would leave
+        # the author nothing to look at.
+        log(f"[raconteur] wrote {out_path.relative_to(project_dir)} (no .docx — pandoc)")
+        return
+    # THE DELIVERABLE IS THE .docx, and it is the only file this stage leaves behind. The
+    # markdown was pandoc's input; nothing reads it. package reads the release .docx, the
+    # revise path reads the annotated .docx, and a second file per rung that nothing
+    # consumes can only drift from the one that matters — which is how a released outline
+    # sat carrying zero bullets for a day after release_markdown learned to keep them.
+    out_path.unlink(missing_ok=True)
+    log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
+    _flag_figure_numbers(docx, text, project_dir)
 
 
 # ── fresh paper draft ─────────────────────────────────────────────────────────

@@ -25,7 +25,8 @@ def test_the_draft_prompt_instructs_figure_embedding():
     assert "ONLY" in p
     assert "did not name here" in p
     # a figure no sentence points at is one the reader is never told to look at
-    assert "introduce" in p.lower()
+    assert "REFER TO EVERY SUCH FIGURE BY NUMBER" in p
+    assert "no sentence points at" in p
 
 
 def test_the_draft_prompt_numbers_figures_across_the_document():
