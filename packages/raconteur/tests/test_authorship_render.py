@@ -95,17 +95,20 @@ def test_an_anonymized_venue_gets_no_authors_in_the_draft(tmp_path, monkeypatch)
 
 # ── the outline ──────────────────────────────────────────────────────────────
 
-def test_the_outline_renders_the_authors(tmp_path):
-    """Read off the .docx, because that is now the only thing _write leaves behind — the
-    markdown was pandoc's input and is deleted once the render succeeds."""
+def test_the_outline_carries_no_byline(tmp_path):
+    """Removed for the reasons it was removed from the skeleton: authorship is derived from
+    the manifest and regenerated at every stage that needs it — paper.py inserts it into the
+    manuscript at write time regardless. A copy riding the outline is a second, older home
+    for it, five paragraphs the author cannot usefully review, and a named byline on the
+    working files of a double-blind submission."""
     from docx import Document
     _manifest(tmp_path, ONE, TWO)
     (tmp_path / "paper").mkdir()
     outline._write(tmp_path, _cfg(), tmp_path / "paper", "## 1. Intro\n- a beat\n")
-    assert not list((tmp_path / "paper").glob("*outline*.md")), "the .md must not survive"
     docx = next((tmp_path / "paper").glob("*outline*.docx"))
     text = "\n".join(p.text for p in Document(str(docx)).paragraphs)
-    assert text.lstrip().startswith("A Title") and "J. Rodenberg" in text
+    assert "A Title" in text
+    assert "J. Rodenberg" not in text and "Corresponding author" not in text
 
 
 def test_the_outline_keeps_its_markdown_when_the_render_fails(tmp_path, monkeypatch):
@@ -117,21 +120,19 @@ def test_the_outline_keeps_its_markdown_when_the_render_fails(tmp_path, monkeypa
     (tmp_path / "paper").mkdir()
     outline._write(tmp_path, _cfg(), tmp_path / "paper", "## 1. Intro\n- a beat\n")
     written = next((tmp_path / "paper").glob("*outline*.md")).read_text()
-    assert written.startswith("# A Title") and "J. Rodenberg" in written
+    assert written.startswith("# A Title") and "Rodenberg" not in written
 
 
-def test_the_outline_hands_the_credit_statement_its_names(tmp_path):
-    """Names from the list; roles left blank. The tool cannot know who did what, and a
-    plausible guess at authorship credit is worse than a blank."""
-    _manifest(tmp_path, ONE, TWO)
-    block = outline._credit_authors(tmp_path)
-    assert "D. Cale Reeves: " in block and "J. Rodenberg: " in block
-    assert "Conceptualization" not in block
-
-
-def test_no_recorded_authors_means_no_credit_names(tmp_path):
-    _manifest(tmp_path)
-    assert outline._credit_authors(tmp_path) == ""
+def test_the_outline_asks_for_no_contribution_statement(tmp_path):
+    """Acknowledgements is an empty heading here; the CRediT block belongs at the paper
+    stage, where the paper is. Asking the outline for it bought fourteen role bullets with
+    both authors' names on every one, against a prompt that said "do not assign any role" —
+    and roles are a thing only the authors know."""
+    from raconteur.outline import _DRAFT_PROMPT
+    assert "{credit_roles}" not in _DRAFT_PROMPT
+    assert "{credit_authors}" not in _DRAFT_PROMPT
+    assert '"## Acknowledgements" heading with no bullets' in _DRAFT_PROMPT
+    assert "Conceptualization" not in _DRAFT_PROMPT
 
 
 # ── the budget does NOT pay for it ───────────────────────────────────────────

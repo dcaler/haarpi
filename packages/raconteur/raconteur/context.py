@@ -545,12 +545,33 @@ def load_onepager(project_dir: Path, short_title: str) -> str:
     return text
 
 
-def load_venue_analysis(project_dir: Path) -> str:
-    """Read paper/venue/venue_analysis.md if present."""
+# Everything from here on is the argument for CHOOSING a venue — the shortlist, the tiers,
+# the conference options, the recommendation, the slate. Once a venue is chosen that work is
+# finished, and an outline written FOR css2026 does not need the case for picking css2026.
+# On SchellingChords it was 9,663 of the file's 11,882 characters — 2,400 tokens, on every
+# outline run, of a decision already made. It pushed the prompt to 11,146 against a
+# 10,649-token budget, and Ollama discards the BEGINNING of an over-long prompt, so what got
+# thrown away was not this: it was whatever sat at the top.
+_VENUE_CHOICE_FROM = re.compile(r"(?m)^##+\s*(venue shortlist|conference opportunities|"
+                                r"recommendation|venue slate|tier\s*\d)\b",
+                                re.IGNORECASE)
+
+
+def load_venue_analysis(project_dir: Path, selected: bool = False) -> str:
+    """Read paper/venue/venue_analysis.md if present.
+
+    ``selected`` — a venue has been chosen, so return only what the analysis says about the
+    PAPER (its research question, novelty claim and profile) and drop the deliberation that
+    chose the venue.
+    """
     from .naming import deliverable_dir
     path = deliverable_dir(project_dir / "paper", "venue") / "venue_analysis.md"
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")
+    if selected:
+        m = _VENUE_CHOICE_FROM.search(text)
+        if m:
+            text = text[:m.start()].rstrip() + "\n"
     log("[raconteur] reading venue_analysis.md")
     return text

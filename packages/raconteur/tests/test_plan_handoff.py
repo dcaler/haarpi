@@ -15,7 +15,7 @@ import pytest
 from docx import Document
 
 from haarpi import redline
-from raconteur import guards, skeleton
+from raconteur import guards, outline, skeleton
 from raconteur.config import ProjectConfig, VenueConfig
 
 SKELETON = ("# T\n\n## Abstract\n\n## Introduction\n\n## Background\n\n### A\n\n### B\n\n"
@@ -184,11 +184,14 @@ def test_the_planner_reconciles_only_the_skeleton_rung():
     import inspect
     from haarpi import planner
     src = inspect.getsource(planner)
-    assert 'if deliverable == "skeleton":' in src
+    assert 'if deliverable in ("skeleton", "outline"):' in src
     assert "from raconteur.skeleton import reconcile_plan as post" in src
-    assert "mint_release(markup, dst, post=post," in src
-    assert 'md_sibling=deliverable != "skeleton"' in src, \
-        "the skeleton releases one artifact — its plan is on the document, not in markdown"
+    assert "from raconteur.outline import reconcile_plan as post" in src
+    assert "mint_release(" in src
+    # Rungs move off the markdown sibling one at a time, as their consumers learn to read
+    # the .docx. A rung whose consumers still read markdown must keep getting it, or they
+    # fall back in silence to the tool's own pre-redline draft.
+    assert 'md_sibling=deliverable not in ("skeleton", "outline")' in src
 
 
 # ── the rate reaches the draft ───────────────────────────────────────────────
@@ -240,3 +243,240 @@ def test_the_draft_reads_the_rate_off_the_release_and_says_when_it_cannot():
 def test_section_lengths_judges_against_the_rate_too():
     import inspect
     assert "rates=rates" in inspect.getsource(guards.section_lengths)
+
+
+# ── a figure is not a beat ───────────────────────────────────────────────────
+# Giving a figure its own bullet meant every count that matters had to remember to exclude
+# it, and three forgot: the css2026 outline's plan comment priced five figures as
+# paragraphs and reported 5,410 words where the paper owed 4,596. Appended to the bullet
+# that introduces it, there is nothing to remember — and the figure cannot be separated
+# from the prose that points at it.
+
+FIG = ("- Discuss settling dynamics [@zhangTipping2011]. "
+       "[[Figure 2: Distance over tolerance x radius (blue = closer to the phrase). "
+       "(results/figures/E1_0.png)]] "
+       "[[Figure 3: Time to settle (rounds). (results/figures/E1_1.png)]]\n")
+
+
+def test_a_bullet_carrying_figures_is_one_beat():
+    md = "# T\n\n## Results\n\n### Recovery\n\n- Present the landscape.\n" + FIG
+    head = [h for h in guards.parse_outline(md) if h.level == 3][0]
+    assert (head.beats, head.figures) == (2, 2)
+
+
+def test_the_delimiter_makes_the_path_exact_not_guessed():
+    """Real captions contain parentheses — "(blue = closer to the phrase)", "(rounds)" —
+    so without a boundary the path has to be guessed at. With "]]" closing the figure it is
+    simply the last parenthesised group before it."""
+    paths = [m.group("path") for m in guards.appended_figures(FIG)]
+    assert paths == ["results/figures/E1_0.png", "results/figures/E1_1.png"]
+
+
+def test_the_form_does_not_collide_with_a_citekey():
+    """Single brackets were the obvious choice and the wrong one: "[@citekey]" is one, and
+    the draft carries them."""
+    assert guards.all_citekeys(FIG) == ["zhangTipping2011"]
+    assert len(guards.appended_figures(FIG)) == 2
+
+
+def test_an_appended_figure_is_still_placed_and_counted():
+    md = "# T\n\n## Results\n\n### Recovery\n\n" + FIG
+    heads = guards.parse_outline(md)
+    assert guards.outline_figures(heads, md) == [
+        ("results/figures/E1_0.png", "Recovery"),
+        ("results/figures/E1_1.png", "Recovery")]
+    from raconteur import paper
+    assert paper._outline_figure_count(md) == 2
+
+
+def test_the_standalone_form_still_reads():
+    """An outline written the old way still places its figures; only the new form is asked
+    for. A guard that stopped seeing them would report every existing figure unplaced."""
+    md = ("# T\n\n## Results\n\n### Recovery\n\n- A beat.\n"
+          "- Figure 1: A caption. (results/figures/x.png)\n")
+    head = [h for h in guards.parse_outline(md) if h.level == 3][0]
+    assert (head.beats, head.figures) == (1, 1)
+    assert guards.outline_figures(guards.parse_outline(md), md) == [
+        ("results/figures/x.png", "Recovery")]
+
+
+def test_the_prompt_asks_for_the_appended_form():
+    from raconteur import outline as _o
+    src = _o._OUTLINE_PROMPT if hasattr(_o, "_OUTLINE_PROMPT") else ""
+    joined = src or "".join(v for k, v in vars(_o).items()
+                            if k.endswith("PROMPT") and isinstance(v, str))
+    assert "APPENDING it IN DOUBLE SQUARE BRACKETS to the bullet" in joined
+    assert "A figure is not a beat" in joined
+
+
+def test_bullet_budget_checks_against_the_plan_not_the_share():
+    """It was telling four approved Background subsections they were 75 words a paragraph
+    and to halve their bullets — arguing with the plan rather than checking against it."""
+    md = "# T\n\n## Background\n\n" + "".join(
+        f"### S{i}\n\n- one\n- two\n\n" for i in range(4))
+    assert len(guards.bullet_budget(md, 4000, None)) == 4      # share-derived, wrong
+    assert guards.bullet_budget(md, 4000, None, {"Background": 150}) == []
+
+
+def test_the_outline_battery_receives_the_rates():
+    import inspect
+    from raconteur import outline as _o
+    assert "rates" in inspect.signature(guards.outline_findings).parameters
+    assert "bullet_budget(markdown, budget, shares, rates)" in inspect.getsource(
+        guards.outline_findings)
+    assert '"rates": rates or {}' in inspect.getsource(_o._outline_guard_inputs)
+
+
+def test_both_outline_prompts_ask_for_the_same_figure_form():
+    """One asked for the appended form and the other for a standalone line. The model can
+    only satisfy one, and which it picks is not predictable."""
+    from raconteur import outline as _o
+    prompts = [v for k, v in vars(_o).items()
+               if k.endswith("PROMPT") and isinstance(v, str) and "figure" in v.lower()]
+    assert prompts
+    for p in prompts:
+        assert "own line" not in p, "the standalone form must be gone from every prompt"
+    assert any("DOUBLE SQUARE BRACKETS" in p for p in prompts)
+
+
+def test_the_draft_prompt_reads_the_bracketed_form():
+    """Given an outline carrying [[Figure …]] on a bullet, a drafter told to look for a
+    standalone line renders no figures at all — and figure_findings then reports every one
+    of them missing."""
+    from raconteur import paper
+    p = paper._DRAFT_SECTION_PROMPT
+    assert "[[Figure: <caption> (<path>)]]" in p
+    assert "a line of the form" not in p
+    assert "immediately AFTER the paragraph you write for that bullet" in p
+
+
+# ── a figure is evidence, and evidence is not optional ───────────────────────
+# css2026 lost two: the Methods illustration was never placed, because nothing told the
+# model Methods owed one, and a recovery-landscape plot rode a beat that was removed.
+# Both were reported and the outline shipped anyway, because the finding was advisory.
+
+class _Fig:
+    def __init__(self, path): self.path = path
+
+
+PLANNED = {"Results": [_Fig("results/figures/E1_0.png"), _Fig("results/figures/E1_1.png")],
+           "Methods": [_Fig("illustrations/1Dspace.png")]}
+
+
+def test_a_figure_never_placed_is_a_fault():
+    md = ("# T\n## Methods\n### M1\n- a beat [[Figure 1: c. (illustrations/1Dspace.png)]]\n"
+          "## Results\n### R1\n- a beat [[Figure 2: c. (results/figures/E1_0.png)]]\n")
+    faults = outline.figure_variance(md, PLANNED)
+    assert faults == {"Results": ["E1_1.png: not placed anywhere"]}
+
+
+def test_a_figure_in_the_wrong_section_is_a_fault():
+    """The section is not the model's guess — an author's figure names its own, and
+    rayleigh's carry the results."""
+    md = ("# T\n## Methods\n### M1\n- a beat\n"
+          "## Results\n### R1\n- a beat [[Figure 1: c. (illustrations/1Dspace.png)]]\n")
+    faults = outline.figure_variance(md, PLANNED)
+    assert any("placed under 'Results'" in x and "puts it in 'Methods'" in x
+               for x in faults["Methods"])
+
+
+def test_a_figure_this_paper_does_not_have_is_a_fault():
+    md = "# T\n## Results\n### R1\n- a beat [[Figure 9: c. (results/figures/made-up.png)]]\n"
+    assert any("not a figure this paper has" in x
+               for x in outline.figure_variance(md, {"Results": []})["Results"])
+
+
+def test_a_matching_outline_reports_nothing():
+    md = ("# T\n## Methods\n### M1\n- a beat [[Figure 1: c. (illustrations/1Dspace.png)]]\n"
+          "## Results\n### R1\n- one [[Figure 2: c. (results/figures/E1_0.png)]]\n"
+          "- two [[Figure 3: c. (results/figures/E1_1.png)]]\n")
+    assert outline.figure_variance(md, PLANNED) == {}
+
+
+def test_figure_faults_join_the_same_converge_or_block_loop():
+    import inspect
+    src = inspect.getsource(outline._outline_fresh)
+    assert "fig_faults = figure_variance(outline, figures)" in src
+    assert "if not variance and not fig_faults:" in src
+    assert "the mint is blocked" in src
+    assert "_write(project_dir, cfg, paper_dir, outline, venue, rates, divergence, fig_faults)" in src
+
+
+def test_the_fault_rides_the_comment_that_blocks_the_mint():
+    import inspect
+    src = inspect.getsource(outline.plan_notes)
+    assert "FIGURE NOT AS PLANNED" in src and "mint until you resolve it" in src
+
+
+# ── the prompt has to fit ────────────────────────────────────────────────────
+# Ollama discards the BEGINNING of an over-long prompt, so an overrun does not degrade
+# gracefully — it removes whatever sits at the top, silently. The css2026 outline ran at
+# 11,146 tokens against a 10,649 budget and produced an outline written half-blind.
+
+def test_a_chosen_venue_drops_the_argument_for_choosing_it(tmp_path):
+    """Shortlist, tiers, conference options, recommendation and slate are 81% of the file
+    and describe a decision already made. What survives is what the analysis says about the
+    PAPER."""
+    from raconteur.context import load_venue_analysis
+    d = tmp_path / "paper" / "venue"
+    d.mkdir(parents=True)
+    (d / "venue_analysis.md").write_text(
+        "## Research question\nq\n\n## Core novelty claim\nc\n\n## Paper profile\np\n\n"
+        "## Venue shortlist\n### Tier 1\nlots\n\n## Recommendation\nmore\n\n"
+        "## Venue slate\nyet more\n")
+    whole = load_venue_analysis(tmp_path)
+    chosen = load_venue_analysis(tmp_path, selected=True)
+    assert "Venue shortlist" in whole, "the venue stage still sees all of it"
+    assert "Research question" in chosen and "Paper profile" in chosen
+    for gone in ("Venue shortlist", "Tier 1", "Recommendation", "Venue slate"):
+        assert gone not in chosen
+
+
+def test_the_heading_match_is_case_insensitive():
+    """It shipped case-sensitive against "## Venue shortlist" and was a silent no-op —
+    the file came back the same length and nothing said so."""
+    from raconteur.context import _VENUE_CHOICE_FROM
+    assert _VENUE_CHOICE_FROM.search("## Venue Shortlist\n")
+    assert _VENUE_CHOICE_FROM.search("## venue slate\n")
+
+
+def test_the_plan_names_figures_by_path_not_by_caption():
+    """The captions are already in key_figures. Repeating them put 1,044 characters of the
+    same text in one prompt twice."""
+    import inspect
+    src = inspect.getsource(outline._per_subsection_plan)
+    assert 'f"      {f.path}"' in src
+    assert "{f.caption}" not in src
+
+
+# ── a beat the plan never granted may not be counted into the plan ───────────
+
+def _outline_doc(tmp_path, body: str):
+    """A rendered outline .docx from markdown, with real Word list bullets."""
+    import subprocess
+    md = tmp_path / "o.md"
+    md.write_text(body, encoding="utf-8")
+    out = tmp_path / "o.docx"
+    subprocess.run(["pandoc", str(md), "-o", str(out)], check=True, capture_output=True)
+    return Document(str(out))
+
+
+def test_a_stray_beat_above_the_first_subsection_is_not_counted(tmp_path):
+    """reconcile_plan counts what the document has, and _sections_of used to count EVERY
+    list paragraph under an H2 — including beats hanging above its first subsection, which
+    the plan never granted. So five figure beats dumped on `## Methods` and `## Results`
+    were written INTO the plan rather than measured against it: Results read "1660 words ·
+    10 bullets" against a plan of 996 and 6, and the document was planned 410 words past
+    the venue ceiling with no comment saying anything was wrong."""
+    doc = _outline_doc(tmp_path,
+                       "# T\n\n## Results\n\n- a stray beat\n\n### C\n\n- one\n- two\n")
+    got = {sec: (subs, bullets) for sec, subs, bullets in outline._sections_of(doc)}
+    assert got["Results"] == (["C"], 2)
+
+
+def test_a_section_with_no_subsections_still_counts_its_own_beats(tmp_path):
+    """planned_bullets names the section itself where it has no subsections, so there its
+    bullets ARE the plan — the rule is "count where the plan puts one", not "ignore H2s"."""
+    doc = _outline_doc(tmp_path, "# T\n\n## Conclusion\n\n- one\n- two\n")
+    got = {sec: (subs, bullets) for sec, subs, bullets in outline._sections_of(doc)}
+    assert got["Conclusion"] == ([], 2)

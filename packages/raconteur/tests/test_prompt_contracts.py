@@ -132,3 +132,77 @@ def test_the_shares_the_prompt_lists_sum_to_the_budget_it_states():
     model is asked to write a paper that cannot exist."""
     total = sum(round(4000 * v) for v in guards.DEFAULT_SECTION_SHARES.values())
     assert total == 4000
+
+
+# ── every prompt that touches the outline states the same contract ───────────
+# The critique and the revise ran for months on rules the rest of the stage had outgrown.
+# _REVISE_PROMPT said nothing about figures at all and ran TWICE before anything normalised
+# them, so the reviser was free to drop, reword or duplicate one; and it told the model to
+# derive heading names from the content, which the skeleton lock then discarded. The
+# critique, meanwhile, ordered every figure into a Results subsection — while
+# figure_variance's rule is that an author's illustration belongs where its own hint says
+# and must never be moved into Results. The critique was fighting the guard.
+
+_OUTLINE_WRITERS = ("_DRAFT_PROMPT", "_REVISE_PROMPT", "_RECOUNT_PROMPT",
+                    "_REFRESH_CONTENT_PROMPT")
+
+
+@pytest.mark.parametrize("const", _OUTLINE_WRITERS)
+def test_every_prompt_that_writes_figures_asks_for_the_one_form(const):
+    """Double square brackets, appended to a bullet. It is the only form guards read, and
+    a bare "Figure: … (path)" is invisible to FIGURE_APPENDED_RE — which is how five
+    correctly placed figures were reported unplaced and re-placed as duplicates."""
+    text = getattr(outline, const)
+    assert "[[Figure" in text, f"{const} names no figure form"
+    assert not re.search(r"(?<!\[\[)\bFigure: <", text), f"{const} shows a bare figure form"
+
+
+@pytest.mark.parametrize("const", ("_REVISE_PROMPT", "_RECOUNT_PROMPT"))
+def test_a_rewriting_prompt_may_not_lose_a_figure(const):
+    text = getattr(outline, const)
+    assert "may not be dropped" in text or "A figure may not be" in text
+
+
+def test_the_reviser_is_told_the_headings_are_fixed():
+    """They are the author's, gated at the skeleton. lock_to_skeleton discards whatever the
+    model calls things, so inviting it to rename spends tokens teaching it the wrong thing —
+    twice, once per critique cycle."""
+    assert "HEADINGS ARE FIXED" in outline._REVISE_PROMPT
+    assert "names must be derived from the paper" not in outline._REVISE_PROMPT
+
+
+def test_the_critique_knows_which_section_a_figure_belongs_to():
+    """Not "any Results subsection" — figure_variance places an author's illustration where
+    its own "section" hint says, so a critique demanding Results moved the Methods schematic
+    and cost a _recount to undo."""
+    c = outline._CRITIQUE_PROMPT
+    assert "not placed in any Results subsection" not in c
+    assert "a model schematic belongs in Methods and must NOT be moved into Results" in c
+
+
+def test_the_critique_covers_all_three_pieces_of_furniture():
+    """Abstract, Acknowledgements and References all carry no bullets. The lock ensures it;
+    the critique is where the model is TOLD, which is cheaper than being corrected."""
+    c = outline._CRITIQUE_PROMPT
+    for name in ("Abstract", "Acknowledgements", "References"):
+        assert name in c
+    assert c.count("it carries none") >= 3
+
+
+def test_the_critique_catches_a_beat_on_a_sectioned_heading():
+    """Beats belong to subsections. A section with subsections owning beats of its own is
+    what inflated a Results plan comment to 10 bullets against a plan of 6."""
+    assert "directly under a \"## \" section" in outline._CRITIQUE_PROMPT
+
+
+def test_the_outline_asks_for_no_contribution_statement_anywhere():
+    for const in _OUTLINE_WRITERS + ("_CRITIQUE_PROMPT",):
+        assert "Conceptualization" not in getattr(outline, const), const
+
+
+def test_the_dead_fill_path_is_gone():
+    """Never called, and it took a `plan` argument it never used — so it could not have
+    stated a bullet count had anything called it. An empty heading is variance now, and
+    converges through _recount like any other."""
+    assert not hasattr(outline, "_fill_empty")
+    assert not hasattr(outline, "_FILL_PROMPT")

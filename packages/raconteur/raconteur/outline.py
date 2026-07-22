@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 import sys
 from .log import log
 from pathlib import Path
@@ -128,9 +129,11 @@ _SYSTEM = (
 
 # ── draft outline (coordinator) ───────────────────────────────────────────────
 
-# CRediT contributor-role taxonomy (credit.niso.org) — reproduced in the
-# outline's Acknowledgements section verbatim, as the reference list the author
-# assigns from. The tool never assigns roles itself.
+# CRediT contributor-role taxonomy (credit.niso.org). Held here as data, not written into
+# the outline: the outline's Acknowledgements is an empty heading, and the contribution
+# statement belongs at the paper stage where the paper is. Asking the outline for it bought
+# fourteen role bullets with both authors' names attached to every one — in defiance of a
+# prompt that said "do not assign any role" — and the tool cannot know who did what.
 _CREDIT_ROLES = [
     "Conceptualization",
     "Data curation",
@@ -147,31 +150,6 @@ _CREDIT_ROLES = [
     "Writing – original draft",
     "Writing – review & editing",
 ]
-
-def _credit_authors(project_dir: Path) -> str:
-    """The recorded authors, as the names the CRediT statement must use.
-
-    Supplies NAMES only. Role assignment stays the author's — the tool cannot know who
-    contributed what, and a plausible guess at it is worse than a blank. Before this, the
-    names lived only in prose the reviewer typed into an annotated .docx, which a major
-    revision regenerates; the list is now the one place they are recorded.
-    """
-    from .context import load_authors_block  # noqa: F401 — same module, keeps imports local
-    try:
-        from haarpi import project as hproject
-    except ImportError:
-        return ""
-    root = hproject.find_root(project_dir)
-    if root is None:
-        return ""
-    people = hproject.authors(hproject.load_manifest(root))
-    if not people:
-        return ""
-    names = "\n".join(f"  - {a['name']}: " for a in people)
-    return ("  Then, below the taxonomy, one bullet per author using EXACTLY these "
-            "names, in this order, each followed by a colon and NOTHING else — the "
-            "author assigns the roles:\n" + names)
-
 
 def _bullets_by_heading(outline_md: str) -> dict[str, list[str]]:
     """heading -> its bullet lines, keyed by normalised heading text."""
@@ -192,8 +170,120 @@ def _bullets_by_heading(outline_md: str) -> dict[str, list[str]]:
     return out
 
 
+def _canonical_figure(caption: str, path: str) -> str:
+    """The one form a figure is written in: ``[[Figure: <caption> (<path>)]]``."""
+    return f"[[Figure: {caption} ({path})]]" if caption else f"[[Figure: ({path})]]"
+
+
+def normalise_figures(markdown: str, figures: dict[str, list]) -> tuple[str, list[str]]:
+    """Rewrite every figure reference into the one accepted form, captions from the manifest.
+
+    THE MODEL DECIDES ONE THING ABOUT A FIGURE: which bullet it hangs on. The caption and
+    the path are data — rayleigh wrote one and produced the other — so neither is worth a
+    token of inference, and both were being got wrong.
+
+    Two failures this removes, seen together in the same outline. The model attached all
+    five figures to exactly the right bullets but wrote them bare, as ``Figure: … (path)``;
+    ``FIGURE_APPENDED_RE`` requires the brackets, so ``figure_variance`` reported all five
+    unplaced, ``_recount`` was asked to place them again, and its properly-bracketed answers
+    landed on the parent H2 — five duplicate beats, ten references for five figures, and a
+    word plan inflated to 5,410 against a 5,000 ceiling. And because the per-subsection plan
+    lists figures by path alone, those duplicates carried the FILENAME where the caption
+    belongs.
+
+    Matching is driven by the KNOWN PATHS, not by a pattern for "something that looks like a
+    figure": a caption is prose and prose contains brackets and parentheses. Anything left
+    that names a figure at a path this paper does not have is returned as a fault, because
+    the alternative is a figure reference nobody can resolve reaching the draft.
+
+    Returns (markdown, unresolved references).
+    """
+    from . import guards
+    known = {f.path: (f.caption or "") for figs in figures.values() for f in figs}
+    for path, caption in known.items():
+        # Both forms, with or without a number, backticked or not — collapsed to one.
+        # Anchored on the PATH, and the span may not cross a "]]" or a second "Figure":
+        # a caption is prose, and this project's captions carry parentheses of their own
+        # ("Fast freeze (small radius / high tolerance) vs. …"), so a pattern that tried to
+        # describe a caption would either stop inside one or swallow the next figure whole.
+        ref = re.compile(
+            r"(?:\[\[[ \t]*)?Figure[ \t]*\d*[ \t]*[:.]?[ \t]*"
+            r"(?:(?!\]\]|\bFigure\b).)*?\([ \t]*`?"
+            + re.escape(path) + r"`?[ \t]*\)(?:[ \t]*\]\])?",
+            re.IGNORECASE)
+        markdown = ref.sub(_canonical_figure(caption, path).replace("\\", "\\\\"), markdown)
+    unresolved: list[str] = []
+    for m in guards.FIGURE_APPENDED_RE.finditer(markdown):
+        if m.group("path").strip() not in known:
+            unresolved.append(m.group("path").strip())
+    for m in guards.OUTLINE_FIGURE_RE.finditer(markdown):
+        if m.group("path").strip() not in known:
+            unresolved.append(m.group("path").strip())
+    return markdown, unresolved
+
+
+def _add_ghosts(faults: dict[str, list[str]], ghosts: list[str]) -> None:
+    """A figure reference at a path this paper does not have, folded in with the rest.
+
+    It converges or blocks like any other figure fault: a path nobody can resolve reaching
+    the draft becomes a missing image in the manuscript, found at render."""
+    for path in dict.fromkeys(ghosts):
+        faults.setdefault("", []).append(
+            f"{path}: this paper has no figure at that path — remove the reference")
+
+
+def figure_variance(outline_md: str, figures: dict[str, list]) -> dict[str, list[str]]:
+    """Section → what is wrong with its figures. Empty when the outline matches the plan.
+
+    A figure is evidence the author produced. Leaving it out is not a stylistic choice, and
+    neither is filing it under a section the plan did not name — an author's figure states
+    its own section, and rayleigh's carry the results. So this is deviance of exactly the
+    kind a beat count is, and it converges or blocks the same way.
+
+    Three failures, all silent before this: never placed (css2026 lost its Methods
+    illustration because nothing had told the model Methods owed one), placed twice, or
+    placed somewhere the plan did not put it.
+    """
+    from . import guards
+    placed = guards.outline_figures(guards.parse_outline(outline_md), outline_md)
+    where: dict[str, list[str]] = {}
+    for path, heading in placed:
+        where.setdefault(path, []).append(heading)
+    # which section each heading belongs to
+    section_of, cur = {}, ""
+    for line in outline_md.splitlines():
+        st = line.lstrip()
+        if st.startswith("## ") and not st.startswith("### "):
+            cur = st[3:].strip()
+        elif st.startswith("### ") and cur:
+            section_of[st[4:].strip()] = cur
+    out: dict[str, list[str]] = {}
+    expected_paths = {f.path: sec for sec, figs in figures.items() for f in figs}
+    for sec, figs in figures.items():
+        for f in figs:
+            spots = where.get(f.path, [])
+            name = f.path.rsplit("/", 1)[-1]
+            if not spots:
+                out.setdefault(sec, []).append(f"{name}: not placed anywhere")
+            elif len(spots) > 1:
+                out.setdefault(sec, []).append(f"{name}: placed {len(spots)} times")
+            else:
+                got = section_of.get(spots[0], spots[0])
+                if got != sec:
+                    out.setdefault(sec, []).append(
+                        f"{name}: placed under {got!r}; the plan puts it in {sec!r}")
+    for path, spots in where.items():
+        if path not in expected_paths:
+            sec = section_of.get(spots[0], spots[0])
+            out.setdefault(sec, []).append(
+                f"{path.rsplit('/', 1)[-1]}: not a figure this paper has")
+    return out
+
+
 def lock_to_skeleton(outline_md: str, skeleton_md: str, title: str,
-                     authors_block: str = "") -> tuple[str, list[str]]:
+                     authors_block: str = "",
+                     planned: list | None = None
+                     ) -> tuple[str, list[str], list[tuple[str, list[str]]]]:
     """Rebuild the outline from the APPROVED skeleton, keeping only the model's bullets.
 
     Conformance stops being something the model is asked for and then checked on. The
@@ -207,7 +297,12 @@ def lock_to_skeleton(outline_md: str, skeleton_md: str, title: str,
     subsections, dropped one, invented another, and duplicated the title because it had
     been shown a document containing one.
 
-    Returns the locked outline and any headings the model left with no bullets.
+    ``planned`` is what each heading is OWED — the (label, heading, words, bullets) rows
+    ``planned_bullets`` produces. Given it, any heading whose beat count differs is reported
+    with the beats it wrote, so the caller can ask for a rewrite. Nothing is removed here.
+
+    Returns the locked outline, headings left with no bullets, and (heading, beats) for
+    every heading that does not match its plan.
     """
     from . import guards
     bullets = _bullets_by_heading(outline_md)
@@ -220,9 +315,42 @@ def lock_to_skeleton(outline_md: str, skeleton_md: str, title: str,
     if authors_block:
         lines += [authors_block, ""]
     empty: list[str] = []
+    surplus: list[tuple[str, list[str]]] = []
+    want = {guards._norm_heading(h): n for _, h, _, n in (planned or [])}
     for i, (lvl, text) in enumerate(heads):
         lines += [f"{'#' * lvl} {text}", ""]
-        got = bullets.get(guards._norm_heading(text), [])
+        key = guards._norm_heading(text)
+        # FURNITURE CARRIES NO BULLETS, and that is ensured rather than asked for. All three
+        # are written elsewhere: the abstract is drafted last from the finished paper, the
+        # bibliography is rendered at draft time, and the contribution statement belongs at
+        # the paper stage. The prompt says so for each, and the prompt said "do not assign
+        # any role" to a model that then assigned all fourteen to both authors.
+        furniture = (guards.is_abstract(text) or guards.is_references(text)
+                     or guards.is_acknowledgements(text))
+        got = [] if furniture else bullets.get(key, [])
+        # THE COUNT IS NOT THE MODEL'S TO SET. A bullet is a paragraph, and at the draft the
+        # section's band is bullets x rate — so six extra beats here became up to 1,100 words
+        # of authorised band, every section legal and the document 2,600 over, discovered
+        # only after a GPU run by the one repair that has never yet succeeded in cutting.
+        # This is the last rung where a bullet costs nothing to remove.
+        # NOTHING IS CUT HERE. Truncating is deleting content, and deleting is the author's
+        # act, not the tool's — the only thing that stood between a cut beat and outright
+        # loss was a merge pass that has never been observed working, and a beat carrying a
+        # figure took the figure down with it. The variance is REPORTED; the caller re-asks
+        # the model to rewrite the subsection to its count, and refuses to write an outline
+        # that still deviates. The tool is not capable of deviance; the author is.
+        # EXPECTED ZERO IS AN EXPECTATION. `want` holds only the headings the plan names —
+        # the subsections — so `want.get(key, 0)` used to mean "not planned", and `if n`
+        # then skipped the check and wrote the bullets through untouched. A section that
+        # owns no beats of its own thereby acquired five: the recount's figure beats landed
+        # on `## Methods` and `## Results`, were never reported as variance, and were then
+        # counted as real beats by reconcile_plan — 5,410 planned words against a 5,000
+        # ceiling, with no comment saying anything was wrong. Furniture is exempt because
+        # its bullets are furniture; everything else is owed exactly what the plan says,
+        # and for an unplanned heading that is none.
+        n = want.get(key, 0)
+        if not furniture and len(got) != n:
+            surplus.append((text, got))
         if got:
             lines += got + [""]
             continue
@@ -230,84 +358,10 @@ def lock_to_skeleton(outline_md: str, skeleton_md: str, title: str,
         # back empty is a heading the model failed to plan.
         has_child = i + 1 < len(heads) and heads[i + 1][0] > lvl
         if not has_child and not (guards.is_references(text)
-                                  or guards.is_acknowledgements(text)):
+                                  or guards.is_acknowledgements(text)
+                                  or guards.is_abstract(text)):
             empty.append(text)
-    return "\n".join(lines).rstrip() + "\n", empty
-
-
-_FILL_PROMPT = """\
-Write the outline bullets for these subsections of an academic paper, and nothing else.
-
-Title: {title}
-
-Structural analysis:
-{analysis}
-
-For each heading below, write its bullets — one bullet per paragraph the manuscript will \
-contain, each stating what that paragraph argues. Reproduce the heading exactly, then its \
-bullets:
-{headings}
-
-Rules:
-- Use `### <heading>` exactly as given, then `- ` bullets beneath it
-- Write only these headings — no others, no prose, no commentary
-"""
-
-_TOPUP_PROMPT = """\
-Add the MISSING outline bullets for these subsections of an academic paper, and nothing \
-else.
-
-Title: {title}
-
-Structural analysis:
-{analysis}
-
-Each heading below states how many further bullets it needs, followed by the bullets it \
-already has. Write ONLY the new ones — each stating what one further paragraph of that \
-subsection argues, and none of them restating a bullet already listed.
-
-{headings}
-
-Rules:
-- Use `### <heading>` exactly as given, then `- ` bullets beneath it
-- Write EXACTLY the number of new bullets each heading asks for
-- Do not repeat the existing bullets in your output
-- Write only these headings — no others, no prose, no commentary
-"""
-
-
-def _topup(brain: Brain, short: list[tuple[str, int, list[str]]],
-           title: str, analysis: str) -> str:
-    """Ask for the bullets the plan affords and the outline did not supply."""
-    blocks = []
-    for heading, need, got in short:
-        lines = [f"### {heading}", f"  NEEDS {need} more bullet(s)."]
-        lines.append("  Already has: " + ("; ".join(g.lstrip('- ').strip() for g in got)
-                                          if got else "nothing — it is empty."))
-        blocks.append("\n".join(lines))
-    log(f"[raconteur] {len(short)} heading(s) under-planned — asking for "
-        f"{sum(n for _, n, _ in short)} more bullet(s): "
-        + ", ".join(h for h, _, _ in short))
-    return brain.coordinator(
-        _TOPUP_PROMPT.format(title=title, analysis=analysis,
-                             headings="\n\n".join(blocks)),
-        system=_SYSTEM, num_ctx=8192)
-
-
-def _fill_empty(brain: Brain, empty: list[str], title: str, analysis: str,
-                skeleton: str, plan: str) -> str:
-    """Ask again for just the headings that came back with no bullets.
-
-    Cheaper than another whole-outline pass, and it cannot disturb what already landed:
-    only the named headings are asked for, and the result is merged by heading.
-    """
-    log(f"[raconteur] {len(empty)} heading(s) came back unplanned — asking again: "
-        + ", ".join(empty))
-    return brain.coordinator(
-        _FILL_PROMPT.format(
-            title=title, analysis=analysis,
-            headings="\n".join(f"### {h}" for h in empty)),
-        system=_SYSTEM, num_ctx=8192)
+    return "\n".join(lines).rstrip() + "\n", empty, surplus
 
 
 def _skeleton_section(skeleton: str) -> str:
@@ -373,8 +427,10 @@ from key_equations it introduces or derives
 specific values, outcomes, and patterns key_findings records; results_structure gives \
 the order
 - If key_figures is non-empty in the analysis: every figure must be PLACED exactly once, \
-as its own line of the form "Figure N: <that figure's caption> (<that figure's exact \
-path>)", numbered from 1 in the order the figures appear in the finished paper. A figure \
+APPENDED IN DOUBLE SQUARE BRACKETS to the bullet whose finding it shows — "- <the beat> \
+[[Figure N: <that figure's caption> (<that figure's exact path>)]]" — numbered from 1 in \
+the order the figures appear in the finished paper. A figure is not a beat and never gets \
+a bullet of its own; a bullet may carry more than one. A figure \
 whose origin is "results" goes in the Results subsection whose finding it shows. A figure \
 whose origin is "author" is an illustration the author placed deliberately — put it in the \
 section its "section" hint names (a model schematic belongs in Methods, not Results), and \
@@ -386,16 +442,13 @@ Discussion and Conclusion must not claim specific empirical outcomes not support
 by the available content
 - Include 3–5 bullet points per subsection describing what that subsection \
 specifically argues, shows, or demonstrates for this paper
-- Open the outline with an unnumbered "## Abstract" section: 2–3 bullets naming \
-what the abstract must distil (the contribution, the key result, the implication). \
-The abstract text itself is drafted last, from the finished paper, and is expected \
+- Leave the unnumbered "## Abstract" heading EMPTY — write no bullets under it. The \
+abstract is drafted last, from the finished paper, and never reads this outline: bullets \
+here are written, gated and then discarded, and being unplanned they arrive in whatever \
+house style the model invents. Furniture, like Acknowledgements and References. \
 to be redrafted across editing rounds — the bullets state its brief, not its prose
-- After the Conclusion, add an unnumbered "## Acknowledgements" section whose \
-bullets reproduce EXACTLY the following CRediT contributor-role taxonomy, one \
-role per bullet, as the author's reference for assigning contributions. Do not \
-invent contributor names, do not assign any role, do not omit or reword a role:
-{credit_roles}
-{credit_authors}
+- After the Conclusion, add an unnumbered "## Acknowledgements" heading with no \
+bullets (the contribution statement is written at the paper stage)
 - End with an unnumbered "## References" heading with no bullets (the \
 bibliography is rendered at draft time)
 - Do not include appendices
@@ -439,14 +492,21 @@ results content was provided)
 are introduced or derived there (only applies when key_equations is non-empty)
 11. Results subsections that do not cite specific findings from key_findings \
 (only applies when key_findings is non-empty)
-11b. A figure in key_figures that is not placed in any Results subsection, or a \
-placed figure whose path or caption does not match key_figures exactly (only \
-applies when key_figures is non-empty) — every figure must appear exactly once
-12. A missing unnumbered Abstract section at the top, or one whose bullets \
-write abstract prose instead of naming what the abstract must distil
-13. A missing Acknowledgements section between the Conclusion and References, \
-or one whose bullets do not reproduce all 14 CRediT contributor roles exactly, \
-or that assigns roles or names contributors
+11b. A figure in key_figures that is not placed, placed more than once, or written \
+any way other than APPENDED IN DOUBLE SQUARE BRACKETS to the bullet that discusses \
+it — "- <the beat> [[Figure: <caption> (<path>)]]". A figure is not a beat and never \
+gets a bullet of its own (only applies when key_figures is non-empty)
+11c. A figure moved out of the section it belongs to: one showing a result belongs \
+with the finding it shows, and an illustration belongs in the section its own \
+"section" hint names — a model schematic belongs in Methods and must NOT be moved \
+into Results
+12. A missing unnumbered Abstract section at the top, or any bullets written \
+under it — it carries none
+13. A missing Acknowledgements heading between the Conclusion and References, \
+or any bullets written under it — it carries none
+13b. Any bullets under the References heading — it carries none either
+13c. A bullet sitting directly under a "## " section that has "### " subsections. \
+Beats belong to subsections; a section with subsections carries none of its own
 14. Any appendix sections (none belong in this outline)
 
 Output: a numbered list of specific, actionable problems. One line each. \
@@ -466,9 +526,20 @@ Current outline:
 Problems to fix:
 {critique}
 
-Fix every listed problem. Preserve what is already correct. Maintain ## major \
-sections, ### subsections and #### sub-subsections. All names must be derived from the paper's actual \
-content. Output only the revised outline. No preamble."""
+Fix every listed problem. Preserve what is already correct.
+
+- The HEADINGS ARE FIXED. Reproduce every "## " and "### " heading exactly as it \
+appears above — same words, same level, same order. You are revising beats, never \
+structure: do not rename, add, merge, drop or reorder a heading, and do not invent a \
+name from the content
+- Keep every "[[Figure: … (path)]]" exactly as written, attached to the bullet that \
+discusses it. A figure may not be dropped, reworded, duplicated, moved to another \
+section, or given a bullet of its own
+- A bullet is ONE PARAGRAPH of the finished paper. Do not split one into two or merge \
+two into one unless the critique asks for it — the count is the author's, not yours
+- Abstract, Acknowledgements and References carry no bullets
+
+Output only the revised outline. No preamble."""
 
 # ── content refresh (coordinator) ────────────────────────────────────────────
 
@@ -501,8 +572,10 @@ outcomes, and patterns present in the results content; results_structure gives \
 structural order; each Results subsection must cite specific findings from \
 key_findings with values where present (if key_findings is empty, extract concrete \
 facts directly from the results content above); and if key_figures is non-empty, place \
-each figure in the Results subsection whose finding it shows with a bullet \
-"- Figure: <caption> (`<exact path>`)", every figure exactly once, exact paths only
+each figure by APPENDING it IN DOUBLE SQUARE BRACKETS to the bullet whose finding it \
+shows — "- <the beat> [[Figure: <caption> (`<exact path>`)]]" — every figure exactly once, \
+exact paths only. A figure is not a beat and never gets a bullet of its own: it belongs to the \
+paragraph that introduces it, and a bullet may carry more than one
 - Every other ## section and its subsections must be copied verbatim
 - Output only the complete outline — no preamble or closing remarks
 """
@@ -705,7 +778,8 @@ def _venue_specs_block(cfg: ProjectConfig, venue: str = "") -> str:
 
 
 def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str,
-                          skeleton: str = "") -> dict:
+                          skeleton: str = "",
+                          rates: dict[str, int] | None = None) -> dict:
     """Everything the structural battery needs to judge an outline against its venue."""
     from . import guards
     from .context import load_bib_keys, load_figure_manifest, load_author_figures
@@ -724,15 +798,18 @@ def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str,
         # The approved structure. Without it phase two can rename, add or drop a section
         # and the author's redline is discarded in silence.
         "skeleton": skeleton,
+        # And what a bullet is worth in each section, so the battery checks the outline
+        # against the plan the author gated rather than re-deriving one from the share.
+        "rates": rates or {},
     }
 
 
 def _structural_critique(cfg: ProjectConfig, project_dir: Path, outline: str,
-                         venue: str = "", skeleton: str = "") -> str:
+                         venue: str = "", skeleton: str = "", rates: dict | None = None) -> str:
     """The guard battery, phrased as critique the reviser must act on."""
     from . import guards
     findings = guards.outline_findings(
-        outline, **_outline_guard_inputs(cfg, project_dir, venue, skeleton))
+        outline, **_outline_guard_inputs(cfg, project_dir, venue, skeleton, rates))
     if not findings:
         return ""
     log(f"[raconteur] structural guards: {len(findings)} finding(s)")
@@ -744,11 +821,11 @@ def _structural_critique(cfg: ProjectConfig, project_dir: Path, outline: str,
 
 
 def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
-                   venue: str = "", skeleton: str = "") -> None:
+                   venue: str = "", skeleton: str = "", rates: dict | None = None) -> None:
     """What survived. An outline that still fails its venue is the author's call to make,
     but they must be told before they gate it, not after a draft run discovers it."""
     from . import guards
-    inputs = _outline_guard_inputs(cfg, project_dir, venue, skeleton)
+    inputs = _outline_guard_inputs(cfg, project_dir, venue, skeleton, rates)
     heads = guards.parse_outline(outline)
     n_leaves = len(guards.leaves(heads))
     budget = inputs["budget"]
@@ -764,7 +841,8 @@ def _log_structure(cfg: ProjectConfig, project_dir: Path, outline: str,
 
 
 def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
-                         skeleton: str = "", rates: dict[str, int] | None = None) -> str:
+                         skeleton: str = "", rates: dict[str, int] | None = None,
+                         figures: dict[str, list] | None = None) -> str:
     """What the writer is told about where this is going.
 
     An outline is written FOR a venue — its length, its columns, what it publishes — so the
@@ -772,10 +850,10 @@ def _build_venue_section(cfg: ProjectConfig, project_dir: Path, venue: str = "",
     narrative belongs to the work, not to whoever might publish it.
     """
     specs = _venue_specs_block(cfg, venue)
-    budget = _budget_block(cfg, project_dir, venue, skeleton, rates)
+    budget = _budget_block(cfg, project_dir, venue, skeleton, rates, figures)
     if budget:
         specs = f"{specs}\n{budget}" if specs else budget
-    venue_analysis = load_venue_analysis(project_dir) if venue else ""
+    venue_analysis = load_venue_analysis(project_dir, selected=bool(venue)) if venue else ""
     if venue_analysis:
         block = f"Venue Analysis:\n{venue_analysis}\n"
         if specs:
@@ -799,10 +877,20 @@ def plan_row(top: str, n_subs: int, bullets: int, wpb: int) -> str:
             f"and it shrinks by the same. Words per bullet is fixed for this section.")
 
 
-def _sections_of(doc) -> list[tuple[str, int, int]]:
-    """(section, subsections, bullets) from a rendered outline, in document order."""
+def _sections_of(doc) -> list[tuple[str, list[str], int]]:
+    """(section, its subsection names, bullets) from a rendered outline, in document order.
+
+    A bullet counts where the PLAN puts one. ``planned_bullets`` names a section's
+    subsections where it has them and the section itself where it does not, so a beat
+    sitting on ``## Results`` above its first subsection is in neither place — it is beats
+    the plan never granted, and counting it wrote it INTO the plan instead of against it.
+    That is how one outline came to carry a Results comment reading "1660 words · 10
+    bullets" against a plan of 996 and 6, and a document planned 410 words past the venue's
+    ceiling with no comment saying anything was wrong. Those beats are reported as variance
+    by lock_to_skeleton; here they are simply not counted.
+    """
     from haarpi.redline import _list_level
-    out: list[list] = []
+    out: list[list] = []            # [name, subsections, in-subsection beats, stray beats]
     for para in doc.paragraphs:
         text = para.text.strip()
         style = para.style.name if para.style is not None else ""
@@ -811,27 +899,52 @@ def _sections_of(doc) -> list[tuple[str, int, int]]:
         if style.startswith("Heading"):
             level = int("".join(c for c in style if c.isdigit()) or 1)
             if level == 2:
-                out.append([text, 0, 0])
+                out.append([text, [], 0, 0])
             elif level >= 3 and out:
-                out[-1][1] += 1
+                out[-1][1].append(text)
             continue
         if out and _list_level(para) is not None:
-            out[-1][2] += 1
-    return [(a, b, c) for a, b, c in out]
+            out[-1][2 if out[-1][1] else 3] += 1
+    return [(name, subs, inside if subs else stray)
+            for name, subs, inside, stray in out]
 
 
 def plan_notes(doc, rates: dict[str, int], budget: int,
-               shares: dict | None) -> list[tuple[str, str]]:
-    """(heading, comment) for every section that spends body prose."""
+               shares: dict | None,
+               variance: dict[str, tuple[int, int]] | None = None,
+               fig_faults: dict[str, list[str]] | None = None
+               ) -> list[tuple[str, str]]:
+    """(heading, comment) for every section that spends body prose.
+
+    ``variance`` maps a subsection to (written, approved) where the model would not write
+    the approved count. The outline is still WRITTEN — throwing away a run because two
+    subsections of fifteen are off by one costs a GPU hour to save thirty seconds of your
+    time — but the note says so, and an unresolved tool comment blocks the mint. So the
+    deviance cannot reach the draft, and the fix is where the cheap fix is: your hands, in
+    the document.
+    """
     from . import guards
     notes = []
     for sec, subs, bullets in _sections_of(doc):
         if guards.is_abstract(sec) or guards.is_references(sec) \
                 or guards.is_acknowledgements(sec):
             continue
-        rate = section_rate(sec, subs, budget, shares, rates)
-        notes.append((sec, plan_row(sec, subs, bullets or
-                                    guards.MIN_BULLETS_PER_SUBSECTION * max(subs, 1), rate)))
+        rate = section_rate(sec, len(subs), budget, shares, rates)
+        row = plan_row(sec, len(subs), bullets or
+                       guards.MIN_BULLETS_PER_SUBSECTION * max(len(subs), 1), rate)
+        off = [(h, v) for h, v in (variance or {}).items() if h in subs]
+        for x in (fig_faults or {}).get(sec, []):
+            row += ("\n\nFIGURE NOT AS PLANNED — a figure is evidence you produced, and "
+                    "the plan names which section carries it. This comment blocks the "
+                    f"mint until you resolve it.\n  · {x}")
+        if off:
+            row += ("\n\nDOES NOT MATCH THIS PLAN — the tool asked twice and the model "
+                    "would not write the approved count. Cut to the approved number, or "
+                    "accept what is there and it becomes the plan. This comment blocks the "
+                    "mint until you resolve it.\n"
+                    + "\n".join(f"  · {h}: {w} bullet(s), plan says {a}"
+                                 for h, (w, a) in off))
+        notes.append((sec, row))
     return notes
 
 
@@ -869,7 +982,8 @@ def reconcile_plan(path) -> int:
 
 
 def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
-                  skeleton: str = "", rates: dict[str, int] | None = None) -> str:
+                  skeleton: str = "", rates: dict[str, int] | None = None,
+                  figures: dict[str, list] | None = None) -> str:
     """How many subsections this venue affords, and how they divide across sections.
 
     A venue's word limit reached the prompt as ambient fact and nothing turned it into the
@@ -913,7 +1027,7 @@ def _budget_block(cfg: ProjectConfig, project_dir: Path, venue: str = "",
         f"{guards.subsection_words()} words — that is the number to divide a section's "
         f"share by, NOT {guards.WORDS_PER_PARAGRAPH}. A subsection is a heading plus an "
         f"argument; one paragraph under a heading is a heading tax.\n"
-        + (_per_subsection_plan(skeleton, budget, shares, rates)
+        + (_per_subsection_plan(skeleton, budget, shares, rates, figures)
            if skeleton.strip() else
            "- Plan a structure that FITS this. Prefer merging related material into one "
            "substantial subsection over splitting it across several thin ones.\n")
@@ -1000,13 +1114,50 @@ def bullet_shortfall(outline_md: str, skeleton_md: str, budget: int,
     out: list[tuple[str, int, list[str]]] = []
     for _, heading, _, want in planned_bullets(skeleton_md, budget, shares, rates):
         got = [b for b in have.get(guards._norm_heading(heading), []) if b.strip()]
-        if len(got) < want:
+        # BOTH directions. Testing only "<" meant the prompt's "write exactly this many"
+        # was half enforced: four subsections came back over, the plan comment adopted the
+        # model's number, and the draft would have banded against it. lock_to_skeleton cuts
+        # the surplus, so a positive count here is now a shortfall the assembler cannot
+        # create and a negative one is a bug in the assembler, not in the model.
+        if len(got) != want:
             out.append((heading, want - len(got), got))
     return out
 
 
+def figures_by_section(project_dir: Path, spine: list[str]) -> dict[str, list]:
+    """Which section each available figure belongs to, decided before a beat is written.
+
+    A figure is not decoration added once the prose exists — it is evidence, and the beat
+    that discusses it has to be written knowing it must carry it. Left to be placed
+    afterwards, two things went wrong on css2026: the model never placed the Methods
+    illustration at all, because nothing had told it Methods owed one, and a recovery-
+    landscape plot rode a beat that was later removed.
+
+    Assignment is computable, which is why it can be stated up front: an author's figure
+    names the section it belongs to (``author_figure_sections``), and rayleigh's figures
+    carry the results. WHICH SUBSECTION is not computable — that depends on which finding a
+    figure shows — so the plan names the section and the model places it within.
+    """
+    from .context import (load_figure_manifest, load_author_figures,
+                          author_figure_sections)
+    from . import guards
+    hints = author_figure_sections(project_dir)
+    out: dict[str, list] = {}
+    for f in load_figure_manifest(project_dir) + load_author_figures(project_dir):
+        if f.origin == "author":
+            hint = hints.get(f.path, "")
+            kind = guards.budget_kind(hint) if hint else "methods"
+        else:
+            kind = "results"
+        target = next((s for s in spine if guards.budget_kind(s) == kind), "")
+        if target:
+            out.setdefault(target, []).append(f)
+    return out
+
+
 def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None,
-                         rates: dict[str, int] | None = None) -> str:
+                         rates: dict[str, int] | None = None,
+                         figures: dict[str, list] | None = None) -> str:
     """The exact words and bullets each APPROVED subsection gets.
 
     Phase two is handed a structure the author has already gated, so every one of these
@@ -1021,6 +1172,13 @@ def _per_subsection_plan(skeleton: str, budget: int, shares: dict | None,
             for label, _, words, n in planned_bullets(skeleton, budget, shares, rates)]
     if not rows:
         return ""
+    for sec, figs in (figures or {}).items():
+        rows.append(f"  - {sec} must also place {len(figs)} figure(s), each appended to the "
+                    f"bullet that discusses it, as [[Figure: <its caption> (`<path>`)]]:")
+        # PATHS only. The captions are already in key_figures, where the model reads them;
+        # repeating them here put 1,044 characters of the same text in the prompt twice and
+        # was 40% of the overshoot that made Ollama discard the top of it.
+        rows += [f"      {f.path}" for f in figs]
     return ("- The structure below is APPROVED and FIXED. Write exactly this many bullets "
             "under each heading — do not add, remove, merge or rename a heading:\n"
             + "\n".join(rows) + "\n")
@@ -1141,6 +1299,102 @@ def run(project_dir: Path, venue: str = "") -> None:
 
 # ── fresh outline: analyse → draft → critique→revise × 2 ─────────────────────
 
+_RECOUNT_PROMPT = """\
+Rewrite outline subsections to the beat count the author approved.
+
+Title: {title}
+
+Structural analysis:
+{analysis}
+
+Each subsection below states how many bullets it must have and shows what you wrote.
+
+{work}
+
+Rules:
+- Output EXACTLY the stated number of bullets for each subsection. Not one more, not one
+  fewer.
+- Nothing may be lost. Where you wrote too many, fold the surplus into the bullets that
+  remain; where too few, develop what the section owes rather than padding.
+- A bullet is ONE PARAGRAPH of the finished paper — keep each a single argument, not two
+  joined by "and"
+- Keep every "[[Figure: … (path)]]" exactly as written, attached to a bullet that discusses
+  it. A figure may not be dropped, invented, or reworded.
+- Output only, for each subsection, its "### " heading followed by its bullets. No preamble.
+"""
+
+
+def _with_rewrites(base_md: str, rewrite_md: str) -> str:
+    """``base_md`` with each heading's beats REPLACED by the rewrite's, where it has any.
+
+    The rewrite used to be concatenated onto the outline and re-locked. ``_bullets_by_heading``
+    collects every bullet under a heading, so the original and its rewrite both survived and
+    the beats accumulated: a subsection asked twice came back with three copies of itself and
+    each figure placed three times. The truncation that used to follow hid it — capping to
+    the planned count made a doubled subsection look merely correct. Take the cap away
+    because deleting is the author's act, and the doubling is what is left.
+
+    Replacing also makes the loop idempotent: running it on an outline that already matches
+    changes nothing, which concatenation could never manage.
+    """
+    from . import guards
+    over = {k: v for k, v in _bullets_by_heading(rewrite_md).items() if v}
+    if not over:
+        return base_md
+    lines, current, replaced = [], None, set()
+    for raw in base_md.splitlines():
+        st = raw.lstrip()
+        if st.startswith("#"):
+            lvl = len(st) - len(st.lstrip("#"))
+            text = st[lvl:].strip()
+            current = guards._norm_heading(text) if text and lvl >= 2 else None
+            lines.append(raw)
+            if current in over and current not in replaced:
+                lines += [""] + over[current]
+                replaced.add(current)
+            continue
+        if current in over:
+            continue                    # its beats came from the rewrite
+        lines.append(raw)
+    return "\n".join(lines) + "\n"
+
+
+def _recount(brain: Brain, variance: list[tuple[str, list[str]]],
+             want: dict[str, int], title: str, analysis: str,
+             figs: dict[str, list[str]] | None = None) -> str:
+    """Ask for the approved count, losing nothing.
+
+    Replaces a merge pass that only ran after the tool had already cut the surplus. The tool
+    no longer cuts, so this is the whole remedy: the model rewrites its own excess, or the
+    stage refuses to write an outline that deviates.
+    """
+    work = []
+    for heading, got in variance:
+        n = want.get(heading, 0)
+        if n == 0:
+            # A heading the plan gives no beats of its own — a section whose content lives
+            # in its subsections. Its beats are not surplus to be folded away; they are in
+            # the wrong place, and the instruction has to say so or the model will simply
+            # delete them.
+            work.append(f"## {heading}\nThis heading OWNS NO BULLETS — its content lives "
+                        f"in its subsections. Move each of these into the subsection of "
+                        f"{heading} where it belongs, folding it into a bullet already "
+                        f"there so that subsection's own count does not change:\n"
+                        + "\n".join(got))
+            continue
+        work.append(f"### {heading}\nMUST HAVE {n} bullet(s); "
+                    f"you wrote {len(got)}:\n" + "\n".join(got))
+    for sec, probs in (figs or {}).items():
+        work.append(f"## {sec}\nFIGURE FAULTS — fix by appending the figure to the bullet "
+                    f"that discusses it, in this section:\n"
+                    + "\n".join(f"  - {x}" for x in probs))
+    log(f"[raconteur] re-asking {len(variance)} subsection(s) and "
+        f"{len(figs or {})} section(s)")
+    return brain.coordinator(
+        _RECOUNT_PROMPT.format(title=title, analysis=analysis, work="\n\n".join(work)),
+        system=_SYSTEM, num_ctx=16384)
+
+
 def _outline_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path,
     venue: str = "", skeleton: str = "", rates: dict[str, int] | None = None,
@@ -1158,7 +1412,10 @@ def _outline_fresh(
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
                                   narrative, figures, project_dir)
 
-    venue_section = _build_venue_section(cfg, project_dir, venue, skeleton, rates)
+    figures = figures_by_section(
+        project_dir, [h.text for h in __import__("raconteur.guards", fromlist=["x"])
+                      .parse_outline(skeleton) if h.level == 2])
+    venue_section = _build_venue_section(cfg, project_dir, venue, skeleton, rates, figures)
     narrative_section = f"Narrative spine (author-approved):\n{narrative}\n" if narrative else ""
     litrev_section = f"Literature Review Context:\n{litrev}\n" if litrev else ""
     # The raw methods writeup and results digest are NOT re-sent here — the analysis above
@@ -1178,8 +1435,6 @@ def _outline_fresh(
             analysis=analysis,
             narrative_section=narrative_section,
             litrev_section=litrev_section,
-            credit_roles="\n".join(f"  - {r}" for r in _CREDIT_ROLES),
-            credit_authors=_credit_authors(project_dir),
             skeleton_section=_skeleton_section(skeleton),
         ),
         system=_SYSTEM,
@@ -1189,45 +1444,71 @@ def _outline_fresh(
     # Passes 3–4 and 5–6: two critique→revise cycles
     outline = _critique_revise(brain, draft, analysis, n=1,
                                structural=_structural_critique(cfg, project_dir, draft,
-                                                              venue, skeleton))
+                                                              venue, skeleton, rates))
     outline = _critique_revise(brain, outline, analysis, n=2,
                                structural=_structural_critique(cfg, project_dir, outline,
-                                                              venue, skeleton))
+                                                              venue, skeleton, rates))
 
+    divergence: dict[str, tuple[int, int]] = {}
+    fig_faults: dict[str, list[str]] = {}
     if skeleton.strip():
         # The structure is not negotiated — it is the skeleton the author gated. Rebuild
         # from it and keep only the bullets; a heading the model renamed, dropped, invented
         # or duplicated simply has nowhere to land. See lock_to_skeleton.
-        from .context import load_authors_block
-        v = cfg.venue(venue) if venue else None
-        authors_block = load_authors_block(
-            project_dir, anonymized=bool(v and v.anonymized))
-        outline, _ = lock_to_skeleton(outline, skeleton, cfg.title, authors_block)
-
-        # Bullets are the manuscript's paragraphs, so a shortfall here is not a cosmetic
-        # gap in a plan — it is the drafter being handed a section's whole word share and
-        # too few paragraphs to spend it across. Ask until the plan is met, then stop.
+        authors_block = ""          # furniture: derived from the manifest, never carried
         from . import guards
-        gi = _outline_guard_inputs(cfg, project_dir, venue, skeleton)
+        gi = _outline_guard_inputs(cfg, project_dir, venue, skeleton, rates)
         budget, shares = gi["budget"], gi["shares"]
+        plan = planned_bullets(skeleton, budget, shares, rates)
+        want = {h: n for _, h, _, n in plan}
+        # CONVERGE OR FAIL. The tool is not capable of deviance: it does not cut the model's
+        # excess (deleting is the author's act) and it does not ship an outline that differs
+        # from the plan (at the draft a section's band is bullets x rate, so six extra beats
+        # became 1,100 words of authorised band — every section legal, the document 2,600
+        # over, found only after a GPU run). It asks, and if the model will not comply it
+        # writes nothing. A wasted outline run is cheaper than a wasted draft run.
+        # Before anything MEASURES the figures, put them in the one form that can be
+        # measured. Skipping this is what turned five correctly-placed figures into ten
+        # references and a word plan 410 words past the venue ceiling — see normalise_figures.
+        outline, ghosts = normalise_figures(outline, figures)
+        outline, _, variance = lock_to_skeleton(outline, skeleton, cfg.title,
+                                                authors_block, plan)
+        fig_faults = figure_variance(outline, figures)
+        _add_ghosts(fig_faults, ghosts)
         for attempt in (1, 2):
-            short = bullet_shortfall(outline, skeleton, budget, shares, rates)
-            if not short:
+            if not variance and not fig_faults:
                 break
-            outline, _ = lock_to_skeleton(
-                outline + "\n" + _topup(brain, short, cfg.title, analysis),
-                skeleton, cfg.title, authors_block)
-        short = bullet_shortfall(outline, skeleton, budget, shares, rates)
-        if short:
-            log(f"[warn] {len(short)} heading(s) still under-planned after two asks "
-                f"— the draft will run short by about "
-                f"{sum(n for _, n, _ in short) * guards.WORDS_PER_PARAGRAPH} words:")
-            for heading, need, _ in short:
-                log(f"  · {heading}: {need} bullet(s) short")
+            rewritten, ghosts = normalise_figures(
+                _with_rewrites(outline,
+                               _recount(brain, variance, want, cfg.title, analysis,
+                                        fig_faults)),
+                figures)
+            outline, _, variance = lock_to_skeleton(rewritten, skeleton, cfg.title,
+                                                    authors_block, plan)
+            fig_faults = figure_variance(outline, figures)
+            _add_ghosts(fig_faults, ghosts)
+        # RECOVERABLE, not fatal. Discarding the run because two subsections of fifteen are
+        # off by one spends a GPU hour to save thirty seconds of the author's time, and
+        # leaves them nothing to look at. The outline is written; the plan comment on each
+        # affected section says it does not match, and an unresolved tool comment blocks the
+        # mint — so the deviance cannot reach the draft, and the fix is a deletion in Word.
+        divergence = {h: (len(got), want.get(h, 0)) for h, got in variance}
+        if fig_faults:
+            log(f"[warn] {len(fig_faults)} section(s) do not carry the figures the plan "
+                f"names. A figure is evidence you produced; the mint is blocked:")
+            for sec, probs in fig_faults.items():
+                for x in probs:
+                    log(f"  · {sec}: {x}")
+        if divergence:
+            log(f"[warn] {len(divergence)} subsection(s) do not carry the approved number "
+                f"of bullets after two rewrites. The outline IS written, and the mint is "
+                f"blocked until you cut them or accept them:")
+            for h, (got_n, want_n) in divergence.items():
+                log(f"  · {h}: {got_n} bullet(s), plan says {want_n}")
 
-    _log_structure(cfg, project_dir, outline, venue, skeleton)
+    _log_structure(cfg, project_dir, outline, venue, skeleton, rates)
 
-    _write(project_dir, cfg, paper_dir, outline, venue, rates)
+    _write(project_dir, cfg, paper_dir, outline, venue, rates, divergence, fig_faults)
     if code:
         cfg.methods_drafted = True
     if results:
@@ -1348,15 +1629,19 @@ def rates_from(path) -> dict[str, int]:
 
 
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
-           venue: str = "", rates: dict[str, int] | None = None) -> None:
-    from .context import load_authors_block
-    v = cfg.venue(venue) if venue else None
+           venue: str = "", rates: dict[str, int] | None = None,
+           divergence: dict[str, tuple[int, int]] | None = None,
+           fig_faults: dict[str, list[str]] | None = None) -> None:
+    # No byline. Authors, affiliations and the corresponding address are derived from the
+    # project manifest by ``load_authors_block`` and regenerated at every stage that needs
+    # them — paper.py inserts them into the manuscript at write time regardless. A copy
+    # riding the outline is a second, older home for authorship, five paragraphs the author
+    # cannot usefully review, and a named byline on the working files of a double-blind
+    # submission. Removed from the skeleton for these reasons; the same ones hold here.
     if text.lstrip().startswith("# "):
         output = text.strip() + "\n"      # already assembled from the skeleton
     else:
-        who = load_authors_block(project_dir, anonymized=bool(v and v.anonymized))
-        head = f"# {cfg.title}\n\n" + (f"{who}\n\n" if who else "")
-        output = f"{head}{text.strip()}\n"
+        output = f"# {cfg.title}\n\n{text.strip()}\n"
     out_path = paper_dir / major_outline_name(cfg.short_title, "md", venue=venue)
     out_path.write_text(output, encoding="utf-8")
 
@@ -1377,10 +1662,11 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
             from docx import Document as _Docx
             from haarpi import redline as _rl
             gi = _outline_guard_inputs(cfg, project_dir, venue)
-            notes = plan_notes(_Docx(str(docx)), rates or {}, gi["budget"], gi["shares"])
+            notes = plan_notes(_Docx(str(docx)), rates or {}, gi["budget"], gi["shares"],
+                               divergence, fig_faults)
             if notes:
                 n = _rl.add_anchored_comments(docx, notes, author="raconteur",
-                                              initials="ra")
+                                              initials="ra", headings_only=True)
                 log(f"[raconteur] attached {n} word-plan comment(s)")
         except Exception as e:              # noqa: BLE001 — a comment must not fail a write
             log(f"[warn] could not attach word-plan comments: {type(e).__name__}: {e}")

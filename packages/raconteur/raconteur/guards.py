@@ -729,6 +729,33 @@ def metrics(markdown: str, known: set[str], budget: int = 0) -> Metrics:
 
 # "Figure: <caption> (<path>)" — the outline's placement line. The outline is the sole
 # authority on where a figure goes; the draft renders only what its own section names.
+# A figure APPENDED to the bullet that introduces it, rather than standing as a bullet of
+# its own. A figure is not a paragraph, and giving it a bullet meant every count that
+# matters — beats, the word plan, the shortfall check, paragraph conformance — had to
+# remember to exclude it. Three of them forgot: the css2026 outline's plan comment priced
+# five figures as paragraphs and reported 5,410 words where the paper owed 4,596.
+#
+# DOUBLE square brackets, and the boundary is what makes the parse exact rather than clever.
+# Real captions contain parentheses ("(blue = closer to the phrase)"), so without a delimiter
+# the path has to be guessed at — by file extension, or by being the last bracket on the
+# line. With "]]" closing it, the path is simply the last parenthesised group before the end.
+#
+# Not single brackets: "[@citekey]" is one, and the form would be ambiguous the moment it
+# reached a document carrying citations — which the draft is. Not braces either: those are
+# inert today only because outline text is always a substituted VALUE and never a
+# str.format TEMPLATE, and resting a format on that is a landmine for whoever next writes
+# `text.format(...)`. "[[" is unused by markdown, by pandoc, and by this pipeline.
+FIGURE_APPENDED_RE = re.compile(
+    r"\[\[\s*Figure\s*(?P<num>\d+)?\s*[:.]\s*(?P<caption>.*?)\s*"
+    r"\(`?(?P<path>[^`()]+)`?\)\s*\]\]",
+    re.IGNORECASE | re.DOTALL)
+
+
+def appended_figures(line: str) -> list[re.Match]:
+    """Figures riding on a bullet. Empty for a bullet that introduces none."""
+    return [m for m in FIGURE_APPENDED_RE.finditer(line)]
+
+
 OUTLINE_FIGURE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?Figure\s*(?P<num>\d+)?\s*[:.]\s*(?P<caption>.+?)\s*"
     r"\(`?(?P<path>[^`)]+)`?\)\s*$",
@@ -774,9 +801,13 @@ def parse_outline(markdown: str) -> list[Heading]:
         if cur is None or not line.strip():
             continue
         if OUTLINE_FIGURE_RE.match(line):
+            # A figure standing alone on its line: still read, never counted as a beat.
             cur["figures"] += 1
         else:
+            # A bullet is one beat however many figures it carries. That is the whole point
+            # of appending them: the count cannot be got wrong by forgetting to exclude one.
             cur["beats"] += 1
+            cur["figures"] += len(appended_figures(line))
     return [Heading(**h) for h in heads]      # type: ignore[arg-type]
 
 
@@ -1004,6 +1035,11 @@ def outline_figures(heads: list[Heading], markdown: str) -> list[tuple[str, str]
         m = OUTLINE_FIGURE_RE.match(raw)
         if m:
             out.append((m.group("path").strip(), cur))
+            continue
+        # A figure riding on the bullet that introduces it. Both forms are read, so an
+        # outline written either way still places its figures; only the new one is asked for.
+        for am in appended_figures(raw):
+            out.append((am.group("path").strip(), cur))
     return out
 
 
@@ -1033,9 +1069,10 @@ def figure_placement(markdown: str, heads: list[Heading],
             if path not in seen:
                 out.append(Finding(
                     "figure-unplaced", path,
-                    f"This figure is available but the outline never places it. Add a "
-                    f'"Figure: <caption> ({path})" line to the subsection it belongs in, '
-                    f"or say nothing about it at all."))
+                    f"This figure is available but the outline never places it. Append "
+                    f'"Figure: <caption> ({path})" to the BULLET that introduces it, so the '
+                    f"figure and the paragraph that points at it cannot be separated — or "
+                    f"say nothing about it at all."))
         for path in seen:
             if path not in expected:
                 out.append(Finding(
@@ -1074,7 +1111,8 @@ def required_sections(markdown: str, required: str) -> list[Finding]:
 
 
 def bullet_budget(markdown: str, budget: int,
-                  shares: dict[str, float] | None = None) -> list[Finding]:
+                  shares: dict[str, float] | None = None,
+                  rates: dict[str, int] | None = None) -> list[Finding]:
     """Subsections whose bullet count does not fit the words they are given. PHASE: outline.
 
     One bullet is one paragraph in the manuscript. That makes a bullet count arithmetic
@@ -1103,13 +1141,20 @@ def bullet_budget(markdown: str, budget: int,
                  else round(budget * (shares or DEFAULT_SECTION_SHARES).get(kind, 0)))
         if not words:
             continue
-        each = words // max(1, len(kids))
+        # WHAT A BULLET IS WORTH is the section's own, pinned at the skeleton and gated at
+        # every rung since. Dividing the share by the subsection count instead told four
+        # approved Background subsections they were 75 words a paragraph and to halve their
+        # bullets — arguing with the plan rather than checking against it. Rates arrive
+        # keyed by heading; this loop groups by KIND, so they are mapped the same way.
+        by_kind = {budget_kind(k): v for k, v in (rates or {}).items()}
+        rate = by_kind.get(kind, 0)
+        each = rate * MIN_BULLETS_PER_SUBSECTION if rate else words // max(1, len(kids))
         want = bullets_for(each)
         lo, hi = PARAGRAPH_BAND
         for leaf in kids:
             if not leaf.beats:
                 continue                      # an empty heading is heading_levels' business
-            per = each // leaf.beats
+            per = rate if rate else each // leaf.beats
             if per < lo or per > hi:
                 out.append(Finding(
                     "bullet-count", leaf.text,
@@ -1134,7 +1179,8 @@ def outline_findings(markdown: str, budget: int = 0,
                      expected_figures: dict[str, str] | None = None,
                      required: str = "",
                      shares: dict[str, float] | None = None,
-                     skeleton: str = "") -> list[Finding]:
+                     skeleton: str = "",
+                     rates: dict[str, int] | None = None) -> list[Finding]:
     """The whole outline battery, in the order a reader would want them fixed.
 
     No ``numbering_gaps``: headings carry no numbers now — the .docx style supplies them —
@@ -1147,7 +1193,7 @@ def outline_findings(markdown: str, budget: int = 0,
     heads = parse_outline(markdown)
     return (skeleton_conformance(markdown, skeleton)
             + heading_levels(heads)
-            + bullet_budget(markdown, budget, shares)
+            + bullet_budget(markdown, budget, shares, rates)
             + figure_placement(markdown, heads, expected_figures)
             + required_sections(markdown, required))
 
@@ -1304,7 +1350,13 @@ def abstract_length(markdown: str, limit: int | None = None) -> list[Finding]:
         f"paper does not demonstrate.")]
 
 
-_ABSTRACT_LABEL_RE = re.compile(r"^\s*\*\*\s*abstract\s*\*\*\s*$", re.IGNORECASE | re.MULTILINE)
+# The bold stars are optional because a RELEASE has lost them: release_markdown renders
+# the accepted .docx body as plain paragraphs, so the assembler's **Abstract** label comes
+# back as the bare line "Abstract". The submission wrapper read a release, found no label,
+# and shipped "Placeholder abstract" behind a TODO on a paper whose abstract was written,
+# measured and approved three rungs up. A line that says only "abstract" is the label.
+_ABSTRACT_LABEL_RE = re.compile(r"^\s*(?:\*\*)?\s*abstract\s*:?\s*(?:\*\*)?\s*$",
+                                re.IGNORECASE | re.MULTILINE)
 
 
 def abstract_body(markdown: str) -> str:

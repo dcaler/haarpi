@@ -1101,14 +1101,31 @@ def anchor_fragment(p_el, fragment: str, nid: str) -> bool:
     return True
 
 
+def _is_heading_p(p_el) -> bool:
+    """A heading, read off the XML — the caller may not have a python-docx paragraph."""
+    pPr = p_el.find(qn("w:pPr"))
+    st = pPr.find(qn("w:pStyle")) if pPr is not None else None
+    return bool(st is not None and (st.get(qn("w:val")) or "").lower().startswith("heading"))
+
+
 def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
-                          author: str = "raconteur", initials: str = "ra") -> int:
+                          author: str = "raconteur", initials: str = "ra",
+                          headings_only: bool = False) -> int:
     """Write new top-level comments, each anchored to the text it is ABOUT.
 
-    ``notes`` is a list of (fragment, comment_text). The fragment locates the paragraph,
-    and then — where it can be found exactly — the comment is anchored on those characters
-    alone: on the word "it's", not on the sentence containing it. Failing that it falls
-    back to the whole paragraph, which is worse but never wrong.
+    ``notes`` is a list of (where, comment_text). ``where`` is either:
+
+    ``notes`` is a list of (fragment, comment_text). The fragment locates the paragraph, and
+    the comment anchors on those characters alone where they can be found: on the word
+    "it's", not the sentence containing it. A whole paragraph equal to the fragment wins over
+    one merely containing it; failing both it falls back to the paragraph, which is worse but
+    never wrong.
+
+    ``headings_only`` restricts the search to heading paragraphs. A section's word plan is
+    about the SECTION, and searching the whole document for "Results" put it on an Abstract
+    bullet beginning "Results show that…" — the first paragraph containing the word. No
+    reader could then find it: ``heading_comments`` returns only comments on headings, so
+    the section had no rate and the draft would have banded it at a flat 150 without a word.
 
     This is the tool's voice on text it must not edit (the author's own): a disagreement, a
     correction, a proposal lands as a comment, never as a tracked change. Tool-authored
@@ -1141,14 +1158,24 @@ def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
     paras = list(body.iter(qn("w:p"))) if body is not None else []
 
     added = 0
-    for fragment, text in notes:
-        if not (fragment or "").strip() or not (text or "").strip():
+    for where, text in notes:
+        if not (text or "").strip():
+            continue
+        fragment = where
+        if not (fragment or "").strip():
             continue
         frag = _norm(fragment)
-        target = next(
-            (p for p in paras
-             if frag in _norm("".join(t.text or "" for t in p.iter(qn("w:t"))))),
-            None)
+        cands = [p for p in paras if not headings_only or _is_heading_p(p)]
+        texts = [_norm("".join(t.text or "" for t in p.iter(qn("w:t")))) for p in cands]
+        # A WHOLE paragraph equal to the fragment wins over one merely containing it.
+        # Anchoring a section's word plan by searching for "Results" put it on an Abstract
+        # bullet beginning "Results show that…" — the first paragraph containing the word.
+        # heading_comments then could not see it, so the section had no rate at all and the
+        # draft would have banded it at a flat 150. Containment stays as the fallback: a
+        # copyedit note anchors on a phrase INSIDE a paragraph and must keep doing so.
+        target = next((p for p, t in zip(cands, texts) if t == frag), None)
+        if target is None:
+            target = next((p for p, t in zip(cands, texts) if frag in t), None)
         if target is None:
             continue
 
@@ -1219,8 +1246,39 @@ def add_anchored_comments(path: Path, notes: list[tuple[str, str]],
     return added
 
 
+def _revisable_roots(doc):
+    """Every part a revision can live in, not just the body.
+
+    Footnotes, endnotes, headers, footers and the style definitions are separate parts, and
+    ``doc.element.body`` reaches none of them. The css2026 manuscript minted "clean" with
+    three insertions in footnotes.xml and a style-definition change in styles.xml, because
+    both the accept and the check that verified it looked only at document.xml.
+    """
+    roots = [doc.element.body]
+    seen = {id(doc.element.body)}
+    for rel in doc.part.rels.values():
+        try:
+            el = rel.target_part._element
+        except AttributeError:
+            continue
+        low = rel.reltype.lower()
+        if not any(k in low for k in ("footnotes", "endnotes", "header", "footer",
+                                      "styles", "comments")):
+            continue
+        if id(el) not in seen:
+            seen.add(id(el))
+            roots.append(el)
+    return roots
+
+
 def accept_all_changes(doc) -> dict:
-    """Accept every tracked change: unwrap <w:ins>, drop <w:del>, remove deleted paragraphs.
+    """Accept EVERY tracked change, not only the two that carry prose.
+
+    Word records seven kinds of revision and this handled two. The css2026 manuscript
+    released with 19 of them intact — moved text, paragraph and character formatting — so a
+    document minted as clean opened in Word still showing tracked changes, and its own gate
+    would have reported reviewer edits pending. The move markers were the harmful ones: a
+    ``w:moveFrom`` left beside its ``w:moveTo`` is the same passage present twice.
 
     A deleted paragraph MARK (w:pPr/w:rPr/w:del) is how Word records "this paragraph ends
     here no longer" — it is what you get for deleting a heading, and it is not exotic. This
@@ -1234,8 +1292,14 @@ def accept_all_changes(doc) -> dict:
     successor, and dropping surviving prose to imitate that would lose content, which is the
     worse error of the two.
     """
-    body = doc.element.body
-    counts = {"ins": 0, "del": 0, "paras": 0}
+    counts = {"ins": 0, "del": 0, "paras": 0, "moved": 0, "format": 0, "cells": 0}
+    for body in _revisable_roots(doc):
+        _accept_in(body, counts)
+    return counts
+
+
+def _accept_in(body, counts: dict) -> None:
+    """Accept every revision under one root element."""
     # FIRST, while the markers still exist: a paragraph-mark deletion lives in
     # w:pPr/w:rPr/w:del, and the sweep below removes every w:del in the body — including
     # those. Collecting after it would find nothing, which is what the first version of
@@ -1257,19 +1321,69 @@ def accept_all_changes(doc) -> dict:
     for d in list(body.iter(qn("w:del"))):
         d.getparent().remove(d)
         counts["del"] += 1
+    # MOVED TEXT is a deletion and an insertion under different names. Accepting means
+    # dropping the origin and keeping the destination — leaving both, which is what handling
+    # only w:ins/w:del did, puts the moved passage in the document TWICE.
+    for mf in list(body.iter(qn("w:moveFrom"))):
+        mf.getparent().remove(mf)
+        counts["moved"] += 1
+    for mt in list(body.iter(qn("w:moveTo"))):
+        parent = mt.getparent()
+        idx = list(parent).index(mt)
+        for child in list(mt):
+            parent.insert(idx, child)
+            idx += 1
+        parent.remove(mt)
+        counts["moved"] += 1
+    for tag in ("w:moveFromRangeStart", "w:moveFromRangeEnd",
+                "w:moveToRangeStart", "w:moveToRangeEnd"):
+        for el in list(body.iter(qn(tag))):
+            el.getparent().remove(el)
+    # A *PrChange records the FORMER formatting of a paragraph, run, section, table, row or
+    # cell. Accepting the current formatting is simply dropping that record — there is
+    # nothing to unwrap, because the live properties are already the accepted ones.
+    for tag in ("w:pPrChange", "w:rPrChange", "w:sectPrChange", "w:tblPrChange",
+                "w:tcPrChange", "w:trPrChange", "w:tblGridChange", "w:numberingChange"):
+        for el in list(body.iter(qn(tag))):
+            el.getparent().remove(el)
+            counts["format"] += 1
+    # Table cell insertions/deletions live in the row properties, not the body text.
+    for tag in ("w:cellIns", "w:cellDel", "w:cellMerge"):
+        for el in list(body.iter(qn(tag))):
+            el.getparent().remove(el)
+            counts["cells"] += 1
     for p in marked:
+        parent = p.getparent()
+        if parent is None:
+            continue
         # Deletions are gone now, so what remains is what the author kept.
         if not "".join(t.text or "" for t in p.iter(qn("w:t"))).strip():
-            parent = p.getparent()
-            if parent is not None:
-                parent.remove(p)
-                counts["paras"] += 1
+            parent.remove(p)
+            counts["paras"] += 1
+            continue
+        # A deleted paragraph MARK with surviving text is a MERGE: the author removed the
+        # break between two paragraphs. Stripping the marker and leaving the split was a
+        # false choice between losing prose and leaving it broken — moving the runs into the
+        # next paragraph loses nothing and is what Word does. Section 5.3 of the css2026
+        # manuscript shipped as two paragraphs, the second beginning mid-sentence.
+        sibs = list(parent)
+        nxt = next((e for e in sibs[sibs.index(p) + 1:] if e.tag == qn("w:p")), None)
+        if nxt is None:
+            continue                     # nothing to merge into; leave it whole
+        keep = [c for c in p if c.tag not in (qn("w:pPr"),)]
+        anchor = nxt.find(qn("w:pPr"))
+        at = list(nxt).index(anchor) + 1 if anchor is not None else 0
+        for c in keep:
+            p.remove(c)
+            nxt.insert(at, c)
+            at += 1
+        parent.remove(p)
+        counts["paras"] += 1
     for rpr in list(body.iter(qn("w:rPr"))):
         for tag in ("w:ins", "w:del"):
             m = rpr.find(qn(tag))
             if m is not None:
                 rpr.remove(m)
-    return counts
 
 
 def strip_comment_anchors(doc) -> int:
@@ -1364,90 +1478,46 @@ def release_markdown(doc) -> str:
     return "\n\n".join(lines) + "\n"
 
 
-# ── the release says one thing ───────────────────────────────────────────────
-# A release is TWO files: the .docx the author reads and the .md the next stage reads.
-# They are supposed to be the same contract in two renderings, and nothing checked that
-# they were. They were not. The css2026 skeleton released 38 docx paragraphs against 27
-# markdown lines, and its outline released 33 docx bullets against zero markdown ones —
-# a human approving one document while the machine was handed another.
-#
-# Derivation was supposed to make that impossible: the .md is generated FROM the .docx.
-# But derivation is exactly where structure is lost, so it guarantees nothing on its own.
-# What guarantees it is reading the same shape back out of both and refusing to ship a
-# release where they differ.
-
-_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
-_MD_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
-_MD_IMAGE_RE = re.compile(r"^!\[[^\]]*\]\([^)]*\)\s*$")
-
-
-class ReleaseMismatch(RuntimeError):
-    """The .docx and the .md of one release do not carry the same structure."""
-
-
-def _norm(text: str) -> str:
-    return " ".join(text.split())
-
-
-def structure_of_docx(doc) -> list[tuple[str, int, str]]:
-    """A release document reduced to (kind, level, text), in order.
-
-    Paragraphs holding only a drawing are skipped — an image is a figure in the .docx and
-    a ``![…](path)`` line in the .md, and comparing those two spellings would fail on every
-    manuscript while proving nothing. Empty paragraphs are skipped on both sides.
-    """
-    out: list[tuple[str, int, str]] = []
-    for p in doc.paragraphs:
-        text = _norm(p.text)
-        if not text:
-            continue
-        style = p.style.name if p.style is not None else ""
-        if is_heading_style(style):
-            level = int("".join(ch for ch in style if ch.isdigit()) or "1")
-            out.append(("heading", level, text))
-            continue
-        depth = _list_level(p)
-        out.append(("para", 0, text) if depth is None else ("bullet", depth, text))
-    return out
-
-
-def structure_of_markdown(text: str) -> list[tuple[str, int, str]]:
-    """The same reduction, read out of the markdown rendering."""
-    out: list[tuple[str, int, str]] = []
-    for line in text.splitlines():
-        if not line.strip() or _MD_IMAGE_RE.match(line.strip()):
-            continue
-        m = _MD_HEADING_RE.match(line)
-        if m:
-            out.append(("heading", len(m.group(1)), _norm(m.group(2))))
-            continue
-        m = _MD_BULLET_RE.match(line)
-        if m:
-            out.append(("bullet", len(m.group(1)) // 2, _norm(m.group(2))))
-            continue
-        out.append(("para", 0, _norm(line)))
-    return out
-
-
-def release_divergence(doc, markdown: str) -> list[str]:
-    """Where the two renderings of one release stop agreeing. Empty means they agree."""
-    a, b = structure_of_docx(doc), structure_of_markdown(markdown)
-    if a == b:
-        return []
-    out: list[str] = []
-    for line in difflib.unified_diff(
-            [f"{k}{lv} {t}" for k, lv, t in a],
-            [f"{k}{lv} {t}" for k, lv, t in b],
-            "docx", "md", lineterm="", n=0):
-        if line[:3] in ("---", "+++") or line.startswith("@@"):
-            continue
-        out.append(line[:160])
-    return out
-
-
 _CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _SIDE_PARTS = re.compile(r"^word/(comments\w*\.xml|people\.xml)$")
+
+
+def set_comment_text(path: Path, updates: dict[str, str]) -> int:
+    """Rewrite the text of existing comments, in place, keyed by comment id.
+
+    Author, date, anchor and the ``w14:paraId`` that carries the resolved flag are all left
+    alone: this changes what a comment SAYS, never whose it is or whether it is settled.
+    """
+    if not updates:
+        return 0
+    doc = Document(str(path))
+    n = 0
+    for rel in doc.part.rels.values():
+        if not rel.reltype.lower().endswith("/comments"):
+            continue
+        root = rel.target_part._element
+        for c in root.findall(".//" + qn("w:comment")):
+            new = updates.get(c.get(qn("w:id")))
+            if new is None:
+                continue
+            runs = [r for r in c.iter(qn("w:r")) if r.find(qn("w:t")) is not None]
+            if not runs:
+                continue
+            first, rest = runs[0], runs[1:]
+            for extra in first.findall(qn("w:t"))[1:]:
+                first.remove(extra)
+            t = first.find(qn("w:t"))
+            t.set(_XML_SPACE, "preserve")
+            t.text = new
+            for r in rest:
+                parent = r.getparent()
+                if parent is not None:
+                    parent.remove(r)
+            n += 1
+    if n:
+        doc.save(str(path))
+    return n
 
 
 def _carry_comment_parts(src: Path, dst: Path) -> list[str]:
@@ -1509,45 +1579,90 @@ def _carry_comment_parts(src: Path, dst: Path) -> list[str]:
     return missing
 
 
-def set_comment_text(path: Path, updates: dict[str, str]) -> int:
-    """Rewrite the text of existing comments, in place, keyed by comment id.
+def read_release(path: Path) -> str:
+    """A release as markdown, whatever it is stored as.
 
-    Author, date, anchor and the ``w14:paraId`` that carries the resolved flag are all left
-    alone: this changes what a comment SAYS, never whose it is or whether it is settled.
+    Releases are .docx and only .docx. A markdown sibling was a second copy of an approved
+    contract, and a derived one: it went stale the moment its deriver was fixed, which is
+    how an outline release sat carrying zero bullets for a day after release_markdown
+    learned to keep them. It also could not carry the word plan at all, since a comment is
+    not markdown.
     """
-    if not updates:
-        return 0
-    doc = Document(str(path))
-    n = 0
-    for rel in doc.part.rels.values():
-        if not rel.reltype.lower().endswith("/comments"):
+    if path.suffix.lower() == ".docx":
+        return release_markdown(Document(str(path)))
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+# Every element Word uses to record a revision. Two of them carry prose; the rest carry
+# moves and formatting, and were invisible to a mint that only knew w:ins and w:del.
+REVISION_TAGS = (
+    "w:ins", "w:del", "w:moveFrom", "w:moveTo",
+    "w:moveFromRangeStart", "w:moveFromRangeEnd",
+    "w:moveToRangeStart", "w:moveToRangeEnd",
+    "w:pPrChange", "w:rPrChange", "w:sectPrChange", "w:tblPrChange",
+    "w:tcPrChange", "w:trPrChange", "w:tblGridChange", "w:numberingChange",
+    "w:cellIns", "w:cellDel", "w:cellMerge",
+)
+
+
+class UnacceptedRevisions(RuntimeError):
+    """A release still carries tracked changes."""
+
+
+def surviving_revisions(path: Path) -> dict[str, int]:
+    """Revision elements left anywhere in the package, keyed ``part:tag``.
+
+    EVERY part, because a check that reads only document.xml fails exactly as the accept
+    did: the css2026 release passed this while footnotes.xml carried three insertions and
+    styles.xml a style-definition change. A verification blind in the same place as the
+    thing it verifies is not a verification.
+    """
+    import re as _re
+    out: dict[str, int] = {}
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            if not name.startswith("word/") or not name.endswith(".xml"):
+                continue
+            xml = z.read(name).decode("utf-8", errors="replace")
+            for tag in REVISION_TAGS:
+                n = len(_re.findall(rf"<{tag}[ />]", xml))
+                if n:
+                    out[f"{name.split('/')[-1]}:{tag}"] = n
+    return out
+
+
+def _accept_in_parts(path: Path) -> int:
+    """Accept revisions in parts python-docx does not model, at zip level.
+
+    ``doc.part.rels`` reaches styles and comments but not footnotes, endnotes, headers or
+    footers: those come back as generic parts with no ``_element``, so a loop over the rels
+    skips them without a word. The css2026 release carried three insertions in
+    footnotes.xml through a mint that reported clean.
+    """
+    parts = _zip_parts(path)
+    touched = 0
+    for name in list(parts):
+        if not name.startswith("word/") or not name.endswith(".xml"):
             continue
-        root = rel.target_part._element
-        for c in root.findall(".//" + qn("w:comment")):
-            new = updates.get(c.get(qn("w:id")))
-            if new is None:
-                continue
-            runs = [r for r in c.iter(qn("w:r")) if r.find(qn("w:t")) is not None]
-            if not runs:
-                continue
-            first, rest = runs[0], runs[1:]
-            for extra in first.findall(qn("w:t"))[1:]:
-                first.remove(extra)
-            t = first.find(qn("w:t"))
-            t.set(_XML_SPACE, "preserve")
-            t.text = new
-            for r in rest:
-                parent = r.getparent()
-                if parent is not None:
-                    parent.remove(r)
-            n += 1
-    if n:
-        doc.save(str(path))
-    return n
+        if name == "word/document.xml":
+            continue                       # already done through python-docx
+        raw = parts[name]
+        if not any(f"<{t}".encode() in raw for t in REVISION_TAGS):
+            continue
+        root = etree.fromstring(raw)
+        _accept_in(root, {"ins": 0, "del": 0, "paras": 0,
+                          "moved": 0, "format": 0, "cells": 0})
+        parts[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8",
+                                     standalone=True)
+        touched += 1
+    if touched:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for n, b in parts.items():
+                z.writestr(n, b)
+    return touched
 
 
-def mint_release(src: Path, dst: Path, md_sibling: bool = True,
-                 post=None) -> dict:
+def mint_release(src: Path, dst: Path, md_sibling: bool = True, post=None) -> dict:
     """Consolidate a gate-passed markup into a release: accept every tracked
     change, strip the comment threads, write the bare-name docx (and its .md
     sibling — what downstream LLM consumers actually read).
@@ -1568,22 +1683,29 @@ def mint_release(src: Path, dst: Path, md_sibling: bool = True,
     # go too or dangle), not a policy; nothing in the pipeline ever read a release's
     # comments, and now something does.
     anchors = _carry_comment_parts(src, dst)
+    _accept_in_parts(dst)
+    # VERIFY, do not assume. The mint reported clean while 19 revisions rode through it,
+    # and nothing noticed until the author opened the file in Word. A release that still
+    # carries a tracked change is not a release.
+    left = surviving_revisions(dst)
+    if left:
+        raise UnacceptedRevisions(
+            f"{dst.name} still carries tracked changes after accepting: "
+            + ", ".join(f"{k}={v}" for k, v in left.items())
+            + ". Refusing to mint a release that is not clean.")
     # A rung may need the release reconciled with what the author actually approved. The
     # skeleton does: its word-plan comments were written against the structure as generated,
     # and the author has since moved subsections around. Runs AFTER the side-parts are
     # carried, so the resolved flags are in place before anything rewrites a comment.
     if post is not None:
         post(dst)
+    # A markdown sibling is a SECOND copy of an approved contract, and a derived one: it
+    # goes stale the moment its deriver is fixed, and it cannot carry the word plan at all,
+    # since a comment is not markdown. Rungs are moved off it one at a time — a rung whose
+    # consumers still read markdown must keep getting it, or they fall back in silence to
+    # the tool's own pre-redline draft. Consumers read a release through ``read_release``.
     md_path = None
     if md_sibling:
-        released = Document(str(dst))
-        markdown = release_markdown(released)
-        divergence = release_divergence(released, markdown)
-        if divergence:
-            raise ReleaseMismatch(
-                f"{dst.name} and its .md do not carry the same structure — the author "
-                f"would approve one document and the next stage read another. "
-                f"Refusing to mint.\n" + "\n".join(divergence[:20]))
         md_path = dst.with_suffix(".md")
-        md_path.write_text(markdown, encoding="utf-8")
+        md_path.write_text(release_markdown(Document(str(dst))), encoding="utf-8")
     return {**counts, "anchors": anchors, "docx": dst, "md": md_path}

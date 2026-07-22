@@ -66,9 +66,11 @@ did not ask this bullet to argue — cut it, do not let the paragraph grow
 equations from the source code above; do not use vague descriptions
 - For Results sections: cite specific values, outcomes, and patterns from the results \
 content above; do not describe anticipated findings
-- Where the section outline names a figure — a line of the form \
-"Figure: <caption> (<path>)" — render it as a Markdown image `![Figure N: <caption>](<path>)` at \
-the point in the prose where it belongs, using that EXACT caption and path. Render ONLY the \
+- Where a bullet in the section outline carries a figure — appended in double square \
+brackets, "[[Figure: <caption> (<path>)]]" — render it as a Markdown image \
+`![Figure N: <caption>](<path>)` immediately AFTER the paragraph you write for that bullet, \
+using that EXACT caption and path. The brackets bind the figure to the paragraph that \
+introduces it; do not move it elsewhere and do not reproduce the brackets in your prose. Render ONLY the \
 figures THIS section's outline names: do not invent a figure or a path, do not add a figure \
 the section outline did not name here, and never repeat one
 - NUMBER THE FIGURES FROM {figure_start}. Figures are numbered across the whole paper, not \
@@ -444,7 +446,10 @@ def _guard_section(
 def _outline_figure_count(section_outline: str) -> int:
     """How many figures THIS section's outline places. The draft must render exactly that
     many — no more (the flood) and no fewer (a figure the reader never sees)."""
-    return len(guards.OUTLINE_FIGURE_RE.findall(section_outline))
+    return (len(guards.OUTLINE_FIGURE_RE.findall(section_outline))
+            + sum(len(guards.appended_figures(ln))
+                  for ln in section_outline.splitlines()
+                  if not guards.OUTLINE_FIGURE_RE.match(ln)))
 
 
 def _guard_repair(
@@ -1105,18 +1110,20 @@ def run(project_dir: Path, resynth: bool = False, venue: str = "") -> None:
     outline_home = deliverable_dir(paper_dir, "outline", venue)
 
     from haarpi.naming import find_latest_release
+    # The RELEASE, and only the release. The fallback that used to sit here read the tool's
+    # own pre-redline working file, so a missing release did not fail — it silently drafted
+    # from an outline the author had never approved.
     outline_path = find_latest_release(
-        outline_home / "output", cfg.short_title, "md",
-        chain_includes=scope + ["outline"],
-    ) or find_latest(outline_home, cfg.short_title, "md", last_initials="ra",
-                     chain_includes=scope + ["outline"])
+        outline_home / "output", cfg.short_title, "docx",
+        chain_includes=scope + ["outline"])
     if outline_path is None:
         where = f" for {venue}" if venue else ""
         log(f"[error] no outline{where} found in {outline_home.relative_to(project_dir)}/ "
             f"— run 'raconteur outline"
             + (f" --venue {venue}'" if venue else "'") + " first")
         raise SystemExit(1)
-    outline_text = outline_path.read_text(encoding="utf-8")
+    from haarpi.redline import read_release
+    outline_text = read_release(outline_path)
     log(f"[raconteur] using outline: {outline_path.name}")
     # The approved rates ride on the outline RELEASE, on its section headings. Looked up in
     # its own right, not derived from wherever the prose came from: `outline_path` may have

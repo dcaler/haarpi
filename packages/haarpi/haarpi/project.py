@@ -293,6 +293,27 @@ def list_plans(root: Path) -> list[dict]:
             for fp in sorted(d.glob("*.yaml"))]
 
 
+def plan_file_for(root: Path, ahash: str) -> Path | None:
+    """The ledger FILE recording this annotation set, or None.
+
+    Reconstructing the name from the entry's ``seq`` would be a guess: ``record_plan``
+    numbers by counting what is in the directory, so moving one file aside renumbers the
+    next. The blocking file is found by reading them, which is what the caller has to act on
+    — a loop guard that names a hash and not a path leaves the author grepping for it.
+    """
+    d = ledger_dir(root)
+    if not d.is_dir():
+        return None
+    for fp in sorted(d.glob("*.yaml")):
+        try:
+            entry = yaml.safe_load(fp.read_text(encoding="utf-8")) or {}
+        except Exception:                     # noqa: BLE001 — a bad file must not blind us
+            continue
+        if entry.get("annotation_hash") == ahash:
+            return fp
+    return None
+
+
 def already_planned(root: Path, ahash: str) -> bool:
     return any(e.get("annotation_hash") == ahash for e in list_plans(root))
 

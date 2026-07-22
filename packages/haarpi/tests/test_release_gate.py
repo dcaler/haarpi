@@ -254,43 +254,9 @@ def test_the_mark_is_collected_before_the_deletion_sweep(tmp_path):
     removes it too. Collect after that and there is nothing left to find — which is what the
     first version of this fix did, silently removing zero paragraphs."""
     import inspect
-    src = inspect.getsource(redline.accept_all_changes)
+    src = inspect.getsource(redline._accept_in)
     assert src.index("marked = [") < src.index('for d in list(body.iter(qn("w:del")))')
 
-
-def test_the_two_renderings_of_a_release_must_agree(tmp_path):
-    src = _skeleton_with_deleted_headings(tmp_path / "m.docx")
-    result = redline.mint_release(src, tmp_path / "out" / "260720_myproj_skeleton.docx")
-    doc, md = Document(str(result["docx"])), result["md"].read_text()
-    assert redline.release_divergence(doc, md) == []
-    assert redline.structure_of_markdown(md) == [
-        ("heading", 2, "Kept Heading"), ("bullet", 0, "A bullet the author kept.")]
-
-
-def test_a_release_that_disagrees_with_itself_is_refused(tmp_path, monkeypatch):
-    """The guarantee. If release_markdown ever loses structure again — as it did with every
-    bullet in the css2026 outline — the mint fails loudly instead of shipping the author one
-    contract and the drafter another."""
-    monkeypatch.setattr(redline, "release_markdown",
-                        lambda doc: "## Kept Heading\n\nA bullet the author kept.\n")
-    src = _skeleton_with_deleted_headings(tmp_path / "m.docx")
-    with pytest.raises(redline.ReleaseMismatch) as e:
-        redline.mint_release(src, tmp_path / "out" / "260720_myproj_skeleton.docx")
-    assert "bullet0" in str(e.value) and "para0" in str(e.value)
-    assert not (tmp_path / "out" / "260720_myproj_skeleton.md").exists()
-
-
-def test_a_figure_is_not_a_divergence():
-    """An image is an embedded drawing in the .docx and a ![](path) line in the .md. Those
-    two spellings are the same content, and comparing them literally would fail on every
-    manuscript while proving nothing."""
-    doc = Document()
-    doc.add_paragraph("Recovery landscape.", style="Heading 2")
-    md = "## Recovery landscape.\n\n![Figure 2: distance over tolerance](f.png)\n"
-    assert redline.release_divergence(doc, md) == []
-
-
-# ── minting without queuing ──────────────────────────────────────────────────
 
 def test_no_queue_is_decided_once_for_every_branch():
     """run_next queues in three places — the rung, the stage advance, and rework. A flag
@@ -320,3 +286,86 @@ def test_the_skipped_note_does_not_blame_a_missing_project_id():
     from haarpi import planner
     src = inspect.getsource(planner.run_next)
     assert 'why = ("--no-queue" if m.trundlr_project_id else "no project id")' in src
+
+
+# ── accepting means accepting everything, everywhere ─────────────────────────
+# Word records seven kinds of revision across half a dozen parts. This handled two kinds in
+# one part, and the check that verified it was blind in the same place — so a release minted
+# "clean" opened in Word still showing tracked changes.
+
+def _revision_doc(path, body_extra=""):
+    from docx import Document
+    doc = Document()
+    doc.add_paragraph("First half of a sentence")
+    doc.add_paragraph("and its second half.")
+    doc.save(str(path))
+    return path
+
+
+def test_a_deleted_paragraph_mark_merges_rather_than_splitting(tmp_path):
+    """The defect that reached the page: section 5.3 shipped as two paragraphs, the second
+    beginning mid-sentence. The old code stripped the marker and left the split, arguing
+    that merging would lose prose — it does not. Moving the runs is what Word does."""
+    from docx import Document
+    src = tmp_path / "m.docx"
+    doc = Document()
+    a = doc.add_paragraph("Rendering a model as sound is an old move,")
+    doc.add_paragraph("and listening reveals what a plot cannot.")
+    pPr = a._p.get_or_add_pPr()
+    rPr = OxmlElement("w:rPr"); pPr.insert(0, rPr)
+    d = OxmlElement("w:del")
+    d.set(qn("w:id"), "77"); d.set(qn("w:author"), "DCR")
+    d.set(qn("w:date"), "2026-07-22T00:00:00Z")
+    rPr.insert(0, d)
+    doc.save(str(src))
+
+    out = Document(str(src))
+    redline.accept_all_changes(out)
+    texts = [p.text for p in out.paragraphs if p.text.strip()]
+    assert len(texts) == 1, "the two halves must become one paragraph"
+    assert texts[0].startswith("Rendering a model as sound")
+    assert "listening reveals" in texts[0]
+
+
+def test_moved_text_is_not_left_in_both_places(tmp_path):
+    """w:moveFrom is the deletion half of a move. Left beside its w:moveTo, the passage is
+    in the document twice — 85 words of the css2026 release were."""
+    import inspect
+    src = inspect.getsource(redline._accept_in)
+    assert 'qn("w:moveFrom")' in src and 'qn("w:moveTo")' in src
+    assert "moveFromRangeStart" in src
+
+
+def test_every_revision_kind_is_handled():
+    import inspect
+    src = inspect.getsource(redline._accept_in)
+    for tag in ("w:pPrChange", "w:rPrChange", "w:sectPrChange", "w:tblPrChange",
+                "w:tcPrChange", "w:trPrChange", "w:cellIns", "w:cellDel"):
+        assert tag in src, tag
+
+
+def test_the_check_reads_every_part_not_just_the_body():
+    """It passed a release whose footnotes.xml carried three insertions and whose
+    styles.xml carried a style-definition change. A verification blind in the same place as
+    the thing it verifies is not a verification."""
+    import inspect
+    src = inspect.getsource(redline.surviving_revisions)
+    assert 'z.namelist()' in src and 'name.startswith("word/")' in src
+    assert 'z.read("word/document.xml")' not in src
+
+
+def test_parts_python_docx_cannot_reach_are_accepted_at_zip_level():
+    """doc.part.rels reaches styles and comments but not footnotes, endnotes, headers or
+    footers — those come back with no _element and a rels loop skips them silently."""
+    import inspect
+    assert "footnotes" in inspect.getsource(redline._accept_in_parts)
+    assert "_accept_in_parts(dst)" in inspect.getsource(redline.mint_release)
+
+
+def test_a_release_that_is_not_clean_is_refused(tmp_path, monkeypatch):
+    """The mint reported clean while 19 revisions rode through it."""
+    src = _make_markup(tmp_path / "m.docx", resolved=True, tracked=True)
+    monkeypatch.setattr(redline, "_accept_in", lambda *a, **k: None)
+    with pytest.raises(redline.UnacceptedRevisions) as e:
+        redline.mint_release(src, tmp_path / "out" / "260722_p_paper.docx", md_sibling=False)
+    assert "still carries tracked changes" in str(e.value)

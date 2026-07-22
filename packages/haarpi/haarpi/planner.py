@@ -135,6 +135,12 @@ STAGE_REFRESH: dict[str, list[str]] = {
 
 _PAPER_DELIVERABLE_WORDS = ("onepager", "skeleton", "outline", "venue")
 
+# The ORDER the rungs are climbed, which the set above does not carry — "venue" sits after
+# "outline" there and before it here. "" is the manuscript itself: the rung with no
+# deliverable word, which is why it cannot simply be named.
+_PAPER_LADDER = ("onepager", "venue", "skeleton", "outline", "", "package")
+_LADDER_NAME = {"": "manuscript"}
+
 _DELIVERABLE_LABEL = {
     "":         "full manuscript draft",
     "onepager": "one-pager (the narrative through-line)",
@@ -997,6 +1003,35 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
     return opened
 
 
+def _ladder_line(root: Path, m: project.Manifest, venue: str, here: str) -> str:
+    """Which rungs have a release, and which one this markup is. Progress, in one line.
+
+    `haarpi next` resolved all of this and said none of it: it named neither the file it
+    gated nor where that file sat on the ladder. On a project whose manuscript chain reads
+    ``_ra_C_DCR_JIR_DCR.docx`` the first is not guessable, and the second is what tells you
+    a queued draft is about to fail for want of a rung that was never minted.
+    """
+    from . import naming as _n
+    parts = []
+    for rung in _PAPER_LADDER:
+        name = _LADDER_NAME.get(rung, rung)
+        if rung == "package":
+            parts.append(name if rung != here else f"{name} ← HERE")
+            continue
+        home = m.stage_dir(root, "paper")
+        if venue:
+            home = home / venue
+        d = (home / rung / "output") if rung else (home / "output")
+        rel = None
+        if d.is_dir():
+            rel = _n.find_latest_release(
+                d, m.short_title, "docx",
+                chain_includes=[x for x in (venue, rung) if x] or None)
+        mark = " ← HERE" if rung == here else ""
+        parts.append(f"{name} ✓{mark}" if rel else f"{name}{mark}")
+    return " · ".join(parts)
+
+
 def run_next(root: Path, stage: str | None = None, file: Path | None = None,
              dry_run: bool = False, no_queue: bool = False) -> int:
     """Read the finished markup: mint a release, or classify and queue rework.
@@ -1028,16 +1063,40 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             return 2
     stage, markup = found
 
+    # Say where we are and what we are reading BEFORE deciding anything, so the header is
+    # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:
+    # the run named neither the file it gated nor its place on the ladder.
+    deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
+    venue = naming.venue_of(markup, m.short_title) if stage == "paper" else ""
     check = redline.gate_check(markup)
+    rung = _DELIVERABLE_LABEL.get(deliverable, deliverable) if stage == "paper" else stage
+    print(f"haarpi next: {stage}" + (f" · {venue}" if venue else "")
+          + (f" · {deliverable or 'manuscript'} rung" if stage == "paper" else ""))
+    print(f"  reading   {markup.name}")
+    print(f"  markup    {len(check['unresolved'])} unresolved comment(s), "
+          f"{check['reviewer_changes']} reviewer edit(s)")
+    if stage == "paper":
+        print(f"  ladder    {_ladder_line(root, m, venue, deliverable)}")
+
     ahash = project.annotation_hash(check["unresolved"], check["reviewer_changes"],
                                     markup.name)
     if project.already_planned(root, ahash):
-        print(f"haarpi next: this annotation set was already planned (hash {ahash}) — "
-              "loop guard, refusing to plan it twice.")
+        prior = next((e for e in reversed(project.list_plans(root))
+                      if e.get("annotation_hash") == ahash), {})
+        fp = project.plan_file_for(root, ahash)
+        print(f"  [stop]    this annotation set was already planned (hash {ahash}) — loop "
+              f"guard, refusing to plan it twice.")
+        if prior:
+            print(f"            recorded {prior.get('at','?')} on {prior.get('markup','?')}"
+                  + (f", released {prior['release']}" if prior.get("release") else ""))
+        if fp:
+            try:
+                shown = fp.relative_to(root)
+            except ValueError:
+                shown = fp
+            print(f"            blocking: {shown}")
+            print(f"            to re-run it:  mv -n {shown} {shown.parent}/old/")
         return 0
-
-    deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
-    venue = naming.venue_of(markup, m.short_title) if stage == "paper" else ""
     infix = "_".join(p for p in (venue, deliverable or
                                  (m.stages[stage].get("infix") or "")) if p)
     if check["clean"]:
@@ -1068,11 +1127,17 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                     from raconteur.outline import reconcile_plan as post
             except ImportError:               # raconteur not installed in this stack
                 post = None
-        # The skeleton releases ONE artifact. Its word plan rides on the document as
-        # comments, which no markdown rendering can carry, so a .md sibling would be a
-        # partial copy of the contract sitting beside the whole one.
-        result = redline.mint_release(markup, dst, post=post,
-                                      md_sibling=deliverable != "skeleton")
+        # ONE artifact per release: the document the author gated, with its word plan on
+        # the headings. A markdown sibling was a second copy of an approved contract, and a
+        # derived one — it went stale the moment its deriver was fixed, and could not carry
+        # a comment at all.
+        # Rungs move off the markdown sibling one at a time, as their consumers learn to
+        # read the .docx. skeleton and outline have; the rest still need it, and a rung whose
+        # consumers still read markdown must keep getting it or they fall back in silence to
+        # the tool's own pre-redline draft.
+        result = redline.mint_release(
+            markup, dst, post=post,
+            md_sibling=deliverable not in ("skeleton", "outline"))
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and

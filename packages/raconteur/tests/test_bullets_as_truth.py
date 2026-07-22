@@ -182,7 +182,27 @@ def test_a_met_plan_reports_no_shortfall():
     assert not outline.bullet_shortfall(md, SKELETON, 4000, None)
 
 
-def test_run_asks_again_when_the_plan_is_not_met():
+def test_run_asks_again_then_blocks_rather_than_discarding_the_run():
+    """One mechanism for both directions, and the failure is RECOVERABLE.
+
+    The tool does not cut the model's excess — deleting is the author's act — and it does
+    not let deviance reach the draft, where a section's band is bullets x rate and six extra
+    beats became 1,100 words of authorised band. But it does not throw the run away either:
+    discarding fifteen correct subsections because two are off by one spends a GPU hour to
+    save thirty seconds of the author's time. The outline is written, the plan comment says
+    it does not match, and an unresolved tool comment blocks the mint."""
     src = inspect.getsource(outline._outline_fresh)
-    assert "bullet_shortfall(" in src
-    assert "_topup(" in src
+    assert "lock_to_skeleton(" in src and "_recount(" in src
+    assert "raise SystemExit" not in src, "the run is not discarded"
+    assert "divergence" in src
+    assert "The outline IS written" in src and "blocked until you cut them" in src
+    assert "_topup(" not in src, "one variance check answers both directions"
+
+
+def test_the_divergence_rides_the_plan_comment_that_blocks_the_mint():
+    from docx import Document
+    import inspect as _i
+    assert "variance" in _i.signature(outline.plan_notes).parameters
+    src = _i.getsource(outline.plan_notes)
+    assert "DOES NOT MATCH THIS PLAN" in src
+    assert "mint until you resolve it" in src

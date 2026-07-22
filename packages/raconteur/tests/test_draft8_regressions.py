@@ -192,6 +192,16 @@ def test_the_abstract_body_stops_at_the_first_section():
     assert guards.abstract_body(md).split() == ["One", "two", "three."]
 
 
+def test_a_release_has_lost_the_stars_and_the_label_still_reads():
+    """release_markdown renders the accepted .docx body as plain paragraphs, so by the time
+    a RELEASE is read the bold **Abstract** label is the bare line "Abstract". The
+    submission wrapper read one, found no label, and shipped "Placeholder abstract" behind
+    a TODO on a paper whose abstract had been written, measured and approved three rungs
+    up. A line that says only "abstract" is the label."""
+    md = "# T\n\nAbstract\n\nOne two three.\n\n## Introduction\n\nText.\n"
+    assert guards.abstract_body(md).split() == ["One", "two", "three."]
+
+
 def test_the_abstract_limit_reaches_the_document_pass():
     assert "abstract_length(assembled, abstract_limit)" in inspect.getsource(
         paper._manuscript_findings)

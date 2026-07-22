@@ -73,15 +73,15 @@ def _draft_fresh(
     project_dir: Path, cfg: ProjectConfig, brain: Brain, paper_dir: Path
 ) -> None:
     from haarpi.naming import find_latest_release
+    # The RELEASE only — the fallback read the pre-redline working file in silence.
     outline_path = find_latest_release(
-        paper_dir / "output", cfg.short_title, "md", chain_includes="outline",
-    ) or find_latest(paper_dir, cfg.short_title, "md",
-                     last_initials="ra", chain_includes="outline")
+        paper_dir / "output", cfg.short_title, "docx", chain_includes="outline")
     if not outline_path:
         print("[error] no outline found — run 'raconteur outline' first", file=sys.stderr)
         raise SystemExit(1)
 
-    outline = outline_path.read_text(encoding="utf-8")
+    from haarpi.redline import read_release
+    outline = read_release(outline_path)
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""

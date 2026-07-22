@@ -260,7 +260,8 @@ def _render_docx(md_path: Path, project_dir: Path,
     if notes:
         from haarpi import redline as _rl
         try:
-            n = _rl.add_anchored_comments(docx, notes, author="raconteur", initials="ra")
+            n = _rl.add_anchored_comments(docx, notes, author="raconteur", initials="ra",
+                                          headings_only=True)
             log(f"[raconteur] attached {n} word-plan comment(s)")
         except Exception as e:                # noqa: BLE001 — a comment must not fail a render
             log(f"[warn] could not attach word-plan comments: {type(e).__name__}: {e}")
