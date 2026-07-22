@@ -181,10 +181,18 @@ def run_init(args) -> int:
     # `raster queue` (the build chain) — init does not contact trundlr.
     tid_default = (prior.get("trundlr", {}) or {}).get("project_id") or name
     trundlr_id = ask("trundlr project id", default=tid_default, preset=args.trundlr_project_id)
+    # ASKED, NOT INFERRED. `kind: abm` is what unlocks `raster odd` — the ODD protocol the
+    # paper carries as its appendix. Guessing it from whether the code says "agent" would
+    # put a protocol on a project with no business carrying one, and an ODD is a claim about
+    # what the model IS.
+    kind = ask("kind (abm if this is an agent-based model, else blank)",
+               default=str(prior.get("kind", "") or ""), preset=getattr(args, "kind", None))
+    kind = kind.strip().lower()
 
     ctx = {
         "PROJECT": name,
         "PACKAGE": package,
+        "KIND": kind or "",
         "BRIEF": brief or "(not provided at init — clarify with the user during planning)",
         "BRIEF_YAML": json.dumps(brief or "(not provided at init)"),
         "DESCRIPTION": description or "(to be generated during raster plan)",

@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="GitHub repo visibility (asked if omitted)")
     init.add_argument("--trundlr-project-id", dest="trundlr_project_id",
                       help="existing trundlr project id (blank/omit to skip trundlr)")
+    init.add_argument("--kind", help="'abm' for an agent-based model (unlocks `raster odd`); else blank")
     init.add_argument("--no-git", action="store_true", help="skip git init/commit")
     init.add_argument("--no-remote", action="store_true",
                       help="git init/commit locally but do NOT create/push the GitHub repo")
@@ -61,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("--out", "-o", help="output path (default: {root}/code/output/{YYMMDD}_{slug}_methods_ra.md)")
     handoff.add_argument("--dry-run", action="store_true", help="print the digest to stdout, write nothing")
 
+    odd = sub.add_parser("odd",
+                         help="write the ODD protocol for an ABM (end of build; the paper's appendix)")
+    _common(odd)
+    odd.add_argument("--out", "-o", help="output path (default: {root}/code/output/{YYMMDD}_{slug}_odd_ra.md)")
+    odd.add_argument("--dry-run", action="store_true", help="print the protocol to stdout, write nothing")
+    odd.add_argument("--force", action="store_true",
+                     help="write one even though raster.yaml does not say `kind: abm`")
+
     return ap
 
 
@@ -90,6 +99,9 @@ def main(argv=None) -> int:
     if args.cmd == "handoff":
         from raster.report import run_report
         return run_report(args)
+    if args.cmd == "odd":
+        from raster.odd import run_odd
+        return run_odd(args)
     return 1
 
 
