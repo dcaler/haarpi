@@ -29,6 +29,7 @@ and EPS (vector, for publication); findings.json lists both formats per figure.
 
 import importlib
 import json
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -208,6 +209,70 @@ def _build_markdown(project, cycle, brief, items, results: Path) -> str:
     return "\n".join(L)
 
 
+# A caption in the design doc is written for the DESIGN CONVERSATION: it ranks the output
+# against its siblings and states what the run is predicted to show. Both are planning
+# vocabulary, and findings.json is where a caption stops being planning and becomes the
+# paper's. The css2026 manuscript printed "PRIMARY: recovery landscape. … Expect a
+# low-distance settling band …" under a plot of the measured result — a reader told what to
+# expect from a figure of what happened, beneath a label that means nothing outside this
+# repo. These strip at that boundary only: RESULTS.md and the .docx are rayleigh's own
+# report, and the figure FILENAMES are slugged from the caption (r_analysis), so a paper
+# that has already placed results/figures/E1_0_primary-… keeps resolving.
+_ROLE_LABEL_RE = re.compile(
+    r"^\s*(?:primary|secondary|tertiary|main|key|headline|supplementary|supplemental|"
+    r"appendix|exploratory|confirmatory|robustness|sanity(?:\s+check)?|diagnostic)"
+    r"\s*[:.—-]\s*", re.IGNORECASE)
+
+# A number belongs to the document that PLACES a figure, not to the one that produced it —
+# the same reason the submission strips "Figure 1:" out of a \caption LaTeX numbers itself.
+# rayleigh's own .docx still numbers its figures, from their position in it.
+_FIGURE_NUMBER_RE = re.compile(
+    r"^\s*(?:figure|fig\.?|table|tab\.?|panel|plot|chart)\s*[0-9]*[A-Za-z]?\s*[:.—-]\s*",
+    re.IGNORECASE)
+
+# A design doc is written BEFORE the run, so a caption may carry the prediction the
+# experiment was preregistered to test. Published beside the result it is worse than
+# useless: it tells the reader to look for something the figure may not show.
+_PREDICTION_RE = re.compile(
+    r"(?:^|(?<=[.;!?]))\s*(?:we\s+)?(?:expect|anticipate|predict|hypothesi[sz]e)\w*\b"
+    r"[^.;!?]*[.;!?]?", re.IGNORECASE)
+
+
+def publication_caption(text: str) -> str:
+    """A design-doc caption as the paper should print it.
+
+    Says what the figure SHOWS: no rank among its siblings, no number, no prediction.
+    Everything removed here is information about the plan rather than about the plot.
+    """
+    out = " ".join(str(text or "").split())          # YAML ">" folding leaves newlines
+    for _ in range(3):                               # "PRIMARY: Figure 2. …" is one string
+        stripped = _FIGURE_NUMBER_RE.sub("", _ROLE_LABEL_RE.sub("", out))
+        if stripped == out:
+            break
+        out = stripped
+    out = " ".join(_PREDICTION_RE.sub(" ", out).split())
+    if out and out[0].islower():
+        out = out[0].upper() + out[1:]
+    return out
+
+
+def _handoff_caption(caption: str, where: str) -> str:
+    """publication_caption, saying so when it changed something.
+
+    Visible because the author wrote the original and should see what was held back — and
+    because a caption gutted to nothing means the design doc said what it planned and never
+    what the figure shows.
+    """
+    original = " ".join(str(caption or "").split())
+    out = publication_caption(original)
+    if out != original:
+        log(f"caption cleaned for the hand-off ({where}): {out!r}")
+    if original and not out:
+        log(f"[warn] {where}: that caption was all planning text — nothing left to publish. "
+            f"Give the output a caption saying what it shows.")
+    return out
+
+
 def _build_findings(project, cycle, brief, items, results: Path) -> str:
     """Machine-readable per-experiment findings for the raconteur hand-off.
 
@@ -236,9 +301,10 @@ def _build_findings(project, cycle, brief, items, results: Path) -> str:
             "figures": [{"path": str(primary.relative_to(results)),
                          "formats": {p.suffix.lstrip("."): str(p.relative_to(results))
                                      for p in all_paths},
-                         "caption": c}
+                         "caption": _handoff_caption(c, primary.name)}
                         for primary, all_paths, c in it["figures"]],
-            "tables": [{"path": str(p.relative_to(results)), "caption": c}
+            "tables": [{"path": str(p.relative_to(results)),
+                        "caption": _handoff_caption(c, p.name)}
                        for p, c in it.get("table_files", [])],
             "analysis": ({"script": str(Path(a["script"]).relative_to(results)),
                           "data": str(Path(a["data"]).relative_to(results)),

@@ -131,7 +131,16 @@ experiments:
         x: param_b
         y: (metric)
         facet: param_a
-        caption: "(what the reader should take away)"
+        caption: "(what the figure SHOWS: axes, encoding, what to look for)"
+                                   # THIS IS THE CAPTION THE PAPER PRINTS. Write it for a
+                                   # reader who has never seen this file: no rank among its
+                                   # siblings ("PRIMARY:"), no number ("Figure 2:") — the
+                                   # paper numbers its own figures — and no prediction.
+                                   # What you expect goes in `expected_direction`, which is
+                                   # the field for it; printed under the result it tells a
+                                   # reader to look for something the figure may not show.
+                                   # process_outputs strips all three at the hand-off, and
+                                   # says so when a caption had nothing else in it.
       # HEATMAP form — x and y are the two swept AXES; the colour is a third field `z`
       # (the metric). z MUST be a metric column, not one of the axes:
       # - kind: figure

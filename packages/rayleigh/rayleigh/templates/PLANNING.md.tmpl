@@ -118,7 +118,12 @@ theoretically motivated. Write each answer into an `experiments:` entry as you g
    basis; do not quote a specific un-run number as though you had measured it.
 5. **Planned outputs** — the artifact(s) that would show the finding: a `figure`
    (line/bar/heatmap/…), a `table`, a summary stat. This list *is* the plan
-   `process_outputs` executes — so specify axes, facets, and the caption's takeaway.
+   `process_outputs` executes — so specify axes, facets, and what each caption states.
+   **A caption is the one the paper prints.** Write what the figure SHOWS — its axes, its
+   encoding, what to look for. Not its rank among its siblings (`PRIMARY:`), not a number
+   (the paper numbers its own figures), and not the prediction: that is what
+   `expected_direction` in step 4 is for, and printed under a plot of the measured result
+   it tells the reader to look for something that may not be there.
 6. **Mode** — `confirmatory` (predicted in advance; the prereg above is binding) or
    `exploratory` (poking at the data; findings will be labeled as such, not overclaimed).
 7. **Resource** — `resource: cpu` or `gpu`, per experiment. **Surface this decision to the
