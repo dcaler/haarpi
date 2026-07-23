@@ -64,7 +64,7 @@ def test_the_template_task_is_scaffolded_and_queued(tmp_path):
     # one human task: command-less, on the human resource, carrying the full brief
     assert len(client.created) == 1
     t = client.created[0]
-    assert t["title"] == "paper css2026 template 1"
+    assert t["title"] == "raconteur template css2026 1"
     assert "command" not in t
     assert t["resource_id"] == 1
     assert t["description"] == brief and "DOUBLE-BLIND" in brief

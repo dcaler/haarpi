@@ -45,8 +45,8 @@ def test_a_venue_chain_names_its_venue_and_carries_it_in_the_command():
     out = planner.queue_chain(client, 1, "paper", ["outline", "comment"], {},
                               venue="ismir")
     titles = [t["title"] for t in out["tasks"]]
-    assert titles == ["paper ismir outline 1", "paper ismir comment 1",
-                      "paper ismir next 1"]
+    assert titles == ["raconteur outline ismir 1", "raconteur comment ismir 1",
+                      "raconteur next ismir 1"]
     cmds = [t["command"] for t in out["tasks"] if t["command"]]
     assert "haarpi raconteur outline --venue ismir" in cmds
 
@@ -68,7 +68,7 @@ def test_a_venueless_chain_is_unchanged():
     client = _FakeClient()
     out = planner.queue_chain(client, 1, "paper", ["recut", "comment"], {})
     assert [t["title"] for t in out["tasks"]] == [
-        "paper recut 1", "paper comment 1", "paper next 1"]
+        "raconteur recut 1", "raconteur comment 1", "raconteur next 1"]
     assert out["tasks"][0]["command"] == "haarpi raconteur onepager --resynth"
 
 
@@ -76,7 +76,7 @@ def test_an_escalation_out_of_the_stage_carries_no_venue():
     """Gathering literature is shared work — it is not the ISMIR paper's private errand."""
     client = _FakeClient()
     out = planner.queue_chain(client, 1, "paper", ["litreview:gather"], {}, venue="ismir")
-    litrev = [t for t in out["tasks"] if t["title"].startswith("litreview")]
+    litrev = [t for t in out["tasks"] if t["title"].startswith("rabbithole")]
     assert litrev and "--venue" not in (litrev[0]["command"] or "")
 
 
@@ -84,8 +84,8 @@ def test_only_venue_aware_verbs_get_the_flag():
     client = _FakeClient()
     out = planner.queue_chain(client, 1, "paper", ["recut", "draft"], {}, venue="ismir")
     by_cmd = {t["title"]: t["command"] for t in out["tasks"]}
-    assert by_cmd["paper ismir recut 1"] == "haarpi raconteur onepager --resynth"
-    assert by_cmd["paper ismir draft 1"] == "haarpi raconteur draft --venue ismir"
+    assert by_cmd["raconteur recut ismir 1"] == "haarpi raconteur onepager --resynth"
+    assert by_cmd["raconteur draft ismir 1"] == "haarpi raconteur draft --venue ismir"
 
 
 # ── the fork ─────────────────────────────────────────────────────────────────
@@ -115,8 +115,8 @@ def test_the_venue_gate_forks_one_chain_per_selected_venue(tmp_path):
     titles = [t["title"] for t in client.tasks]
     # The venue gate now forks to phase ONE of the outline: headings only, redlined before
     # a bullet is written.
-    assert "paper ismir skeleton 1" in titles
-    assert "paper jasss skeleton 1" in titles
+    assert "raconteur skeleton ismir 1" in titles
+    assert "raconteur skeleton jasss 1" in titles
     assert not any("cmj" in t for t in titles), "a candidate is not a decision"
 
 
@@ -138,7 +138,7 @@ def test_rework_on_one_venues_paper_stays_in_that_venues_lane(tmp_path):
     note = planner._queue_next_rung(tmp_path, m, client, {}, "outline", "jasss",
                                     tmp_path / "260714_Chords_jasss_outline.docx")
     assert "jasss" in note
-    assert [t["title"] for t in client.tasks][0] == "paper jasss draft 1"
+    assert [t["title"] for t in client.tasks][0] == "raconteur draft jasss 1"
 
 
 # ── reading a venue back off a filename ──────────────────────────────────────

@@ -267,7 +267,7 @@ def _queue_template_task(root: Path, m, client, tr_cfg: dict, slug: str, vcfg,
         readme.write_text(f"# Submission template — {vcfg.name or slug}\n\n{brief}\n",
                           encoding="utf-8")
     client.create_task(
-        f"paper {slug} template {cycle}", m.trundlr_project_id, description=brief,
+        _title("paper", "template", slug, cycle), m.trundlr_project_id, description=brief,
         resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
     return brief
 
@@ -317,9 +317,9 @@ def _template_task_id(client, m, venue: str) -> int | None:
     """The venue's template-fetch task, so packaging waits until the template is in the
     slot. None when there is none (the template was placed by hand, no task) — packaging
     then simply runs, and `raconteur package` degrades if the slot is still empty."""
-    pat = re.compile(rf"^paper {re.escape(venue)} template \d+$", re.I)
     ids = [t.get("id") for t in client.tasks_for_project(m.trundlr_project_id)
-           if pat.match((t.get("title") or "").strip())]
+           if (p := _parse_title(t.get("title") or "")) and p[3] is not None
+           and p[0] == "paper" and p[1] == "template" and (p[2] or "") == venue]
     return ids[-1] if ids else None
 
 
@@ -334,14 +334,14 @@ def _queue_packaging(root: Path, m, client, tr_cfg: dict, venue: str, release: P
     titles = [t.get("title", "") for t in client.tasks_for_project(m.trundlr_project_id)]
     cycle = next_cycle(titles, "paper", venue)
     pkg = client.create_task(
-        f"paper {venue} package {cycle}", m.trundlr_project_id,
+        _title("paper", "package", venue, cycle), m.trundlr_project_id,
         command=_venued("haarpi raconteur package", venue),
         description=f"Assemble + compile the {venue} submission from {release.name}.",
         resource_id=_resource_id(tr_cfg, "runner"),
         duration=estimate_hours(client.all_tasks(), "paper", "package", 0.3),
         depends_on_id=_template_task_id(client, m, venue))
     client.create_task(
-        f"paper {venue} submission {cycle}", m.trundlr_project_id,
+        _title("paper", "submission", venue, cycle), m.trundlr_project_id,
         description=(f"Read paper/submission/{venue}/submission.pdf, finish submission.tex "
                      "(author, affiliations, abstract, keywords), and submit."),
         resource_id=_resource_id(tr_cfg, "human"), duration=1.0,
@@ -448,23 +448,70 @@ _ESTIMATE_WINDOW = 5
 _STEP_SYNONYMS: dict[tuple[str, str], tuple[str, str]] = {
     ("litreview", "write"): ("litreview", "report"),
 }
-_TITLE_RE = re.compile(r"^(.*?)\s+(\w+)\s+\d+$")
+
+# A task title NAMES ITS TOOL, not its stage: "raconteur outline css2026 9", not "paper
+# css2026 outline 9". The stage is an internal word ("paper") and the tool is the one the
+# author actually runs ("raconteur"), so the board reads as the work does. The venue sits
+# AFTER the step — "<tool> <step> <venue?> <cycle>" — so a glance down the column lines the
+# steps up regardless of which venue each belongs to.
+_STAGE_TOOL = {s: spec["tool"] for s, spec in project.DEFAULT_STAGES.items()}
+_TOOL_STAGE = {t: s for s, t in _STAGE_TOOL.items()}
+
+# Every word that can stand where the step stands — the chain steps plus the verbs the
+# one-off tasks use. Parsing is vocabulary-driven, not positional, because the venue now
+# sits between the step and the cycle: the step is the token we RECOGNISE, and the venue is
+# whatever is left over. That one rule reads both the new order and the old
+# "<stage> <venue> <step> <cycle>", so realised-duration history survives the rename.
+_STEP_VOCAB = ({step for d in STAGE_STEPS.values() for step in d}
+               | {"template", "package", "submission", "approve", "next"})
+
+
+def _title(stage: str, step: str, venue: str, cycle) -> str:
+    """A task title in the one form this module writes: <tool> <step> <venue?> <cycle>."""
+    tool = _STAGE_TOOL.get(stage, stage)
+    parts = [tool, step] + ([venue] if venue else []) + [str(cycle)]
+    return " ".join(parts)
+
+
+def _parse_title(title: str) -> tuple[str, str, str, int | None] | None:
+    """(stage, step, venue, cycle) from a title of any era, or None if it is not one.
+
+    New order is "<tool> <step> <venue?> <cycle>"; the pre-rename order was
+    "<stage> <venue?> <step> <cycle>". Both are read by the same rule: the first token
+    names the tool (or, on an old title, the stage); the step is whichever remaining token
+    is a known step; the venue is the leftover. cycle is None for an unnumbered title (a
+    design session), which the callers that need a number then skip."""
+    toks = (title or "").strip().split()
+    if not toks:
+        return None
+    cycle = None
+    if toks[-1].isdigit():
+        cycle, toks = int(toks[-1]), toks[:-1]
+    if not toks:
+        return None
+    head = re.sub(r"\s+", "", toks[0].lower())
+    stage = _TOOL_STAGE.get(head, head)                       # tool -> stage, else as-is
+    stage = next((s for s in project.DEFAULT_STAGES
+                  if stage == s or stage.startswith(s)), stage)
+    rest = [t.lower() for t in toks[1:]]
+    step = next((t for t in rest if t in _STEP_VOCAB), rest[-1] if rest else "")
+    venue = " ".join(t for t in rest if t != step)
+    stage, step = _STEP_SYNONYMS.get((stage, step), (stage, step))
+    return stage, step, venue, cycle
 
 
 def _canonical(title: str) -> tuple[str, str] | None:
     """Reduce a task title to its (stage, step) identity across naming eras.
 
-    Whitespace in the stage name collapses ("lit review" == "litreview"), a venue
-    infix folds into its stage ("paper ismir outline 3" is paper/outline work), and
-    renamed verbs map forward through _STEP_SYNONYMS. None for titles that don't
-    look like `<stage> <step> <cycle>` at all."""
-    m = _TITLE_RE.match((title or "").strip())
-    if not m:
+    The tool name folds to its stage ("raconteur" is paper work), the venue folds away
+    ("raconteur outline ismir 3" is paper/outline work), and renamed verbs map forward
+    through _STEP_SYNONYMS. None for a title that carries no cycle — a design session is
+    not a step with a history to pool."""
+    p = _parse_title(title)
+    if p is None or p[3] is None:
         return None
-    stage = re.sub(r"\s+", "", m.group(1).lower())
-    step = m.group(2).lower()
-    stage = next((s for s in STAGE_STEPS if stage == s or stage.startswith(s)), stage)
-    return _STEP_SYNONYMS.get((stage, step), (stage, step))
+    stage, step, _venue, _cycle = p
+    return stage, step
 
 
 def estimate_hours(tasks: list[dict], stage: str, step: str, fallback: float) -> float:
@@ -496,9 +543,11 @@ def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
 
     Cycles count PER VENUE: the JASSS paper's first outline is its cycle 1, however many
     rounds the ISMIR paper has already been through."""
-    mid = rf"{re.escape(venue)} \w+" if venue else r"\w+"
-    pat = re.compile(rf"^{re.escape(stage)} {mid} (\d+)$", re.I)
-    nums = [int(m.group(1)) for t in titles for m in [pat.match((t or "").strip())] if m]
+    nums = []
+    for t in titles:
+        p = _parse_title(t)
+        if p and p[3] is not None and p[0] == stage and (p[2] or "") == (venue or ""):
+            nums.append(p[3])
     return max(nums, default=0) + 1
 
 
@@ -555,7 +604,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
         rid = _resource_id(tr_cfg, "human" if step.human else step.resource)
         # the venue belongs to the paper stage; an escalation into litreview is shared work
         v = venue if (venue and st == stage) else ""
-        title = f"{st} {v} {name} {cycle}" if v else f"{st} {name} {cycle}"
+        title = _title(st, name, v, cycle)
         command = _venued(step.command, v)
         desc = step.desc
         if first and description:
@@ -987,7 +1036,7 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
         if spec.get("attended"):
             verb = {"raster": "plan", "rayleigh": "init"}.get(tool, "init")
             client.create_task(
-                f"{stage} design session", m.trundlr_project_id,
+                f"{_STAGE_TOOL.get(stage, stage)} design session", m.trundlr_project_id,
                 description=f"Interactive design session — run: haarpi {tool} {verb}",
                 resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
         else:
@@ -1269,7 +1318,7 @@ def run_queue(root: Path) -> int:
                   + (f", created at priority {m.trundlr_priority})" if created else ")"))
         titles = [t.get("title", "") for t in
                   client.tasks_for_project(m.trundlr_project_id)]
-        if any(t.startswith("litreview ") for t in titles):
+        if any((p := _parse_title(t)) and p[0] == "litreview" for t in titles):
             print(f"haarpi queue: litreview already has tasks "
                   f"({len(titles)} total) — nothing to queue.")
             return 0

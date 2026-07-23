@@ -7,7 +7,31 @@ the step from its realised history ("lit review write 4" no longer matched), and
 the median of a high-dispersion window undershoots exactly when it matters.
 """
 
-from haarpi.planner import _canonical, estimate_hours
+from haarpi.planner import _canonical, _parse_title, _title, estimate_hours, next_cycle
+
+
+class TestTitleNamesItsTool:
+    """A task title names the tool the author runs, not the internal stage word, and the
+    venue sits after the step: "raconteur outline css2026 9", not "paper css2026 outline 9".
+    The board then reads as the work does, and a glance down the column lines up the steps."""
+
+    def test_the_written_form_is_tool_step_venue_cycle(self):
+        assert _title("paper", "outline", "css2026", 9) == "raconteur outline css2026 9"
+        assert _title("litreview", "gather", "", 3) == "rabbithole gather 3"
+        assert _title("experiments", "process", "", 2) == "rayleigh process 2"
+
+    def test_a_new_title_round_trips(self):
+        stage, step, venue, cycle = _parse_title("raconteur outline css2026 9")
+        assert (stage, step, venue, cycle) == ("paper", "outline", "css2026", 9)
+
+    def test_an_old_title_still_parses_so_history_survives(self):
+        assert _parse_title("paper css2026 outline 9") == ("paper", "outline", "css2026", 9)
+        assert _parse_title("litreview gather 3") == ("litreview", "gather", "", 3)
+
+    def test_next_cycle_reads_a_board_of_mixed_eras(self):
+        mixed = ["paper css2026 outline 7", "raconteur draft css2026 8"]
+        assert next_cycle(mixed, "paper", "css2026") == 9
+        assert next_cycle(mixed, "paper", "ismir") == 1     # cycles count per venue
 
 
 def _done(title: str, hours: float, end: str = "2026-07-01") -> dict:
@@ -16,15 +40,21 @@ def _done(title: str, hours: float, end: str = "2026-07-01") -> dict:
 
 class TestTitleErasPoolTogether:
     def test_legacy_write_history_budgets_a_new_style_report(self):
-        # The task-591 miss: 8 realised "lit review write" runs existed; the
-        # estimator saw none of them and fell back to 3.0.
-        history = [_done(f"lit review write {i}", h, end=f"2026-06-{10+i:02d}")
+        # The write->report rename orphaned its history once; the synonym re-pools it. The
+        # single-token "litreview write" form is what July wrote — the earlier two-word
+        # "lit review write" is intentionally NOT recovered (its titles predate the rename
+        # and were left un-renamed on the board).
+        history = [_done(f"litreview write {i}", h, end=f"2026-06-{10+i:02d}")
                    for i, h in enumerate([2.42, 1.43, 1.43, 1.22, 6.19, 34.99,
                                           40.44, 16.03], start=1)]
         assert estimate_hours(history, "litreview", "report", 3.0) > 3.0
 
-    def test_spaced_and_collapsed_stage_names_are_the_same_step(self):
-        assert _canonical("lit review gather 4") == _canonical("litreview gather 1")
+    def test_the_tool_name_pools_with_the_stage_name(self):
+        # The tool->stage rename must not orphan history the way write->report did: a task
+        # titled by its tool ("raconteur outline …") is the same work as one titled by its
+        # stage ("paper … outline …"), whichever order the venue sits in.
+        assert _canonical("raconteur outline css2026 9") == ("paper", "outline")
+        assert _canonical("raconteur outline css2026 9") == _canonical("paper ismir outline 3")
 
     def test_a_venue_infix_folds_into_its_stage(self):
         assert _canonical("paper ismir outline 3") == ("paper", "outline")

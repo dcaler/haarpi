@@ -119,9 +119,9 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert (proj / "litReview" / "output").is_dir()
     assert (proj / ".haarpi" / "plans").is_dir()
     titles = [t["title"] for t in tr.tasks]
-    assert titles == ["litreview gather 1", "litreview collect 1",
-                      "litreview report 1", "litreview comment 1",
-                      "litreview next 1"]
+    assert titles == ["rabbithole gather 1", "rabbithole collect 1",
+                      "rabbithole report 1", "rabbithole comment 1",
+                      "rabbithole next 1"]
     # chained, umbrella-form commands, human steps command-less
     assert tr.tasks[1]["depends_on_id"] == tr.tasks[0]["id"]
     assert tr.tasks[0]["command"].startswith("haarpi rabbithole")
@@ -175,7 +175,7 @@ def test_clean_markup_mints_release_and_advances(proj, servers):
     entries = project.list_plans(proj)
     assert any(e["type"] == "gate" for e in entries)
     # build became unlocked -> attended stage opened as a human design-session task
-    assert any(t["title"] == "build design session" for t in tr.tasks)
+    assert any(t["title"] == "raster design session" for t in tr.tasks)
     assert project.latest_release(proj, m, "litreview") is not None
 
 
@@ -189,8 +189,8 @@ def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = [t["title"] for t in tr.tasks[before:]]
-    assert new == ["litreview gather 2", "litreview collect 2", "litreview revise 2",
-                   "litreview comment 2", "litreview next 2"]    # gap_fill chain, cycle 2
+    assert new == ["rabbithole gather 2", "rabbithole collect 2", "rabbithole revise 2",
+                   "rabbithole comment 2", "rabbithole next 2"]    # gap_fill chain, cycle 2
     entry = [e for e in project.list_plans(proj) if e.get("type") == "plan"][-1]
     assert entry["tier"] == "gap_fill" and entry["annotation_hash"]
 
@@ -219,7 +219,7 @@ def test_redirection_inserts_approval_gate(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
-    assert new[0]["title"].startswith("litreview approve")     # confirm_tiers head
+    assert new[0]["title"].startswith("rabbithole approve")     # confirm_tiers head
     assert "command" not in new[0]                             # human, command-less
     assert new[1]["depends_on_id"] == new[0]["id"]             # chain gated behind it
     assert "gather topics: Y" in new[0]["description"]         # the human reads the plan
@@ -237,8 +237,8 @@ def test_paper_markup_escalates_upstream_literature(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     steps = [t["title"].rsplit(" ", 1)[0] for t in tr.tasks[before:]]
-    assert steps == ["litreview gather", "litreview collect", "litreview report",
-                     "litreview comment", "paper next"]        # cross-stage chain
+    assert steps == ["rabbithole gather", "rabbithole collect", "rabbithole report",
+                     "rabbithole comment", "raconteur next"]        # cross-stage chain
     assert tr.tasks[before]["command"].startswith("haarpi rabbithole")
 
 
@@ -257,7 +257,7 @@ def test_release_refreshes_idle_downstream_stage(proj, servers):
     assert planner.run_next(proj) == 0                          # mints litreview release
 
     titles = [t["title"] for t in tr.tasks[before:]]
-    assert any(t.startswith("paper revise") for t in titles)    # staleness re-fired paper
+    assert any(t.startswith("raconteur revise") for t in titles)    # staleness re-fired paper
     entry = [e for e in project.list_plans(proj) if e.get("type") == "refresh"][-1]
     assert entry["stage"] == "paper" and entry["bindings"].get("litreview")
 
@@ -272,7 +272,7 @@ def test_experiments_extend_escalates_to_attended_review(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
-    assert new[0]["title"].startswith("experiments review_session")
+    assert new[0]["title"].startswith("rayleigh review_session")
     assert "command" not in new[0]                              # attended session, yours
     assert "rayleigh review" in new[0]["description"]
 
@@ -291,7 +291,7 @@ def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     created = [p for p in tr.projects if p["name"] == "other"]
     assert created and created[0]["priority"] == 1
     titles = [t["title"] for t in tr.tasks if t.get("project_id") == m.trundlr_project_id]
-    assert titles[0].startswith("litreview gather")
+    assert titles[0].startswith("rabbithole gather")
     assert planner.run_queue(root) == 0                         # idempotent: nothing doubled
     assert len([t for t in tr.tasks
                 if t.get("project_id") == m.trundlr_project_id]) == 5
