@@ -37,16 +37,28 @@ from pathlib import Path
 
 import yaml
 
+from haarpi import runlog as _runlog
 from rayleigh import __version__
 from rayleigh.spec import active_spec_path
 
 DEFAULT_WORKERS = 8
 DEFAULT_TEMPLATE = "data/{experiment}/{cellkey}_seed{seed}.parquet"
 PROGRESS_EVERY_S = 15.0     # heartbeat cadence while the pool grinds (see _Progress)
+# Below this many cells a run is small enough to narrate ONE LINE PER CELL, the way a person
+# watching a smoke test wants to see it move. Above it, per-cell lines would bury the run —
+# a 6400-cell grid gets the rate/ETA heartbeat instead. (elephantRoom's sweep printed a line
+# per cell and nothing else: no timestamp, no counter, no ETA, and total silence inside a
+# slow cell. conduct_exp names the cell AND stamps every line AND keeps the heartbeat.)
+VERBOSE_CELL_CAP = 40
 
 
 def log(msg: str) -> None:
-    print(f"[rayleigh conduct_exp] {msg}", flush=True)
+    """Every line stamped with wall-clock + elapsed-since-start, so a run interleaved into a
+    trundlr log — or read hours later — says WHEN each thing happened, not just that it did.
+
+    Shares haarpi.runlog's format with raster, so the two read the same in a queue: the
+    difference between "[raster …]" and "[rayleigh conduct_exp …]" is the only tell."""
+    _runlog.log(msg, tool="rayleigh conduct_exp")
 
 
 # --------------------------------------------------------------------- run narration
@@ -76,35 +88,65 @@ def _levels(vals, cap: int = 8) -> str:
     return f"[{shown}]" if len(vals) <= cap else f"[{shown}, … +{len(vals) - cap} more]"
 
 
-class _Progress:
-    """Heartbeat for a long pool run: completed/total, failures, throughput, ETA.
+def _cell_label(result: dict) -> str:
+    """A short name for the cell a result belongs to, from its output filename."""
+    try:
+        return Path(result.get("output", "")).stem or "cell"
+    except (TypeError, ValueError):
+        return "cell"
 
-    Rate-limited to one line per PROGRESS_EVERY_S (plus a final line at 100%), so a 20-cell
-    smoke test stays quiet and a 6400-cell grid stays legible. The ETA is a naive
-    remaining/rate — honest enough to tell "20 minutes" from "tomorrow", which is the only
-    question being asked of it."""
+
+class _Progress:
+    """Heartbeat for a pool run: completed/total, failures, throughput, ETA — and, so a
+    stalled run is diagnosable, the cell that finished last and the slowest cell so far.
+
+    A SMALL run (<= VERBOSE_CELL_CAP) narrates one line per cell: a smoke test should read
+    like it is moving, and elephantRoom's per-cell line was the one thing its sweep log got
+    right. A LARGE run rate-limits to one line per PROGRESS_EVERY_S (plus a final line at
+    100%), so a 6400-cell grid stays legible. The ETA is a naive remaining/rate — honest
+    enough to tell "20 minutes" from "tomorrow", which is the only question asked of it."""
 
     def __init__(self, total: int, pass_label: str = ""):
         self.total = max(1, total)
         self.pass_label = pass_label
+        self.per_cell = self.total <= VERBOSE_CELL_CAP
         self.n = self.failed = 0
         self.t0 = self.last = time.monotonic()
+        self.last_cell = ""
+        self.last_secs = 0.0
+        self.slow_cell = ""
+        self.slow_secs = 0.0
 
-    def tick(self, ok: bool) -> None:
+    def tick(self, ok: bool, result: dict | None = None) -> None:
         self.n += 1
         if not ok:
             self.failed += 1
+        secs = float((result or {}).get("seconds") or 0.0)
+        cell = _cell_label(result) if result else ""
+        if cell:
+            self.last_cell, self.last_secs = cell, secs
+            if secs > self.slow_secs:
+                self.slow_cell, self.slow_secs = cell, secs
         now = time.monotonic()
-        if now - self.last < PROGRESS_EVERY_S and self.n < self.total:
+        # A small run speaks every cell; a large one only on the cadence (and at the end).
+        if not self.per_cell and now - self.last < PROGRESS_EVERY_S and self.n < self.total:
             return
         self.last = now
         elapsed = now - self.t0
         rate = self.n / elapsed if elapsed > 0 else 0.0
         eta = (self.total - self.n) / rate if rate > 0 else 0.0
         fail = f" · {self.failed} failed" if self.failed else ""
-        log(f"  progress{self.pass_label}: {self.n}/{self.total} cells "
-            f"({100 * self.n / self.total:.0f}%){fail} · {rate:.1f} cells/s · "
-            f"elapsed {_dur(elapsed)} · ETA {_dur(eta)}")
+        if self.per_cell and cell:
+            mark = "ok " if ok else "FAIL"
+            log(f"  cell {self.n}/{self.total}{self.pass_label} {mark} {cell} "
+                f"in {_dur(secs)}{fail} · ETA {_dur(eta)}")
+        else:
+            tail = f" · last {self.last_cell} {_dur(self.last_secs)}" if self.last_cell else ""
+            slow = (f" · slowest {self.slow_cell} {_dur(self.slow_secs)}"
+                    if self.slow_cell and self.slow_cell != self.last_cell else "")
+            log(f"  progress{self.pass_label}: {self.n}/{self.total} cells "
+                f"({100 * self.n / self.total:.0f}%){fail} · {rate:.1f} cells/s · "
+                f"elapsed {_dur(elapsed)} · ETA {_dur(eta)}{tail}{slow}")
 
 
 def _describe_design(exp: dict, n_cells: int) -> list[str]:
@@ -818,7 +860,7 @@ def run_conduct_exp(args) -> int:
         for j in run_jobs:
             r = _execute_cell(j)
             results_out.append(r)
-            prog.tick(r["status"] == "done")
+            prog.tick(r["status"] == "done", r)
     else:
         # Route even the serial (workers==1) guarded case through the pool so the RLIMIT_AS
         # ceiling lands on a *worker*, never on rayleigh's own process. The watchdog may SIGKILL a
@@ -851,7 +893,7 @@ def run_conduct_exp(args) -> int:
                     for f in as_completed(futs):
                         r = f.result()
                         results_out.append(r)
-                        prog.tick(r["status"] == "done")
+                        prog.tick(r["status"] == "done", r)
                 except BrokenProcessPool:
                     log("memory watchdog broke the pool after a kill — completed cells are saved; "
                         "rebuilding to finish the rest.")
