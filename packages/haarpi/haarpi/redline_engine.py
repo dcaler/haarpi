@@ -138,7 +138,11 @@ class RedlinePolicy(Protocol):
     two tools genuinely differ on; everything they share is in the engine."""
 
     author: str                          # "rabbitHole" | "raconteur" — the tracked-change author
-    route_classes: tuple[str, ...]       # this deliverable's ROUTE vocabulary
+    route_classes: tuple[str, ...]       # this deliverable's ROUTE vocabulary; [0] = the
+                                         #   fallback for an unrecognised class ("sources")
+    # route_verb (optional, default "ROUTE"): the word the policy's audit prompt uses to open
+    # a route verdict. raconteur says "ROUTE:", rabbitHole says "CORPUS:" — same shape, and
+    # the engine reads it via getattr so a policy that omits it gets "ROUTE".
 
     # ── evidence ──────────────────────────────────────────────────────────────
     def evidence_for(self, ctx: ParaContext) -> Evidence:
@@ -358,7 +362,8 @@ def redline_paragraph(brain, ctx: ParaContext, policy: RedlinePolicy,
         except Exception:  # noqa: BLE001 — fail closed rather than claim an unchecked success
             return None, Disposition.SKIPPED.value, copyedits
 
-        if audit.upper().startswith("ROUTE"):
+        route_verb = getattr(policy, "route_verb", "ROUTE").upper()
+        if audit.upper().startswith(route_verb):
             return None, routed(_route_class(audit, policy.route_classes)), copyedits
         if _is_ok(audit):
             return new_text, Disposition.EDITED.value, copyedits

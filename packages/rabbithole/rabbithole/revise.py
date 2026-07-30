@@ -40,6 +40,9 @@ import sys
 import time
 from pathlib import Path
 
+from haarpi import redline_engine as _engine
+from haarpi.redline_engine import Evidence, ParaContext, route_class_of
+
 from . import config, corpus as corpus_mod, docxio, guards, render, runlog
 from .brain import Brain
 from .models import Candidate
@@ -447,93 +450,76 @@ def _para_guard_findings(old_text: str, new_text: str, touched: set[int],
             + guards.minimal_edit_violation(touched, anchored, n_units))
 
 
+class RabbitHolePolicy:
+    """rabbitHole's dialect for the shared redline engine: evidence is the corpus digest, the
+    prompts are the litreview house style, the guards are rabbitHole's set (every paragraph
+    must cite), and the audit routes with the verb ``CORPUS`` rather than ``ROUTE``.
+
+    Constructed per paragraph, because the digest is scoped to the paragraph's own citekeys.
+    ``resolve_named_source`` is None here — step 4 fills it with the whole-library Zotero pull
+    that lets "add @doblinger, it's in Zotero" land in one pass instead of a misleading skip.
+    """
+
+    author = "rabbitHole"
+    route_verb = "CORPUS"
+    # sources-first: the engine falls back to route_classes[0] for an unrecognised audit
+    # class, and rabbitHole's safe default is "sources" (matching the original _corpus_class).
+    route_classes = ("sources", "table", "section")
+
+    def __init__(self, cfg, digest: str):
+        self._topic = cfg.topic
+        self._focus = cfg.focus or ""
+        self._digest = digest
+
+    def evidence_for(self, ctx: ParaContext) -> Evidence:
+        return Evidence(known=set(), context=self._digest)
+
+    def resolve_named_source(self, citekey: str):
+        return None
+
+    def revise_system(self) -> str:
+        return _PARA_REVISE_SYS
+
+    def audit_system(self) -> str:
+        return _PARA_AUDIT_SYS
+
+    def revise_user(self, ctx: ParaContext, evidence: Evidence,
+                    numbered_sentences: str, comment_block: str) -> str:
+        return _PARA_REVISE_PROMPT.format(
+            topic=self._topic, focus=self._focus,
+            sentences=numbered_sentences, comments=comment_block, digest=evidence.context)
+
+    def audit_user(self, ctx: ParaContext, revised: str, comment_block: str) -> str:
+        return _PARA_AUDIT_PROMPT.format(
+            topic=self._topic, focus=self._focus,
+            comments=comment_block, paragraph=ctx.text, revised=revised)
+
+    def guard_findings(self, old_text: str, new_text: str, touched: set[int],
+                       ctx: ParaContext, evidence: Evidence) -> list:
+        n_units = len(guards.sentence_units(ctx.text))
+        return _para_guard_findings(old_text, new_text, touched, ctx.anchored, n_units)
+
+
 def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[str],
                             digest: str, anchored: set[int] | None = None,
                             rounds: int | None = None) -> tuple[str | None, str]:
-    """Rewrite one commented paragraph and hold it to the adversarial bar.
+    """Rewrite one commented paragraph, through the shared engine, in rabbitHole's dialect.
 
-    The reviser returns only the sentences it changed, keyed by index, so the set of touched
-    sentences is known exactly rather than estimated from a prose diff. Minimality, citation
-    integrity, and equation integrity are all decided in Python; the LLM audit is left with
-    the one question code cannot answer — does the edit mean what the comment asked for.
-
-    Returns (new_text, outcome):
-      - ("...text...", "edited")     — passes every deterministic guard and the audit.
-      - (None, "corpus:<class>")     — a comment a prose edit cannot satisfy; route it.
-      - (None, "skipped")            — no edit could be produced that keeps the paragraph
-                                       verifiable. Fail closed: leave the reviewer's
-                                       paragraph alone and say so, rather than emit a
-                                       paragraph that quietly lost a source or an equation.
+    The loop, the primals, the triage stage, and the fail-closed contract now live in
+    ``haarpi.redline_engine``; this is the thin adapter that keeps rabbitHole's call signature
+    and outcome vocabulary (``edited`` / ``corpus:<class>`` / ``skipped``) so the orchestration
+    and the adversary tests are unchanged.
     """
     if rounds is None:
         rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
-    anchored = anchored or set()
-    units = guards.sentence_units(paragraph)
-    if not units:
-        return None, "skipped"
-    comment_block = "\n".join(f"- {c}" for c in comments)
-    base_prompt = _PARA_REVISE_PROMPT.format(
-        topic=cfg.topic, focus=cfg.focus or "",
-        sentences=_number_sentences(units, anchored),
-        comments=comment_block, digest=digest)
-
-    critique: str | None = None
-    for _ in range(rounds):
-        prompt = base_prompt if critique is None else (
-            base_prompt + f"\n\nYour previous attempt had these problems — fix every one, "
-            f"changing as little else as possible:\n{critique}\n\nReturn the corrected JSON "
-            f"object of changed sentences only.")
-        try:
-            raw = brain.coordinator(prompt, _PARA_REVISE_SYS, num_ctx=16384).strip()
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] paragraph revise failed ({e}); leaving as-is.", file=sys.stderr)
-            return None, "skipped"
-
-        edits, errors = _parse_sentence_edits(raw, len(units))
-        if errors:
-            critique = "\n".join(f"- {e}" for e in errors)
-            continue
-        if not edits:
-            # The reviser says nothing needs changing. It cannot both leave the paragraph
-            # alone and have addressed the comment; let the audit route it.
-            return None, "skipped"
-
-        new_text = _apply_sentence_edits(units, edits)
-        touched = {int(k) - 1 for k in edits}
-
-        # Deterministic guards — mechanical, so decided precisely here rather than guessed
-        # at by an LLM lint. Any failure feeds a focused re-revise. Cheap, and they run
-        # first: the expensive audit never sees a paragraph that is already broken.
-        findings = _para_guard_findings(paragraph, new_text, touched, anchored, len(units))
-        if findings:
-            critique = "\n".join(f"- {f.imperative}" for f in findings)
-            continue
-
-        # The only question left for the brain: does this edit mean what the comment asked?
-        try:
-            verdict = brain.coordinator(
-                _PARA_AUDIT_PROMPT.format(
-                    topic=cfg.topic, focus=cfg.focus or "",
-                    comments=comment_block, paragraph=paragraph, revised=new_text),
-                _PARA_AUDIT_SYS, num_ctx=16384).strip()
-        except Exception as e:  # noqa: BLE001
-            # Fail closed. The guards prove the text is verifiable, not that it answers the
-            # comment — and replying "revised to address this" when nothing checked that
-            # claim is exactly the fabricated reply this adversary exists to prevent.
-            print(f"  [warn] paragraph audit failed ({e}); leaving the paragraph unchanged.",
-                  file=sys.stderr)
-            return None, "skipped"
-        if verdict.upper().startswith("CORPUS"):
-            return None, f"corpus:{_corpus_class(verdict)}"
-        if _is_ok(verdict):
-            return new_text, "edited"
-        critique = verdict  # audit found problems → another round
-
-    # Rounds exhausted. Fail closed: a paragraph that still trips any guard would emit a
-    # tracked change that silently dropped a source or an equation, over a reply claiming
-    # the comment was addressed. Under the polestar that is an unverification, not a
-    # tolerable imperfection — leave the paragraph as the reviewer wrote it.
-    return None, "skipped"
+    policy = RabbitHolePolicy(cfg, digest)
+    ctx = ParaContext(heading="", text=paragraph, comments=list(comments),
+                      anchored=set(anchored or ()), named_keys=set(), kind="prose")
+    new_text, disposition, _copyedits = _engine.redline_paragraph(
+        brain, ctx, policy, rounds=rounds)
+    cls = route_class_of(disposition)
+    outcome = f"corpus:{cls}" if cls else disposition   # engine "routed:x" → rabbitHole "corpus:x"
+    return new_text, outcome
 
 
 def _redline_revise(brain: Brain, cfg, paths, docx: Path,
