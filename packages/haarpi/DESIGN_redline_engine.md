@@ -237,14 +237,19 @@ law is not a constraint either tool strains against; it is each one's natural sh
    loop, triage, and fail-closed contract through a fake policy. **Not yet wired into either
    live tool**, so nothing in the running pipeline changed. Guards come through the policy
    (see the note above), so the engine is correct without a guards migration first.
-2. **NEXT** — Write `RaconteurPolicy` (evidence from refs.bib + section context, authored
-   atoms, style signature, section-kind gate, the paper prompts); make `raconteur paper` call
-   the engine through it. Green raconteur tests = behaviour preserved.
-3. Write `RabbitHolePolicy` (corpus evidence, the tier planner); make `rabbithole revise`
-   call the engine. Retire `rabbithole/redline.py`.
-4. Fill rabbitHole's `resolve_named_source` with the whole-library Zotero pull. The TRIAGE
-   stage that consumes it already exists and is tested — this is the feature that started it
-   all: *name a curated paper in a comment and it lands, no second round.*
+2. **✅ DONE** — `RaconteurPolicy` in `raconteur/redline_revise.py`; `redline_paragraph`
+   delegates to the engine, signature + outcome vocabulary unchanged. Full raconteur suite
+   green (630). One faithful-port fix: route classes declared sources-first.
+3. **✅ DONE** — `RabbitHolePolicy` in `rabbithole/revise.py`; `_redline_para_adversary`
+   delegates to the engine. rabbitHole's audit verb is `CORPUS`, so the engine reads the route
+   verb from the policy (`route_verb`, default `ROUTE`). rabbitHole suite green (130). (The
+   duplicated `rabbithole/redline.py` OOXML layer can be retired later — it is orthogonal to
+   the per-paragraph loop and its removal is not required for the engine.)
+4. **NEXT (the feature — changes behaviour)** — Fill rabbitHole's `resolve_named_source` with
+   corpus-promote + whole-library Zotero pull, and populate `named_keys` so TRIAGE fires. The
+   feature that started it all: *name a curated paper in a comment and it lands, no second
+   round.* Outward-facing decision: whether a pulled paper is also written back to the project
+   Zotero collection, or ingested into the local corpus only.
 5. Formalise the cross-stage `FollowUp` signal and wire raconteur's `sources/evidence/figure`
    routes into the planner (the `aggregate()` boundary law).
 6. *(later, optional)* Parameterise the core guard vocabulary into a shared `haarpi.guards`
