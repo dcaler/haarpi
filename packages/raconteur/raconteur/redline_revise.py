@@ -36,7 +36,9 @@ import shutil
 from pathlib import Path
 
 from haarpi import redline as hredline
+from haarpi import redline_engine as _engine
 from haarpi import text as htext
+from haarpi.redline_engine import Evidence, ParaContext, route_class_of
 
 from . import guards, redline
 from .brain import Brain
@@ -274,100 +276,96 @@ def _para_guard_findings(
     return findings
 
 
+class RaconteurPolicy:
+    """raconteur's dialect for the shared redline engine: evidence is a refs.bib slice plus
+    the heading's section context, the prompts are the paper house style (with the ⟦a:N⟧
+    authored-span contract), and the guards are raconteur's full set. Constructed per
+    paragraph, because ``context_section`` is heading-specific.
+
+    ``resolve_named_source`` is None for now: raconteur owns no gatherer, so a comment naming a
+    source not in refs.bib routes as a missing source (via the audit) rather than being pulled
+    in. It will return a line once raconteur may delegate the pull to rabbitHole.
+    """
+
+    author = redline.AUTHOR
+    # sources-first: the engine falls back to route_classes[0] for an unrecognised audit
+    # class, and raconteur's safe default is "missing sources" (matching the original
+    # _route_class). Membership is order-independent; the audit prompt lists them itself.
+    route_classes = ("sources", "section", "evidence", "figure")
+
+    def __init__(self, title: str, context_section: str, bib_section: str,
+                 known: set[str], signature: dict | None = None):
+        self._title = title
+        self._context_section = context_section
+        self._bib_section = bib_section
+        self._known = set(known or ())
+        self._signature = signature
+
+    def evidence_for(self, ctx: ParaContext) -> Evidence:
+        return Evidence(known=set(self._known), context=self._context_section)
+
+    def resolve_named_source(self, citekey: str):
+        return None
+
+    def revise_system(self) -> str:
+        return _PARA_REVISE_SYS
+
+    def audit_system(self) -> str:
+        return _PARA_AUDIT_SYS
+
+    def revise_user(self, ctx: ParaContext, evidence: Evidence,
+                    numbered_sentences: str, comment_block: str) -> str:
+        legend = "\n".join(f'  {k} = "{v.strip()}"' for k, v in (ctx.authored or {}).items())
+        return _PARA_REVISE_PROMPT.format(
+            title=self._title, heading=ctx.heading,
+            sentences=numbered_sentences,
+            authored_section=_AUTHORED_BLOCK.format(legend=legend) if legend else "",
+            comments=comment_block,
+            context_section=evidence.context,
+            bib_section=self._bib_section,
+        )
+
+    def audit_user(self, ctx: ParaContext, revised: str, comment_block: str) -> str:
+        return _PARA_AUDIT_PROMPT.format(
+            title=self._title, heading=ctx.heading, comments=comment_block,
+            paragraph=ctx.text, revised=revised)
+
+    def guard_findings(self, old_text: str, new_text: str, touched: set[int],
+                       ctx: ParaContext, evidence: Evidence) -> list:
+        n_units = len(guards.sentence_units(ctx.text))
+        return _para_guard_findings(
+            old_text, new_text, touched, ctx.anchored, n_units, ctx.kind,
+            evidence.known, self._signature)
+
+
 def redline_paragraph(
     brain: Brain, title: str, heading: str, paragraph: str, comments: list[str],
     context_section: str, bib_section: str, anchored: set[int], kind: str,
     known: set[str], rounds: int = 2, authored: dict[str, str] | None = None,
     copyedits: dict[str, str] | None = None, signature: dict | None = None,
 ) -> tuple[str | None, str]:
-    """Rewrite one commented paragraph and hold it to the adversarial bar.
+    """Rewrite one commented paragraph, through the shared engine, in raconteur's dialect.
 
-    ``authored`` maps ⟦a:N⟧ → the author's exact words: spans the reviser may read and must
-    reproduce, but may never write. ``copyedits``, if given, is filled with any correction
-    the reviser proposes to those spans — corrections that are DELIVERED AS COMMENTS and
-    never applied, because the author's text is theirs.
+    The loop, the primals, and the fail-closed contract now live in
+    ``haarpi.redline_engine``; this is the thin adapter that keeps raconteur's call signature
+    and outcome vocabulary (``edited`` / ``route:<class>`` / ``skipped``) so the orchestration
+    and the adversary tests are unchanged.
 
-    Returns (new_text, outcome):
-      - ("…text…", "edited")   — passes every deterministic guard and the audit.
-      - (None, "route:<class>") — a comment a prose edit cannot satisfy; the caller routes it.
-      - (None, "skipped")      — no edit could be produced that keeps the paragraph
-                                 verifiable. Fail closed: leave the reviewer's paragraph
-                                 alone and say so, rather than emit a tracked change that
-                                 quietly lost a source or an equation.
+    ``authored`` maps ⟦a:N⟧ → the author's exact words. ``copyedits``, if given, is filled with
+    any correction the reviser proposes to those spans — DELIVERED AS COMMENTS, never applied.
     """
-    units = guards.sentence_units(paragraph)
-    if not units:
-        return None, "skipped"
-    comment_block = "\n".join(f"- {c}" for c in comments)
-    legend = "\n".join(f'  {k} = "{v.strip()}"' for k, v in (authored or {}).items())
-    base_prompt = _PARA_REVISE_PROMPT.format(
-        title=title, heading=heading,
-        sentences=_number_sentences(units, anchored),
-        authored_section=_AUTHORED_BLOCK.format(legend=legend) if legend else "",
-        comments=comment_block,
-        context_section=context_section,
-        bib_section=bib_section,
-    )
-
-    critique: str | None = None
-    for _ in range(rounds):
-        prompt = base_prompt if critique is None else (
-            base_prompt + f"\n\nYour previous attempt had these problems — fix every one, "
-            f"changing as little else as possible:\n{critique}\n\nReturn the corrected JSON "
-            f"object of changed sentences only.")
-        try:
-            raw = brain.coordinator(prompt, _PARA_REVISE_SYS, num_ctx=16384).strip()
-        except Exception as e:
-            log(f"[warn] paragraph revise failed ({e}); leaving as-is.")
-            return None, "skipped"
-
-        edits, proposed_copyedits, errors = _parse_sentence_edits(raw, len(units), authored)
-        if errors:
-            critique = "\n".join(f"- {e}" for e in errors)
-            continue
-        if copyedits is not None:
-            copyedits.update(proposed_copyedits)
-        if not edits:
-            # The reviser says nothing needs changing. It cannot both leave the paragraph
-            # alone and have addressed the comment; let the caller record it as skipped.
-            # (A copyedit it noticed on the author's own text still travels — that is a
-            # remark about their prose, not an answer to their comment.)
-            return None, "skipped"
-
-        new_text = _apply_sentence_edits(units, edits)
-        touched = {int(k) - 1 for k in edits}
-
-        # Deterministic guards run first: the expensive audit never sees a paragraph that is
-        # already broken. Any failure feeds a focused re-revise.
-        findings = _para_guard_findings(
-            paragraph, new_text, touched, anchored, len(units), kind, known, signature)
-        if findings:
-            critique = "\n".join(f"- {f.imperative}" for f in findings)
-            continue
-
-        # The only question left for the brain: does this edit mean what the comment asked?
-        try:
-            verdict = brain.coordinator(
-                _PARA_AUDIT_PROMPT.format(
-                    title=title, heading=heading, comments=comment_block,
-                    paragraph=paragraph, revised=new_text),
-                _PARA_AUDIT_SYS, num_ctx=16384).strip()
-        except Exception as e:
-            # Fail closed. The guards prove the text is verifiable, not that it answers the
-            # comment — and replying "revised to address this" when nothing checked that
-            # claim is exactly the fabricated reply this adversary exists to prevent.
-            log(f"[warn] paragraph audit failed ({e}); leaving the paragraph unchanged.")
-            return None, "skipped"
-        if verdict.upper().startswith("ROUTE"):
-            return None, f"route:{_route_class(verdict)}"
-        if _is_ok(verdict):
-            return new_text, "edited"
-        critique = verdict  # audit found problems → another round
-
-    # Rounds exhausted. Fail closed: a paragraph that still trips any guard would emit a
-    # tracked change that silently dropped a source or an equation, over a reply claiming the
-    # comment was addressed. Leave the paragraph as the reviewer wrote it.
-    return None, "skipped"
+    policy = RaconteurPolicy(title, context_section, bib_section, known, signature)
+    ctx = ParaContext(
+        heading=heading, text=paragraph, comments=list(comments),
+        anchored=set(anchored or ()), named_keys=set(), kind=kind,
+        authored=dict(authored or {}))
+    new_text, disposition, produced = _engine.redline_paragraph(
+        brain, ctx, policy, rounds=rounds)
+    if copyedits is not None:
+        copyedits.update(produced)
+    cls = route_class_of(disposition)
+    outcome = f"route:{cls}" if cls else disposition   # engine "routed:x" → raconteur "route:x"
+    return new_text, outcome
 
 
 # ── orchestration ────────────────────────────────────────────────────────────
