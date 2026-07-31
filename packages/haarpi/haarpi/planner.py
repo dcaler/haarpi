@@ -666,6 +666,174 @@ def classify(stage: str, check: dict, cfg: dict,
     return plan
 
 
+# ── the general solution: decompose → sequence → instruct (litreview) ─────────
+# Instead of collapsing the whole annotation set into ONE tier and running that tier's
+# fixed template chain, `haarpi next` (for litreview) enumerates a per-comment TASK LIST,
+# derives the chain the tasks require, and steers each verb with what its tasks actually
+# need. Open-loop by design: the human is the verification loop — each cycle is a fresh
+# decomposition of the current annotations. See DESIGN_next_orchestration.md.
+
+# The verb-need vocabulary. Every unresolved comment maps to exactly one.
+_LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "redirect")
+
+_DECOMPOSE_PROMPT = """\
+A reviewer left these unresolved annotations on a literature-review draft, numbered:
+{annotations}
+
+For EACH annotation decide what WORK it needs, then group annotations that need the SAME
+work into one task. Every annotation number must appear in exactly one task.
+
+need types:
+- "edit": satisfiable by rewriting text that is already there — reword, restructure,
+  clarify, cut. No new sources.
+- "sources": asks for more substance, depth, or coverage on a topic ("more on X", "go
+  deeper", "what about Y"). Needs new literature gathered — TRUE even if the topic is
+  already present; presence is not sufficiency.
+- "section": asks for a whole new section, theme, or strand to be ADDED to the review.
+  The review must be re-planned, not just edited.
+- "ingest": names specific papers, DOIs, or citations the reviewer wants pulled in.
+- "redirect": the review is aimed wrong or needs a fundamentally different scope — a
+  genuine change of direction, not "add more".
+
+For "sources", "section", and "redirect" give a specific, searchable "query" (the topic to
+gather). For "edit" and "ingest" set "query" to "".
+
+Respond ONLY with JSON:
+{{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}}, ...]}}"""
+
+
+def decompose(comments: list[dict], cfg: dict) -> list[dict]:
+    """Per-comment task list for a litreview annotation set (the 'list all the tasks' step).
+
+    Returns ``[{comments: [texts], need: <one of _LITREVIEW_NEEDS>, query: str}]``. Falls back
+    to a single ``edit`` task over everything if the brain returns nothing usable — a bad parse
+    must degrade to the safe, in-place chain, never crash the gate.
+    """
+    from .brain import Brain
+    texts = [c["text"] for c in comments]
+    if not texts:
+        return []
+    o = cfg.get("ollama", {})
+    b = Brain(o.get("url", "http://localhost:11434"),
+              o.get("coordinator", "qwen3.6:27b-16k"),
+              o.get("worker", "llama3.1:8b"), tool="haarpi")
+    numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
+    try:
+        raw = _parse_json_obj(b.coordinator(
+            _DECOMPOSE_PROMPT.format(annotations=numbered), _SYS, think=False))
+        parsed = raw.get("tasks") or []
+    except (ValueError, json.JSONDecodeError):
+        parsed = []
+    return _normalise_tasks(parsed, texts)
+
+
+def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
+    """Coerce the model's task list into the contract, and guarantee total coverage.
+
+    Every comment lands in exactly one task: unknown needs become ``edit``, a comment named
+    twice keeps its first task, and any comment the model forgot is swept into a trailing
+    ``edit`` task. The result is never empty when there are comments — the chain always has
+    something to do, and it is always the safe thing when the model is unsure.
+    """
+    n = len(texts)
+    claimed: set[int] = set()
+    tasks: list[dict] = []
+    for t in parsed:
+        need = t.get("need") if isinstance(t, dict) else None
+        if need not in _LITREVIEW_NEEDS:
+            need = "edit"
+        idxs = []
+        for c in (t.get("comments") or []):
+            try:
+                i = int(c)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= i <= n and i not in claimed:
+                claimed.add(i)
+                idxs.append(i)
+        if not idxs:
+            continue
+        query = (t.get("query") or "").strip() if isinstance(t, dict) else ""
+        tasks.append({"comments": [texts[i - 1] for i in idxs],
+                      "need": need, "query": query})
+    missed = [i for i in range(1, n + 1) if i not in claimed]
+    if missed:
+        tasks.append({"comments": [texts[i - 1] for i in missed],
+                      "need": "edit", "query": ""})
+    return tasks
+
+
+def chain_from_tasks(tasks: list[dict]) -> dict:
+    """Derive the litreview rework chain, its instructions, and a summary tier FROM the tasks.
+
+    The chain is BUILT, not looked up: any task needing new corpus prepends ``gather → collect``;
+    the redraft verb is ``report`` when a section/redirect is in play (it re-plans the review's
+    sections) else ``revise``; a redirect also re-aims the brief; specific references prepend
+    ``ingest``. ``gather_topics`` and ``section_focus`` are the exact queries of the tasks that
+    need them — the specific comments deterministically steer the gather.
+
+    ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
+    key on it keep working as a SUMMARY of the decomposition rather than its driver.
+    """
+    needs = {t["need"] for t in tasks}
+    gather_topics = [t["query"] for t in tasks
+                     if t["need"] in ("sources", "section", "redirect") and t["query"]]
+    section_focus = [t["query"] for t in tasks
+                     if t["need"] in ("section", "redirect") and t["query"]]
+    needs_sources = bool(needs & {"sources", "section", "redirect"})
+    needs_report = bool(needs & {"section", "redirect"})
+
+    steps: list[str] = []
+    if "ingest" in needs:
+        steps.append("ingest")
+    if needs_sources:
+        steps += ["gather", "collect"]
+    steps.append("report" if needs_report else "revise")
+    steps.append("comment")
+
+    tier = ("redirection" if "redirect" in needs
+            else "gap_fill" if needs_sources else "cosmetic")
+    return {"steps": steps, "tier": tier,
+            "gather_topics": gather_topics, "section_focus": section_focus}
+
+
+def _tasks_assessment(tasks: list[dict]) -> str:
+    """One-line human summary of the task breakdown, for the plan record and notify."""
+    from collections import Counter
+    counts = Counter(t["need"] for t in tasks)
+    return ", ".join(f"{counts[n]}×{n}" for n in _LITREVIEW_NEEDS if counts[n])
+
+
+def _write_litreview_steering(directory: str, built: dict) -> str | None:
+    """INSTRUCT the gather/report: write a new numbered litrev config carrying the tasks' queries.
+
+    This is the channel the current classify path never wrote — its gather_topics went only into
+    a task description and steered nothing. The config helpers live in rabbitHole (litreview's
+    own config format); haarpi soft-imports them, exactly as it soft-imports raconteur for the
+    paper ladder, so there is no hard dependency and a stack without rabbitHole degrades quietly.
+    """
+    if not (built["gather_topics"] or built["section_focus"]):
+        return None
+    try:
+        from rabbithole import plan as _rhplan
+    except ImportError:
+        return None
+    extra_focus = "; ".join(built["section_focus"])
+    try:
+        if "gather" in built["steps"]:
+            fp = _rhplan._write_gap_config(
+                directory, {"gather_topics": built["gather_topics"]}, extra_focus)
+        elif extra_focus:
+            fp = _rhplan._write_section_config(directory, extra_focus)
+        else:
+            return None
+    except Exception as e:  # noqa: BLE001 — a steering-config failure must not crash the gate;
+        print(f"  [warn] could not write gather-steering config ({e}) — "
+              f"the chain will run unsteered")   # the chain still runs, just from the base config
+        return None
+    return getattr(fp, "name", str(fp))
+
+
 def _print_authors(m: project.Manifest) -> None:
     people = project.authors(m)
     if not people:
@@ -1234,11 +1402,23 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         _email(cfg, f"haarpi: {m.name} — {stage} gate passed", msg)
         return 0
 
-    # unresolved asks -> classify + queue rework
+    # unresolved asks -> plan + queue rework
     dtiers = PAPER_DELIVERABLE_TIERS.get(deliverable) if deliverable else None
-    plan = classify(stage, check, cfg, tiers=dtiers, deliverable=deliverable)
-    tier = plan["tier"]
-    steps = (dtiers or STAGE_TIERS[stage])[tier]
+    built = None
+    if stage == "litreview":
+        # The general solution: decompose the comments into a per-comment task list, derive the
+        # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
+        # human is the verification loop. See DESIGN_next_orchestration.md.
+        tasks = decompose(check["unresolved"], cfg)
+        built = chain_from_tasks(tasks)
+        tier, steps = built["tier"], built["steps"]
+        plan = {"tier": tier, "steps": steps, "tasks": tasks,
+                "gather_topics": built["gather_topics"],
+                "assessment": _tasks_assessment(tasks)}
+    else:
+        plan = classify(stage, check, cfg, tiers=dtiers, deliverable=deliverable)
+        tier = plan["tier"]
+        steps = (dtiers or STAGE_TIERS[stage])[tier]
     what = f"{stage} [{deliverable}]" if deliverable else stage
     if venue:
         what += f" ({venue})"
@@ -1251,6 +1431,12 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     if dry_run:
         print("\n".join(["[dry-run]"] + summary))
         return 0
+    # INSTRUCT: write the numbered litrev config that steers the gather/report at the tasks'
+    # queries. This is a file side-effect, so it happens only past the dry-run return, and for
+    # both the queued and the manual paths (a manual gather deserves steering too).
+    steer_config = _write_litreview_steering(str(root), built) if built else None
+    if steer_config:
+        summary.append(f"  steering config: {steer_config}")
     confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or ["redirection"])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
@@ -1260,6 +1446,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
              "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
+             "steer_config": steer_config,
              "bindings": _current_bindings(root, m, stage)}
     if not queueing:
         project.record_plan(root, entry)

@@ -180,7 +180,9 @@ def test_clean_markup_mints_release_and_advances(proj, servers):
 
 
 def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
-    tr, _ = servers
+    tr, ol = servers
+    # litreview now decomposes into a per-comment task list; a 'sources' task yields gap_fill.
+    ol.reply = json.dumps({"tasks": [{"comments": [1], "need": "sources", "query": "X"}]})
     m = project.load_manifest(proj)
     out = m.output_dir(proj, "litreview")
     markup = out / "260710_myproj_litreview_ra_DCR.docx"
@@ -210,8 +212,8 @@ def test_status_reports_stage_states(proj, capsys):
 
 def test_redirection_inserts_approval_gate(proj, servers):
     tr, ol = servers
-    ol.reply = json.dumps({"tier": "redirection", "assessment": "wrong direction",
-                           "gather_topics": ["Y"]})
+    # a 'redirect' task derives tier=redirection (and steers gather at its query).
+    ol.reply = json.dumps({"tasks": [{"comments": [1], "need": "redirect", "query": "Y"}]})
     m = project.load_manifest(proj)
     markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"
     _make_markup(markup, resolved=False)
