@@ -83,6 +83,34 @@ def test_the_gate_and_the_reviser_now_read_the_same_comments(doc):
             == {a["id"] for a in rl.open_asks(doc)})
 
 
+def test_add_replies_nests_even_when_a_paragraph_carries_several_comments(tmp_path):
+    """The writer, not the parser. Two comments anchored to different spans of ONE paragraph,
+    then a tool reply to each: both must nest under their own parent. This is exactly what
+    rabbitHole's old whole-paragraph-anchor writer got wrong — it orphaned the replies into
+    separate top-level comments — and why the reply writer is now this shared one."""
+    path = write_commented_docx(
+        tmp_path / "multi.docx",
+        ["The quick brown fox jumps over the lazy dog."],
+        [{"cid": "1", "author": HUMAN, "text": "define fox", "on": "quick brown fox"},
+         {"cid": "2", "author": HUMAN, "text": "define dog", "on": "lazy dog"}],
+    )
+    added = rl.add_replies(path, {"1": "A fox is a fox.", "2": "A dog is a dog."},
+                           author="rabbitHole", initials="rH")
+    assert added == 2
+
+    threads = rl.comment_threads(path)
+    # each reply landed under its OWN parent, not beside it
+    replies_of = {cid: rec["parent"] for cid, rec in threads.items() if rec["is_tool"]}
+    assert set(replies_of.values()) == {"1", "2"}, "each reply nests under its own ask"
+    assert all(rec["is_tool"] for cid, rec in threads.items() if rec["parent"])
+
+    # and the parser agrees: still two open asks, each now a repeat carrying its reply
+    asks = {a["id"]: a for a in rl.open_asks(path)}
+    assert set(asks) == {"1", "2"}
+    assert asks["1"]["prior_tool_replies"] == ["A fox is a fox."]
+    assert asks["2"]["prior_tool_replies"] == ["A dog is a dog."]
+
+
 def test_a_comment_on_deleted_text_is_still_seen(tmp_path):
     """A reviewer who comments on a phrase and then deletes it leaves the anchor inside
     the w:del. A direct-children search loses the comment silently — the worst way for

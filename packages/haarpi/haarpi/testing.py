@@ -66,15 +66,29 @@ def write_commented_docx(path: Path, paragraphs: list[str],
     path = Path(path)
     doc = Document()
     paras = [doc.add_paragraph(t) for t in paragraphs]
+
+    def _reference_after(end_el) -> None:
+        # A real Word comment carries a w:commentReference run at its range end; the fixture
+        # emits one too, so a WRITER like add_replies (which threads a reply off the parent's
+        # reference) has the same anchor it would find in a document a person actually annotated.
+        ref_run = end_el.makeelement(qn("w:r"), {})
+        ref_run.append(ref_run.makeelement(qn("w:commentReference"), {qn("w:id"): cid}))
+        end_el.addnext(ref_run)
+
     for c in comments:
         p_el = paras[c.get("anchor", 0)]._p
         cid = str(c["cid"])
         if c.get("on"):
             if not anchor_fragment(p_el, c["on"], cid):
                 raise ValueError(f"comment {cid}: {c['on']!r} is not in that paragraph")
+            end_el = next(e for e in p_el.iter(qn("w:commentRangeEnd"))
+                          if e.get(qn("w:id")) == cid)
+            _reference_after(end_el)
             continue
         p_el.insert(0, p_el.makeelement(qn("w:commentRangeStart"), {qn("w:id"): cid}))
-        p_el.append(p_el.makeelement(qn("w:commentRangeEnd"), {qn("w:id"): cid}))
+        end_el = p_el.makeelement(qn("w:commentRangeEnd"), {qn("w:id"): cid})
+        p_el.append(end_el)
+        _reference_after(end_el)
     doc.save(str(path))
 
     para_of = {str(c["cid"]): f"0000{int(c['cid']):04X}" for c in comments}

@@ -40,6 +40,7 @@ import sys
 import time
 from pathlib import Path
 
+from haarpi import redline as hredline
 from haarpi import redline_engine as _engine
 from haarpi.redline_engine import Evidence, EvidenceLine, ParaContext, route_class_of
 
@@ -812,28 +813,29 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
                   "table yourself, or ask for the numbers to be restated in the prose."),
         "section": section_msg,
     }
-    replies = []
+    replies: dict[str, str] = {}
     for cid, outcome in outcomes.items():
         if outcome == "edited":
-            replies.append({"parent_id": cid, "text": "rabbitHole: revised the paragraph "
-                            "above as a tracked change to address this comment."})
+            replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
+                            "address this comment.")
         elif outcome.startswith("corpus"):
             cls = outcome.split(":", 1)[1] if ":" in outcome else "sources"
-            replies.append({"parent_id": cid, "text": corpus_msg.get(cls, corpus_msg["sources"])})
+            replies[cid] = corpus_msg.get(cls, corpus_msg["sources"])
         elif outcome == "skipped":
             # Say so. Silence here reads as "the tool ignored me"; worse, an earlier version
             # emitted the edit anyway and claimed success.
-            replies.append({"parent_id": cid, "text":
-                            "rabbitHole: could not produce a revision that addressed this "
+            replies[cid] = ("rabbitHole: could not produce a revision that addressed this "
                             "without dropping a citation or an equation from the paragraph, "
                             "so the paragraph is unchanged. Narrow the comment, or revise "
-                            "this one by hand."})
+                            "this one by hand.")
     if not replies:
         return
     try:
-        rsum = redline.add_reply_comments(out_docx, replies, author="rabbitHole")
-        print(f"  Replies added: {rsum['replies_added']} reviewer comment(s) answered "
-              f"(authored rabbitHole).")
+        # The shared writer (raconteur uses it too): it shadows each parent's exact anchor and
+        # sets w15:paraIdParent, so the reply nests as a real thread even when a paragraph
+        # carries several comments — and it creates commentsExtended.xml when it is absent.
+        n = hredline.add_replies(out_docx, replies, author="rabbitHole", initials="rH")
+        print(f"  Replies added: {n} reviewer comment(s) answered (authored rabbitHole).")
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] could not add reply comments ({e}).", file=sys.stderr)
 
