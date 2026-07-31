@@ -23,3 +23,8 @@ venv/
 # workflow handoff — never committed (see GitHub rules)
 HANDOFF.md
 DIAGNOSIS.md
+
+# trained author-voice profiles + their data — personal, never committed. These live in
+# ~/.config/haarpi/ (outside any repo); this is belt-and-suspenders against a stray copy.
+style_profile.md
+*.md.bak
