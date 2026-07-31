@@ -253,24 +253,12 @@ def load_bib_summary(project_dir: Path, subdir: str = "litReview") -> str:
 
 
 def _read_profile() -> tuple[dict, str]:
-    """The style profile: (frontmatter, body). Empty if it has never been trained."""
-    import yaml
+    """The style profile: (frontmatter, body). Empty if it has never been trained.
 
-    from .config import GLOBAL_CONFIG_PATH
-    path = GLOBAL_CONFIG_PATH.parent / "style_profile.md"
-    if not path.exists():
-        return {}, ""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    meta: dict = {}
-    if text.startswith("---"):
-        end = text.find("\n---\n", 3)
-        if end != -1:
-            try:
-                meta = yaml.safe_load(text[4:end]) or {}
-            except yaml.YAMLError:
-                meta = {}
-            text = text[end + 5:]
-    return meta, text.strip()
+    Sourced through the shared engine, which reads the neutral ``~/.config/haarpi/`` path (and
+    honors the legacy ``~/.config/raconteur/`` path during the transition)."""
+    from haarpi import style as _engine
+    return _engine.read_profile()
 
 
 def load_style_signature(project_dir: Path) -> dict:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 
+from haarpi import style as hstyle
 from raconteur import paper, style
 from raconteur.config import ProjectConfig
 
@@ -54,39 +55,48 @@ def test_the_note_survives_a_config_round_trip(tmp_path):
 
 # ── an old-format profile must be detectable ─────────────────────────────────
 
+def _neutralise(monkeypatch, p):
+    # profile_is_current now lives in the shared engine and reads the engine's path globals;
+    # point them at the fixture file and disable the legacy fallback so nothing leaks in.
+    monkeypatch.setattr(hstyle, "STYLE_PROFILE_PATH", p)
+    monkeypatch.setattr(hstyle, "LEGACY_PROFILE_PATHS", ())
+
+
 def test_a_profile_without_a_signature_is_not_current(monkeypatch, tmp_path):
     """No signature means style_block bails, load_style_profile dumps the raw body, and
     load_style_signature returns {} — so no style guard can fire. It still looks fine."""
     p = tmp_path / "style_profile.md"
     p.write_text("---\nauthor: X\npaper_keys: [A]\n---\n\n## Style Profile\n\nprose\n")
-    monkeypatch.setattr(style, "STYLE_PROFILE_PATH", p)
+    _neutralise(monkeypatch, p)
     assert not style.profile_is_current({"author": "X", "paper_keys": ["A"]})
 
 
 def test_a_profile_without_tagged_exemplars_is_not_current(monkeypatch, tmp_path):
     p = tmp_path / "style_profile.md"
     p.write_text("---\nauthor: X\n---\n\n## Representative Excerpts\n\n1. prose\n")
-    monkeypatch.setattr(style, "STYLE_PROFILE_PATH", p)
+    _neutralise(monkeypatch, p)
     assert not style.profile_is_current({"signature": {"corpus_words": 10}})
 
 
 def test_a_current_profile_is_current(monkeypatch, tmp_path):
     p = tmp_path / "style_profile.md"
     p.write_text("---\nauthor: X\n---\n\n## Voice — exemplars\n\n> some real prose here\n")
-    monkeypatch.setattr(style, "STYLE_PROFILE_PATH", p)
+    _neutralise(monkeypatch, p)
     assert style.profile_is_current({"signature": {"corpus_words": 10}})
 
 
 def test_an_unchanged_key_set_no_longer_blocks_a_format_retrain():
     """The staleness check compares PAPER KEYS. A format change leaves them identical, so
-    the one profile that most needs retraining reported itself up to date."""
-    src = inspect.getsource(style.run)
+    the one profile that most needs retraining reported itself up to date. The guard now lives
+    in the shared engine's run()."""
+    src = inspect.getsource(hstyle.run)
     assert "and current_format" in src, \
         "the up-to-date early return must also require a current format"
 
 
 def test_the_profiles_own_keys_are_a_valid_training_source():
     """style_paper_keys is empty in every project config that predates it; falling to the
-    interactive Zotero search there is what made a trained profile look absent."""
-    src = inspect.getsource(style.run)
-    assert "cfg.style_paper_keys or sorted(existing_keys)" in src
+    interactive Zotero search there is what made a trained profile look absent. The engine
+    falls to the profile's own keys; raconteur's policy sources the requested keys from cfg."""
+    assert "requested_keys or sorted(existing_keys)" in inspect.getsource(hstyle.run)
+    assert "cfg.style_paper_keys" in inspect.getsource(style.RaconteurStylePolicy.__init__)
