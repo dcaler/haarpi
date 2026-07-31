@@ -41,7 +41,7 @@ import time
 from pathlib import Path
 
 from haarpi import redline_engine as _engine
-from haarpi.redline_engine import Evidence, ParaContext, route_class_of
+from haarpi.redline_engine import Evidence, EvidenceLine, ParaContext, route_class_of
 
 from . import config, corpus as corpus_mod, docxio, guards, render, runlog
 from .brain import Brain
@@ -450,14 +450,39 @@ def _para_guard_findings(old_text: str, new_text: str, touched: set[int],
             + guards.minimal_edit_violation(touched, anchored, n_units))
 
 
+# A comment names a source either bracketed ("[@doblinger2019]") or bare
+# ("add info from @doblinger2019"). The bare form is what reviewers actually write, and
+# guards.all_citekeys only matches the bracketed form — so this catches both. A bare token is
+# required to look like a citekey (it must carry a 4-digit year) so an @-mention or an email
+# address is not mistaken for a source and wrongly routed.
+_COMMENT_KEY_RE = re.compile(
+    r"\[@([^\]\s]+)\]"                                   # bracketed: any key
+    r"|(?<![\w@])@([A-Za-z0-9][\w:.\-]*\d{4}[a-z]?)")    # bare: must carry a year
+
+
+def _named_citekeys(comments: list[str]) -> set[str]:
+    """The [@citekeys] a reviewer names in their comments — the keys triage tries to make
+    citeable before the reviser is ever asked to cite them."""
+    keys: set[str] = set()
+    for c in comments:
+        for m in _COMMENT_KEY_RE.finditer(c):
+            keys.add(m.group(1) or m.group(2))
+    return keys
+
+
 class RabbitHolePolicy:
     """rabbitHole's dialect for the shared redline engine: evidence is the corpus digest, the
     prompts are the litreview house style, the guards are rabbitHole's set (every paragraph
     must cite), and the audit routes with the verb ``CORPUS`` rather than ``ROUTE``.
 
     Constructed per paragraph, because the digest is scoped to the paragraph's own citekeys.
-    ``resolve_named_source`` is None here — step 4 fills it with the whole-library Zotero pull
-    that lets "add @doblinger, it's in Zotero" land in one pass instead of a misleading skip.
+
+    ``resolve_named_source`` is a CORPUS-PROMOTE: a source the reviewer names that is in the
+    corpus but not in this paragraph's digest (the digest is budget-capped, so a large corpus
+    can crowd a source out) is surfaced so the reviser can cite it. A named key that is in
+    NEITHER routes as a missing source — honestly, with an instruction to add it to the project
+    Zotero collection — instead of the old misleading "couldn't without dropping a citation".
+    It reads only the local corpus; it never touches the wider Zotero library.
     """
 
     author = "rabbitHole"
@@ -466,16 +491,22 @@ class RabbitHolePolicy:
     # class, and rabbitHole's safe default is "sources" (matching the original _corpus_class).
     route_classes = ("sources", "table", "section")
 
-    def __init__(self, cfg, digest: str):
+    def __init__(self, cfg, digest: str, source_lines: dict[str, str] | None = None):
         self._topic = cfg.topic
         self._focus = cfg.focus or ""
         self._digest = digest
+        # citekey -> the evidence line for every source in the corpus (full line where the
+        # corpus has one, else compact). What a promote draws from.
+        self._source_lines = source_lines or {}
 
     def evidence_for(self, ctx: ParaContext) -> Evidence:
-        return Evidence(known=set(), context=self._digest)
+        # known = the keys already citeable in THIS paragraph's digest. Triage only tries to
+        # promote a named key that is not already here.
+        return Evidence(known=set(guards.all_citekeys(self._digest)), context=self._digest)
 
     def resolve_named_source(self, citekey: str):
-        return None
+        line = self._source_lines.get(citekey)
+        return EvidenceLine(citekey=citekey, text=line) if line else None
 
     def revise_system(self) -> str:
         return _PARA_REVISE_SYS
@@ -502,19 +533,25 @@ class RabbitHolePolicy:
 
 def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[str],
                             digest: str, anchored: set[int] | None = None,
-                            rounds: int | None = None) -> tuple[str | None, str]:
+                            rounds: int | None = None,
+                            source_lines: dict[str, str] | None = None,
+                            ) -> tuple[str | None, str]:
     """Rewrite one commented paragraph, through the shared engine, in rabbitHole's dialect.
 
     The loop, the primals, the triage stage, and the fail-closed contract now live in
     ``haarpi.redline_engine``; this is the thin adapter that keeps rabbitHole's call signature
     and outcome vocabulary (``edited`` / ``corpus:<class>`` / ``skipped``) so the orchestration
     and the adversary tests are unchanged.
+
+    ``source_lines`` (citekey -> evidence line for every corpus source) lets triage promote a
+    named source out of the corpus and into this paragraph's evidence before the reviser runs.
     """
     if rounds is None:
         rounds = max(1, int(getattr(brain.cfg, "critique_rounds", 2)))
-    policy = RabbitHolePolicy(cfg, digest)
+    policy = RabbitHolePolicy(cfg, digest, source_lines)
     ctx = ParaContext(heading="", text=paragraph, comments=list(comments),
-                      anchored=set(anchored or ()), named_keys=set(), kind="prose")
+                      anchored=set(anchored or ()), named_keys=_named_citekeys(comments),
+                      kind="prose")
     new_text, disposition, _copyedits = _engine.redline_paragraph(
         brain, ctx, policy, rounds=rounds)
     cls = route_class_of(disposition)
@@ -535,6 +572,9 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
     cmap = redline.comments_by_id(docx)
     compact = _compact_lines(corpus, notes, citekeys)
     full = _full_lines(corpus, notes, citekeys)
+    # Every corpus source's best evidence line, keyed by citekey — full where the corpus has
+    # one, else compact. Triage promotes a named source out of this into a paragraph's digest.
+    source_lines = {**compact, **full}
 
     edits: list[dict] = []
     skipped: list[str] = []
@@ -562,7 +602,8 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
               f"...", flush=True)
         digest = _para_digest(compact, full, guards.all_citekeys(a["text"]))
         new_text, outcome = _redline_para_adversary(
-            brain, cfg, a["text"], comments, digest, anchored=anchored)
+            brain, cfg, a["text"], comments, digest, anchored=anchored,
+            source_lines=source_lines)
         if outcome == "edited" and new_text:
             edits.append({"para": a["para"], "op": "replace", "text": new_text})
             outcomes.update({i: "edited" for i in ids})
@@ -762,8 +803,10 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
                        "does not read this file.")
 
     corpus_msg = {
-        "sources": ("rabbitHole: this needs sources not yet in the corpus, which an in-place "
-                    "edit can't add — " + fetch[0].lower() + fetch[1:]),
+        "sources": ("rabbitHole: a source this comment needs is not in the corpus, which an "
+                    "in-place edit can't add. If you named a specific paper, add it to the "
+                    "project's Zotero collection and re-run `rabbitHole revise` — the next run "
+                    "pulls it into the corpus so the reviser can cite it. Otherwise " + fetch[0].lower() + fetch[1:]),
         "table": ("rabbitHole: this asks for a table, which isn't a prose edit — a redline "
                   "can only rewrite sentences. Left the paragraph as it stands; add the "
                   "table yourself, or ask for the numbers to be restated in the prose."),

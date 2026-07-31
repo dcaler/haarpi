@@ -245,11 +245,17 @@ law is not a constraint either tool strains against; it is each one's natural sh
    verb from the policy (`route_verb`, default `ROUTE`). rabbitHole suite green (130). (The
    duplicated `rabbithole/redline.py` OOXML layer can be retired later — it is orthogonal to
    the per-paragraph loop and its removal is not required for the engine.)
-4. **NEXT (the feature — changes behaviour)** — Fill rabbitHole's `resolve_named_source` with
-   corpus-promote + whole-library Zotero pull, and populate `named_keys` so TRIAGE fires. The
-   feature that started it all: *name a curated paper in a comment and it lands, no second
-   round.* Outward-facing decision: whether a pulled paper is also written back to the project
-   Zotero collection, or ingested into the local corpus only.
+4. **✅ DONE (the feature)** — rabbitHole's `resolve_named_source` is a **corpus-promote**, and
+   `named_keys` is populated (`_named_citekeys` reads both `[@key]` and the bare `@key2019`
+   form reviewers actually write). TRIAGE now fires: a named source in the corpus but crowded
+   out of this paragraph's budget-capped digest is surfaced so the reviser can cite it; a named
+   source in *neither* the digest nor the corpus routes as a missing source — honestly, with
+   "add it to the project Zotero collection and re-run" — before any rewrite attempt is spent.
+   **Local only**: it reads the corpus, never the wider Zotero library, and writes nothing back
+   — the user maintains the project collection by hand. The whole-library *pull* and the
+   collection *write-back* are deliberately not built (they exist only to save the manual add,
+   which the user is happy to do); they remain a future opt-in. rabbitHole suite green (134,
+   +4 triage tests).
 5. Formalise the cross-stage `FollowUp` signal and wire raconteur's `sources/evidence/figure`
    routes into the planner (the `aggregate()` boundary law).
 6. *(later, optional)* Parameterise the core guard vocabulary into a shared `haarpi.guards`

@@ -247,6 +247,68 @@ def test_empty_edit_object_is_skipped():
     assert text is None
 
 
+# ── triage: a source the reviewer NAMES, made citeable before the reviser runs ──
+
+class _RecordingBrain(_FakeBrain):
+    """Captures the revise prompts so a test can prove a promoted line reached the reviser."""
+
+    def __init__(self, revise_outputs, audit_outputs):
+        super().__init__(revise_outputs, audit_outputs)
+        self.revise_prompts: list[str] = []
+
+    def coordinator(self, prompt, sys_prompt, **kw):
+        if "audit" not in sys_prompt.lower():
+            self.revise_prompts.append(prompt)
+        return super().coordinator(prompt, sys_prompt, **kw)
+
+
+def _run_named(brain, comments, source_lines=None, paragraph=PARA, anchored=ANCHOR):
+    return revise._redline_para_adversary(
+        brain, _FakeCfg(), paragraph, list(comments), DIGEST,
+        anchored=set(anchored), source_lines=source_lines or {})
+
+
+def test_named_citekeys_reads_bare_and_bracketed_forms():
+    # bare is what reviewers actually write; bracketed is the formal form; both are caught
+    assert revise._named_citekeys(["add info from @doblingerGovernments2019 - it's in Zotero"]) \
+        == {"doblingerGovernments2019"}
+    assert revise._named_citekeys(["see [@smith2021] here"]) == {"smith2021"}
+    # a plain @-mention or an address is not a citekey (no year) — not routed as a source
+    assert revise._named_citekeys(["ping @dave about this", "mail a@b.com"]) == set()
+
+
+def test_a_named_source_in_the_corpus_is_promoted_and_reaches_the_reviser():
+    """The source is in the corpus but not in this paragraph's (budget-capped) digest. Naming
+    it must surface it so the reviser can cite it — not route it away as missing."""
+    promoted = {"newsource2021": "- [@newsource2021] a promoted evidence line"}
+    brain = _RecordingBrain(
+        revise_outputs=['{"2": "Beta rises [@bowling2018], echoed by [@newsource2021]."}'],
+        audit_outputs=["OK"])
+    text, outcome = _run_named(brain, ["tie this to @newsource2021"], source_lines=promoted)
+    assert outcome == "edited"
+    assert "[@newsource2021] a promoted evidence line" in brain.revise_prompts[0]
+
+
+def test_a_named_source_in_neither_digest_nor_corpus_routes_as_missing():
+    """The whole point of triage: classify BEFORE attempting. A source that cannot be made
+    citeable is routed honestly, and the reviser is never even called."""
+    brain = _FakeBrain(revise_outputs=[], audit_outputs=[])   # any call would raise
+    text, outcome = _run_named(brain, ["bring in @ghostpaper2000"], source_lines={})
+    assert outcome == "corpus:sources"
+    assert text is None
+    assert brain.revise_calls == 0 and brain.audit_calls == 0
+
+
+def test_a_named_source_already_in_the_digest_is_left_to_the_normal_flow():
+    """[@bowling2018] is already citeable here, so triage does not treat it as a pull — the
+    comment is a normal prose edit, not a routed missing source."""
+    brain = _FakeBrain(
+        revise_outputs=['{"2": "Beta falls sharply [@bowling2018]."}'],
+        audit_outputs=["OK"])
+    text, outcome = _run_named(brain, ["lean harder on @bowling2018"], source_lines={})
+    assert outcome == "edited"
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items())
