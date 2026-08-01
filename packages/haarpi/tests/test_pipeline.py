@@ -150,6 +150,43 @@ def test_init_asks_priority_and_defaults_to_trundlrs_own_band(tmp_path, servers,
     assert project.load_manifest(root).trundlr_priority == trundlr.PRIORITY_DEFAULT
 
 
+def test_init_reads_a_pasted_multiparagraph_brief_without_spilling(
+        tmp_path, servers, monkeypatch):
+    """A pasted multi-line brief is consumed whole — every line up to the `.`/EOF
+    terminator, blank paragraph breaks included — so its later paragraphs never fall
+    through into the initials/priority prompts. This is the paste corruption that once
+    split a brief across `brief` and `initials`."""
+    tr, _ = servers
+    root = tmp_path / "260801_pasted"
+    root.mkdir()
+    # brief lines (with a paragraph break) → sentinel → initials → priority(default)
+    feed = iter(["para one of the brief", "", "para two of the brief", ".",
+                 "JQ", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(feed))
+    assert planner.run_init(root, name="pasted", short_title="pasted") == 0
+    m = project.load_manifest(root)
+    assert m.brief == "para one of the brief\n\npara two of the brief"
+    assert m.initials == "JQ"          # the 2nd paragraph did NOT leak here
+
+
+def test_init_multiline_brief_ends_on_eof(tmp_path, servers, monkeypatch):
+    """Ctrl-D (EOF) is an equally valid terminator for the pasted brief."""
+    tr, _ = servers
+    root = tmp_path / "260801_eof"
+    root.mkdir()
+    calls = iter(["only paragraph"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(calls)
+        except StopIteration:
+            raise EOFError
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert planner.run_init(root, name="eof", short_title="eof",
+                            initials="DCR", priority=2) == 0
+    assert project.load_manifest(root).brief == "only paragraph"
+
+
 def test_init_clamps_a_priority_trundlr_would_reject(tmp_path, servers):
     """Trundlr accepts 1..4. A typo lands in range instead of failing the init."""
     tr, _ = servers

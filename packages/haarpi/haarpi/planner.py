@@ -1528,6 +1528,31 @@ def _ask(label: str, default: str = "") -> str:
     return got or default
 
 
+def _ask_multiline(label: str, default: str = "") -> str:
+    """Read a long-form, possibly multi-paragraph value (the research brief).
+
+    A single `input()` returns at the first newline, so pasting a multi-paragraph
+    brief would answer *this* prompt with line one and let every remaining line fall
+    through into the following questions (initials, priority) — the paste corruption
+    that split one brief across `brief` and `initials`. Here we consume every pasted
+    line until an explicit terminator — a line containing only `.`, or EOF/Ctrl-D —
+    so the whole paste lands in a single field. Interior blank lines (paragraph
+    breaks) are preserved; they do not end the read."""
+    hint = "paste it, then a line with just '.' (or Ctrl-D) to finish"
+    tail = f" [{default}]" if default else ""
+    print(f"  {label} — {hint}{tail}:")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    return "\n".join(lines).strip() or default
+
+
 def _ask_priority(default: int = trundlr.PRIORITY_DEFAULT) -> int:
     """The project's standing in the queue, asked once. A new project used to be born
     at priority 1 — top band, ahead of everything already running — which is a claim
@@ -1564,7 +1589,7 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
         name=name or _ask("project name", default_name),
         short_title=short_title or _ask("short title (filename stem)",
                                         (name or default_name).lower()),
-        brief=brief if brief is not None else _ask("research brief (long-form)"),
+        brief=brief if brief is not None else _ask_multiline("research brief (long-form)"),
         initials=initials or _ask("your initials (revision chain)", "DCR"),
         trundlr_priority=(trundlr.clamp_priority(priority) if priority is not None
                           else _ask_priority() if asks_trundlr
