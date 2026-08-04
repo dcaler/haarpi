@@ -92,6 +92,25 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                                "`haarpi rayleigh review` — the attended session designs "
                                "and queues the follow-on chain itself."),
     },
+    # The DESIGN (preregistration) stage. Its rework is always an attended re-run of the
+    # design session — rayleigh re-authors experiments.yaml + the prereg docx addressing the
+    # annotations (mirrors experiments' `review_session`). No `comment` step: re-running the
+    # session ends by re-rendering the prereg for the author to annotate again.
+    "design": {
+        "design_session": Step(None, 1.0,
+                               "Re-open the preregistration design session: run "
+                               "`haarpi rayleigh init` to address the annotations, revise "
+                               "experiments.yaml, and re-render the prereg docx."),
+    },
+    # The BUILD stage. raster's `handoff` renders the methods digest to a docx the gate mints;
+    # rework re-opens the attended build session (raster re-plans/re-builds and re-emits the
+    # digest). Same shape as design — one tier, an attended re-run.
+    "build": {
+        "build_session": Step(None, 1.0,
+                              "Re-open the build: run `haarpi raster plan` / `raster build` to "
+                              "address the annotations, then `raster handoff` to re-emit the "
+                              "methods digest docx."),
+    },
 }
 
 # tier -> ordered step chain, per stage. A "stage:step" element queues into
@@ -117,6 +136,16 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     "experiments": {
         "cosmetic": ["process", "comment"],
         "extend":   ["review_session"],
+    },
+    # Any prereg annotation re-opens the attended design session (one tier — the design is
+    # authored interactively, so every rework is "re-run the session").
+    "design": {
+        "revise": ["design_session"],
+    },
+    # Any methods annotation re-opens the attended build session (one tier — raster's build is
+    # an attended process; every rework is "re-run it and re-emit the digest").
+    "build": {
+        "revise": ["build_session"],
     },
 }
 
@@ -420,6 +449,28 @@ A reviewer left unresolved annotations on an experiment results write-up:
   sweep, or a new experiment. Presentation cannot satisfy it.
 
 Respond: {{"tier": "...", "assessment": "<one sentence>"}}""",
+    "design": """\
+A reviewer left unresolved annotations on an experiment PREREGISTRATION (the design of the
+experiments, before any data exists):
+{annotations}
+
+Any unresolved annotation re-opens the attended design session — rayleigh re-authors the
+preregistration (experiments.yaml + the prereg docx) to address them. There is one tier.
+
+- "revise": address the annotations by revising the preregistered design.
+
+Respond: {{"tier": "revise", "assessment": "<one sentence>"}}""",
+    "build": """\
+A reviewer left unresolved annotations on the METHODS DIGEST (raster's account of what the
+build did — the model, its contracts, the frozen test suite):
+{annotations}
+
+Any unresolved annotation re-opens the attended build session — raster re-plans/re-builds to
+address them and re-emits the digest. There is one tier.
+
+- "revise": address the annotations by revising the build and re-emitting the methods digest.
+
+Respond: {{"tier": "revise", "assessment": "<one sentence>"}}""",
 }
 
 
@@ -456,6 +507,13 @@ _STEP_SYNONYMS: dict[tuple[str, str], tuple[str, str]] = {
 # steps up regardless of which venue each belongs to.
 _STAGE_TOOL = {s: spec["tool"] for s, spec in project.DEFAULT_STAGES.items()}
 _TOOL_STAGE = {t: s for s, t in _STAGE_TOOL.items()}
+# A tool that owns more than one stage (rayleigh: design + experiments) cannot be mapped
+# to a single stage by name — the STEP disambiguates it (a `design_session` title is design
+# work, a `process`/`review_session` title is experiments). Keyed tool -> its stages in order.
+_MULTISTAGE_TOOLS: dict[str, list[str]] = {}
+for _s, _t in _STAGE_TOOL.items():
+    _MULTISTAGE_TOOLS.setdefault(_t, []).append(_s)
+_MULTISTAGE_TOOLS = {t: ss for t, ss in _MULTISTAGE_TOOLS.items() if len(ss) > 1}
 
 # Every word that can stand where the step stands — the chain steps plus the verbs the
 # one-off tasks use. Parsing is vocabulary-driven, not positional, because the venue now
@@ -495,6 +553,13 @@ def _parse_title(title: str) -> tuple[str, str, str, int | None] | None:
                   if stage == s or stage.startswith(s)), stage)
     rest = [t.lower() for t in toks[1:]]
     step = next((t for t in rest if t in _STEP_VOCAB), rest[-1] if rest else "")
+    # A tool with >1 stage: pick the stage whose registry owns this step (else leave the
+    # by-name default — an uncycled opening title like "rayleigh design session" has no
+    # step to resolve, and _canonical/next_cycle ignore it anyway).
+    for _s in _MULTISTAGE_TOOLS.get(head, ()):
+        if step in STAGE_STEPS.get(_s, {}):
+            stage = _s
+            break
     venue = " ".join(t for t in rest if t != step)
     stage, step = _STEP_SYNONYMS.get((stage, step), (stage, step))
     return stage, step, venue, cycle
@@ -1189,6 +1254,21 @@ def _refresh_stale(root: Path, m: project.Manifest, client, tr_cfg: dict,
     return refreshed
 
 
+# How each attended stage opens: (opening verb, task label, blurb). One tool now owns two
+# attended stages (rayleigh: `design` opens with `init` — the analytical framework; `experiments`
+# opens with `plan` — the executable experiments against the raster-built tooling), so the verb is
+# keyed by STAGE, not tool. Both are interactive Cale+Claude sessions; `rayleigh plan` hands off to
+# conduct itself once the compute is confirmed.
+_OPENING: dict[str, tuple[str, str, str]] = {
+    "design":      ("init", "design session",
+                    "Interactive preregistration/design session (the analytical framework)"),
+    "build":       ("plan", "design session", "Interactive design session"),
+    "experiments": ("plan", "experiment design session",
+                    "Design the executable experiments that use the built tooling to fulfil the "
+                    "framework, then hand off to conduct"),
+}
+
+
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
     """After a mint: open any downstream stage that just became unlocked."""
     opened = []
@@ -1202,10 +1282,11 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue
         tool = spec["tool"]
         if spec.get("attended"):
-            verb = {"raster": "plan", "rayleigh": "init"}.get(tool, "init")
+            verb, label, blurb = _OPENING.get(stage, ("init", "design session",
+                                                      "Interactive design session"))
             client.create_task(
-                f"{_STAGE_TOOL.get(stage, stage)} design session", m.trundlr_project_id,
-                description=f"Interactive design session — run: haarpi {tool} {verb}",
+                f"{tool} {label}", m.trundlr_project_id,
+                description=f"{blurb} — run: haarpi {tool} {verb}",
                 resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
         else:
             # The paper stage opens at the top of its ladder — narrative first,

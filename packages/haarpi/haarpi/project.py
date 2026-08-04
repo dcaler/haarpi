@@ -33,13 +33,25 @@ DEFAULT_STAGES: dict[str, dict] = {
         "dir": "litReview", "tool": "rabbithole", "inputs": [],
         "infix": "litreview", "attended": False,
     },
+    # The experiment DESIGN (preregistration) runs BEFORE build: you commit the
+    # experiments, then build code to satisfy them — designing against finished code is
+    # the preregistration anti-pattern. rayleigh authors it; the gate mints a `prereg`
+    # docx (see DESIGN_experiment_split.md). Its own directory, so no stage shares a
+    # workspace and the gate stays directory-scoped.
+    "design": {
+        "dir": "design", "tool": "rayleigh", "inputs": ["litreview"],
+        "infix": "prereg", "attended": True,        # opens with `rayleigh init`
+    },
     "build": {
-        "dir": "code", "tool": "raster", "inputs": ["litreview"],
+        "dir": "code", "tool": "raster", "inputs": ["litreview", "design"],
         "infix": "methods", "attended": True,       # opens with `raster plan`
     },
+    # CONDUCT the committed design against the built code, then write it up. Opens by
+    # kicking off `rayleigh queue` (per-experiment conduct -> process); `review` is the
+    # deeper re-design gate after results exist.
     "experiments": {
-        "dir": "results", "tool": "rayleigh", "inputs": ["build", "litreview"],
-        "infix": "results", "attended": True,       # opens with `rayleigh init`
+        "dir": "results", "tool": "rayleigh", "inputs": ["build", "design"],
+        "infix": "results", "attended": True,       # opens with `rayleigh queue`
     },
     "paper": {
         "dir": "paper", "tool": "raconteur",

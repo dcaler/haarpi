@@ -211,8 +211,9 @@ def test_clean_markup_mints_release_and_advances(proj, servers):
     assert (out.parent / "archive").is_dir()                     # spent chain archived
     entries = project.list_plans(proj)
     assert any(e["type"] == "gate" for e in entries)
-    # build became unlocked -> attended stage opened as a human design-session task
-    assert any(t["title"] == "raster design session" for t in tr.tasks)
+    # design (prereg) became unlocked -> attended session task; build stays locked (needs design)
+    assert any(t["title"] == "rayleigh design session" for t in tr.tasks)
+    assert not any(t["title"] == "raster design session" for t in tr.tasks)
     assert project.latest_release(proj, m, "litreview") is not None
 
 
@@ -299,6 +300,80 @@ def test_release_refreshes_idle_downstream_stage(proj, servers):
     assert any(t.startswith("raconteur revise") for t in titles)    # staleness re-fired paper
     entry = [e for e in project.list_plans(proj) if e.get("type") == "refresh"][-1]
     assert entry["stage"] == "paper" and entry["bindings"].get("litreview")
+
+
+def test_reordered_ladder_puts_design_before_build(proj):
+    """The experiment DESIGN (preregistration) is its own stage, before build, in its own
+    directory; build and experiments both depend on it."""
+    m = project.load_manifest(proj)
+    assert list(m.stages) == ["litreview", "design", "build", "experiments", "paper"]
+    assert m.stages["design"]["inputs"] == ["litreview"]
+    assert m.stages["design"]["dir"] == "design"
+    assert m.stages["design"]["infix"] == "prereg"
+    assert "design" in m.stages["build"]["inputs"]
+    assert "design" in m.stages["experiments"]["inputs"]
+    assert (proj / "design" / "output").is_dir()          # own workspace, scaffolded
+
+
+def test_dirty_prereg_reopens_the_design_session(proj, servers):
+    """A prereg annotation that isn't clean re-opens the attended design session (rayleigh
+    re-authors experiments.yaml + the prereg), mirroring experiments' review_session."""
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "revise", "assessment": "tighten E2's metric"})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "design") / "260710_myproj_prereg_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert new[0]["title"].startswith("rayleigh design_session")
+    assert "command" not in new[0]                         # attended session, yours
+    assert "rayleigh init" in new[0]["description"]
+
+
+def test_title_parse_disambiguates_rayleighs_two_stages():
+    """One tool, two stages: the STEP tells design work from experiments work."""
+    assert planner._parse_title("rayleigh design_session 2")[0] == "design"
+    assert planner._parse_title("rayleigh process 2")[0] == "experiments"
+    assert planner._parse_title("rayleigh review_session 3")[0] == "experiments"
+
+
+def test_clean_methods_mints_build_and_opens_experiments(proj, servers):
+    """raster's methods digest, rendered to a docx, mints the build stage on a clean read and
+    unlocks experiments — the build rung is no longer unwired."""
+    tr, _ = servers
+    m = project.load_manifest(proj)
+    # build's inputs (litreview + design) already released
+    for stage, infix in (("litreview", "litreview"), ("design", "prereg")):
+        rel = m.output_dir(proj, stage) / f"260710_myproj_{infix}.docx"
+        _make_markup(rel, resolved=True)                      # token-free name == a release
+    markup = m.output_dir(proj, "build") / "260710_myproj_methods_ra_DCR.docx"
+    _make_markup(markup, resolved=True, tracked=True)         # clean methods review
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    assert project.latest_release(proj, m, "build") is not None     # build minted
+    # experiments opens with the interactive `rayleigh plan` session (executable experiments)
+    opened = [t for t in tr.tasks[before:] if t["title"] == "rayleigh experiment design session"]
+    assert opened and "rayleigh plan" in opened[0]["description"]
+
+
+def test_dirty_methods_reopens_the_build_session(proj, servers):
+    """An annotation on the methods digest re-opens the attended build session (raster
+    re-builds and re-emits) — mirrors design's design_session."""
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "revise", "assessment": "the frozen test for E2 is wrong"})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "build") / "260710_myproj_methods_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert new[0]["title"].startswith("raster build_session")
+    assert "command" not in new[0]                            # attended session, yours
+    assert "raster" in new[0]["description"]
 
 
 def test_experiments_extend_escalates_to_attended_review(proj, servers):
