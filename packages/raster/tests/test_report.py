@@ -140,4 +140,25 @@ def test_run_report_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     rc = run_report(args)
     assert rc == 0
     assert not list(tmp_path.glob("*_methods_ra.md"))
+
+
+def test_run_report_renders_gate_ready_methods_docx(tmp_path, monkeypatch, capsys):
+    """The methods digest is also rendered to a docx, so `haarpi next` can mint the build
+    stage (the gate scans *.docx). Skips cleanly if pandoc isn't available."""
+    import pytest
+    hrender = pytest.importorskip("haarpi.render")
+    if not hrender.check_pandoc():
+        pytest.skip("pandoc not available")
+    project = make_project(tmp_path)
+    monkeypatch.setattr("raster.report.load_project", lambda d: project)
+    run_report(SimpleNamespace(dir=str(tmp_path), out=None, dry_run=False))
+
+    docx = list((project.code / "output").glob("*_methods_ra.docx"))
+    assert len(docx) == 1                       # a gate-scannable sibling beside the .md
+
+    # haarpi reads it as build-stage markup (infix methods), a draft awaiting the mint
+    from haarpi import naming
+    parsed = naming.parse(docx[0], __import__("raster.init", fromlist=["slugify"]).slugify(project.name))
+    assert parsed is not None and "methods" in [c.lower() for c in parsed[1]]
+    assert not naming.is_release(parsed[1])
     assert "Methods Digest" in capsys.readouterr().out

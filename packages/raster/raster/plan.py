@@ -12,11 +12,16 @@ import subprocess
 from pathlib import Path
 
 PLAN_PROMPT = (
-    "You are running the `raster plan` step. Read code/designdocs/PLANNING.md and follow it: "
-    "absorb the build brief (code/raster.yaml `brief:`) and the project's existing materials "
-    "(litReview/, paper/, and root files), then design code/designdocs/DESIGN.md and "
-    "code/designdocs/tasks.yaml interactively with me, and write the generated one-line "
-    "`description:` into code/raster.yaml. Start by reading PLANNING.md."
+    "You are running the `raster plan` step. Read code/designdocs/PLANNING.md and follow it. "
+    "FIRST, if this project has a committed experiment design, read it — the minted preregistration "
+    "in design/output/ (the `…_prereg` doc) and design/designdocs/EXPERIMENTS.md + experiments.yaml. "
+    "That design is your BUILD TARGET: its analytical approach and its 'Data infrastructure required' "
+    "section state exactly what code/data infrastructure this build must provide, so code/designdocs/"
+    "DESIGN.md and code/designdocs/tasks.yaml must be designed to SATISFY it. Also absorb the build "
+    "brief (code/raster.yaml `brief:`) and the project's materials (litReview/, paper/, root files). "
+    "Then design DESIGN.md and tasks.yaml interactively with me, and write the generated one-line "
+    "`description:` into code/raster.yaml. If there is no design/ prereg, fall back to the brief. "
+    "Start by reading PLANNING.md."
 )
 
 

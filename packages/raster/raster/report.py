@@ -243,6 +243,27 @@ def default_report_path(project, today=None) -> Path:
     return project.code / "output" / f"{today:%y%m%d}_{slug}_methods_ra.md"
 
 
+def render_methods_docx(md_path: Path) -> Path | None:
+    """Render the methods digest to the docx the haarpi gate mints.
+
+    The digest is Markdown, but `haarpi next` scans *.docx — so without a docx sibling the build
+    stage can never mint and experiments/paper never unlock (see DESIGN_experiment_split.md, the
+    build rung). Renders `{...}_methods_ra.md` -> `{...}_methods_ra.docx`, track-changes on for the
+    OPTIONAL margin review: the digest is mechanical, so a clean read commits in one `haarpi next`.
+    Returns the docx path, or None if pandoc/haarpi is unavailable (the .md still ships)."""
+    try:
+        from haarpi import render as hrender
+    except Exception:
+        return None
+    if not hrender.check_pandoc():
+        return None
+    dst = md_path.with_suffix(".docx")
+    if not hrender.pandoc_convert(md_path, dst):
+        return None
+    hrender.enable_track_changes(dst)
+    return dst
+
+
 def run_report(args) -> int:
     project = load_project(getattr(args, "dir", None))
     out = Path(args.out).resolve() if getattr(args, "out", None) else default_report_path(project)
@@ -254,4 +275,9 @@ def run_report(args) -> int:
     out.write_text(text)
     log(f"report: wrote Methods Digest -> {out}")
     log(f"  {len(text)} chars; hand to raconteur (it reads the newest ra* methods digest).")
+    doc = render_methods_docx(out)
+    if doc is not None:
+        log(f"  rendered {doc.name} for review — `haarpi next` mints it (unlocks experiments + paper).")
+    else:
+        log("  (pandoc unavailable — render the methods docx for review before `haarpi next`.)")
     return 0

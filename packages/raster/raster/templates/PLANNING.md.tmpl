@@ -12,14 +12,29 @@ design documents in `code/designdocs/`:
 > `meta:` / `orchestration:` / `execution:` blocks of `tasks.yaml`. You are filling in
 > the *design* and the `modules:` list — not the boilerplate.
 
+## The build target — the committed experiment design (if this project has one)
+
+If a **`design/` prereg** exists, it is the mandate for this build, and it outranks the brief.
+It is the minted preregistration from the `rayleigh init` design stage upstream of you:
+
+- `design/output/…_prereg.docx`/`.md` — the **committed** design (questions + analytical approach).
+- `design/designdocs/EXPERIMENTS.md` — the human-facing design; its **"Data infrastructure
+  required (the handoff to raster)"** section states, concretely, what you must build.
+- `design/designdocs/experiments.yaml` — the machine-readable spec of the analytical approach.
+
+**Your job is to build the code/data infrastructure that analytical approach needs** — nothing
+less, and no scope the design didn't ask for. Read the prereg *first*; DESIGN.md and tasks.yaml
+must be designed to *satisfy* it. Where it's silent on an implementation detail, that's Step 2
+(interactive design) — pin it down with the user, don't invent past the committed design.
+
 ## What the user asked to build (the brief, from `raster init`)
 
 > {{BRIEF}}
 
-This long-form brief is your **primary starting material** — it's the answer to "what do you want
-to build today?" captured at init and stored in `code/raster.yaml` (`brief:`). Read it closely;
-it states the intent the whole design must serve. Where it's thin or ambiguous, that's exactly
-what Step 2 (interactive design with the user) is for — pin it down, don't invent past it.
+This long-form brief, stored in `code/raster.yaml` (`brief:`), is supporting context — the intent
+behind the project. When a `design/` prereg exists, the prereg is the authority on *what to build*;
+the brief just explains *why*. With no prereg (a standalone `raster` project), the brief is your
+primary starting material instead. Where either is thin, that's what Step 2 is for.
 
 (The one-line `description:` is a *separate*, GENERATED field — **you write it** in Step 4, distilled
 from this brief + the settled design. It's the single line of grounding every build LLM worker sees,
@@ -32,6 +47,11 @@ so it must end up concrete and accurate in `code/raster.yaml`.)
 Read, in this order, to absorb as much context as possible **before** the interactive
 part. The point is to arrive with a concrete straw-man, not a blank page:
 
+- **`design/` — the committed prereg, if any (THE BUILD TARGET, read first).** The minted
+  `design/output/…_prereg` doc, `design/designdocs/EXPERIMENTS.md` (esp. "Data infrastructure
+  required"), and `experiments.yaml`. Your module decomposition should map onto what the
+  analytical approach requires — the data pipeline, the model/estimators, the single-run
+  entrypoint the experiments will call.
 - `code/raster.yaml` — project name, package (`{{PACKAGE}}`), language/python, models, remote.
 - This whole `code/designdocs/` folder — the skeletons you're completing.
 - **The project root (one level up from `code/`)** — this dir is shared with the other
