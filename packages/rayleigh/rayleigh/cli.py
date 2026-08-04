@@ -1,4 +1,4 @@
-"""rayleigh CLI — `rayleigh <init|conduct_exp|process_outputs|review|queue>`."""
+"""rayleigh CLI — `rayleigh <init|plan|conduct_exp|process_outputs|review|queue>`."""
 
 import argparse
 
@@ -25,6 +25,15 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--new-cycle", action="store_true",
                       help="start a fresh {YYMMDD} research cycle, archiving the prior one")
     init.add_argument("--no-launch", action="store_true",
+                      help="scaffold only; print the playbook path instead of launching claude")
+
+    plan = sub.add_parser(
+        "plan",
+        help="(interactive) design the executable experiments against the raster-built tooling")
+    _common(plan)
+    plan.add_argument("--name", help="project name (default: derived from the working-dir name)")
+    plan.add_argument("--brief", help="research brief (else from the prereg / manifest)")
+    plan.add_argument("--no-launch", action="store_true",
                       help="scaffold only; print the playbook path instead of launching claude")
 
     conduct = sub.add_parser("conduct", aliases=["conduct_exp"], help="run one experiment's cells against code/")
@@ -75,6 +84,9 @@ def main(argv=None) -> int:
     if args.cmd == "init":
         from rayleigh.init import run_init
         return run_init(args)
+    if args.cmd == "plan":
+        from rayleigh.plan import run_plan
+        return run_plan(args)
     if args.cmd in ("conduct", "conduct_exp"):
         from rayleigh.conduct_exp import run_conduct_exp
         return run_conduct_exp(args)

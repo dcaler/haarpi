@@ -80,11 +80,11 @@ def run_queue(args) -> int:
     results = root / "results"
     spec_path = active_spec_path(results / "designdocs")
     if not spec_path.is_file():
-        log(f"no {spec_path} — run `rayleigh init` first")
+        log(f"no {spec_path} — run `rayleigh plan` first")
         return 1
     spec = yaml.safe_load(spec_path.read_text()) or {}
     if not spec.get("experiments"):
-        log("experiments.yaml has no experiments — author them in `rayleigh init` first")
+        log("experiments.yaml has no experiments — author them in `rayleigh plan` first")
         return 1
 
     meta = {}

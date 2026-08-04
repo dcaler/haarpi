@@ -1,0 +1,78 @@
+# {{PROJECT}} — rayleigh experiment playbook (cycle {{CYCLE}})
+
+*Read by the interactive `rayleigh plan` session. You (Claude) and the user (Cale) design the
+EXECUTABLE experiments here — the ones that use the raster-built tooling to fulfil the committed
+analytical framework. Heavy human involvement is the point; it is a conversation, not a form.*
+
+> Fulfil this framework (from the design stage): `design/designdocs/EXPERIMENTS.md` + the minted
+> `design/output/…_prereg`.
+> Run against this built code: `{{CODE_PATH}}` (package `{{PACKAGE}}`).
+
+---
+
+## Your job
+
+The design stage already committed the **research questions + analytical approach** (the prereg).
+raster has already **built the tooling**. Your job is the executable layer between them: turn the
+analytical approach into a set of **runnable experiments**, written to
+`designdocs/experiments.yaml` (executable) and mirrored in `designdocs/EXPERIMENTS.md`
+(human-facing). The atomic unit is the **experiment**: one question + one design + one metric +
+planned outputs = one finding.
+
+Every experiment must **trace to a prereg question** — you are fulfilling the committed framework,
+not expanding it. `conduct` runs what you write here; `process` renders the findings.
+
+### Non-negotiables (the user should never have to remind you of these)
+
+1. **Fulfil the prereg — don't drift.** Read `design/…_prereg` + `EXPERIMENTS.md` first. Each
+   experiment names the prereg question it answers. No scope the framework didn't ask for.
+2. **Surface every compute decision.** State the cell count (axes × seeds), `workers`, and
+   `resource:` (cpu|gpu) with your reasoning and let the user confirm *before* you queue anything.
+3. **You design and queue — you never pre-state results.** `expected_direction` is a *prediction*
+   grounded in the framework; never quote an un-run number as if measured.
+
+## 1. Read the prereg and the built code, then PROPOSE
+
+`plan` indexed the priors in **`designdocs/PRIORS.md`** — read it first, then:
+
+- **`design/…_prereg` + `design/designdocs/EXPERIMENTS.md`** — the questions + analytical approach
+  you must fulfil, and the "Data infrastructure required" that raster built to.
+- **`{{CODE_PATH}}/` (raster-built)** — read it for the three things that become the `run_adapter`:
+  1. the **single-run entrypoint** — the callable/CLI that takes one config and produces one output;
+  2. the **config surface** — the parameters an experiment can vary (the axes);
+  3. the **output format** — what one run writes, and the metrics recoverable from it.
+  Record 1–3 in `experiments.yaml` under `code.run_adapter`. If the built entrypoint doesn't match
+  `conduct`'s calling contract (see the comments in `experiments.yaml`), author a thin adapter shim
+  and point `entrypoint` at it.
+
+Arrive with a straw-man experiment set from the analytical approach + the code, then refine it WITH
+the user.
+
+## 2. Designing each experiment (per the analytical approach)
+
+For each experiment, walk the user through these in order; write each into `experiments.yaml` as
+you go:
+
+1. **Question** — the prereg question it answers (name it). One decision per experiment.
+2. **Design** — what varies and how: `sweep` (cartesian axes), `conditions` (named arms), `oat`,
+   `ablation`, `sobol`. Set axes and `seeds`. Sanity-check the cell count against the compute budget.
+3. **run_adapter / cells** — how `conduct` turns one cell into one run against the built code.
+4. **Metric** — the measured quantity and how cells/seeds `reduce` to it. Fix it now.
+5. **Expected direction** — the prediction the analytical approach implies, and the framework prior
+   it rests on. Phrase it as a prediction, not a finding.
+6. **Planned outputs** — the figure(s)/table(s)/stat(s) `process` will render. Write the caption the
+   paper prints (what it shows — not a rank, a number, or the prediction).
+7. **Mode** — `confirmatory` (predicted; binding) or `exploratory` (labeled honestly).
+8. **Resource / workers** — `resource: cpu|gpu` and the intended `workers`. **Surface both to the
+   user before writing them.** `conduct` pilot-measures RAM and lowers `workers` if needed.
+
+## 3. Hand off to conduct
+
+When the design is settled and the user has confirmed the compute:
+- Mirror the experiments in `EXPERIMENTS.md`, add a row per experiment to `PROGRESS.md`.
+- Offer BOTH ways to run:
+  - **Locally** — `rayleigh conduct <id>` per experiment, then `rayleigh process`.
+  - **At scale** — `rayleigh queue` submits the whole chain to trundlr (one `conduct` node per
+    experiment on its `resource:`, then `process`). Preview with `rayleigh queue --dry-run`.
+  Recommend the local smoke path first, then `queue` for the full run. The results write-up is the
+  gated deliverable — after `process`, review it and `haarpi next` mints the experiments stage.

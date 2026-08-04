@@ -443,10 +443,10 @@ def _load_spec(results: Path) -> dict:
     spec_path = active_spec_path(results / "designdocs")
     if not spec_path.is_file():
         raise FileNotFoundError(
-            f"no {spec_path} — run `rayleigh init` and design experiments first")
+            f"no {spec_path} — run `rayleigh plan` and design experiments first")
     spec = yaml.safe_load(spec_path.read_text()) or {}
     if not spec.get("experiments"):
-        raise ValueError(f"{spec_path} has no `experiments:` — author them in `rayleigh init`")
+        raise ValueError(f"{spec_path} has no `experiments:` — author them in `rayleigh plan`")
     return spec
 
 
