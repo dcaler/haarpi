@@ -91,6 +91,12 @@ class Manifest:
     # the stage opening queues a `razzle deck --format <fmt>` session per entry. Empty → the opening
     # is a single prompt to pick one (razzle owns the vocabulary: longtalk/shorttalk/lecture/poster).
     deck_formats: list = field(default_factory=list)
+    # Per-format deck configuration, keyed by format name — written by `razzle interview` (a pure-
+    # python, no-LLM session). Each entry: {venue, date, authors:[names], affiliations:[names],
+    # funders:[names]} — the deterministic facts a deck needs (who presents where and when, which
+    # affiliation/funder logos). razzle's gather reads decks[fmt] to scope the logos and byline;
+    # absent → it falls back to all authors/funders. A fact the tools never invent.
+    decks: dict = field(default_factory=dict)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
@@ -126,7 +132,7 @@ def save_manifest(m: Manifest, root: Path) -> Path:
     # then silently fails to persist, which looks like the edit never happened.
     data = {"name": m.name, "short_title": m.short_title, "brief": m.brief,
             "initials": m.initials, "authors": m.authors, "funders": m.funders,
-            "deck_formats": m.deck_formats,
+            "deck_formats": m.deck_formats, "decks": m.decks,
             "trundlr_project_id": m.trundlr_project_id,
             "trundlr_priority": m.trundlr_priority, "stages": m.stages}
     fp = root / MANIFEST

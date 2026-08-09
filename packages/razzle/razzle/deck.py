@@ -25,8 +25,9 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
     """Gather → compose → render a deck for `fmt`. Returns {spec, pptx} (pptx None if no master)."""
     if fmt not in formats.FORMATS:
         raise ValueError(f"unknown format {fmt!r} — one of {sorted(formats.FORMATS)}")
-    b = gather.bundle(root)
+    b = gather.bundle(root, fmt)
     spec = compose.compose(brain, b["narrative"], b["figures"], b["claims"], fmt=fmt)
+    gather.apply_byline(spec, b["byline"])    # the presenting authors are a fact, not the LLM's
 
     slides_dir = root / "slides" / fmt
     slides_dir.mkdir(parents=True, exist_ok=True)

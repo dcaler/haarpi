@@ -1342,10 +1342,10 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
     if not fmts:
         client.create_task(
             "razzle deck: pick format(s)", m.trundlr_project_id,
-            description="Choose the presentation format(s) for this project and add them to "
-                        "`deck_formats:` in haarpi.yaml (razzle: longtalk / shorttalk / lecture), "
-                        "then run `haarpi razzle deck --format <fmt>`. The stage builds one deck "
-                        "per format.",
+            description="Configure this project's deck(s): run `haarpi razzle interview` — a pure-"
+                        "python (no-LLM) session that picks the presentation format(s) and, per "
+                        "format, the venue, date, presenting authors, affiliation logos, and "
+                        "funders. It writes the config and queues one authoring session per format.",
             resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
         return
     for fmt in fmts:

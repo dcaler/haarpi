@@ -434,7 +434,7 @@ def test_deck_opening_prompts_when_no_format_chosen(proj, servers):
     planner._open_deck(_human_client(tr), m, {"human_resource": 1})
     new = tr.tasks[before:]
     assert len(new) == 1 and "pick format" in new[0]["title"]
-    assert "deck_formats" in new[0]["description"]
+    assert "razzle interview" in new[0]["description"]     # the prompt points at the pure-python interview
 
 
 def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):

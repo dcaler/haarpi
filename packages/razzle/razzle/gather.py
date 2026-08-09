@@ -68,12 +68,27 @@ def claims(root: Path, results_dir: str = "results") -> str:
     return "\n".join(out)
 
 
-def logos(root: Path) -> list[Path]:
-    """Author-affiliation + funder logos for this project, from the manifest + the neutral registries."""
+def deck_config(root: Path, fmt: str | None) -> dict:
+    """The per-format deck config `razzle interview` wrote (`manifest.decks[fmt]`), or {}."""
+    if not fmt:
+        return {}
+    try:
+        return (getattr(_hproject.load_manifest(root), "decks", {}) or {}).get(fmt, {}) or {}
+    except Exception:
+        return {}
+
+
+def logos(root: Path, fmt: str | None = None) -> list[Path]:
+    """Affiliation + funder logos, from the neutral registries. When a deck config exists for `fmt`,
+    only its SELECTED affiliations/funders (the interview's choices); otherwise every author's
+    affiliations + every project funder (the global fallback)."""
     try:
         m = _hproject.load_manifest(root)
     except Exception:
         return []
+    cfg = deck_config(root, fmt)
+    if cfg:
+        return assets.logos_for(affiliations=cfg.get("affiliations", []), funders=cfg.get("funders", []))
     affs: list[str] = []
     for a in getattr(m, "authors", []) or []:
         if isinstance(a, dict):
@@ -82,8 +97,31 @@ def logos(root: Path) -> list[Path]:
     return assets.logos_for(affiliations=affs, funders=funders)
 
 
-def bundle(root: Path) -> dict:
-    """Everything compose needs from a project, in one call."""
+def byline(root: Path, fmt: str | None = None) -> str:
+    """The presenting authors as a comma list (the title-slide subtitle) — the deck config's chosen
+    authors, else all manifest authors. A deterministic fact, never the LLM's to write."""
+    try:
+        m = _hproject.load_manifest(root)
+    except Exception:
+        return ""
+    names = deck_config(root, fmt).get("authors") or [
+        a.get("name") for a in getattr(m, "authors", []) or [] if isinstance(a, dict) and a.get("name")]
+    return ", ".join(n for n in names if n)
+
+
+def apply_byline(spec: list[dict], line: str) -> list[dict]:
+    """Stamp the presenting authors onto the title slide's subtitle (facts over the LLM's guess)."""
+    if line and spec and spec[0].get("role") == "title":
+        spec[0]["subtitle"] = line
+    return spec
+
+
+def bundle(root: Path, fmt: str | None = None) -> dict:
+    """Everything compose + render need from a project, in one call. `fmt` scopes the logos/byline/
+    venue/date to that format's deck config when the interview has set one."""
     short = short_title(root)
+    cfg = deck_config(root, fmt)
     return {"short_title": short, "narrative": narrative(root, short),
-            "figures": figures(root, short), "claims": claims(root), "logos": logos(root)}
+            "figures": figures(root, short), "claims": claims(root),
+            "logos": logos(root, fmt), "byline": byline(root, fmt),
+            "venue": cfg.get("venue", ""), "date": cfg.get("date", "")}

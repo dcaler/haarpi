@@ -62,11 +62,12 @@ def run_render(args) -> int:
         return 1
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     short = gather.short_title(root)
+    gather.apply_byline(spec, gather.byline(root, fmt))   # presenting authors are a fact, not the LLM's
     # The `_ra` chain draft — the author reviews it in place; `haarpi next` mints it (the format is
     # carried by the folder, so the filename infix is just `deck`).
     out = root / "slides" / fmt / _naming.major_name(short, "pptx", infix="deck")
     render.render_deck(spec, desc["master_path"], desc, out,
-                       figures=_figures_for(root, short, spec), logos=gather.logos(root))
+                       figures=_figures_for(root, short, spec), logos=gather.logos(root, fmt))
     print(f"razzle render: wrote {out.relative_to(root)}  ({len(spec)} slides)")
     return 0
 
@@ -77,7 +78,7 @@ def run_deck(args) -> int:
     if fmt not in formats.FORMATS:
         print(f"razzle deck: unknown format {fmt!r} — one of {sorted(formats.FORMATS)}", file=sys.stderr)
         return 2
-    b = gather.bundle(root)
+    b = gather.bundle(root, fmt)
     budget = formats.slide_budget(fmt) or 15
     mins = formats.minutes(fmt)
     print(f"razzle deck — {fmt}" + (f" (~{mins} min, ~{budget} slides)" if mins else " (poster)"))
@@ -90,6 +91,13 @@ def run_deck(args) -> int:
     print(f"[razzle deck] launching an interactive authoring session for {fmt} in {root} …")
     return subprocess.run(["claude", DECK_PROMPT.format(fmt=fmt, mins=mins or 0, budget=budget)],
                           cwd=str(root)).returncode
+
+
+def run_interview(args) -> int:
+    from razzle import interview
+    root = Path(args.dir).resolve() if args.dir else Path.cwd()
+    interview.run(root, queue=not getattr(args, "no_queue", False))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,11 +113,17 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "deck":
             p.add_argument("--no-launch", action="store_true",
                            help="gather + print the manual path instead of launching claude")
+    iv = sub.add_parser("interview", help="pure-python interview: configure the deck(s) + queue sessions")
+    iv.add_argument("--dir", help="project root (default: cwd)")
+    iv.add_argument("--no-queue", action="store_true",
+                    help="write the config but do not queue authoring sessions")
     return ap
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "interview":
+        return run_interview(args)
     return run_deck(args) if args.cmd == "deck" else run_render(args)
 
 

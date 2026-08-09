@@ -120,6 +120,12 @@ def list_tasks(api_url: str, project_id: int | None = None) -> list:
     return _api(api_url, "GET", path) or []
 
 
+def delete_task(api_url: str, task_id: int) -> None:
+    """Remove a task entirely (204). Trundlr has no 'cancelled' status, so a spurious/superseded
+    task — e.g. the deck-open prompt once the interview has queued the real sessions — is deleted."""
+    _api(api_url, "DELETE", f"/tasks/{task_id}")
+
+
 # ── stateful wrapper ─────────────────────────────────────────────────────────
 
 class TrundlrClient:
@@ -172,6 +178,13 @@ class TrundlrClient:
     def update_task(self, task_id: int, **fields) -> dict:
         """PATCH a task (e.g. duration=1.3 to correct a queued estimate)."""
         return update_task(self.base, task_id, fields)
+
+    def list_tasks(self, project_id: int | None = None) -> list:
+        return list_tasks(self.base, project_id)
+
+    def delete_task(self, task_id: int) -> None:
+        """DELETE a task (trundlr has no cancelled status)."""
+        delete_task(self.base, task_id)
 
     def close(self) -> None:
         pass  # kept for callers that close() the httpx-era client

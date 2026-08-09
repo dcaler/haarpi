@@ -156,6 +156,21 @@ a promotion, not a contract.
    verbatim and razzle validates on run, keeping the dependency one-directional). Migration is **by
    load**: `load_manifest` merges `DEFAULT_STAGES`, so a manifest written before the deck stage existed
    loads with it and an empty `deck_formats` — no rewrite needed. (`_OPENING` no longer keys `deck`.)
+
+   **The deck-open interview (DONE):** the deck stage's opening splits in two — configuration is a
+   **pure-python, no-LLM** `razzle interview` (`razzle/interview.py`), and only the AUTHORING (composing
+   the spec) is the LLM `razzle deck` session. The interview asks, via plain `input()`: which formats,
+   and per format the venue, date, presenting authors, which of their affiliation logos to include (each
+   shown as `logo ✓` / `NO LOGO → text only` against the neutral registry), and the funders to
+   acknowledge. It writes `deck_formats` + a `decks` block (keyed by format) to the manifest and
+   auto-queues one `razzle deck --format <fmt>` session per format, deleting the "pick format(s)" prompt
+   it fulfils (via the new `trundlr.delete_task` — trundlr has no cancelled status). `gather` consumes
+   `decks[fmt]`: the logos and byline are scoped to the deck's chosen affiliations/authors/funders
+   (falling back to all when no config), and the presenting authors are stamped onto the title slide's
+   subtitle deterministically (`apply_byline`) — a fact, never the LLM's to write. `venue`/`date` are
+   captured and exposed in the bundle for the master's footer once that furniture is redesigned. The
+   deck-open prompt now points at `haarpi razzle interview`. Tested: scripted-input interview, per-format
+   gather scoping, byline stamping, and the queue/delete path.
 2. **Asset registries**: the three loaders (`masters/<name>.pptx` + `.layouts.yaml`,
    `affiliations.yaml`, `funders.yaml`) in neutral `~/.config/haarpi/razzle/`, with graceful
    text-fallback + warnings for missing logos. Ship one default master + layout descriptor.
