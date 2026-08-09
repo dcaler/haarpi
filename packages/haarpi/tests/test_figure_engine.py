@@ -14,6 +14,7 @@ import pytest
 from haarpi import figure, naming, project
 
 _HAS_DOT = shutil.which("dot") is not None
+_HAS_TIKZ = shutil.which("pdflatex") is not None and shutil.which("dvisvgm") is not None
 
 
 # ── deterministic emitters ─────────────────────────────────────────────────────
@@ -67,6 +68,26 @@ def test_render_produces_real_svg_and_png_export(tmp_path):
     # PNG is a derived export from the canonical SVG
     png = figure.resolve(tmp_path, "demo", "stageLadder", "png", width=800)
     assert png is not None and png.suffix == ".png" and png.stat().st_size > 0
+
+
+@pytest.mark.skipif(not _HAS_DOT, reason="graphviz `dot` not installed")
+def test_pdf_export_from_the_canonical_svg(tmp_path):
+    figure.write_figure(tmp_path, "demo", figure.stage_dag(project.DEFAULT_STAGES))
+    pdf = figure.resolve(tmp_path, "demo", "stageLadder", "pdf")
+    assert pdf is not None and pdf.suffix == ".pdf"
+    assert pdf.read_bytes()[:5] == b"%PDF-"           # a real PDF
+
+
+@pytest.mark.skipif(not _HAS_TIKZ, reason="pdflatex/dvisvgm not installed")
+def test_tikz_renders_to_svg(tmp_path):
+    spec = figure.FigureSpec(id="mech", kind="schematic", format="tikz",
+                             source=r"\begin{tikzpicture}\node[draw] (a) {A}; "
+                                    r"\node[draw,right=of a] (b) {B}; \draw[->] (a)--(b);"
+                                    r"\end{tikzpicture}")
+    out = figure.write_figure(tmp_path, "demo", spec)
+    assert out["svg"] is not None and "<svg" in out["svg"].read_text()
+    src = list((tmp_path / "figures").glob("*_mech_ra.tex"))     # source is .tex on the chain
+    assert len(src) == 1
 
 
 def test_rerender_reuses_the_datestamp_not_a_pile_of_drafts(tmp_path):

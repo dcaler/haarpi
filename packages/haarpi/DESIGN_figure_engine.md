@@ -12,8 +12,8 @@ agent status would fragment ownership of one figure across its three consumers.
 
 **Diffusion image models are the wrong tool here and are out of scope.** A flowchart must place exact
 boxes, arrows, and *legible text labels*, and must stay correct and editable — none of which a raster
-image model can do. The engine is **diagram-as-code**: a text source (Mermaid / Graphviz / TikZ /
-matplotlib) rendered deterministically. This plays to HAARPi's strengths (it already runs on LLMs and
+image model can do. The engine is **diagram-as-code**: a text source (Graphviz / TikZ / Mermaid)
+rendered deterministically. This plays to HAARPi's strengths (it already runs on LLMs and
 pandoc, no GPU) and its ethos (a figure derived from the real structure cannot misrepresent it).
 
 ## Two production modes
@@ -87,8 +87,10 @@ target as needed.
 |---|---|---|
 | Flowcharts, pipeline, DAGs | **Mermaid** | `mmdc -o fig.svg` |
 | Dense / auto-laid-out graphs | **Graphviz** | `dot -Tsvg` |
-| Publication conceptual figures | **TikZ** | `pdflatex` → `dvisvgm`/`pdf2svg` → svg |
-| Programmatic / mixed data+concept | **matplotlib** | `savefig("fig.svg")` |
+| Publication conceptual figures | **TikZ** | `pdflatex` → `dvisvgm` → svg |
+
+**Data figures** (line/bar/heatmap from numbers) are **not** the engine's job — rayleigh already renders
+those in R/ggplot2 and registers them into the pool. The engine owns *structural/conceptual* figures.
 
 **Export from the canonical SVG:** `to_png(id, width|dpi)` via a rasteriser (`cairosvg` — pure-Python,
 in-stack, no extra system binary — or `rsvg-convert`), and `to_pdf(id)` for a LaTeX manuscript that
@@ -96,13 +98,14 @@ wants vector. **PNG is the embed format for slides** (python-pptx embeds PNG rel
 is patchy) **and for docx** (pandoc); **PDF** is the higher-quality path for a LaTeX paper. Fonts must
 be present at raster time (or the source converts text→path) for crisp labels.
 
-v1 ships **Graphviz `dot` → SVG** plus **SVG → PNG (cairosvg)** export. Graphviz is chosen over Mermaid
+Now: **Graphviz `dot` → SVG** and **TikZ (`pdflatex`→`dvisvgm`) → SVG**, plus **SVG → PNG** and
+**SVG → PDF** export (cairosvg). Graphviz is chosen over Mermaid
 for the machine-emitted DAGs on two grounds: it's a lightweight native binary (no headless Chromium —
 `mermaid-cli` drags in puppeteer + a ~300 MB Chromium + a dozen X11 libs + ~100–300 MB RAM per render,
 disproportionate on a headless server), and its SVG is **clean and Inkscape-editable** (semantic
 `<g class="node">`, real `<text>` labels), whereas Mermaid's nested/`<foreignObject>` output is not.
 Mermaid is deferred to the *conceptual* figures where its styling earns its weight and volume is low.
-TikZ, matplotlib, and PDF export land later for paper-grade figures. Each renderer/rasteriser is
+Each renderer/rasteriser is
 checked at call time; if absent, the engine **keeps what it has and warns** — a missing `dot` or
 `cairosvg` never blocks a figure, exactly as a missing pandoc never blocks a docx.
 
@@ -114,7 +117,7 @@ renders:
 ```yaml
 id: framework_schematic
 kind: schematic            # dag | flowchart | schematic | graph | plot
-format: mermaid            # mermaid | dot | tikz | matplotlib
+format: dot                # dot | tikz | mermaid
 caption: "The analytical framework: questions → approach → data infrastructure."
 source: |                  # the diagram code (emitted deterministically, or authored by the LLM)
   flowchart LR
@@ -166,8 +169,9 @@ re-derive when that data changes.
 1. **Shared engine, not an agent/stage.** Recommend: yes — figures are components of gated
    deliverables, not deliverables themselves.
 2. **Diagram-as-code only; diffusion out of scope** for figures. Recommend: yes.
-3. **v1 = Mermaid + Graphviz**, TikZ + matplotlib later. Recommend: yes (covers flowcharts + all DAGs
-   first; paper-grade formats when the paper needs them).
+3. **Formats: Graphviz `dot` (flowcharts/DAGs) + TikZ (paper-grade)**, both → SVG; PNG/PDF exports.
+   Mermaid deferred to conceptual figures; **matplotlib cut** — data figures are rayleigh's R/ggplot2,
+   structural/conceptual are DOT+TikZ, so it fills no gap. Resolved.
 4. **Figures are revision-chain artifacts resolved through `haarpi.naming`** (no side index) — reusing
    release/hand-edit/draft resolution, the `_ra`-only clobber guard, staleness, and `old/` archiving.
    Resolved. (Superseded the earlier `index.yaml` idea.)
@@ -204,8 +208,11 @@ re-derive when that data changes.
    source header, wired into the outline's figure placement. Empty outside a project; raconteur 632, no
    regression. *Still to come:* register rayleigh's R data figures onto the pool; razzle as the deck
    consumer.
-5. **Paper-grade formats**: TikZ (`pdflatex` → pdf → svg) and matplotlib renderers, for raconteur's
-   publication figures.
+5. **DONE (TikZ + PDF)** — TikZ rendering (`pdflatex` → `dvisvgm` → SVG; the standalone wrap loads the
+   common TikZ libraries) for paper-grade conceptual figures, and SVG → PDF export (cairosvg) for a
+   LaTeX manuscript's vector figures (`resolve(want="pdf")`). **matplotlib is cut** — data figures are
+   rayleigh's R/ggplot2, structural/conceptual are DOT+TikZ, so it fills no gap. Figure tests green;
+   full haarpi 265. **Step 5 complete.**
 6. **razzle** consumes the populated pool (its own build) — the figure engine is razzle's prerequisite.
 
 Suites to stay green: a new `figure` suite (render core, deterministic emitters, compose) plus haarpi's

@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,14 +33,14 @@ def _log(msg: str) -> None:
 
 
 # Source-file extension per format. A figure id is a SINGLE chain token (no `_`, the chain separator).
-_SRC_EXT = {"dot": "dot", "mermaid": "mmd", "tikz": "tex", "matplotlib": "py"}
+_SRC_EXT = {"dot": "dot", "mermaid": "mmd", "tikz": "tex"}
 
 
 @dataclass
 class FigureSpec:
     id: str                         # a single chain token, e.g. "stageLadder"
     kind: str                       # dag | flowchart | schematic | graph | plot
-    format: str                     # dot | mermaid | tikz | matplotlib
+    format: str                     # dot | mermaid | tikz
     source: str                     # the diagram code, header comments included
     caption: str = ""
     provenance: dict = field(default_factory=dict)
@@ -248,6 +249,30 @@ def render(spec: FigureSpec, out_svg: Path) -> Path | None:
             _log(f"mmdc failed for {spec.id}: {r.stderr.strip()[:200]}")
             return None
         return out_svg
+    if spec.format == "tikz":
+        if not (_have("pdflatex") and _have("dvisvgm")):
+            _log(f"pdflatex/dvisvgm absent — kept {spec.id} tikz source, no SVG")
+            return None
+        body = spec.source
+        tex = body if "\\documentclass" in body else (
+            "\\documentclass[tikz,border=4pt]{standalone}\n\\usepackage{tikz}\n"
+            "\\usetikzlibrary{positioning,arrows.meta,calc,shapes.geometric,fit,backgrounds}\n"
+            "\\begin{document}\n" + body + "\n\\end{document}\n")
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            (d / "fig.tex").write_text(tex)
+            subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "fig.tex"],
+                           cwd=td, capture_output=True, text=True)
+            if not (d / "fig.pdf").exists():
+                _log(f"pdflatex failed for {spec.id}")
+                return None
+            subprocess.run(["dvisvgm", "--pdf", "fig.pdf", "-o", "fig.svg"],
+                           cwd=td, capture_output=True, text=True)
+            if not (d / "fig.svg").exists():
+                _log(f"dvisvgm failed for {spec.id}")
+                return None
+            out_svg.write_text((d / "fig.svg").read_text())
+            return out_svg
     _log(f"no renderer wired for format {spec.format!r} — kept {spec.id} source")
     return None
 
@@ -268,6 +293,25 @@ def export_png(svg: Path, out_png: Path, width: int = 1600) -> Path | None:
         if r.returncode == 0 and out_png.exists():
             return out_png
     _log(f"no SVG→PNG rasteriser (pip install cairosvg) — kept {svg.name}")
+    return None
+
+
+def export_pdf(svg: Path, out_pdf: Path) -> Path | None:
+    """Convert a canonical SVG to (vector) PDF — for a LaTeX manuscript. cairosvg, else rsvg-convert.
+    Best-effort: no converter → keep the SVG, return None."""
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import cairosvg
+        cairosvg.svg2pdf(url=str(svg), write_to=str(out_pdf))
+        return out_pdf
+    except Exception:
+        pass
+    if _have("rsvg-convert"):
+        r = subprocess.run(["rsvg-convert", "-f", "pdf", "-o", str(out_pdf), str(svg)],
+                           capture_output=True)
+        if r.returncode == 0 and out_pdf.exists():
+            return out_pdf
+    _log(f"no SVG→PDF converter (pip install cairosvg) — kept {svg.name}")
     return None
 
 
@@ -386,4 +430,7 @@ def resolve(root: Path, short_title: str, fig_id: str, want: str = "svg", width:
     if want == "png":
         png = svg.with_suffix(".png")
         return png if png.exists() else export_png(svg, png, width)
+    if want == "pdf":
+        pdf = svg.with_suffix(".pdf")
+        return pdf if pdf.exists() else export_pdf(svg, pdf)
     return None
