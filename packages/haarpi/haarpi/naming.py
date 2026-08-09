@@ -71,8 +71,12 @@ def _pattern(short_title: str) -> re.Pattern:
     # committee. Letters only, and `260714_Chords_css2026_outline_ra.docx` fails to parse —
     # which does not merely lose the venue, it makes the file invisible to the gate, the
     # redline and the release, in silence.
+    # Extensions: the document deliverables (md, docx) plus the figure engine's artifacts — the
+    # revision chain now covers figures too (svg render, dot/mmd/tex source, png/pdf export), so a
+    # figure is a first-class chain artifact resolved by the same machinery (see haarpi.figure).
     return re.compile(
-        rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z][A-Za-z0-9]*)*)\.(md|docx)$"
+        rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z][A-Za-z0-9]*)*)"
+        rf"\.(md|docx|svg|dot|mmd|tex|png|pdf)$"
     )
 
 
