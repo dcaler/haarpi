@@ -27,6 +27,7 @@ TOOLS = {
     "raconteur": "raconteur",
     "raster": "raster",
     "rayleigh": "rayleigh",
+    "razzle": "razzle",
 }
 
 _USAGE = """\
@@ -139,7 +140,7 @@ def _doctor() -> int:
     prefix = sys.prefix
     print(f"haarpi stack : {haarpi.__version__} in {prefix}")
     shadows = 0
-    for name in ("haarpi", "rabbitHole", "raconteur", "raster", "rayleigh"):
+    for name in ("haarpi", "rabbitHole", "raconteur", "raster", "rayleigh", "razzle"):
         found = shutil.which(name)
         if not found:
             print(f"  {name:<11}: not on PATH")

@@ -14,6 +14,9 @@ dependencies = [
     "PyYAML>=6.0.2",
 ]
 
+[project.scripts]
+razzle = "razzle.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["razzle*"]
 

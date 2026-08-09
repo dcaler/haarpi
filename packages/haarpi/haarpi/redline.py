@@ -858,6 +858,49 @@ def pending_reviewer_changes(path: Path, tool_authors=TOOL_AUTHORS) -> int:
     return n
 
 
+# PowerPoint 2018 "modern" comments — the deck stage's review surface. A .pptx has NO tracked
+# changes: comments carry the entire review. A comment thread is one <p188:cm> (its replies are
+# nested <p188:reply>, which never gate independently); the thread is resolved iff the cm carries
+# status="resolved". Pure zipfile+lxml — no python-pptx dependency in the gate.
+_P188 = "http://schemas.microsoft.com/office/powerpoint/2018/8/main"
+_A_DML = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def pptx_comment_threads(path: Path) -> list[dict]:
+    """Every top-level modern comment: [{id, author, text, slide, resolved}], slide order."""
+    ns = {"p188": _P188, "a": _A_DML}
+    with zipfile.ZipFile(str(path)) as z:
+        names = z.namelist()
+        authors = {}
+        if "ppt/authors.xml" in names:
+            for au in etree.fromstring(z.read("ppt/authors.xml")).findall("p188:author", ns):
+                authors[au.get("id")] = au.get("name") or au.get("initials") or "?"
+        slide_of = {}                       # modernComment part -> which slide's rels point at it
+        for n in names:
+            mm = re.match(r"ppt/slides/_rels/(slide\d+)\.xml\.rels", n)
+            if mm:
+                for t in re.finditer(r'Target="[^"]*?(modernComment_[^"]+\.xml)"',
+                                     z.read(n).decode("utf-8", "ignore")):
+                    slide_of[f"ppt/comments/{t.group(1)}"] = mm.group(1)
+        out = []
+        for n in sorted(x for x in names if "modernComment" in x):
+            for cm in etree.fromstring(z.read(n)).findall("p188:cm", ns):
+                body = cm.find("p188:txBody", ns)   # the ask's own text, not nested reply text
+                text = "".join(t.text or "" for t in body.findall(".//a:t", ns)) if body is not None else ""
+                out.append({"id": cm.get("id"), "author": authors.get(cm.get("authorId"), "?"),
+                            "text": text, "slide": slide_of.get(n, "?"),
+                            "resolved": cm.get("status") == "resolved"})
+    return out
+
+
+def _gate_check_pptx(path: Path) -> dict:
+    """Deck gate: clean ⟺ every modern comment is resolved. No tracked changes exist in a .pptx,
+    so reviewer_changes is always 0 — comments are the whole work order."""
+    unresolved = [{"id": t["id"], "author": t["author"], "text": t["text"]}
+                  for t in pptx_comment_threads(path) if not t["resolved"]]
+    return {"unresolved": unresolved, "reviewer_changes": 0, "clean": not unresolved}
+
+
 def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
     """The mechanical gate: clean ⟺ every reviewer comment is resolved.
 
@@ -867,7 +910,12 @@ def gate_check(path: Path, tool_authors=TOOL_AUTHORS) -> dict:
     edits are their final word on that span, not an instruction the tool must process;
     they are reported for context but do not gate, and the mint accepts them into the
     release along with everything else. (Was: also required reviewer_changes == 0 —
-    the "accept every tracked change to advance" rule, now retired.)"""
+    the "accept every tracked change to advance" rule, now retired.)
+
+    A .pptx deck routes to the modern-comment gate (``_gate_check_pptx``): same
+    resolved-or-blocks rule, no tracked-change half (PowerPoint has none)."""
+    if Path(path).suffix.lower() == ".pptx":
+        return _gate_check_pptx(Path(path))
     unresolved = unresolved_comments(path, tool_authors)
     reviewer_changes = pending_reviewer_changes(path, tool_authors)
     return {"unresolved": unresolved, "reviewer_changes": reviewer_changes,

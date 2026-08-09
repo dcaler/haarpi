@@ -8,7 +8,7 @@ durable artifact, the `.pptx` the output the author polishes.
 
 A deck spec is a list of slides:
     {"role": "title", "title": "...", "subtitle": "..."}
-    {"role": "figure", "title": "...", "figure": <figure-id>, "caption": "...", "notes": "..."}
+    {"role": "figure", "title": "...", "figure": <figure-id>, "citation": "...", "notes": "..."}
     {"role": "content", "title": "...", "body": ["bullet", "bullet"], "notes": "..."}
 """
 
@@ -41,6 +41,17 @@ def _set_text(ph, value) -> None:
         ph.text = str(value)
 
 
+def _strip_unused(slide, filled_idxs: set) -> None:
+    """Remove the master's placeholders this slide didn't fill — the empty caption/footer strips that
+    would otherwise render as leftover template furniture ("legacy bits"). The slide-number
+    placeholder is kept (it auto-numbers)."""
+    for ph in list(slide.placeholders):
+        f = ph.placeholder_format
+        if f.idx in filled_idxs or (f.type is not None and "SLIDE_NUMBER" in str(f.type)):
+            continue
+        ph._element.getparent().remove(ph._element)
+
+
 def _place_picture(slide, ph, img: Path) -> None:
     """Add a picture fitted (aspect-preserved) inside the placeholder box, centred, then remove the
     now-empty placeholder so it doesn't render 'click to add'."""
@@ -69,17 +80,22 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
             continue
         s = prs.slides.add_slide(prs.slide_layouts[rdef["layout"]])
         phs = {ph.placeholder_format.idx: ph for ph in s.placeholders}
+        filled: set = set()
         for slot, idx in (rdef.get("text") or {}).items():
             val = slide.get(slot)
             if val and idx in phs:
                 _set_text(phs[idx], val)
+                filled.add(idx)
         for slot, idx in (rdef.get("picture") or {}).items():
             img = figures.get(slide.get(slot))
             if img and idx in phs:
                 _place_picture(s, phs[idx], Path(img))
+                filled.add(idx)
         for i, idx in enumerate(rdef.get("logos") or []):
             if logos and i < len(logos) and logos[i] and idx in phs:
                 _place_picture(s, phs[idx], Path(logos[i]))
+                filled.add(idx)
+        _strip_unused(s, filled)      # drop the empty master placeholders this slide didn't use
         if slide.get("notes"):
             s.notes_slide.notes_text_frame.text = str(slide["notes"])
     prs.save(str(out_path))

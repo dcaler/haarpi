@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,6 +112,15 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                               "address the annotations, then `raster handoff` to re-emit the "
                               "methods digest docx."),
     },
+    # The DECK stage. razzle drafts a venue-specific .pptx the author reviews IN PLACE with
+    # PowerPoint comments (no rename to initials — the .pptx is its own markup). Rework re-opens
+    # the attended deck session (razzle re-authors the spec addressing the comments, re-renders).
+    # Same one-tier shape as design/build.
+    "deck": {
+        "deck_session": Step(None, 1.0,
+                             "Re-open the deck session: run `haarpi razzle deck` to address the "
+                             "PowerPoint comments, revise the spec, and re-render the .pptx."),
+    },
 }
 
 # tier -> ordered step chain, per stage. A "stage:step" element queues into
@@ -146,6 +156,11 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     # an attended process; every rework is "re-run it and re-emit the digest").
     "build": {
         "revise": ["build_session"],
+    },
+    # Any unresolved deck comment re-opens the attended deck session (one tier — the deck is
+    # authored interactively; every rework is "re-run it and re-render").
+    "deck": {
+        "revise": ["deck_session"],
     },
 }
 
@@ -469,6 +484,17 @@ Any unresolved annotation re-opens the attended build session — raster re-plan
 address them and re-emits the digest. There is one tier.
 
 - "revise": address the annotations by revising the build and re-emitting the methods digest.
+
+Respond: {{"tier": "revise", "assessment": "<one sentence>"}}""",
+    "deck": """\
+A reviewer left unresolved comments on a presentation DECK (a venue-specific .pptx built from the
+paper — slides, figures, speaker notes):
+{annotations}
+
+Any unresolved comment re-opens the attended deck session — razzle re-authors the deck spec to
+address them and re-renders the .pptx. There is one tier.
+
+- "revise": address the comments by revising the deck spec and re-rendering.
 
 Respond: {{"tier": "revise", "assessment": "<one sentence>"}}""",
 }
@@ -1185,6 +1211,18 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
                     t = p.stat().st_mtime
                     if best is None or t > best[0]:
                         best = (t, stage, p)
+            # A deck (.pptx) is reviewed IN PLACE — PowerPoint comments live in the same file the
+            # tool drafted (`…_deck_ra.pptx`); there is no rename to a reviewer's initials. So the
+            # "a human went last" signal is the presence of a comment, not the chain tail. A draft
+            # nobody has commented on is not finished markup; a release (bare chain) is never markup.
+            for p in d.glob("*.pptx"):
+                parsed = naming.parse(p, m.short_title)
+                if not parsed or naming.is_release(parsed[1]):
+                    continue
+                if redline.pptx_comment_threads(p):
+                    t = p.stat().st_mtime
+                    if best is None or t > best[0]:
+                        best = (t, stage, p)
     return (best[1], best[2]) if best else None
 
 
@@ -1207,7 +1245,7 @@ def _archive_chain(root: Path, m: project.Manifest, stage: str, release: Path) -
     d = release.parent
     dest = d.parent / "archive" / release.stem
     n = 0
-    for p in list(d.glob("*.docx")) + list(d.glob("*.md")):
+    for p in list(d.glob("*.docx")) + list(d.glob("*.md")) + list(d.glob("*.pptx")):
         parsed = naming.parse(p, m.short_title)
         if parsed and not naming.is_release(parsed[1]):
             dest.mkdir(parents=True, exist_ok=True)
@@ -1266,6 +1304,9 @@ _OPENING: dict[str, tuple[str, str, str]] = {
     "experiments": ("plan", "experiment design session",
                     "Design the executable experiments that use the built tooling to fulfil the "
                     "framework, then hand off to conduct"),
+    "deck":        ("deck", "deck session",
+                    "Author the venue-specific presentation deck(s) from the paper's one-pager + "
+                    "the figures/claims, then render"),
 }
 
 
@@ -1398,7 +1439,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     infix = "_".join(p for p in (venue, deliverable or
                                  (m.stages[stage].get("infix") or "")) if p)
     if check["clean"]:
-        rel_name = naming.release_name(m.short_title, "docx", infix=infix)
+        ext = markup.suffix.lstrip(".").lower()      # docx deliverable, or a deck's pptx
+        rel_name = naming.release_name(m.short_title, ext, infix=infix)
         # Beside the markup it was minted from: raconteur gives each deliverable its own
         # folder, so paper/css2026/outline/output/ — not one shared paper/output/.
         dst = _release_dir(root, m, stage, markup) / rel_name
@@ -1433,9 +1475,17 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # went first; the manuscript followed once package stopped reading one — it takes
         # the release .docx through read_release, and the abstract off the same file. What
         # remains on markdown is the litreview stage, whose consumers still read it.
-        result = redline.mint_release(
-            markup, dst, post=post,
-            md_sibling=stage != "paper")
+        if ext == "pptx":
+            # A deck is minted by PROMOTION, not redline resolution: its comments are all
+            # resolved, a .pptx has no tracked changes to accept, and there is no markdown
+            # sibling. Copy the reviewed .pptx to the release name; the author hand-polishes
+            # from here (gate model B — the deck is a communication artifact, not a prereg).
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(markup, dst)
+        else:
+            result = redline.mint_release(
+                markup, dst, post=post,
+                md_sibling=stage != "paper")
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and

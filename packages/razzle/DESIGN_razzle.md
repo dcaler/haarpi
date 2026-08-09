@@ -103,22 +103,25 @@ renderer draws it, and a human gates it.
 The **spec is the durable artifact** (editable, diffable, re-renderable); the `.pptx` is the output
 collaborators tweak in PowerPoint.
 
-## Open question — how a `.pptx` deliverable is gated
+## How a `.pptx` deliverable is gated — RESOLVED: comment ON the pptx
 
-The redline gate is docx-centric, and a deck is a *communication* artifact the author will almost
-always hand-polish in PowerPoint. So forcing a docx-style annotate→mint cycle on a `.pptx` is
-probably the wrong fit. Two candidates (decision for you):
+Decision (Cale): **comment on the `.pptx` itself**, reusing the redline procedure — not gating a spec
+or a docx outline. A deck *is* its own markup. PowerPoint has no tracked changes, so **modern comments
+carry the whole review**, and the redline rule maps cleanly:
 
-- **(A) Gate the spec, not the pptx.** The human annotates the structured deck spec (or a rendered
-  PDF/outline of it); razzle revises the spec and re-renders. The `.pptx` is a build output, not the
-  reviewed surface. Clean, matches the rest of the pipeline.
-- **(B) Lightweight commit + hand-off.** razzle renders the draft `.pptx`; the human polishes it
-  directly in PowerPoint and that *is* the finalisation — razzle's job ends at a good first draft.
-  Optionally razzle can re-ingest the edited `.pptx` to update the spec for the next cycle.
+- razzle drafts `slides/{fmt}/{date}_{short}_deck_ra.pptx` — a first-class revision-chain artifact.
+- The author reviews it **in place** in PowerPoint (comments, resolving what's addressed). There is no
+  rename to initials — the `.pptx` is the markup, and *the presence of a comment* is the "a human went
+  last" signal (a draft nobody commented on is not finished markup).
+- `haarpi next` reads the modern comments (`redline.pptx_comment_threads` / `gate_check`, pure
+  zipfile+lxml, no python-pptx): **clean ⟺ every comment resolved.** Clean → mint by **promotion**
+  (copy to the token-free `{date}_{short}_deck.pptx`; no redline resolution, no md sibling — gate model
+  B for the finish). Any open comment → queue the `deck_session` rework tier (re-open `razzle deck`,
+  address the comments, re-render).
 
-Recommendation: **(A) for the review loop, (B) for the finish** — gate the spec so razzle's draft is
-directed by real feedback, then let the human polish the rendered deck by hand. A deck is not a
-preregistration; it doesn't need a strict mint.
+So: **(A-by-comment) for the review loop, (B) for the finish** — the author's real comments direct the
+next draft, and the minted deck is theirs to hand-polish. A deck is not a preregistration; the mint is
+a promotion, not a contract.
 
 ## Manifest additions
 
@@ -140,8 +143,13 @@ preregistration; it doesn't need a strict mint.
 
 ## Build order (each step ends green)
 
-1. **Manifest + stage**: add the `deck` stage to `DEFAULT_STAGES`, the `funders` field, and
-   scaffold `slides/`. Migration inserts `deck` into existing manifests. Stage-graph tests.
+1. **DONE (stage + CLI wiring)** — the `deck` stage is in `DEFAULT_STAGES` (razzle, `dir: slides`,
+   inputs `[paper, experiments]`, attended, opens with `razzle deck`); the manifest gained a `funders`
+   field; razzle is registered in haarpi's `TOOLS` (so `haarpi razzle …` dispatches) and `_OPENING`
+   (minting the paper opens a `razzle deck session` — verified). The `razzle` CLI has `deck` (gather +
+   launch an authoring session, or `--no-launch` to print the manual path) and `render`
+   (`slides/<fmt>/spec.json` → the branded `.pptx`). Stage-graph + CLI tests. *Remaining:* migration of
+   existing manifests (manual for now, like the `design` stage rollout); per-project format selection.
 2. **Asset registries**: the three loaders (`masters/<name>.pptx` + `.layouts.yaml`,
    `affiliations.yaml`, `funders.yaml`) in neutral `~/.config/haarpi/razzle/`, with graceful
    text-fallback + warnings for missing logos. Ship one default master + layout descriptor.
@@ -172,8 +180,28 @@ preregistration; it doesn't need a strict mint.
    effort throughout. Tested with a fixture project + fake brain. **Remaining for step 5:** the
    per-project *selection* of which formats to build, a `razzle` CLI entry, and wiring the `deck`
    stage opening in `_advance` (with the stage-graph work in step 1).
-6. **Gate**: the spec-annotation review loop (A) + the hand-polish finish (B); `haarpi next`
-   integration for the deck stage (its own `STAGE_STEPS`/`TIERS`/`PROMPTS`, like design/build).
+6. **DONE (gate — comment on the pptx)** — the deck's review surface is the `.pptx` itself, gated by
+   reusing the redline procedure on PowerPoint **modern comments**. `redline.pptx_comment_threads` +
+   the `_gate_check_pptx` branch of `gate_check` read the comments (id/author/text/slide/resolved) with
+   pure zipfile+lxml — clean ⟺ every comment resolved, `reviewer_changes` always 0 (no tracked changes
+   in a .pptx). `find_finished_markup` scans `*.pptx` and surfaces a deck **iff it carries a comment**
+   (commented-in-place; no rename to initials); `naming` accepts `pptx`; the clean branch mints by
+   **promotion** (copy `_ra` → token-free release, no md sibling); the `deck` stage has its own
+   `STAGE_STEPS`/`STAGE_TIERS`/`STAGE_PROMPTS` (one `deck_session` rework tier, like design/build), and
+   `_archive_chain` sweeps the spent `_ra` pptx. Tested end to end (`test_deck_gate.py`: reader,
+   clean/blocked gate, and `find_finished_markup` surface/ignore-draft/ignore-release).
+
+## Render fixes from the first commented demo (DONE)
+
+Cale's two open comments on the demo were real furniture feedback, now addressed in `render_deck`:
+
+- **"only citations go here in this format"** — the caption slot is **citations-only**. The `figure`
+  role's placeholder is `citation` (a bare source ref), not a prose `caption`; a figure slide's message
+  is its **title**. `compose` emits `citation`, the descriptors map it, the prose caption is gone.
+- **"legacy bits"** — `render_deck` was leaving the master's **unfilled placeholders** (empty
+  caption/footer strips) on each slide. It now tracks the placeholders it fills and **strips the rest**
+  (`_strip_unused`, keeping only the auto-numbering slide-number placeholder), so no leftover template
+  furniture renders.
 
 ## Open items (to discuss)
 
@@ -181,7 +209,8 @@ preregistration; it doesn't need a strict mint.
   engineered from a reference deck (design idea only), and its layouts are thin (title / figure /
   content). We need to design razzle's actual house master + its role set together — section dividers,
   two-column, an acknowledgements/funding slide, the logo strip treatment — before razzle ships decks
-  anyone presents.
+  anyone presents. The **running footer** (venue|short-title, page numbers) belongs here too: for now
+  unfilled footer placeholders are stripped rather than populated.
 - **Poster** is not a slide count — it needs its own shape (one board), a separate mode from the
   timed-talk formats.
 

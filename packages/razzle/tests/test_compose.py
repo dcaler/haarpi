@@ -22,13 +22,14 @@ class _Brain:
 def test_compose_normalises_a_deck_spec():
     reply = json.dumps({"slides": [
         {"role": "title", "title": "A talk", "subtitle": "the spine"},
-        {"role": "figure", "title": "Pipeline", "figure": "ladder", "caption": "c", "notes": "n"},
+        {"role": "figure", "title": "Pipeline", "figure": "ladder", "citation": "[Ref 1]", "notes": "n"},
         {"role": "content", "title": "Points", "bullets": ["a", "b"]},
         {"role": "figure", "title": "Missing", "figure": "nope"}]})   # figure we don't have
     slides = compose.compose(_Brain(reply), "narrative here",
                              [{"id": "ladder", "caption": "the ladder"}])
     assert slides[0]["role"] == "title"
     assert slides[1]["role"] == "figure" and slides[1]["figure"] == "ladder"
+    assert slides[1]["citation"] == "[Ref 1]" and "caption" not in slides[1]   # citations-only slot
     assert slides[2]["body"] == ["a", "b"]
     assert slides[3]["role"] == "content" and "figure" not in slides[3]   # missing → demoted
 

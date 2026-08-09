@@ -58,6 +58,13 @@ DEFAULT_STAGES: dict[str, dict] = {
         "inputs": ["litreview", "build", "experiments"],
         "infix": "", "attended": False,
     },
+    # The venue-specific presentation DECK (razzle), forked per presentation FORMAT. Feeds on the
+    # paper (the one-pager is the talk's spine) + experiments (the figures/claims). Opens with an
+    # authoring session; see packages/razzle/DESIGN_razzle.md.
+    "deck": {
+        "dir": "slides", "tool": "razzle", "inputs": ["paper", "experiments"],
+        "infix": "deck", "attended": True,          # opens with `razzle deck`
+    },
 }
 
 
@@ -75,6 +82,10 @@ class Manifest:
     # flag can only strip an author block that exists as data.
     # Each entry: {name, initials?, affiliation?, email?, orcid?}.
     authors: list = field(default_factory=list)
+    # Who funded THIS work — for the deck's acknowledgements and any funder logos. Project-level,
+    # like authors; each entry {name, grant?}. razzle resolves each name to a logo via the neutral
+    # funder registry. A fact the tools never invent.
+    funders: list = field(default_factory=list)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
@@ -109,7 +120,7 @@ def save_manifest(m: Manifest, root: Path) -> Path:
     # Enumerated, not asdict() — a new field that is not listed here loads correctly and
     # then silently fails to persist, which looks like the edit never happened.
     data = {"name": m.name, "short_title": m.short_title, "brief": m.brief,
-            "initials": m.initials, "authors": m.authors,
+            "initials": m.initials, "authors": m.authors, "funders": m.funders,
             "trundlr_project_id": m.trundlr_project_id,
             "trundlr_priority": m.trundlr_priority, "stages": m.stages}
     fp = root / MANIFEST

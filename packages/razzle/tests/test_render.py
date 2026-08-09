@@ -43,7 +43,7 @@ def test_render_deck_against_the_house_master(tmp_path):
     spec = [
         {"role": "title", "title": "A research talk", "subtitle": "the through-line"},
         {"role": "figure", "title": "The pipeline", "figure": "ladder",
-         "caption": "The stages.", "notes": "walk the ladder"},
+         "citation": "[Ref 1]", "notes": "walk the ladder"},
         {"role": "content", "title": "Takeaways", "body": ["it composes", "it's grounded"]},
     ]
     out = render.render_deck(spec, _DESC["master_path"], _DESC, tmp_path / "deck.pptx",

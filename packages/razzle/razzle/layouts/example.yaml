@@ -9,5 +9,5 @@ master: master.pptx
 size: "16:9"
 roles:
   title:   {layout: 0, text: {title: 0, subtitle: 1}, logos: [14]}
-  figure:  {layout: 1, text: {title: 0, caption: 13}, picture: {figure: 1}, logos: [15]}
-  content: {layout: 1, text: {title: 0, body: 1}, logos: [15]}
+  figure:  {layout: 1, text: {title: 0, citation: 13}, picture: {figure: 1}}   # citation slot = source ref only
+  content: {layout: 1, text: {title: 0, body: 1}}

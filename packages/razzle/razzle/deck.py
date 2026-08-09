@@ -1,9 +1,12 @@
 """razzle.deck — the orchestrator: gather a project's inputs → compose the deck spec → render the
 branded .pptx, sized to a presentation format. One call from a project root to a deck.
 
-The output lands in `slides/{fmt}/{cycle-ish}_{short}_{fmt}_deck.pptx` — a per-format deliverable, the
-format being razzle's venue-analogue. Figures are exported to PNG on demand from the pool; logos come
-from the neutral registries. Best-effort: a missing master/renderer degrades to writing the spec.
+The output lands in `slides/{fmt}/{date}_{short}_deck_ra.pptx` — a per-format deliverable (the format
+is razzle's venue-analogue, carried by the FOLDER, so the filename infix is just `deck`). The `_ra`
+draft is a first-class revision-chain artifact: the author reviews it IN PLACE with PowerPoint
+comments, and `haarpi next` mints it to the token-free `{date}_{short}_deck.pptx`. Figures are exported
+to PNG on demand from the pool; logos come from the neutral registries. Best-effort: a missing
+master/renderer degrades to writing the spec.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 from pathlib import Path
 
 from haarpi import figure as _figure
+from haarpi import naming as _naming
 
 from razzle import assets, compose, formats, gather, render
 
@@ -42,6 +46,6 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
             if png:
                 fig_paths[fid] = str(png)
 
-    out = out or (slides_dir / f"{b['short_title']}_{fmt}_deck.pptx")
+    out = out or (slides_dir / _naming.major_name(b["short_title"], "pptx", infix="deck"))
     render.render_deck(spec, desc["master_path"], desc, out, figures=fig_paths, logos=b["logos"])
     return {"spec": spec, "pptx": out}

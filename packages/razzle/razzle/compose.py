@@ -34,11 +34,13 @@ KEY CLAIMS / NUMBERS (use verbatim; invent nothing):
 Output ONLY JSON:
 {{"slides": [
   {{"role": "title",   "title": "...", "subtitle": "..."}},
-  {{"role": "figure",  "title": "...", "figure": "<id>", "caption": "...", "notes": "..."}},
+  {{"role": "figure",  "title": "...", "figure": "<id>", "citation": "...", "notes": "..."}},
   {{"role": "content", "title": "...", "bullets": ["...", "..."], "notes": "..."}}
 ]}}
 Rules: open with ONE title slide; one idea per slide; terse bullets; the detail goes in `notes`
-(speaker notes); a figure slide names an EXISTING figure id; never a number not in the claims."""
+(speaker notes); a figure slide names an EXISTING figure id; never a number not in the claims.
+A figure slide's MESSAGE is its `title` — write no prose caption; `citation` is a bare source
+reference only (e.g. "[Kramers 1940]") or omit it."""
 
 
 def _parse(reply: str) -> dict:
@@ -58,7 +60,7 @@ def _normalise(slides, figure_ids: set[str]) -> list[dict]:
             continue
         role = s.get("role") if s.get("role") in _ROLES else "content"
         slide = {"role": role, "title": str(s.get("title", "")).strip()}
-        for k in ("subtitle", "caption", "notes"):
+        for k in ("subtitle", "citation", "notes"):
             if s.get(k):
                 slide[k] = str(s[k]).strip()
         if s.get("bullets"):

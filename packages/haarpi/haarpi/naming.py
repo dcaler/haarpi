@@ -73,10 +73,11 @@ def _pattern(short_title: str) -> re.Pattern:
     # redline and the release, in silence.
     # Extensions: the document deliverables (md, docx) plus the figure engine's artifacts — the
     # revision chain now covers figures too (svg render, dot/mmd/tex source, png/pdf export), so a
-    # figure is a first-class chain artifact resolved by the same machinery (see haarpi.figure).
+    # figure is a first-class chain artifact resolved by the same machinery (see haarpi.figure) —
+    # and the deck stage's pptx, which razzle drafts (`_ra`) and mints (bare) as a chain artifact.
     return re.compile(
         rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z][A-Za-z0-9]*)*)"
-        rf"\.(md|docx|svg|dot|mmd|tex|png|pdf)$"
+        rf"\.(md|docx|svg|dot|mmd|tex|png|pdf|pptx)$"
     )
 
 
