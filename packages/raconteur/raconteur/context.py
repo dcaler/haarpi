@@ -414,6 +414,41 @@ def load_author_figures(project_dir: Path) -> list[Figure]:
     return figs
 
 
+def load_pool_figures(project_dir: Path) -> list[Figure]:
+    """Conceptual figures from the shared figure pool (`<root>/figures/`, haarpi.figure) — the
+    framework schematic, the experiment DAG, and any other diagram the pipeline produced. Surfaced as
+    author-origin figures (they are conceptual, and the outline places them), exported to PNG for
+    embedding. Empty outside a HAARPi project or when the pool is empty — a paper with no pool simply
+    has no pool figures; it never invents one.
+    """
+    try:
+        from haarpi import figure as hfigure
+        from haarpi import project as hproject
+    except ImportError:
+        return []
+    root = hproject.find_root(project_dir)
+    if root is None:
+        return []
+    try:
+        short = hproject.load_manifest(root).short_title
+    except Exception as e:  # noqa: BLE001 — a bad manifest must not fail the render
+        log(f"[warn] could not read the manifest for pool figures ({e})")
+        return []
+    figs: list[Figure] = []
+    for fid in hfigure.list_ids(root, short):
+        asset = hfigure.resolve(root, short, fid, "png") or hfigure.resolve(root, short, fid, "svg")
+        if asset is None:
+            continue
+        try:
+            rel = str(asset.relative_to(project_dir))
+        except ValueError:
+            rel = str(asset)
+        figs.append(Figure(rel, hfigure.caption_of(root, short, fid), origin="author"))
+    if figs:
+        log(f"[raconteur] {len(figs)} figure(s) from the shared pool")
+    return figs
+
+
 def author_figure_sections(project_dir: Path) -> dict[str, str]:
     """path → the author's requested section, for figures that name one."""
     manifest = project_dir / "paper" / "figures" / AUTHOR_FIGURES_FILE

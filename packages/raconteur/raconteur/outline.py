@@ -782,10 +782,12 @@ def _outline_guard_inputs(cfg: ProjectConfig, project_dir: Path, venue: str,
                           rates: dict[str, int] | None = None) -> dict:
     """Everything the structural battery needs to judge an outline against its venue."""
     from . import guards
-    from .context import load_bib_keys, load_figure_manifest, load_author_figures
+    from .context import (load_bib_keys, load_figure_manifest, load_author_figures,
+                          load_pool_figures)
     v = cfg.venue(venue) if venue else None
-    figs = (load_figure_manifest(project_dir, cfg.results_dir or "results")
-            if cfg.results_dir else []) + load_author_figures(project_dir)
+    figs = ((load_figure_manifest(project_dir, cfg.results_dir or "results")
+             if cfg.results_dir else []) + load_author_figures(project_dir)
+            + load_pool_figures(project_dir))
     corpus = len(load_bib_keys(project_dir, cfg.litrev_dir)) if cfg.litrev_dir else 0
     # The length to AIM AT, not the venue's ceiling — see guards.word_target.
     target = guards.word_target(v.word_min, v.word_limit) if v else 0
@@ -1139,11 +1141,12 @@ def figures_by_section(project_dir: Path, spine: list[str]) -> dict[str, list]:
     figure shows — so the plan names the section and the model places it within.
     """
     from .context import (load_figure_manifest, load_author_figures,
-                          author_figure_sections)
+                          author_figure_sections, load_pool_figures)
     from . import guards
     hints = author_figure_sections(project_dir)
     out: dict[str, list] = {}
-    for f in load_figure_manifest(project_dir) + load_author_figures(project_dir):
+    for f in (load_figure_manifest(project_dir) + load_author_figures(project_dir)
+              + load_pool_figures(project_dir)):
         if f.origin == "author":
             hint = hints.get(f.path, "")
             kind = guards.budget_kind(hint) if hint else "methods"

@@ -131,6 +131,15 @@ def test_compose_repairs_invalid_dot_then_stubs_on_failure():
     assert figure._dot_validates(stub.source)
 
 
+def test_list_ids_and_caption_from_the_pool(tmp_path):
+    figure.write_figure(tmp_path, "demo", figure.stage_dag(project.DEFAULT_STAGES), render_svg=False)
+    figure.write_figure(tmp_path, "demo", figure.experiment_dag([{"id": "E1", "outputs": []}]),
+                        render_svg=False)
+    assert set(figure.list_ids(tmp_path, "demo")) == {"stageLadder", "experimentDag"}
+    assert figure.caption_of(tmp_path, "demo", "stageLadder") == "The HAARPi stage pipeline."
+    assert figure.caption_of(tmp_path, "demo", "nope") == ""
+
+
 def test_run_compose_goes_through_the_policy():
     class P:
         def brain(self):

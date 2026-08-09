@@ -320,6 +320,32 @@ def _resolve_svg(figdir: Path, short_title: str, fig_id: str) -> Path | None:
     return (best_human or best_ra or (0, None))[1]
 
 
+def list_ids(root: Path, short_title: str) -> list[str]:
+    """The distinct figure ids present in the pool (the leading chain token of each figure file).
+    What a consumer enumerates to embed everything the pipeline produced."""
+    figdir = pool_dir(root)
+    if not figdir.is_dir():
+        return []
+    ids = set()
+    for p in figdir.glob("*"):
+        r = naming.parse(p, short_title)
+        if r and r[1]:
+            ids.add(r[1][0])
+    return sorted(ids)
+
+
+def caption_of(root: Path, short_title: str, fig_id: str) -> str:
+    """The figure's caption, read from its source header (`// caption:` / `%% caption:`)."""
+    src = resolve(root, short_title, fig_id, "source")
+    if src is None:
+        return ""
+    for line in src.read_text().splitlines():
+        m = re.match(r"\s*(?://|%%)\s*caption:\s*(.+)", line)
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
 def resolve(root: Path, short_title: str, fig_id: str, want: str = "svg", width: int = 1600) -> Path | None:
     """Consumer-facing: get the authoritative figure by id. `svg` = release > hand-edit > draft;
     `png` = that SVG rasterised on demand (and cached); `source` = the newest source file."""

@@ -196,8 +196,13 @@ re-derive when that data changes.
    by the Claude design session as `framework.dot` and rendered onto the chain (`rayleigh init`,
    post-session; `DESIGN_PROMPT` instructs the session to draw it). rayleigh has **no ollama brain**,
    so it uses the deterministic + render/naming paths, not `compose` — the strong in-session Claude is
-   the conceptual author. 4 rayleigh tests; sweeps green. *Still to come:* the consumer side —
-   raconteur/razzle embed-by-id, and registering rayleigh's R data figures onto the pool.
+   the conceptual author. 4 rayleigh tests; sweeps green.
+   **DONE (raconteur consumer)** — `haarpi.figure` gained `list_ids`/`caption_of` (pool enumeration);
+   raconteur's `load_pool_figures` surfaces the pool as a THIRD figure source (beside rayleigh's
+   results figures and the author's `figures.yaml`) — author-origin, PNG-exported, captioned from the
+   source header, wired into the outline's figure placement. Empty outside a project; raconteur 632, no
+   regression. *Still to come:* register rayleigh's R data figures onto the pool; razzle as the deck
+   consumer.
 5. **Paper-grade formats**: TikZ (`pdflatex` → pdf → svg) and matplotlib renderers, for raconteur's
    publication figures.
 6. **razzle** consumes the populated pool (its own build) — the figure engine is razzle's prerequisite.
