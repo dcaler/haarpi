@@ -1304,10 +1304,31 @@ _OPENING: dict[str, tuple[str, str, str]] = {
     "experiments": ("plan", "experiment design session",
                     "Design the executable experiments that use the built tooling to fulfil the "
                     "framework, then hand off to conduct"),
-    "deck":        ("deck", "deck session",
-                    "Author the venue-specific presentation deck(s) from the paper's one-pager + "
-                    "the figures/claims, then render"),
+    # (deck opens via `_open_deck` — it forks per presentation format, so it is not a single
+    # opening move keyed here.)
 }
+
+
+def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
+    """Open the deck stage: a `razzle deck --format <fmt>` authoring session per chosen format, or —
+    if none is chosen — one prompt to pick them. razzle owns the format vocabulary, so haarpi passes
+    the names through verbatim (razzle validates on run) rather than importing them."""
+    fmts = [str(f).strip() for f in (m.deck_formats or []) if str(f).strip()]
+    if not fmts:
+        client.create_task(
+            "razzle deck: pick format(s)", m.trundlr_project_id,
+            description="Choose the presentation format(s) for this project and add them to "
+                        "`deck_formats:` in haarpi.yaml (razzle: longtalk / shorttalk / lecture), "
+                        "then run `haarpi razzle deck --format <fmt>`. The stage builds one deck "
+                        "per format.",
+            resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
+        return
+    for fmt in fmts:
+        client.create_task(
+            f"razzle deck {fmt}", m.trundlr_project_id,
+            description=f"Author the {fmt} deck from the paper's one-pager + the figures/claims, "
+                        f"then render — run: haarpi razzle deck --format {fmt}",
+            resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
 
 
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
@@ -1322,7 +1343,12 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
         if not project.unlocked(root, m, stage):
             continue
         tool = spec["tool"]
-        if spec.get("attended"):
+        if stage == "deck":
+            # The deck stage FORKS per presentation format (razzle's venue-analogue): one authoring
+            # session per format the author chose. deck_formats verbatim — haarpi does not own the
+            # format vocabulary (razzle validates on run), keeping the dependency one-directional.
+            _open_deck(client, m, tr_cfg)
+        elif spec.get("attended"):
             verb, label, blurb = _OPENING.get(stage, ("init", "design session",
                                                       "Interactive design session"))
             client.create_task(

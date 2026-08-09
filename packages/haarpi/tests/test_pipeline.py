@@ -391,6 +391,52 @@ def test_experiments_extend_escalates_to_attended_review(proj, servers):
     assert "rayleigh review" in new[0]["description"]
 
 
+def test_manifest_round_trips_deck_formats(tmp_path):
+    m = project.Manifest(name="x", short_title="x", brief="b",
+                         deck_formats=["shorttalk", "longtalk"])
+    project.save_manifest(m, tmp_path)
+    assert project.load_manifest(tmp_path).deck_formats == ["shorttalk", "longtalk"]
+
+
+def test_old_manifest_gains_deck_stage_and_empty_formats_on_load(tmp_path):
+    """A manifest written before the deck stage existed loads WITH it (DEFAULT_STAGES merge) and an
+    empty deck_formats — migration is by load, no rewrite needed."""
+    (tmp_path / project.MANIFEST).write_text(
+        "name: old\nshort_title: old\nbrief: b\n"
+        "stages:\n  litreview:\n    dir: litReview\n")
+    m = project.load_manifest(tmp_path)
+    assert "deck" in m.stages and m.stages["deck"]["tool"] == "razzle"
+    assert m.deck_formats == []
+
+
+def _human_client(tr):
+    return trundlr.TrundlrClient(f"http://127.0.0.1:{tr.server_address[1]}")
+
+
+def test_deck_opens_one_session_per_chosen_format(proj, servers):
+    """The deck stage FORKS per presentation format — one authoring session each."""
+    tr, _ = servers
+    m = project.load_manifest(proj)
+    m.deck_formats = ["shorttalk", "longtalk"]
+    before = len(tr.tasks)
+    planner._open_deck(_human_client(tr), m, {"human_resource": 1})
+    new = tr.tasks[before:]
+    assert [t["title"] for t in new] == ["razzle deck shorttalk", "razzle deck longtalk"]
+    assert all("razzle deck --format" in t["description"] for t in new)
+    assert all("command" not in t for t in new)                 # attended sessions, yours
+
+
+def test_deck_opening_prompts_when_no_format_chosen(proj, servers):
+    """No format chosen → one prompt to pick them (razzle owns the vocabulary)."""
+    tr, _ = servers
+    m = project.load_manifest(proj)                             # deck_formats empty by default
+    before = len(tr.tasks)
+    planner._open_deck(_human_client(tr), m, {"human_resource": 1})
+    new = tr.tasks[before:]
+    assert len(new) == 1 and "pick format" in new[0]["title"]
+    assert "deck_formats" in new[0]["description"]
+
+
 def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     tr, _ = servers
     root = tmp_path / "260813_other"

@@ -86,6 +86,11 @@ class Manifest:
     # like authors; each entry {name, grant?}. razzle resolves each name to a logo via the neutral
     # funder registry. A fact the tools never invent.
     funders: list = field(default_factory=list)
+    # Which presentation formats this project builds a deck in — razzle's venue-analogue. The deck
+    # stage FORKS per format (one deck each): the author sets e.g. ["shorttalk", "longtalk"], and
+    # the stage opening queues a `razzle deck --format <fmt>` session per entry. Empty → the opening
+    # is a single prompt to pick one (razzle owns the vocabulary: longtalk/shorttalk/lecture/poster).
+    deck_formats: list = field(default_factory=list)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
@@ -121,6 +126,7 @@ def save_manifest(m: Manifest, root: Path) -> Path:
     # then silently fails to persist, which looks like the edit never happened.
     data = {"name": m.name, "short_title": m.short_title, "brief": m.brief,
             "initials": m.initials, "authors": m.authors, "funders": m.funders,
+            "deck_formats": m.deck_formats,
             "trundlr_project_id": m.trundlr_project_id,
             "trundlr_priority": m.trundlr_priority, "stages": m.stages}
     fp = root / MANIFEST

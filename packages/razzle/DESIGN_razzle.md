@@ -148,8 +148,14 @@ a promotion, not a contract.
    field; razzle is registered in haarpi's `TOOLS` (so `haarpi razzle …` dispatches) and `_OPENING`
    (minting the paper opens a `razzle deck session` — verified). The `razzle` CLI has `deck` (gather +
    launch an authoring session, or `--no-launch` to print the manual path) and `render`
-   (`slides/<fmt>/spec.json` → the branded `.pptx`). Stage-graph + CLI tests. *Remaining:* migration of
-   existing manifests (manual for now, like the `design` stage rollout); per-project format selection.
+   (`slides/<fmt>/spec.json` → the branded `.pptx`). Stage-graph + CLI tests.
+   **Per-project format selection + migration (DONE):** the manifest gained `deck_formats` (the
+   presentation formats this project builds a deck in — razzle's venue-analogue). The deck stage FORKS
+   per format — `_open_deck` queues one `razzle deck --format <fmt>` session per entry; an empty list
+   opens a single "pick format(s)" prompt (razzle owns the vocabulary, so haarpi passes names through
+   verbatim and razzle validates on run, keeping the dependency one-directional). Migration is **by
+   load**: `load_manifest` merges `DEFAULT_STAGES`, so a manifest written before the deck stage existed
+   loads with it and an empty `deck_formats` — no rewrite needed. (`_OPENING` no longer keys `deck`.)
 2. **Asset registries**: the three loaders (`masters/<name>.pptx` + `.layouts.yaml`,
    `affiliations.yaml`, `funders.yaml`) in neutral `~/.config/haarpi/razzle/`, with graceful
    text-fallback + warnings for missing logos. Ship one default master + layout descriptor.
