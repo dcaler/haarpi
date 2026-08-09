@@ -85,3 +85,24 @@ def test_find_finished_markup_ignores_a_release(tmp_path):
     rel = tmp_path / "slides" / "shorttalk" / naming.release_name("demo", "pptx", infix="deck")
     _write_deck_pptx(rel, [_cm("C1", "x", resolved=True)])  # bare chain == a release, never markup
     assert planner.find_finished_markup(tmp_path, m) is None
+
+
+def test_render_pptx_pdf_skips_when_no_libreoffice(tmp_path, monkeypatch):
+    """A missing converter never blocks the mint — the PDF twin is best-effort."""
+    monkeypatch.setattr(planner.shutil, "which", lambda *_: None)
+    assert planner._render_pptx_pdf(tmp_path / "d.pptx") is None
+
+
+def test_render_pptx_pdf_returns_the_pdf_on_success(tmp_path, monkeypatch):
+    """When LibreOffice is present, the PDF twin lands beside the .pptx with the same stem."""
+    pptx = tmp_path / "260710_x_deck.pptx"
+    pptx.write_bytes(b"x")
+    monkeypatch.setattr(planner.shutil, "which", lambda *_: "/usr/bin/soffice")
+
+    def fake_run(cmd, **kw):
+        pptx.with_suffix(".pdf").write_bytes(b"%PDF-1.4")   # emulate soffice --convert-to pdf
+        return None
+
+    monkeypatch.setattr(planner.subprocess, "run", fake_run)
+    out = planner._render_pptx_pdf(pptx)
+    assert out == pptx.with_suffix(".pdf") and out.is_file()

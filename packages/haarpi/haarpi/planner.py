@@ -28,7 +28,9 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1240,6 +1242,29 @@ def _release_dir(root: Path, m: project.Manifest, stage: str, markup: Path) -> P
     return home / "output"
 
 
+def _render_pptx_pdf(pptx: Path) -> Path | None:
+    """A PDF twin of a minted deck, same content as the .pptx, written beside it.
+
+    LibreOffice headless is the only faithful .pptx renderer on a server (python cannot draw
+    slides). Best-effort: if `soffice`/`libreoffice` isn't installed the mint is never blocked —
+    it just skips the PDF. Fidelity depends on the deck's fonts being installed where this runs;
+    for a pixel-exact match, export the PDF from PowerPoint itself. Each call uses a throwaway
+    user profile so concurrent conversions don't collide on LibreOffice's single-instance lock."""
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    with tempfile.TemporaryDirectory() as prof:
+        try:
+            subprocess.run(
+                [soffice, "--headless", f"-env:UserInstallation=file://{prof}",
+                 "--convert-to", "pdf", "--outdir", str(pptx.parent), str(pptx)],
+                check=True, capture_output=True, timeout=180)
+        except (subprocess.SubprocessError, OSError):
+            return None
+    pdf = pptx.with_suffix(".pdf")
+    return pdf if pdf.is_file() else None
+
+
 def _archive_chain(root: Path, m: project.Manifest, stage: str, release: Path) -> int:
     """Move the spent chain files aside so output/ holds releases + live work only."""
     d = release.parent
@@ -1501,6 +1526,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # went first; the manuscript followed once package stopped reading one — it takes
         # the release .docx through read_release, and the abstract off the same file. What
         # remains on markdown is the litreview stage, whose consumers still read it.
+        deck_pdf = None
         if ext == "pptx":
             # A deck is minted by PROMOTION, not redline resolution: its comments are all
             # resolved, a .pptx has no tracked changes to accept, and there is no markdown
@@ -1508,6 +1534,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             # from here (gate model B — the deck is a communication artifact, not a prereg).
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(markup, dst)
+            # A PDF twin of the released deck, same content (for circulation/archival). Best-effort:
+            # a missing converter never blocks the mint.
+            deck_pdf = _render_pptx_pdf(dst)
         else:
             result = redline.mint_release(
                 markup, dst, post=post,
@@ -1552,6 +1581,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             except trundlr.TrundlrError as e:
                 print(f"  [trundlr] advance skipped: {e}")
         msg = (f"{stage}: gate PASSED — released {dst.name}"
+               + (f" (+PDF {deck_pdf.name})" if deck_pdf else
+                  "; PDF skipped (LibreOffice not found)" if ext == "pptx" else "")
                + (f"; opened {', '.join(opened)}" if opened else "")
                + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else "")
                + packaged + skipped)

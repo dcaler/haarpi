@@ -194,8 +194,17 @@ a promotion, not a contract.
    (commented-in-place; no rename to initials); `naming` accepts `pptx`; the clean branch mints by
    **promotion** (copy `_ra` → token-free release, no md sibling); the `deck` stage has its own
    `STAGE_STEPS`/`STAGE_TIERS`/`STAGE_PROMPTS` (one `deck_session` rework tier, like design/build), and
-   `_archive_chain` sweeps the spent `_ra` pptx. Tested end to end (`test_deck_gate.py`: reader,
-   clean/blocked gate, and `find_finished_markup` surface/ignore-draft/ignore-release).
+   `_archive_chain` sweeps the spent `_ra` pptx. **On mint, a PDF twin** of the released deck is
+   written beside it (`_render_pptx_pdf` → LibreOffice headless, the only faithful `.pptx` renderer on
+   a server) — best-effort, so a missing `soffice`/`libreoffice` never blocks the release (it prints
+   "PDF skipped"). Fidelity depends on the deck's fonts being installed where the mint runs; a
+   pixel-exact match means exporting from PowerPoint itself. Tested end to end (`test_deck_gate.py`:
+   reader, clean/blocked gate, `find_finished_markup` surface/ignore-draft/ignore-release, and the PDF
+   twin's skip/success paths).
+
+   > **Dependency:** the PDF twin needs LibreOffice on the box that runs `haarpi next`
+   > (`apt install libreoffice-impress`, or the full `libreoffice`). Absent it, the deck still mints —
+   > only the `.pdf` is skipped.
 
 ## Render fixes from the first commented demo (DONE)
 
