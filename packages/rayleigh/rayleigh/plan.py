@@ -136,7 +136,17 @@ def run_plan(args) -> int:
     log("done.")
     print()
     print(f"  Scaffolded results/ for {name} (cycle {cycle}) in {results}")
-    return launch_session(root, getattr(args, "no_launch", False), model=cfg.design_model)
+    interactive = not getattr(args, "no_launch", False) and shutil.which("claude") is not None
+    rc = launch_session(root, getattr(args, "no_launch", False), model=cfg.design_model)
+    if interactive and rc == 0:
+        # The session has authored experiments.yaml — render the experiment DAG onto the pool
+        # (deterministic, no model) for the paper and the deck.
+        from rayleigh import figures as rfigures
+        short = rfigures.short_title(root, slugify(name))
+        dag = rfigures.emit_experiment_dag(root, short)
+        if dag and dag.get("svg"):
+            print(f"\n  Rendered the experiment DAG: {dag['svg'].relative_to(root)}")
+    return rc
 
 
 def launch_session(root: Path, no_launch: bool, model: str = "") -> int:

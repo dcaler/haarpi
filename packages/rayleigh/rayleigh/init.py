@@ -44,6 +44,9 @@ DESIGN_PROMPT = (
     "(the framework: research questions + analytical approach + the data infrastructure raster must "
     "build) and the finalized brief into design/rayleigh.yaml. You author the FRAMEWORK only — the "
     "executable experiments come later, in `rayleigh plan`, once raster has built the tooling. "
+    "Also draw the framework as a Graphviz DOT diagram in design/designdocs/framework.dot (a `digraph`: "
+    "research questions -> analytical approach -> data infrastructure) — rayleigh renders it onto the "
+    "project's figure pool for the paper and the deck. "
     "Three hard rules, and I should not have to remind you of them: (1) READ THE PRIORS FIRST — "
     "the minted litReview and the brief — before proposing any question or approach, and name the "
     "prior each rests on; (2) SURFACE EVERY SCOPE/COMPUTE DECISION for me to confirm — never set "
@@ -375,4 +378,12 @@ def run_init(args) -> int:
             print("  Review it, then `haarpi next` to commit the design → hands off to raster.")
         else:
             print("\n  (Render the prereg for review once the design doc is ready.)")
+        # If the session authored a framework schematic (Graphviz DOT), render + chain it onto the
+        # project's figure pool — a conceptual figure both the paper and the deck will want.
+        from rayleigh import figures as rfigures
+        short = rfigures.short_title(root, slugify(name))
+        fw = rfigures.chain_authored_dot(root, short, "analyticalFramework",
+                                         designdocs / "framework.dot", "The analytical framework.")
+        if fw and fw.get("svg"):
+            print(f"  Rendered the framework schematic: {fw['svg'].relative_to(root)}")
     return rc
