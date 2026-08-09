@@ -145,16 +145,45 @@ preregistration; it doesn't need a strict mint.
 2. **Asset registries**: the three loaders (`masters/<name>.pptx` + `.layouts.yaml`,
    `affiliations.yaml`, `funders.yaml`) in neutral `~/.config/haarpi/razzle/`, with graceful
    text-fallback + warnings for missing logos. Ship one default master + layout descriptor.
-3. **Render engine** (`razzle.render`, python-pptx): given a deck spec + master + resolved logos →
-   `.pptx`. Deterministic; tested against a fixture master (title/section/content/figure/ack roles;
-   logo placement). This is the load-bearing, LLM-free core — build and test it first.
-4. **Spec authoring** (`razzle.compose`): the LLM turns the one-pager + figures + claims + venue
-   constraints into the deck spec (per-slide role/title/bullets/figure/notes; venue-sized). Grounded;
-   never invents a number. Fixture-tested with a fake brain.
-5. **Venue fork + gather**: read raconteur's venue slate; per selected venue, gather inputs and run
-   compose→render into `slides/{venue}/`. Wire the `deck` stage opening in `_advance`.
+3. **DONE (render engine + neutral assets)** — `razzle.render.render_deck(spec, master, descriptor,
+   out, figures=, logos=)` (python-pptx) clones the master's layouts by role, fills text placeholders,
+   and places figures/logos as pictures fitted into the placeholder boxes (python-pptx can't insert
+   into an OBJECT placeholder, so `add_picture` at its geometry + drop the empty placeholder;
+   `_clear_slides` drops slide RELS so the deck isn't corrupted). `razzle.assets` resolves the
+   **neutral, never-in-repo** branding from `~/.config/haarpi/razzle/` — a house `master` (.pptx +
+   `.yaml` descriptor: 16:9 title/figure/content roles → placeholders + logo slots) and the
+   affiliation/funder → logo registries. Logos gracefully skipped when absent. The package ships only
+   CODE + a generic `layouts/example.yaml` documenting the format — no real master/logos ever touch
+   git (belt-and-suspenders: `*.pptx`, `/logos/` gitignored). New `razzle` package, editable-installed;
+   render tested against the house master (skip-guarded on the neutral assets' presence).
+4. **DONE (spec authoring)** — `razzle.compose(brain, narrative, figures, claims, venue=, max_slides=)`
+   has the LLM turn the one-pager (the talk's spine) + the figure pool + the real claims into a deck
+   spec as JSON, then parses/validates/**normalises** it: a valid role per slide, a leading title
+   slide, figure refs demoted to plain slides if the id doesn't exist, `max_slides` respected; a bad
+   parse degrades to a title-only deck (never a crash). Output feeds `render_deck` directly — proven
+   end to end (compose → render → a 3-slide branded pptx). 4 fake-brain tests. (Which brain drives it
+   — an ollama coordinator vs the interactive session — is settled at the stage opening, step 5.)
+5. **DONE (gather + orchestrator)** — `razzle.gather` pulls the real inputs from a project: the
+   narrative (raconteur's `load_onepager`, release > draft), the figure pool (by id + caption), the
+   claims (each experiment's observed `finding` from `findings.json`, verbatim), and the author/funder
+   logos (from the manifest + neutral registries). `razzle.deck.build_deck(root, fmt, brain)`
+   orchestrates gather → compose (sized to the format) → render into `slides/{fmt}/`, writing the deck
+   spec (`spec.json`, the durable artifact) and the `.pptx`; figures export to PNG on demand. Best-
+   effort throughout. Tested with a fixture project + fake brain. **Remaining for step 5:** the
+   per-project *selection* of which formats to build, a `razzle` CLI entry, and wiring the `deck`
+   stage opening in `_advance` (with the stage-graph work in step 1).
 6. **Gate**: the spec-annotation review loop (A) + the hand-polish finish (B); `haarpi next`
    integration for the deck stage (its own `STAGE_STEPS`/`TIERS`/`PROMPTS`, like design/build).
+
+## Open items (to discuss)
+
+- **The draft house master is not good enough — revisit it.** The current descriptor was reverse-
+  engineered from a reference deck (design idea only), and its layouts are thin (title / figure /
+  content). We need to design razzle's actual house master + its role set together — section dividers,
+  two-column, an acknowledgements/funding slide, the logo strip treatment — before razzle ships decks
+  anyone presents.
+- **Poster** is not a slide count — it needs its own shape (one board), a separate mode from the
+  timed-talk formats.
 
 Suites to stay green: a new `razzle` suite (render + compose + registries) plus haarpi's stage-graph
 tests. The render engine (step 3) is the piece to prototype first — it proves the master/logo

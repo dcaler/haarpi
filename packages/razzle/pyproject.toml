@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "razzle"
+version = "0.1.0"
+description = "Venue-specific presentation agent in the ra* family — turns a committed paper into a branded .pptx deck."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "haarpi",
+    "python-pptx>=0.6.21",   # the render core: clone master layouts, fill placeholders, place figures/logos
+    "PyYAML>=6.0.2",
+]
+
+[tool.setuptools.packages.find]
+include = ["razzle*"]
+
+[tool.setuptools.package-data]
+razzle = ["layouts/*.yaml"]
+
+[tool.uv.sources]
+haarpi = { workspace = true }

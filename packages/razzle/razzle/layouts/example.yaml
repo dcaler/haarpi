@@ -1,0 +1,13 @@
+# Example razzle layout descriptor — documents the format only. The REAL house master and its
+# descriptor live neutral in ~/.config/haarpi/razzle/masters/ (never in any repo); this is a generic
+# template, not tied to any real deck.
+#
+# `master` names the .pptx beside this descriptor; `roles` map razzle's slide roles to the master's
+# layouts (by index) and their placeholders (by idx): `text` fills text placeholders, `picture`
+# places a figure, `logos` lists placeholder boxes for affiliation/funder logos.
+master: master.pptx
+size: "16:9"
+roles:
+  title:   {layout: 0, text: {title: 0, subtitle: 1}, logos: [14]}
+  figure:  {layout: 1, text: {title: 0, caption: 13}, picture: {figure: 1}, logos: [15]}
+  content: {layout: 1, text: {title: 0, body: 1}, logos: [15]}
