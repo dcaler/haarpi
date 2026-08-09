@@ -183,9 +183,10 @@ re-derive when that data changes.
    (release > hand-edit > `_ra`), and the best-effort fallback. `haarpi.naming` extended to recognise
    figure extensions so a figure is a first-class chain artifact. The `_ra`-only write IS the clobber
    guard.
-2. **DONE** — Deterministic emitters: `stage_dag(stages)` + `experiment_dag(experiments)` → DOT,
-   provenance in the source header. Renders the real `DEFAULT_STAGES` ladder to SVG + PNG today.
-   (`module_graph(tasks.yaml)` still to come.) 7 figure tests; full haarpi suite 257 green.
+2. **DONE** — Deterministic emitters: `stage_dag(stages)`, `experiment_dag(experiments)`, and
+   `module_graph(tasks.yaml)` → DOT, provenance in the source header. Renders the real `DEFAULT_STAGES`
+   ladder to SVG + PNG. raster emits the module graph at `handoff` (`raster.figures`) — the third
+   producer, beside rayleigh. Figure tests green; full haarpi suite 263.
 3. **DONE** — Engine + `FigurePolicy` + conceptual `compose`: the LLM authors DOT source grounded in
    context; the output is EXTRACTED (fenced or bare) and VALIDATED (must compile), with one repair
    pass and a labelled compiling stub on total failure (never a crash). `run_compose(policy, …)`

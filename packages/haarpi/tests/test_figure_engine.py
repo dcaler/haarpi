@@ -40,6 +40,14 @@ def test_experiment_dag_links_experiments_to_their_outputs():
     assert "does friction bind?" in src           # E2 falls back to the question
 
 
+def test_module_graph_chains_the_build_modules():
+    spec = {"modules": [{"id": "M0", "name": "core", "tasks": [{"id": "t1"}, {"id": "t2"}]},
+                        {"id": "M1", "name": "sweep", "tasks": [{"id": "t3"}]}]}
+    src = figure.module_graph(spec).source
+    assert '"M0" -> "M1"' in src                                  # modules advance in sequence
+    assert "M0: core (2 tasks)" in src and "M1: sweep (1 task)" in src
+
+
 # ── chain-named pool + naming resolution ───────────────────────────────────────
 
 def test_write_figure_names_a_tool_draft_on_the_chain(tmp_path):

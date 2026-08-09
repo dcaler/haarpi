@@ -107,6 +107,28 @@ def experiment_dag(experiments: list, *, fig_id: str = "experimentDag") -> Figur
                       born_stage="experiments")
 
 
+def module_graph(spec: dict, *, fig_id: str = "moduleGraph") -> FigureSpec:
+    """raster's build modules as a Graphviz DAG from `tasks.yaml`. Modules advance sequentially
+    (gate-pass → next, block-on-fail), so the graph is the module chain, each node labelled with its
+    task count. Deterministic — the build's structure, derived, not depicted."""
+    prov = {"mode": "deterministic", "from": "tasks.yaml"}
+    body = [f"digraph {fig_id} {{", "  rankdir=LR;", f"  {_NODE}", f"  {_EDGE}"]
+    prev = None
+    for m in spec.get("modules", []) or []:
+        mid = _q(str(m.get("id", "M?")), 12)
+        name = _q(m.get("name", ""), 28)
+        n = len(m.get("tasks", []) or [])
+        label = (f"{mid}: {name}" if name else mid) + (f" ({n} task{'s' * (n != 1)})" if n else "")
+        body.append(f'  "{mid}" [label="{label}"];')
+        if prev is not None:
+            body.append(f'  "{prev}" -> "{mid}";')
+        prev = mid
+    body.append("}")
+    src = _dot_header(fig_id, "The build's module structure.", prov) + "\n".join(body) + "\n"
+    return FigureSpec(id=fig_id, kind="dag", format="dot", source=src,
+                      caption="The build's module structure.", provenance=prov, born_stage="build")
+
+
 # ── conceptual figures: the LLM authors DOT source, grounded + validated ───────
 # For the figures no structured file can derive — a framework schematic, a mechanism diagram.
 # The model writes CODE (DOT), never pixels; the result is validated (it must compile) before it

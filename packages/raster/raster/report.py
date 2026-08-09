@@ -280,4 +280,10 @@ def run_report(args) -> int:
         log(f"  rendered {doc.name} for review — `haarpi next` mints it (unlocks experiments + paper).")
     else:
         log("  (pandoc unavailable — render the methods docx for review before `haarpi next`.)")
+    # The build's module graph onto the shared figure pool, for the paper and the deck (deterministic).
+    from raster import figures as rfig
+    from raster.init import slugify
+    mg = rfig.emit_module_graph(project.root, rfig.short_title(project.root, slugify(project.name)))
+    if mg and mg.get("svg"):
+        log(f"  rendered the module graph -> figures/{mg['svg'].name}")
     return 0
