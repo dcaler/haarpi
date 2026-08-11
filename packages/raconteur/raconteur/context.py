@@ -114,6 +114,96 @@ def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
     return text
 
 
+# ── litreview threads: the harvestable unit (tier-1) ──────────────────────────
+# rabbitHole builds the review as thesis-headed "## " threads (one idea per heading), with
+# an "## Annotated Bibliography" tail. That structure is already a harvestable index: raconteur
+# need not swallow a truncated prefix of the prose — it can see every thread's thesis compactly
+# (tier-1) and pull the ones a section actually needs (tier-2). See DESIGN_litreview_harvest.md.
+
+class LitThread(NamedTuple):
+    heading: str                 # the "## " thesis heading
+    thesis: str                  # first sentence of the thread, citekeys stripped
+    citekeys: tuple[str, ...]    # every [@key] the thread cites, in order, de-duplicated
+    body: str                    # the thread's prose (for tier-2 harvest into a section)
+
+
+_H2_RE = re.compile(r"^##\s+(.+\S)\s*$")          # exactly level-2: "## x" but not "### x"
+_CITEKEY_RE = re.compile(r"\[@([^\]]+)\]")
+# Structural tails that are not narrative threads — collecting stops at the first of these.
+_LITREV_BIB_MARKERS = ("annotated bibliography", "bibliography", "references",
+                       "cited in the review", "additional curated sources", "works cited")
+_LITREV_SKIP_HEADINGS = {"narrative review"}      # a wrapper heading, no prose of its own
+
+
+def _split_h2(md: str) -> list[tuple[str, str]]:
+    """[(heading, body)] for every level-2 ('## ') section, in document order."""
+    out: list[tuple[str, str]] = []
+    head: str | None = None
+    lines: list[str] = []
+    for ln in md.splitlines():
+        m = _H2_RE.match(ln)
+        if m:
+            if head is not None:
+                out.append((head, "\n".join(lines).strip()))
+            head, lines = m.group(1).strip(), []
+        elif head is not None:
+            lines.append(ln)
+    if head is not None:
+        out.append((head, "\n".join(lines).strip()))
+    return out
+
+
+def _thread_citekeys(text: str) -> tuple[str, ...]:
+    keys: list[str] = []
+    for grp in _CITEKEY_RE.findall(text):
+        for k in grp.split(";"):
+            k = k.strip().lstrip("@").strip()
+            if k and k not in keys:
+                keys.append(k)
+    return tuple(keys)
+
+
+def _thread_thesis(body: str, limit: int = 240) -> str:
+    t = _CITEKEY_RE.sub("", " ".join(body.split()))
+    t = re.sub(r"\s+([.!?,;:])", r"\1", t).strip()      # citekey removal can orphan a space
+    m = re.search(r"(.+?[.!?])(\s|$)", t)
+    return (m.group(1) if m else t).strip()[:limit]
+
+
+def load_litreview_threads(project_dir: Path, subdir: str = "litReview") -> list[LitThread]:
+    """Parse the newest review .md into its narrative threads (the bibliography excluded).
+
+    The harvestable unit for raconteur: every ``## `` thesis section becomes one thread, with
+    its citekeys and a one-sentence thesis. Returns [] for a review with no ``## `` threads (an
+    older flat review), which is the signal for callers to fall back to the truncated prefix."""
+    glob = _LIT_GLOB.format(litrev_dir=subdir)
+    files = sorted(project_dir.glob(glob), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return []
+    md = files[0].read_text(encoding="utf-8", errors="replace")
+    threads: list[LitThread] = []
+    for heading, body in _split_h2(md):
+        h = heading.lower()
+        if any(mk in h for mk in _LITREV_BIB_MARKERS):
+            break                                 # the bibliography and everything after it
+        if h in _LITREV_SKIP_HEADINGS or not body:
+            continue                              # a wrapper heading with no prose
+        threads.append(LitThread(heading, _thread_thesis(body),
+                                  _thread_citekeys(body), body))
+    return threads
+
+
+def litreview_index(threads: list[LitThread], max_keys: int = 8) -> str:
+    """Tier-1: one compact line per thread — the whole review's shape in a few hundred chars."""
+    lines: list[str] = []
+    for t in threads:
+        shown = "; ".join("@" + k for k in t.citekeys[:max_keys])
+        extra = f"; +{len(t.citekeys) - max_keys} more" if len(t.citekeys) > max_keys else ""
+        tail = f"  [{shown}{extra}]" if shown else ""
+        lines.append(f"- {t.heading} — {t.thesis}{tail}")
+    return "\n".join(lines)
+
+
 def load_methods(project_dir: Path) -> str:
     """Read raster's methods writeup (<date>_methods_<chain>.md at project root)."""
     path = find_methods_file(project_dir)

@@ -573,8 +573,8 @@ def run(project_dir: Path, venue: str = "") -> None:
     """Phase one: plan the paper's sections and subsections against the word budget."""
     from .brain import Brain
     from .config import GlobalConfig
-    from .context import (check_prerequisites, load_litreview, load_methods,
-                          load_onepager, load_results)
+    from .context import (check_prerequisites, load_litreview, load_litreview_threads,
+                          load_methods, load_onepager, load_results)
     from .naming import deliverable_dir, find_latest, find_user_revision
     from .outline import _analyze_structure, _build_venue_section, _budget_block
 
@@ -622,8 +622,10 @@ def run(project_dir: Path, venue: str = "") -> None:
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
 
     log("[raconteur] analysing paper structure…")
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
-                                  narrative, None, project_dir)
+                                  narrative, None, project_dir,
+                                  threads=threads, sidecar=(work, "skeleton"))
 
     spine = spine_for(cfg, venue)
     budget = _budget_for(cfg, venue)

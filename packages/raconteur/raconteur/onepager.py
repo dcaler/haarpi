@@ -11,7 +11,7 @@ from pathlib import Path
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
 from .context import (
-    load_litreview, load_methods, load_results, load_bib_summary,
+    load_litreview, load_litreview_threads, load_methods, load_results, load_bib_summary,
     load_bib_keys, load_style_profile, load_style_signature,
     load_figure_manifest, check_prerequisites,
 )
@@ -1259,7 +1259,9 @@ def _onepager_fresh(
     known = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
 
     log("[raconteur] analysing paper structure…")
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results)
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
+                                  threads=threads, sidecar=(paper_dir, "onepager"))
 
     venue_section = _build_venue_section(cfg, project_dir)
     figure_list = _figure_section(figures)

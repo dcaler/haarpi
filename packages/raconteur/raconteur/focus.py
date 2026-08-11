@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .config import ProjectConfig, GlobalConfig
-from .context import load_litreview, load_methods, load_results, load_bib_summary, load_style_profile, load_onepager
+from .context import load_litreview, load_litreview_threads, load_methods, load_results, load_bib_summary, load_style_profile, load_onepager
 from .guards import (
     LITREV_KW as _LITREV_KW,
     CODE_KW as _CODE_KW,
@@ -292,9 +292,11 @@ def run(project_dir: Path, section: str) -> None:
 
     from .outline import _analyze_structure
     log("[raconteur] analysing paper structure…")
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(
         Brain(gcfg, coordinator=cfg.brain.coordinator_model),
         cfg.description, litrev, code, results, narrative,
+        threads=threads, sidecar=(paper_dir, "focus"),
     )
 
     brain = Brain(gcfg, coordinator=cfg.brain.coordinator_model)

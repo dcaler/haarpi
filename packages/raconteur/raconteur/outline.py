@@ -10,6 +10,7 @@ from .context import (
     load_litreview, load_methods, load_results, load_venue_analysis,
     check_prerequisites, load_onepager, load_figure_manifest,
     load_author_figures, author_figure_sections,
+    load_litreview_threads, litreview_index,
 )
 from .naming import (
     major_name, major_outline_name, find_latest, find_user_revision, deliverable_dir,
@@ -63,7 +64,7 @@ only — do not imply specific empirical findings that have not been provided.
 - "discussion_angle": specifically what this paper's method or findings reveal or \
 enable that existing approaches do not; be concrete
 - "limitations": 1–3 key limitations or caveats to address
-
+{harvest_instruction}
 Return ONLY valid JSON."""
 
 # ── equation extraction (worker) ──────────────────────────────────────────────
@@ -684,6 +685,7 @@ def analysis_view(analysis: str, drop: tuple[str, ...] = ()) -> str:
 def _analyze_structure(
     brain: Brain, description: str, litrev: str, code: str, results: str,
     narrative: str = "", figures=None, project_dir: Path | None = None,
+    threads=None, sidecar: tuple[Path, str] | None = None,
 ) -> str:
     """Return structural analysis as a JSON string (coordinator call).
 
@@ -697,8 +699,21 @@ def _analyze_structure(
     belongs: a 'results' figure with the finding it shows, an 'author' figure in the
     section the author named. ``project_dir`` supplies those section hints.
     An outline that never names a figure leaves the draft to guess where they go.
+
+    ``threads`` is the parsed review (``context.load_litreview_threads``). When present the
+    analysis sees the untruncated tier-1 INDEX instead of a 12k-char prefix of the prose, and
+    also returns ``litrev_harvest`` binding each pillar to the threads it draws on (tier-2).
+    ``sidecar`` = (dir, tag): where to write the inspectable harvest record. Absent ``threads``
+    reproduces the original behaviour exactly — a flat review keeps the truncated-prefix path.
     """
-    litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
+    if threads:
+        from . import harvest
+        litrev_context = ("\nLiterature Review Thread Index (every thread — heading, thesis, "
+                          f"citekeys):\n{litreview_index(threads)}\n")
+        harvest_instruction = harvest.harvest_instruction(threads)
+    else:
+        litrev_context = f"\nLiterature Review Context:\n{litrev}\n" if litrev else ""
+        harvest_instruction = ""
     narrative_context = (
         "\nNarrative spine (author-approved concise path through the paper — the "
         "structure you extract must follow this through-line):\n"
@@ -711,6 +726,7 @@ def _analyze_structure(
             description=description,
             narrative_context=narrative_context,
             litrev_context=litrev_context,
+            harvest_instruction=harvest_instruction,
             content_status=status,
         ),
         system=_ANALYZE_SYSTEM,
@@ -740,6 +756,11 @@ def _analyze_structure(
              **({"section": hints[f.path]} if hints.get(f.path) else {})}
             for f in figures]
         log(f"[raconteur] {len(figures)} figure(s) carried into the analysis for placement")
+
+    # tier-2: leave a verification record of which threads fed which pillar, beside the output.
+    if threads and sidecar is not None:
+        from . import harvest
+        harvest.write_sidecar(sidecar[0], sidecar[1], threads, parsed)
 
     return f"{status}\n\n{json.dumps(parsed, indent=2)}"
 
@@ -1412,8 +1433,10 @@ def _outline_fresh(
 
     # Pass 1: structural analysis
     log("[raconteur] analysing paper structure…")
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
-                                  narrative, figures, project_dir)
+                                  narrative, figures, project_dir,
+                                  threads=threads, sidecar=(paper_dir, "outline"))
 
     figures = figures_by_section(
         project_dir, [h.text for h in __import__("raconteur.guards", fromlist=["x"])
@@ -1538,8 +1561,10 @@ def _refresh_content(
     narrative = load_onepager(project_dir, cfg.short_title)
 
     log("[raconteur] analysing paper structure…")
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results,
-                                  narrative, figures, project_dir)
+                                  narrative, figures, project_dir,
+                                  threads=threads, sidecar=(paper_dir, "outline-rebuild"))
 
     existing_text = existing_md.read_text(encoding="utf-8")
     venue_section = _build_venue_section(cfg, project_dir, venue)

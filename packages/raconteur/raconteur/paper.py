@@ -14,7 +14,7 @@ from .guards import (
     is_acknowledgements as _is_acknowledgements,
 )
 from .context import (
-    load_litreview, load_methods, load_results, load_bib_summary,
+    load_litreview, load_litreview_threads, load_methods, load_results, load_bib_summary,
     load_bib_keys, load_style_profile, load_onepager,
 )
 from .log import log
@@ -941,7 +941,9 @@ def _draft_paper(
     # subsection they belong to. We deliberately do NOT feed the manifest into the per-section
     # analysis: key_figures there handed the full figure list to every section, and the model
     # then rendered all of them in every section. The outline is the sole placement authority.
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative,
+                                  threads=threads, sidecar=(paper_dir, "paper"))
 
     venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
@@ -1067,7 +1069,9 @@ def _revise_paper(
     # subsection they belong to. We deliberately do NOT feed the manifest into the per-section
     # analysis: key_figures there handed the full figure list to every section, and the model
     # then rendered all of them in every section. The outline is the sole placement authority.
-    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative)
+    threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
+    analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative,
+                                  threads=threads, sidecar=(paper_dir, "paper-revise"))
 
     existing_text = read_text(user_rev)
     annotations = build_revision_context(user_rev)
