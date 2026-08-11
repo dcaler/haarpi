@@ -98,6 +98,36 @@ def test_no_comments_is_no_tasks():
     assert planner._normalise_tasks([], []) == []
 
 
+# ── the deterministic floor: an explicit new-section ask cannot be filed as "sources" ──
+
+def test_an_explicit_section_ask_is_promoted_even_when_the_model_said_sources():
+    """The 8B coordinator filed 'a section on X' under sources (→ revise → decline). The floor
+    promotes it to a section task, so the chain re-plans (`report`) instead."""
+    text = "It would be great to have a section identifying regular milestones."
+    tasks = planner._normalise_tasks(
+        [{"comments": [1], "need": "sources", "query": "milestones"}], [text])
+    assert [t["need"] for t in tasks] == ["section"]
+    assert tasks[0]["query"] == text                 # the comment's own words steer the report
+    assert planner.chain_from_tasks(tasks)["steps"] == \
+        ["gather", "collect", "report", "comment"]
+
+
+def test_an_edit_of_an_existing_section_is_not_promoted():
+    """'this section' is the structure that's already there — an edit, not a new strand."""
+    tasks = planner._normalise_tasks(
+        [{"comments": [1], "need": "edit"}], ["This section is unclear — tighten it."])
+    assert [t["need"] for t in tasks] == ["edit"]
+
+
+def test_promotion_splits_a_mixed_task_and_preserves_coverage():
+    tasks = planner._normalise_tasks(
+        [{"comments": [1, 2], "need": "edit"}],
+        ["Please add a section on lifecycle milestones.", "Also fix this typo."])
+    assert sorted(t["need"] for t in tasks) == ["edit", "section"]
+    assert sorted(c for t in tasks for c in t["comments"]) == \
+        ["Also fix this typo.", "Please add a section on lifecycle milestones."]
+
+
 # ── decompose: brain output → tasks, with a safe fallback ──────────────────────
 
 class _FakeBrain:

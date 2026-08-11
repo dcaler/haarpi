@@ -776,20 +776,27 @@ A reviewer left these unresolved annotations on a literature-review draft, numbe
 For EACH annotation decide what WORK it needs, then group annotations that need the SAME
 work into one task. Every annotation number must appear in exactly one task.
 
-need types:
-- "edit": satisfiable by rewriting text that is already there — reword, restructure,
-  clarify, cut. No new sources.
-- "sources": asks for more substance, depth, or coverage on a topic ("more on X", "go
-  deeper", "what about Y"). Needs new literature gathered — TRUE even if the topic is
-  already present; presence is not sufficiency.
-- "section": asks for a whole new section, theme, or strand to be ADDED to the review.
-  The review must be re-planned, not just edited.
-- "ingest": names specific papers, DOIs, or citations the reviewer wants pulled in.
-- "redirect": the review is aimed wrong or needs a fundamentally different scope — a
-  genuine change of direction, not "add more".
+Decide in THIS ORDER and stop at the first that fits — a later type never overrides an
+earlier one:
 
-For "sources", "section", and "redirect" give a specific, searchable "query" (the topic to
-gather). For "edit" and "ingest" set "query" to "".
+1. "redirect": the review is aimed wrong or needs a fundamentally different scope — a
+   genuine change of direction, not "add more".
+2. "section": asks for a new section, theme, strand, or sub-topic to be DEVELOPED as its
+   own treatment — the review's STRUCTURE must change, not just its wording. Triggers:
+   "a section on X", "identify/enumerate/lay out the Xs", "cover the specific techniques
+   and how to use them", "this is too high level — I want the concrete X". A demand to
+   build out a topic into its own strand is section, NOT sources, even when that topic is
+   already mentioned in passing. When in doubt between section and sources, choose section.
+3. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
+   in ("add @key", "cite Smith 2020", "these references:").
+4. "sources": wants more evidence UNDER the structure that already exists — thicker support
+   for a point the review already makes ("more on X", "go deeper", "what about Y"). Use this
+   only when no new section is being asked for; it gathers literature, it does not re-plan.
+5. "edit": satisfiable by rewriting text that is already there — reword, restructure,
+   clarify, cut. No new sources, no new structure.
+
+For "redirect", "section", and "sources" give a specific, searchable "query" (the topic to
+gather or the section to plan). For "edit" and "ingest" set "query" to "".
 
 Respond ONLY with JSON:
 {{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}}, ...]}}"""
@@ -853,7 +860,42 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
     if missed:
         tasks.append({"comments": [texts[i - 1] for i in missed],
                       "need": "edit", "query": ""})
-    return tasks
+    return _promote_explicit_sections(tasks)
+
+
+# A reviewer who writes "a section on X" is asking for STRUCTURE, and an in-place reviser
+# structurally cannot add one — it only rewrites the paragraph a comment sits on. The 8B
+# coordinator has been seen to file such asks under "sources" (gather more literature), which
+# routes to `revise`, which then declines. This is the deterministic floor under the prompt:
+# an unambiguous new-section request is a section task no matter what the model called it, so
+# the chain re-plans (`report`) instead of sending a reviser at a job it cannot do. Kept tight
+# on purpose — an indefinite/new determiner before "section", so "this section is unclear"
+# (an edit of existing structure) never trips it.
+_SECTION_ASK = re.compile(
+    r"\b(?:a|an|another|new|separate|dedicated|standalone|whole)\s+section\b"
+    r"|\bits own section\b|\badd a section\b",
+    re.IGNORECASE)
+
+
+def _promote_explicit_sections(tasks: list[dict]) -> list[dict]:
+    """Move any comment that unambiguously asks for a new section into a ``section`` task.
+
+    Coverage is preserved: a promoted comment leaves its old task and joins the section task,
+    a task emptied by promotion is dropped, and a comment's own words become the section's
+    ``query`` (the exact focus the report/gather is steered by)."""
+    promoted: list[str] = []
+    kept: list[dict] = []
+    for t in tasks:
+        if t["need"] == "section":
+            kept.append(t)
+            continue
+        stay = [c for c in t["comments"] if not _SECTION_ASK.search(c)]
+        promoted += [c for c in t["comments"] if _SECTION_ASK.search(c)]
+        if stay:
+            kept.append({**t, "comments": stay})
+    for c in promoted:
+        kept.append({"comments": [c], "need": "section", "query": c.strip()})
+    return kept
 
 
 def chain_from_tasks(tasks: list[dict]) -> dict:

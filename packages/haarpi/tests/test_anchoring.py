@@ -134,3 +134,29 @@ def test_an_unfindable_fragment_falls_back_to_the_paragraph(tmp_path):
         tmp_path / "rev.docx", ["A sentence about nothing in particular."],
         [{"cid": "1", "author": HUMAN, "text": "an existing comment"}])
     assert rl.add_anchored_comments(doc, [("A sentence", "a whole-paragraph note")]) == 1
+
+
+# ── the anchor survives the redline ──────────────────────────────────────────
+
+def test_a_sentence_edit_keeps_the_comment_on_its_sentence():
+    """A one-sentence rewrite must not balloon the reviewer's comment — and, threaded off it,
+    the tool's reply — to the whole paragraph. _relay used to pin every range to the paragraph
+    edges; the bracket now follows the sentence the comment bore on through the redline."""
+    p_el = Document().add_paragraph(
+        "Alpha sets the stage. Beta expands on it. "
+        "Gamma is the flagged claim. Delta closes it.")._p
+    assert rl.anchor_fragment(p_el, "Gamma is the flagged claim.", "7")
+
+    rl.tracked_replace_sentencewise(
+        p_el,
+        "Alpha sets the stage. Beta expands on it. "
+        "Gamma is the flagged claim, now grounded. Delta closes it.",
+        author="rabbitHole")
+
+    lo, hi = rl.comment_spans(p_el)["7"]
+    bracketed = rl.paragraph_text(p_el)[lo:hi]
+    assert "Gamma" in bracketed, "kept its own sentence"
+    assert "Alpha" not in bracketed and "Delta" not in bracketed, \
+        "did not swallow the untouched sentences"
+    # the redline itself is still sentence-wise: the calm sentences are accepted, in place
+    assert "Alpha sets the stage." in rl.flatten_paragraph(p_el)

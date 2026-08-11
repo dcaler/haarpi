@@ -28,11 +28,13 @@ OOXML notes:
 
 from __future__ import annotations
 
+import bisect
 import copy
 import datetime
 import difflib
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 from docx import Document
@@ -392,7 +394,7 @@ def _redline_chunk(old_chunk: str, new_chunk: str, smap: dict,
     return body
 
 
-def _relay(p_el, body: list, consumed: list) -> None:
+def _relay(p_el, body: list, consumed: list, bracket_comments: bool = True) -> None:
     """Detach what we consumed and re-lay [starts] <body> [ends] [reference runs].
 
     Whatever we did NOT consume keeps its place. A tracked deletion from an earlier cycle
@@ -400,9 +402,18 @@ def _relay(p_el, body: list, consumed: list) -> None:
     as gone), but it is still in the paragraph, and a rebuild that re-laid the new body at
     the top swept every old deletion to the paragraph's tail — severing the struck-through
     text from the prose it was struck from, which is most of what makes a redline readable.
+
+    ``bracket_comments`` re-lays every comment range around the WHOLE body — correct for a
+    wholesale replace, where the new prose is the anchored span. The sentence-wise path passes
+    False: it has already interleaved each range's markers around the sentences that comment
+    actually bears on (and detached them from ``p_el``), so a one-sentence edit no longer
+    balloons its comment — and its threaded reply — to the entire paragraph.
     """
-    starts = p_el.findall(qn("w:commentRangeStart"))
-    ends = p_el.findall(qn("w:commentRangeEnd"))
+    if bracket_comments:
+        starts = p_el.findall(qn("w:commentRangeStart"))
+        ends = p_el.findall(qn("w:commentRangeEnd"))
+    else:
+        starts = ends = []      # already placed inside `body` by the caller
     ref_runs = [r for r in p_el.findall(qn("w:r")) if _is_ref_run(r)]
     ppr = p_el.find(qn("w:pPr"))
 
@@ -480,19 +491,70 @@ def tracked_replace_sentencewise(p_el, new_text: str, author: str,
         return False
     rpr = _dominant_rpr(consumed)
 
+    # Which sentences each comment bears on, measured over the SAME serialized text — so a
+    # comment's range can follow its sentence through the rewrite instead of being pinned to
+    # the paragraph edges. Captured (and the marker elements detached) before the rebuild.
+    spans = comment_spans(p_el, protect_authored)
+    starts_el = {cs.get(qn("w:id")): cs for cs in p_el.findall(qn("w:commentRangeStart"))}
+    ends_el = {ce.get(qn("w:id")): ce for ce in p_el.findall(qn("w:commentRangeEnd"))}
+    for el in (*starts_el.values(), *ends_el.values()):
+        el.getparent().remove(el)
+
     old_units = sentence_units(old_text)
     new_units = sentence_units(new_text)
+    # Char offset where each old unit begins, so a comment's [start, end) maps to a unit range.
+    bounds = [0]
+    for u in old_units:
+        bounds.append(bounds[-1] + len(u))
+
+    def _unit_of(pos: int) -> int:
+        return max(0, min(bisect.bisect_right(bounds, pos) - 1, len(old_units) - 1))
+
     sm = difflib.SequenceMatcher(a=old_units, b=new_units, autojunk=False)
     body: list = []
+    unit_begin: dict[int, int] = {}   # old-unit index -> body position where its content starts
+    unit_end: dict[int, int] = {}     # ...and one past where it ends
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
-            for u in old_units[i1:i2]:
-                body.extend(_render(u, smap, rpr))  # unchanged — accepted, atoms in place
+            for k in range(i1, i2):
+                unit_begin[k] = len(body)
+                body.extend(_render(old_units[k], smap, rpr))  # unchanged — accepted, atoms in place
+                unit_end[k] = len(body)
         else:
+            b0 = len(body)
             body.extend(_redline_chunk("".join(old_units[i1:i2]),
                                        "".join(new_units[j1:j2]),
                                        smap, author, ids, rpr))
-    _relay(p_el, body, consumed)
+            for k in range(i1, i2):    # a changed span groups its units — the range wraps the chunk
+                unit_begin[k], unit_end[k] = b0, len(body)
+
+    # Re-lay each comment range around the sentences it bore on. `end_before` fires before
+    # `start_before` at a shared boundary, so one comment ending where the next begins nests
+    # cleanly rather than overlapping.
+    start_before: dict[int, list] = defaultdict(list)
+    end_before: dict[int, list] = defaultdict(list)
+    for cid, (cstart, cend) in spans.items():
+        s_el, e_el = starts_el.get(cid), ends_el.get(cid)
+        if s_el is None or e_el is None:
+            continue
+        fu = _unit_of(cstart)
+        lu = max(fu, _unit_of(max(cstart, cend - 1)))
+        sb = unit_begin.get(fu)
+        eb = unit_end.get(lu)
+        if sb is None or eb is None:      # a unit that rendered to nothing — bracket the whole body
+            sb, eb = 0, len(body)
+        start_before[sb].append(s_el)
+        end_before[eb].append(e_el)
+    if start_before or end_before:
+        placed: list = []
+        for i in range(len(body) + 1):
+            placed.extend(end_before.get(i, []))
+            placed.extend(start_before.get(i, []))
+            if i < len(body):
+                placed.append(body[i])
+        body = placed
+
+    _relay(p_el, body, consumed, bracket_comments=False)
     return True
 
 
