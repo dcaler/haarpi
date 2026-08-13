@@ -215,14 +215,38 @@ def test_clean_first_try():
 
 # ── fail closed ──────────────────────────────────────────────────────────────
 
-def test_exhausted_rounds_is_skipped_not_a_dirty_edit():
-    """Every round drops the citekey. The old code emitted the last attempt anyway as long as
-    it had *some* citation, so a source silently left the review while the reply claimed the
-    comment was addressed."""
+def test_exhausted_rounds_on_a_soft_fault_is_honored_as_an_override():
+    """Every round drops [@bowling2018] — no rewrite both answers the comment and keeps it. The
+    tool no longer DECLINES ("I couldn't without dropping a citation"): it honors the explicit
+    comment, lands the best attempt, and flags exactly what it sacrificed. The exhaustion audit
+    confirms the edit means what was asked, running once."""
     brain = _FakeBrain(
         revise_outputs=['{"2": "Beta falls [@x1]."}'] * 3,
-        audit_outputs=[])
+        audit_outputs=["OK"])
     text, outcome = _run(brain)
+    assert outcome.startswith("override:")
+    assert text == "Alpha rises [@x1]. Beta falls [@x1]. Gamma is stable [@x1]."   # the edit landed
+    assert "[@bowling2018]" not in text                                            # the sacrifice
+    assert brain.audit_calls == 1
+
+
+def test_the_override_note_names_the_dropped_source():
+    """The flag is derived from old-vs-new text, so it can never overstate: it names the exact
+    [@key] that left the paragraph, which becomes the reviewer's reply."""
+    brain = _FakeBrain(
+        revise_outputs=['{"2": "Beta falls [@x1]."}'] * 3,
+        audit_outputs=["OK"])
+    _text, outcome = _run(brain)
+    assert outcome == "override:dropped the citation [@bowling2018]"
+
+
+def test_an_invented_equation_is_never_overridden():
+    """The override is only for a DROPPED citation/equation. Inventing an equation is
+    fabrication — a hard finding — so it keeps failing closed no matter how many rounds."""
+    brain = _FakeBrain(
+        revise_outputs=['{"2": "Correlation ⟦m:9⟧ held [@bowling2018]."}'] * 3,
+        audit_outputs=[])
+    text, outcome = _run(brain, paragraph=MATH_PARA, anchored={1})
     assert outcome == "skipped"
     assert text is None
     assert brain.audit_calls == 0

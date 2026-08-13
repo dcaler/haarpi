@@ -531,6 +531,15 @@ class RabbitHolePolicy:
         n_units = len(guards.sentence_units(ctx.text))
         return _para_guard_findings(old_text, new_text, touched, ctx.anchored, n_units)
 
+    def soft_finding_kinds(self) -> frozenset[str]:
+        """The reviewer's comment is an explicit ask: honor it. A rewrite that answers the
+        comment but cannot keep a citation or an equation is HELD as a fallback, not vetoed —
+        if no clean rewrite emerges, rabbitHole lands it and flags the sacrifice rather than
+        replying "I couldn't without dropping a citation." Fabrication is never soft: an
+        INVENTED equation, author-year prose, over-reach, or a paragraph emptied of every
+        citation stay hard blockers, exactly as before."""
+        return frozenset({"dropped-citekey", "dropped-equation"})
+
 
 def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[str],
                             digest: str, anchored: set[int] | None = None,
@@ -555,9 +564,29 @@ def _redline_para_adversary(brain: Brain, cfg, paragraph: str, comments: list[st
                       kind="prose")
     new_text, disposition, _copyedits = _engine.redline_paragraph(
         brain, ctx, policy, rounds=rounds)
+    if disposition == _engine.Disposition.OVERRIDDEN.value:
+        # The edit lands, but it sacrificed a soft-protected atom. Derive the note from
+        # old-vs-new text (never the model) so the reply names exactly what was dropped.
+        return new_text, f"override:{_override_note(paragraph, new_text)}"
     cls = route_class_of(disposition)
     outcome = f"corpus:{cls}" if cls else disposition   # engine "routed:x" → rabbitHole "corpus:x"
     return new_text, outcome
+
+
+def _override_note(old_text: str, new_text: str) -> str:
+    """A short, honest phrase naming what an override sacrificed, computed from the two texts
+    so it can never overstate: the citekeys and equation placeholders present before but not
+    after. Reads as the tail of "Doing so {note}"."""
+    dropped_keys = sorted(set(guards.all_citekeys(old_text)) - set(guards.all_citekeys(new_text)))
+    dropped_eqs = [s for s in guards.sentinels(old_text) if s not in set(guards.sentinels(new_text))]
+    parts: list[str] = []
+    if dropped_keys:
+        parts.append(("dropped the citations " if len(dropped_keys) > 1 else "dropped the citation ")
+                     + ", ".join(f"[@{k}]" for k in dropped_keys))
+    if dropped_eqs:
+        parts.append(("dropped the equations " if len(dropped_eqs) > 1 else "dropped the equation ")
+                     + ", ".join(dropped_eqs))
+    return " and ".join(parts) if parts else "changed grounded content"
 
 
 def _redline_revise(brain: Brain, cfg, paths, docx: Path,
@@ -608,6 +637,15 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         if outcome == "edited" and new_text:
             edits.append({"para": a["para"], "op": "replace", "text": new_text})
             outcomes.update({i: "edited" for i in ids})
+        elif outcome.startswith("override") and new_text:
+            # No clean rewrite was possible, but the comment was explicit — honor it. The edit
+            # lands as a tracked change; the reply flags what it sacrificed so the human keeps
+            # the accept/reject call with the trade-off in front of them.
+            edits.append({"para": a["para"], "op": "replace", "text": new_text})
+            outcomes.update({i: outcome for i in ids})
+            print(f"  {runlog.stamp()}Para {a['para']}: honored the comment though it "
+                  f"{outcome.split(':', 1)[1] if ':' in outcome else 'changed grounded content'}"
+                  f" — flagged for review", flush=True)
         elif outcome.startswith("corpus"):
             # The audit found a comment a prose edit can't satisfy (a table, a new section,
             # sources not yet in the review). Don't fabricate a rewrite — route it and reply
@@ -818,6 +856,12 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
         if outcome == "edited":
             replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
                             "address this comment.")
+        elif outcome.startswith("override"):
+            note = outcome.split(":", 1)[1] if ":" in outcome else "changed grounded content"
+            replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
+                            f"address this comment. Doing so {note} — I could not honor the "
+                            "comment while keeping it, so verify this was the intended "
+                            "trade-off (reject the change to keep the original).")
         elif outcome.startswith("corpus"):
             cls = outcome.split(":", 1)[1] if ":" in outcome else "sources"
             replies[cid] = corpus_msg.get(cls, corpus_msg["sources"])

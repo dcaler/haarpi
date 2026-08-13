@@ -20,6 +20,7 @@ from haarpi.redline_engine import (
 @dataclass
 class Finding:
     imperative: str
+    kind: str = ""            # only read when a policy declares soft_finding_kinds()
 
 
 class FakeBrain:
@@ -50,11 +51,15 @@ class FakePolicy:
     author = "tester"
     route_classes = ("sources", "table", "section")
 
-    def __init__(self, known=None, resolvable=None, guard=None):
+    def __init__(self, known=None, resolvable=None, guard=None, soft=None):
         self._known = set(known or ())
         self._resolvable = set(resolvable or ())
         self._guard = guard or (lambda *a: [])
         self.resolved = []
+        # Only bind the optional hook when asked, so a bare FakePolicy has NO
+        # soft_finding_kinds — exactly how raconteur reaches the engine's getattr default.
+        if soft is not None:
+            self.soft_finding_kinds = lambda: frozenset(soft)
 
     def evidence_for(self, ctx):
         return Evidence(known=set(self._known), context="EVIDENCE")
@@ -199,7 +204,55 @@ def test_a_guard_failure_feeds_a_refined_reround_then_succeeds():
 
 def test_persistent_guard_failure_exhausts_rounds_and_fails_closed():
     brain = FakeBrain(['{"1": "x"}', '{"1": "y"}'])   # two rounds, both fail the guard
-    pol = FakePolicy(guard=lambda *a: [Finding("still broken")])
+    pol = FakePolicy(guard=lambda *a: [Finding("still broken")])   # no soft_finding_kinds
+    new, disp, _ = redline_paragraph(brain, _ctx(anchored={0}), pol, rounds=2)
+    assert new is None and disp == Disposition.SKIPPED.value
+    # A policy that never opts in keeps the pure fail-closed loop — raconteur's contract.
+
+
+# ── the soft override: honor an explicit comment rather than decline ──────────
+
+def _soft_guard(*_a):
+    """Every attempt drops a citation — a soft-protected fault, never clean."""
+    return [Finding("restore [@x]", kind="dropped-citekey")]
+
+
+def test_a_soft_only_exhaustion_is_honored_as_an_override():
+    """No round is clean, but the fault is only a dropped citation and the audit says the edit
+    answers the comment. The best attempt lands as OVERRIDDEN — the human's ask is honored, not
+    declined. The audit runs exactly ONCE, at exhaustion (never during the guard rounds)."""
+    brain = FakeBrain(['{"1": "first drop"}', '{"1": "second drop"}', "OK"])
+    pol = FakePolicy(guard=_soft_guard, soft={"dropped-citekey"})
+    new, disp, _ = redline_paragraph(brain, _ctx(anchored={0}), pol, rounds=2)
+    assert disp == Disposition.OVERRIDDEN.value
+    assert new.startswith("second drop")             # the latest attempt (most critique absorbed)
+    assert "And a second one here." in new           # the untouched sentence is copied through
+    assert sum("SYS-AUDIT" == s for s, _ in brain.calls) == 1
+
+
+def test_a_soft_override_whose_audit_routes_is_routed_not_landed():
+    """Honoring the comment still requires the edit to MEAN it. If the exhaustion audit routes,
+    the override does not fire — the comment is routed, no edit lands."""
+    brain = FakeBrain(['{"1": "a drop"}', '{"1": "b drop"}', "ROUTE: table: needs a table"])
+    pol = FakePolicy(guard=_soft_guard, soft={"dropped-citekey"})
+    new, disp, _ = redline_paragraph(brain, _ctx(anchored={0}), pol, rounds=2)
+    assert new is None and route_class_of(disp) == "table"
+
+
+def test_a_soft_override_whose_audit_rejects_fails_closed():
+    """A dropped citation on an edit that also misses the point is junk — still SKIPPED."""
+    brain = FakeBrain(['{"1": "a drop"}', '{"1": "b drop"}', "NO: it does not address the comment"])
+    pol = FakePolicy(guard=_soft_guard, soft={"dropped-citekey"})
+    new, disp, _ = redline_paragraph(brain, _ctx(anchored={0}), pol, rounds=2)
+    assert new is None and disp == Disposition.SKIPPED.value
+
+
+def test_a_hard_finding_is_never_overridden():
+    """The override is only for the declared soft kinds. A finding of any other kind (here an
+    invented equation) is fabrication and keeps the loop fail-closed even when soft is set."""
+    brain = FakeBrain(['{"1": "x"}', '{"1": "y"}'])
+    pol = FakePolicy(guard=lambda *a: [Finding("no invented equations", kind="invented-equation")],
+                     soft={"dropped-citekey", "dropped-equation"})
     new, disp, _ = redline_paragraph(brain, _ctx(anchored={0}), pol, rounds=2)
     assert new is None and disp == Disposition.SKIPPED.value
 

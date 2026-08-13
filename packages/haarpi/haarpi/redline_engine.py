@@ -52,6 +52,11 @@ class Disposition(str, Enum):
     ROUTED = "routed"       # answerable, but not by editing this paragraph — carries a class
     SKIPPED = "skipped"     # fail-closed: no verifiable edit could be produced; left as-is
     OBSOLETE = "obsolete"   # the anchored text was deleted — nothing here to revise
+    OVERRIDDEN = "overridden"  # no clean rewrite emerged, but the human's explicit comment is
+                               #   honored anyway: the best attempt lands even though it could
+                               #   not keep a SOFT-protected atom (a citation/equation), and the
+                               #   caller flags the sacrifice. Only for policies that opt in via
+                               #   soft_finding_kinds(); off by default, so fail-closed stands.
 
 
 def routed(cls: str) -> str:
@@ -143,6 +148,11 @@ class RedlinePolicy(Protocol):
     # route_verb (optional, default "ROUTE"): the word the policy's audit prompt uses to open
     # a route verdict. raconteur says "ROUTE:", rabbitHole says "CORPUS:" — same shape, and
     # the engine reads it via getattr so a policy that omits it gets "ROUTE".
+    # soft_finding_kinds() (optional, default frozenset()): the guard-finding kinds this
+    # deliverable will SACRIFICE rather than decline on an explicit comment. When a rewrite
+    # answers the comment but its only remaining findings are all in this set, the engine holds
+    # it as a fallback and, if no clean rewrite emerges, lands it as OVERRIDDEN. Read via
+    # getattr, so a policy that omits it keeps the pure fail-closed loop (raconteur's contract).
 
     # ── evidence ──────────────────────────────────────────────────────────────
     def evidence_for(self, ctx: ParaContext) -> Evidence:
@@ -300,6 +310,11 @@ def redline_paragraph(brain, ctx: ParaContext, policy: RedlinePolicy,
 
     Returns (new_text, disposition, copyedits):
       - ("…text…", "edited", copyedits)   — passed every deterministic guard and the audit.
+      - ("…text…", "overridden", copyedits)— no clean rewrite emerged, but the best attempt
+                                             answers an explicit comment at the cost of only a
+                                             soft-protected atom (a citation/equation). Lands
+                                             anyway; the caller flags the sacrifice. Off unless
+                                             the policy opts in via soft_finding_kinds().
       - (None, "routed:<class>", {})       — a comment a prose edit cannot satisfy; caller routes.
       - (None, "skipped", copyedits)       — no edit could be produced that keeps the paragraph
                                              verifiable. Fail closed: leave it, and say so.
@@ -327,6 +342,11 @@ def redline_paragraph(brain, ctx: ParaContext, policy: RedlinePolicy,
 
     copyedits: dict[str, str] = {}
     critique: str | None = None
+    # A deliverable may declare finding kinds it will SACRIFICE rather than decline (rabbitHole:
+    # a dropped citation/equation). Empty for a policy that omits the hook — raconteur, every
+    # bare FakePolicy — so the loop below is byte-for-byte the fail-closed one for them.
+    soft_kinds = frozenset(getattr(policy, "soft_finding_kinds", lambda: frozenset())())
+    best_soft: str | None = None   # latest rewrite whose ONLY findings are soft-protected
     for _ in range(rounds):
         user = base_user if critique is None else (
             base_user + f"\n\nYour previous attempt had these problems — fix every one, "
@@ -352,6 +372,12 @@ def redline_paragraph(brain, ctx: ParaContext, policy: RedlinePolicy,
         # ② deterministic guards first — the expensive audit never sees a broken paragraph.
         findings = policy.guard_findings(ctx.text, new_text, touched, ctx, evidence)
         if findings:
+            # A rewrite that answers the comment but can only do so by dropping a citation or
+            # an equation is not junk — it is the honest cost of an explicit ask. Hold the
+            # latest such attempt (it has absorbed the most critique); we still re-round,
+            # because a rewrite that keeps everything would beat it.
+            if soft_kinds and all(f.kind in soft_kinds for f in findings):
+                best_soft = new_text
             critique = "\n".join(f"- {f.imperative}" for f in findings)
             continue
 
@@ -369,5 +395,20 @@ def redline_paragraph(brain, ctx: ParaContext, policy: RedlinePolicy,
             return new_text, Disposition.EDITED.value, copyedits
         critique = audit   # ④ audit found a problem → another round
 
-    # Rounds exhausted. Fail closed: leave the paragraph as the reviewer wrote it.
+    # Rounds exhausted with no clean rewrite. If one attempt answered the comment at the cost
+    # of only a SOFT-protected atom, honor the explicit comment rather than decline — but only
+    # if it MEANS what the comment asked. The audit is that meaning check; a dropped citation
+    # on an edit that also misses the point is junk, and still fails closed.
+    if best_soft is not None:
+        try:
+            audit = brain.coordinator(policy.audit_user(ctx, best_soft, comment_block),
+                                      policy.audit_system(), num_ctx=NUM_CTX).strip()
+        except Exception:  # noqa: BLE001 — fail closed rather than claim an unchecked success
+            return None, Disposition.SKIPPED.value, copyedits
+        route_verb = getattr(policy, "route_verb", "ROUTE").upper()
+        if audit.upper().startswith(route_verb):
+            return None, routed(_route_class(audit, policy.route_classes)), copyedits
+        if _is_ok(audit):
+            return best_soft, Disposition.OVERRIDDEN.value, copyedits
+    # Fail closed: leave the paragraph as the reviewer wrote it.
     return None, Disposition.SKIPPED.value, copyedits
