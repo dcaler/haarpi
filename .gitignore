@@ -13,6 +13,10 @@ venv/
 # macOS / sync litter
 .DS_Store
 ._*
+@eaDir/
+
+# generated figure pool — diagram artifacts (svg/png/dot), rebuilt from source, not tracked
+/figures/
 
 # Word lock files
 ~$*
