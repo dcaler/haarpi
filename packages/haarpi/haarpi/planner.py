@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config as hconfig
-from . import naming, notify, project, redline, trundlr
+from . import naming, project, redline, trundlr
 
 
 # ── step registries ──────────────────────────────────────────────────────────
@@ -933,7 +933,7 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
 
 
 def _tasks_assessment(tasks: list[dict]) -> str:
-    """One-line human summary of the task breakdown, for the plan record and notify."""
+    """One-line human summary of the task breakdown, for the plan record and the log."""
     from collections import Counter
     counts = Counter(t["need"] for t in tasks)
     return ", ".join(f"{counts[n]}×{n}" for n in _LITREVIEW_NEEDS if counts[n])
@@ -1605,7 +1605,6 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             msg = (f"{stage}: {deliverable}{for_v} gate PASSED — "
                    f"released {dst.name}{queued_note}")
             print(f"haarpi next: {msg}")
-            _email(cfg, f"haarpi: {m.name} — {deliverable} gate passed", msg)
             return 0
 
         archived = _archive_chain(root, m, stage, dst)
@@ -1629,7 +1628,6 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else "")
                + packaged + skipped)
         print(f"haarpi next: {msg}")
-        _email(cfg, f"haarpi: {m.name} — {stage} gate passed", msg)
         return 0
 
     # unresolved asks -> plan + queue rework
@@ -1701,15 +1699,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append(f"  [trundlr] queueing failed ({e}) — run the chain manually:")
         summary += [f"    {_step_of(stage, s).command or '(you) ' + s}" for s in steps]
     print("\n".join(summary))
-    _email(cfg, f"haarpi: {m.name} — {stage} plan ({tier})", "\n".join(summary))
     return 0
-
-
-def _email(cfg: dict, subject: str, body: str) -> None:
-    nt = cfg.get("notify", {})
-    to = nt.get("to") or cfg.get("contact_email", "")
-    if to:
-        notify.send_email(subject, body, to=to, mail_prog=nt.get("mail_prog", ""))
 
 
 def run_queue(root: Path) -> int:

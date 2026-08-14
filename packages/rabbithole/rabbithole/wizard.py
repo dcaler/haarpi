@@ -254,19 +254,8 @@ def _check_style(cfg: ProjectConfig) -> None:
 
 
 def _finalize(root: Path, cfg: ProjectConfig) -> int:
-    from . import notify
-    notify.send_email(
-        f"rabbitHole: project '{cfg.project_name}' initialized",
-        (f"Project '{cfg.project_name}' is set up at {root}.\n\n"
-         "Interview summary\n"
-         f"  Request: {cfg.research_prompt or '(kept previous topic/focus)'}\n"
-         f"  Topic:   {cfg.topic or '(to be extracted by gather)'}\n"
-         f"  Focus:   {cfg.focus or '(none)'}\n"
-         f"  Target:  {cfg.target_max} articles\n\n"
-         "Next: run `rabbitHole gather` to list sources missing from your "
-         "Zotero collection."),
-        config.load_global(),
-    )
+    # init is interactive and has no trundlr task behind it, so there is nothing to notify:
+    # the human ran it and saw the interview. Just print the next step.
     _print_next_steps()
     return 0
 

@@ -33,7 +33,7 @@ import statistics
 import sys
 from pathlib import Path
 
-from . import config, docxio, notify, runlog
+from . import config, docxio, runlog
 from .brain import Brain
 from .models import Candidate
 from .revise import _load_corpus
@@ -562,15 +562,7 @@ def run(directory: str = ".", brain_override: str | None = None,
         _print_manual(steps)
         rc = 0
 
-    # 7. Notify
-    topics = ", ".join(plan.get("gather_topics", [])) or "(none)"
-    notify.send_email(
-        f"rabbitHole parseNplan: {cfg.project_name} ({tier})",
-        (f"Planned next steps for '{cfg.project_name}' from {docx.name}.\n\n"
-         f"Tier: {tier}\n"
-         f"Assessment: {plan.get('assessment', '')}\n"
-         f"Gather topics: {topics}\n"
-         f"Pipeline: {' -> '.join(steps)}\n"),
-        gc,
-    )
+    # The plan (tier, assessment, chain) is already printed above via _print_plan and the
+    # queued tasks by _submit_chain, so it lands in the task log — which trundlr emails on
+    # completion. No tool-initiated mail: trundlr's log-tail is the one notification channel.
     return rc
