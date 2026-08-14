@@ -551,7 +551,7 @@ def _venue_fresh(
     candidates = _brainstorm_candidates(brain, cfg, litrev, narrative)
 
     # Step 2: web research
-    email = gcfg.notify_to or ""
+    email = gcfg.contact_email or ""
     log("[raconteur] researching venues on the web…")
     web_content = _web_research(candidates, email)
 

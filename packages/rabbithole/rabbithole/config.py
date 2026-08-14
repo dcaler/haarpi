@@ -224,10 +224,6 @@ class GlobalConfig:
     zotero_library_type: str = "user"  # "user" | "group"
     anthropic_api_key: str = ""
     s2_api_key: str = ""               # optional Semantic Scholar key
-    # Optional email notifications — sent via the local mail program (the same one
-    # SLURM uses on HPC systems), so no SMTP credentials are needed.
-    notify_to: str = ""               # recipient; defaults to contact_email
-    mail_prog: str = ""               # override; else SLURM MailProg / `mail` is auto-detected
     # trundlr task queue (parseNplan submits gather/collect/revise/comment chains here).
     trundlr_url: str = ""             # e.g. http://100.87.86.57:8251
     trundlr_runner_resource_id: int | None = None  # cpu/gpu resource the runner polls
@@ -245,10 +241,6 @@ class GlobalConfig:
     def have_anthropic(self) -> bool:
         return bool(self.anthropic_api_key)
 
-    @property
-    def notify_recipient(self) -> str:
-        return self.notify_to or self.contact_email
-
 
 def _legacy_normalized() -> dict:
     """rabbitHole's old ~/.config/rabbithole/config.toml, translated to the
@@ -259,11 +251,9 @@ def _legacy_normalized() -> dict:
         return {}
     tr = data.get("trundlr", {})
     out = {k: v for k, v in data.items()
-           if k in ("contact_email", "zotero", "anthropic", "semantic_scholar", "notify")}
+           if k in ("contact_email", "zotero", "anthropic", "semantic_scholar")}
     if "ollama_url" in data:
         out["ollama"] = {"url": data["ollama_url"]}
-    if data.get("notify_to"):
-        out.setdefault("notify", {}).setdefault("to", data["notify_to"])
     if tr:
         out["trundlr"] = {"url": tr.get("url", "")}
         if tr.get("runner_resource_id") is not None:
@@ -280,7 +270,6 @@ def load_global() -> GlobalConfig:
     z = data.get("zotero", {})
     a = data.get("anthropic", {})
     s2 = data.get("semantic_scholar", {})
-    nt = data.get("notify", {})
     tr = data.get("trundlr", {})
 
     gc = GlobalConfig(
@@ -291,8 +280,6 @@ def load_global() -> GlobalConfig:
         zotero_library_type=z.get("library_type", "user"),
         anthropic_api_key=a.get("api_key", ""),
         s2_api_key=s2.get("api_key", ""),
-        notify_to=nt.get("to", ""),
-        mail_prog=nt.get("mail_prog", ""),
         trundlr_url=tr.get("url", ""),
         trundlr_runner_resource_id=tr.get("runner_resource") or None,
         trundlr_human_resource_id=tr.get("human_resource") or None,
@@ -306,8 +293,6 @@ def load_global() -> GlobalConfig:
     gc.zotero_library_type = os.environ.get("ZOTERO_LIBRARY_TYPE", gc.zotero_library_type)
     gc.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", gc.anthropic_api_key)
     gc.s2_api_key = os.environ.get("S2_API_KEY", gc.s2_api_key)
-    gc.notify_to = os.environ.get("RABBITHOLE_NOTIFY_TO", gc.notify_to)
-    gc.mail_prog = os.environ.get("RABBITHOLE_MAIL_PROG", gc.mail_prog)
     gc.trundlr_url = os.environ.get("TRUNDLR_URL", gc.trundlr_url)
     _rid = os.environ.get("TRUNDLR_RUNNER_RESOURCE_ID")
     if _rid:

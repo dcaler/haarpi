@@ -21,7 +21,6 @@ Schema (all sections optional):
     [anthropic]                     # api_key, design (claude session model)
     [zotero]                        # api_key, library_id, library_type
     [semantic_scholar]              # api_key
-    [notify]                        # to, mail_prog
     [trundlr]                       # url, gpu_resource, cpu_resource,
                                     # human_resource, claude_resource, runner_resource
     [git]                           # host, owner, author_name, author_email, co_authorship
@@ -41,7 +40,7 @@ DEFAULT_UNIFIED_TOML = """\
 # HAARPi machine config — shared by rabbitHole, raconteur, raster, and rayleigh.
 # Personal details stay here: never committed into a project.
 
-contact_email = ""           # used for API "polite pools" — recommended
+contact_email = ""           # API "polite pools" + raconteur web-research contact — recommended
 
 [ollama]
 url         = "http://localhost:11434"
@@ -60,10 +59,6 @@ library_type = "user"        # "user" | "group"
 
 [semantic_scholar]
 api_key = ""
-
-[notify]
-to        = ""               # recipient; falls back to contact_email
-mail_prog = ""               # override; else SLURM MailProg / `mail` is auto-detected
 
 [trundlr]
 url             = "http://100.87.86.57:8251"

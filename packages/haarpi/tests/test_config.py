@@ -48,6 +48,6 @@ def test_template_parses_and_covers_the_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     hc.write_default_unified()
     data = hc.load_toml(hc.unified_path())
-    for section in ("ollama", "anthropic", "zotero", "notify", "trundlr", "git", "author"):
+    for section in ("ollama", "anthropic", "zotero", "trundlr", "git", "author"):
         assert section in data, section
     assert data["git"]["co_authorship"] is False

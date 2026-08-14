@@ -271,16 +271,11 @@ class GlobalConfig:
     ollama_url: str = "http://localhost:11434"
     coordinator_model: str = "qwen3.6:27b-16k"
     worker_model: str = "llama3.1:8b"
-    notify_to: str = ""
-    mail_prog: str = ""
-
-    @property
-    def notify_recipient(self) -> str:
-        return self.notify_to
+    contact_email: str = ""          # for API "polite pools" / web-research (venue analysis)
 
     @classmethod
     def load(cls) -> "GlobalConfig":
-        # raconteur's legacy file already uses the unified [ollama]/[notify] shape.
+        # raconteur's legacy file already uses the unified [ollama] shape.
         legacy = haarpi_config.load_toml(GLOBAL_CONFIG_PATH)
         data = haarpi_config.merged_config("raconteur", legacy)
         cfg = cls()
@@ -288,10 +283,7 @@ class GlobalConfig:
         cfg.ollama_url = ollama.get("url", cfg.ollama_url)
         cfg.coordinator_model = ollama.get("coordinator", cfg.coordinator_model)
         cfg.worker_model = ollama.get("worker", cfg.worker_model)
-        notify = data.get("notify", {})
-        cfg.notify_to = notify.get("to", "")
-        cfg.mail_prog = notify.get("mail_prog", "")
+        cfg.contact_email = data.get("contact_email", "")
         cfg.ollama_url = os.environ.get("OLLAMA_URL", cfg.ollama_url)
-        cfg.notify_to = os.environ.get("RACONTEUR_NOTIFY_TO", cfg.notify_to)
-        cfg.mail_prog = os.environ.get("RACONTEUR_MAIL_PROG", cfg.mail_prog)
+        cfg.contact_email = os.environ.get("RACONTEUR_CONTACT_EMAIL", cfg.contact_email)
         return cfg
