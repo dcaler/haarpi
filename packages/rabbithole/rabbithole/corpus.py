@@ -176,6 +176,32 @@ def refresh_append(cfg, gc, paths, existing: list[Candidate]) -> list[Candidate]
     return added
 
 
+def count_uningested(cfg, gc, existing: list[Candidate]) -> int:
+    """How many Zotero-collection items are not yet in `existing` — metadata probe only.
+
+    A cheap staleness check for `revise`, which no longer embeds new sources itself (that is
+    `build`'s job): list the collection ONCE and compare dedup_keys built from item metadata,
+    fetching no PDF and embedding nothing. Returns 0 when Zotero is unavailable."""
+    from . import zotero
+    try:
+        zc = zotero.ZoteroClient(gc)
+    except Exception:  # noqa: BLE001 — a staleness hint must never break a revise
+        return 0
+    coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
+    if not coll:
+        return 0
+    have = {c.dedup_key for c in existing if c.dedup_key}
+    n = 0
+    for it in zc.collection_items(coll):
+        data = it.get("data", {})
+        if data.get("itemType") in ("attachment", "note"):
+            continue
+        probe = _zotero_item_to_candidate(data)
+        if probe.dedup_key and probe.dedup_key not in have:
+            n += 1
+    return n
+
+
 def _bibtex_key_maps(bib_text: str) -> tuple[dict[str, str], dict[str, str]]:
     """From a Better BibTeX export, map normalised DOI → key and normalised title → key.
 

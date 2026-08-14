@@ -84,6 +84,31 @@ def test_pasted_references_without_a_section_get_build_before_revise():
     assert steps == ["ingest", "collect", "audit", "build", "revise", "comment"]
 
 
+def test_zotero_additions_build_before_revise_without_collect_or_audit():
+    """Papers the reviewer already put in Zotero need only EMBEDDING — a lone `build` before
+    revise. No `ingest`/`collect` (nothing to fetch) and no `audit` (the reviewer named them,
+    so deference forbids quarantining)."""
+    steps = plan._chain_for("cosmetic", {"zotero_additions": True})
+    assert steps == ["build", "revise", "comment"]
+    assert "ingest" not in steps and "collect" not in steps and "audit" not in steps
+
+
+def test_zotero_additions_report_redraft_needs_no_separate_build():
+    """A `report` re-draft embeds the collection inline, so a section ask + zotero_additions
+    still gets no standalone `build` (no double embedding)."""
+    steps = plan._chain_for("cosmetic", {"zotero_additions": True}, needs_report=True)
+    assert steps == ["report", "comment"]
+    assert "build" not in steps
+
+
+def test_zotero_additions_does_not_double_build_on_a_gather_chain():
+    """A gap_fill chain already builds after collect; setting zotero_additions must not add a
+    second `build`."""
+    steps = plan._chain_for("gap_fill", {"zotero_additions": True})
+    assert steps.count("build") == 1
+    assert steps == ["gather", "collect", "audit", "build", "revise", "comment"]
+
+
 def test_report_is_a_known_step_with_a_command():
     assert plan._STEP["report"]["verb"] == "report"
     assert plan._STEP["report"]["human"] is False

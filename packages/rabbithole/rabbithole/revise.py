@@ -48,7 +48,7 @@ from . import config, corpus as corpus_mod, docxio, guards, render, runlog
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
-    _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check, read_notes,
+    _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check,
     locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
     _HAVE_CHROMA, _cited_indices, _legacy_notes_by_paper, _located_filename,
 )
@@ -930,34 +930,34 @@ def run(directory: str = ".", brain_override: str | None = None,
     else:
         current_narrative = md_path.read_text(encoding="utf-8")
 
-    # 4. Load corpus + notes. Pull in anything added to the Zotero collection since the
-    #    last build (e.g. via `ingest` and your `collect` step). Notes are keyed by citekey,
-    #    so a source appearing or disappearing anywhere in the collection cannot shift another
-    #    paper's notes onto it; only papers without a note get annotated.
+    # 4. Load the corpus + notes exactly as `build` left them. revise does NOT embed new
+    #    sources: embedding lives solely in `build`, the one step that changes the corpus, so
+    #    revise's learned duration is pure drafting and stays estimable. New Zotero papers
+    #    reach the review through a `build` step the planner queues ahead of revise (an "I've
+    #    added … to Zotero, cite them" comment triggers one — see plan._chain_for). Notes are
+    #    keyed by citekey, so the cached annotations stay aligned to their papers.
     corpus = _load_corpus(paths)
     if not corpus:
         print("[error] work/corpus.json not found — run 'rabbitHole report' first.",
               file=sys.stderr)
         return 1
-    persist_needed = False
     if gc.have_zotero and cfg.zotero.get("collection_key"):
-        new = corpus_mod.refresh_append(cfg, gc, paths, corpus)
-        if new:
-            corpus = corpus + new
-            corpus_mod.persist(paths, corpus)
-            print(f"  {runlog.stamp()}Corpus refresh: +{len(new)} new source(s) "
-                  f"from Zotero; annotating…", flush=True)
-            read_notes(brain, corpus, cfg, paths, citekeys=_make_citekeys(corpus))
-        # Heal a corpus first built before citekeys were captured: fill any empty
-        # citekey from Zotero's Extra so the review cites the user's curated keys
-        # instead of generated ones. Cheap metadata call; no re-ingest.
+        # Cheap staleness check (collection listing + metadata probe — no PDF, no embedding):
+        # warn if sources were added to Zotero without a build to embed them, so a stale
+        # corpus never masquerades as complete.
+        stale = corpus_mod.count_uningested(cfg, gc, corpus)
+        if stale:
+            print(f"  [warn] {stale} source(s) in the Zotero collection are not in the "
+                  f"corpus; revise will not embed them. Run `rabbitHole build` first (or "
+                  f"leave an 'I've added these to Zotero, cite them' comment) so they can "
+                  f"be cited.", file=sys.stderr)
+        # Heal a corpus first built before citekeys were captured: fill any empty citekey
+        # from Zotero's Extra so the review cites the user's curated keys. Metadata only.
         filled = corpus_mod.backfill_citekeys(cfg, gc, paths, corpus)
         if filled:
-            persist_needed = True
+            corpus_mod.persist(paths, corpus)
             print(f"  {runlog.stamp()}Backfilled {filled} Zotero citation key(s) "
                   f"into the cached corpus.", flush=True)
-    if persist_needed:
-        corpus_mod.persist(paths, corpus)
     citekeys = _make_citekeys(corpus)   # before the notes: they are keyed by it
     notes = _load_notes(paths, corpus, citekeys)
 

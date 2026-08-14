@@ -146,6 +146,7 @@ Respond with a single JSON object:
 {{
   "tier": "cosmetic" | "gap_fill" | "redirection",
   "added_references": true | false,
+  "zotero_additions": true | false,
   "assessment": "1-3 sentences explaining the decision; name the annotation that drove it",
   "gather_topics": ["specific search topics to deepen the requested areas"],
   "focus_addition": "one line to steer the next search toward those areas, or empty",
@@ -153,14 +154,23 @@ Respond with a single JSON object:
   "new_focus": "redirection only: the new emphasis/scope in one line, else empty",
   "new_research_prompt": "redirection only: a self-contained 3-6 sentence research brief in the new direction, else empty"
 }}
-Independently of the tier, set added_references to true if the reviewer pasted
-bibliographic references or new citations into the draft — inserted reference text, a
-reference list, or a comment such as "add these citations" / "incorporate this work from
-a related project". This routes an `ingest` step ahead of the chain to bring those
-specific sources into the corpus (it is orthogonal to cosmetic/gap_fill/redirection).
+Independently of the tier, decide how any reviewer-supplied sources reach the corpus —
+these two are orthogonal to cosmetic/gap_fill/redirection, and at most one is true:
+
+- added_references = true when the reviewer supplied references that are NOT yet in the
+  Zotero library — pasted reference text or a reference list, an in-text citation to fold
+  in, or a comment like "add these citations" / "incorporate this work from a related
+  project". This routes an `ingest` step (then a `collect` step) so the works can be fetched
+  and pulled into the corpus.
+- zotero_additions = true when the reviewer says the works are ALREADY in the Zotero
+  library/collection and asks to cite them — "I've added Doblinger 2019 and Howell 2017 to
+  Zotero, cite them here", "these are in the collection now, use them". This routes a single
+  `build` step ahead of the re-draft to EMBED the already-collected papers — no ingest and no
+  collect, because there is nothing to fetch. Choose this, not added_references, whenever the
+  reviewer states the papers are already in the library.
 
 gather_topics and focus_addition are needed for gap_fill or redirection; the new_* fields
-are needed only for redirection; added_references may be set for any tier."""
+are needed only for redirection; added_references / zotero_additions may be set for any tier."""
 
 
 def _chain_for(tier: str, plan: dict, needs_report: bool = False) -> list[str]:
@@ -191,6 +201,12 @@ def _chain_for(tier: str, plan: dict, needs_report: bool = False) -> list[str]:
     # `build` runs immediately before revise whenever the corpus changed (collect present). A
     # `report` re-draft builds inline, so it needs no separate build step.
     if "collect" in steps and "revise" in steps and "build" not in steps:
+        steps.insert(steps.index("revise"), "build")
+    # Papers the reviewer says are ALREADY in the collection need only embedding: a single
+    # `build` before revise, with no collect (nothing to fetch) and no audit (deference forbids
+    # quarantining sources the reviewer named). Like the collect-driven build above, this only
+    # applies to a `revise` re-draft — a `report` re-draft embeds the collection inline.
+    if plan.get("zotero_additions") and "revise" in steps and "build" not in steps:
         steps.insert(steps.index("revise"), "build")
     return steps
 
@@ -267,6 +283,7 @@ def _make_plan(brain: Brain, cfg, coverage: str, revision_context: str) -> dict:
     plan.setdefault("new_focus", "")
     plan.setdefault("new_research_prompt", "")
     plan.setdefault("added_references", False)
+    plan.setdefault("zotero_additions", False)
     return plan
 
 

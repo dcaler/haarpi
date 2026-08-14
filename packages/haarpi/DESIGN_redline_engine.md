@@ -162,7 +162,7 @@ per-paragraph, so they live on the policy but are consumed by the outer `run_red
 | Method | Fill |
 |---|---|
 | `route_classes` | `("sources", "table", "section")` |
-| `evidence_for` | `_para_digest(corpus, notes, cited)` — the Zotero-backed corpus, refreshed via `corpus.refresh_append` |
+| `evidence_for` | `_para_digest(corpus, notes, cited)` — the cached corpus exactly as `build` left it (revise no longer embeds; new Zotero papers arrive via a `build` step the planner queues) |
 | **`resolve_named_source`** | **the new competency**: `ZoteroClient.library_items()` → match `@key` via `_extract_citekey` → download PDF/fulltext → `read_notes` annotate → `add_item_to_collection` + `persist` → return its evidence line. `None` only if the key resolves nowhere in the library. |
 | `revise_system` | litreview house style (organise around ideas; cite from EVIDENCE) |
 | `audit_route_menu` | `sources / table / section` |
