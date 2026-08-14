@@ -46,10 +46,13 @@ from .revise import _load_corpus
 # handed them to a step structurally incapable of using them. `report` appears in no chain at
 # all. `_chain_for` swaps in `report` when the redline reported a comment it could not satisfy
 # because it asked for a new section (the audit's `CORPUS: section` verdict).
+# `audit` follows `collect` on every chain that touches the corpus: once the human has
+# finalised the newly-gathered sources, the word-sense filter quarantines lexical false-friends
+# before the re-draft reads them. It runs standalone too (`rabbitHole audit`).
 _PIPELINE = {
     "cosmetic":    ["revise", "comment"],
-    "gap_fill":    ["gather", "collect", "revise", "comment"],
-    "redirection": ["gather", "collect", "revise", "comment"],
+    "gap_fill":    ["gather", "collect", "audit", "revise", "comment"],
+    "redirection": ["gather", "collect", "audit", "revise", "comment"],
 }
 
 # Per-step metadata. `human` steps carry no command (you do them); the rest are
@@ -68,6 +71,16 @@ _STEP = {
                 "desc": "Discover & curate new sources into the Zotero collection."},
     "collect": {"human": True,  "verb": None,    "hours": 0.25,
                 "desc": "Download the new PDFs and add them to the Zotero collection."},
+    "audit":   {"human": False, "verb": "audit",  "hours": 0.5,
+                "desc": "Word-sense filter: quarantine lexical false-friends (shared word, no "
+                        "conceptual transfer) from the finalised corpus into the Zotero "
+                        "'quarantine' collection. Reversible; reasons in audit_quarantine.md."},
+    # `build` embeds the audited collection once (candidates, citekeys, ChromaDB, notes) so
+    # `revise` drafts from a clean, complete corpus. `hours` scales with new papers, so its
+    # learned median de-blurs now that embedding is no longer lumped into `report`.
+    "build":   {"human": False, "verb": "build",  "hours": 1.0,
+                "desc": "Embed the audited Zotero collection into the working corpus "
+                        "(candidates, citekeys, ChromaDB index, per-paper notes)."},
     "revise":  {"human": False, "verb": "revise", "hours": 4.0,
                 "desc": "Re-draft the review from the expanded corpus + your annotations."},
     "report":  {"human": False, "verb": "report", "hours": 3.0,
@@ -169,6 +182,16 @@ def _chain_for(tier: str, plan: dict, needs_report: bool = False) -> list[str]:
         redraft = "report" if needs_report else "revise"
         if "collect" not in steps and redraft in steps:
             steps.insert(steps.index(redraft), "collect")
+    # A changed corpus must be word-sense audited before the re-draft reads it. `audit` always
+    # follows `collect` — whether collect came from the gather chains above or was inserted for
+    # pasted references — so every path that finalises new sources cleans them exactly once.
+    if "collect" in steps and "audit" not in steps:
+        steps.insert(steps.index("collect") + 1, "audit")
+    # A `revise` re-draft loads a cached corpus, so the audited collection must be EMBEDDED first:
+    # `build` runs immediately before revise whenever the corpus changed (collect present). A
+    # `report` re-draft builds inline, so it needs no separate build step.
+    if "collect" in steps and "revise" in steps and "build" not in steps:
+        steps.insert(steps.index("revise"), "build")
     return steps
 
 

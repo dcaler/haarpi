@@ -1500,6 +1500,45 @@ def _write_disposition(paths, corpus: list[Candidate], citekeys: dict[int, str],
 # ──────────────────────────────────────────────────────────────────────────
 # Orchestration
 # ──────────────────────────────────────────────────────────────────────────
+def build_corpus(cfg, gc, paths, brain, *, from_folder: bool = False,
+                 refresh_notes: bool = True):
+    """Read the Zotero collection (or ./pdfs/) into the working corpus: candidates + full text,
+    Better-BibTeX citekeys, ChromaDB index, and per-paper notes — everything the drafting steps
+    consume, persisted to work/. Returns (corpus, notes, citekeys, collection), or None when no
+    usable full-text source exists.
+
+    This is the corpus-BUILD half of the old `report`, extracted so it is its own pipeline step
+    (`rabbitHole build`): the corpus is embedded ONCE, from the already-audited collection, and
+    both `report` and `revise` draft from what it leaves behind. `report` still calls it directly,
+    so a standalone `report` is unchanged."""
+    corpus = corpus_mod.build(cfg, gc, paths, from_folder=from_folder)
+    if not corpus:
+        return None
+    print(f"\nCorpus: {len(corpus)} sources with full text.")
+    # Honour Zotero's Better BibTeX keys even when they aren't pinned to the Extra field
+    # (the common case): source them from the collection's BibTeX export. No-op when the
+    # keys were already captured at ingest, or Zotero is unavailable.
+    if corpus_mod.backfill_citekeys(cfg, gc, paths, corpus):
+        corpus_mod.persist(paths, corpus)
+    citekeys = _make_citekeys(corpus)
+
+    collection = None
+    if _HAVE_CHROMA:
+        try:
+            collection = _chroma.get_collection(paths.work / "chroma")
+            print(f"  ChromaDB ready at {paths.work / 'chroma'}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] ChromaDB unavailable ({e}) — locate will use head-truncation",
+                  file=sys.stderr)
+    else:
+        print("  [info] chromadb not installed — run: pip install 'rabbithole[rag]'")
+
+    print(f"\n{_stamp()}[1/3] Reading papers (notes for synthesis)...")
+    notes = read_notes(brain, corpus, cfg, paths, collection=collection,
+                       citekeys=citekeys, refresh_notes=refresh_notes)
+    return corpus, notes, citekeys, collection
+
+
 def run(directory: str = ".", brain_override: str | None = None,
         from_folder: bool = False, refresh_notes: bool = True) -> int:
     cfg = config.load_project(directory)
@@ -1523,34 +1562,14 @@ def run(directory: str = ".", brain_override: str | None = None,
                       file=sys.stderr)
             print()
 
-    corpus = corpus_mod.build(cfg, gc, paths, from_folder=from_folder)
-    if not corpus:
+    built = build_corpus(cfg, gc, paths, brain,
+                         from_folder=from_folder, refresh_notes=refresh_notes)
+    if built is None:
         print("\nNo usable sources with full text. Add PDFs to Zotero / ./pdfs/ "
               "and re-run.")
         return 1
-    print(f"\nCorpus: {len(corpus)} sources with full text.")
-    # Honour Zotero's Better BibTeX keys even when they aren't pinned to the Extra field
-    # (the common case): source them from the collection's BibTeX export. No-op when the
-    # keys were already captured at ingest, or Zotero is unavailable.
-    if corpus_mod.backfill_citekeys(cfg, gc, paths, corpus):
-        corpus_mod.persist(paths, corpus)
-    citekeys = _make_citekeys(corpus)
+    corpus, notes, citekeys, collection = built
     t0 = runlog.start()
-
-    collection = None
-    if _HAVE_CHROMA:
-        try:
-            collection = _chroma.get_collection(paths.work / "chroma")
-            print(f"  ChromaDB ready at {paths.work / 'chroma'}")
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] ChromaDB unavailable ({e}) — locate will use head-truncation",
-                  file=sys.stderr)
-    else:
-        print("  [info] chromadb not installed — run: pip install 'rabbithole[rag]'")
-
-    print(f"\n{_stamp()}[1/3] Reading papers (notes for synthesis)...")
-    notes = read_notes(brain, corpus, cfg, paths, collection=collection,
-                       citekeys=citekeys, refresh_notes=refresh_notes)
 
     print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""

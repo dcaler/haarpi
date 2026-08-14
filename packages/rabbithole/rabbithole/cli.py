@@ -93,6 +93,16 @@ def main(argv: list[str] | None = None) -> int:
                           "changed since they were written (faster, but a prompt fix won't "
                           "reach the existing corpus). Default re-reads stale notes")
 
+    bld = sub.add_parser("build",
+                         help="embed the (audited) Zotero collection into the working corpus — "
+                              "candidates, citekeys, ChromaDB index, per-paper notes")
+    bld.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    bld.add_argument("--from-folder", action="store_true",
+                     help="ingest PDFs from the local pdfs/ folder instead of Zotero")
+    bld.add_argument("--no-refresh-notes", action="store_true",
+                     help="keep cached per-paper notes even when the extraction logic changed")
+
     rev = sub.add_parser("revise",
                          help="apply reviewer annotations from a _ra.docx to re-draft")
     rev.add_argument("--brain", choices=["ollama", "claude"], default=None,
@@ -130,6 +140,22 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("style",
                    help="train a style profile on the author's Zotero publications")
 
+    mm = sub.add_parser("mindmap",
+                        help="mint a themed contribution map (mind-map) from the minted litreview")
+    mm.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                    help="override the brain backend for this run")
+
+    aud = sub.add_parser("audit",
+                         help="quarantine lexical false-friends (shared word, no conceptual "
+                              "transfer) from the corpus into a Zotero 'quarantine' collection")
+    aud.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    aud.add_argument("--dry-run", action="store_true",
+                     help="judge and write the reasons report, but move nothing")
+    aud.add_argument("--release", default=None, metavar="KEY",
+                     help="move an item back from quarantine to this project's collection "
+                          "(a Zotero item key or an Author-Year label)")
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -147,6 +173,12 @@ def main(argv: list[str] | None = None) -> int:
         return summarize.run(args.dir, brain_override=args.brain,
                              from_folder=args.from_folder,
                              refresh_notes=not args.no_refresh_notes)
+
+    if args.command == "build":
+        _check_env(need_pandoc=False)          # brain + Zotero; no docx output
+        from . import build
+        return build.run(args.dir, from_folder=args.from_folder,
+                         refresh_notes=not args.no_refresh_notes, brain_override=args.brain)
 
     if args.command == "revise":
         _check_env(need_pandoc=True)
@@ -168,6 +200,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "style":
         from . import style
         return style.run(args.dir)
+
+    if args.command == "mindmap":
+        _check_env(need_pandoc=False)          # needs the brain (Ollama); no pandoc
+        from . import mindmap
+        return mindmap.run(args.dir, brain_override=args.brain)
+
+    if args.command == "audit":
+        _check_env(need_pandoc=False)          # brain + Zotero; no pandoc
+        from . import audit
+        return audit.run(args.dir, dry_run=args.dry_run, release=args.release,
+                         brain_override=args.brain)
 
     parser.print_help()
     return 1

@@ -26,7 +26,8 @@ def test_cosmetic_stays_a_redline():
 
 
 def test_gap_fill_redrafts_with_revise_by_default():
-    assert plan._chain_for("gap_fill", {}) == ["gather", "collect", "revise", "comment"]
+    assert plan._chain_for("gap_fill", {}) == [
+        "gather", "collect", "audit", "build", "revise", "comment"]
 
 
 def test_a_section_request_swaps_revise_for_report():
@@ -36,24 +37,51 @@ def test_a_section_request_swaps_revise_for_report():
 
 def test_a_section_request_survives_a_gather():
     assert plan._chain_for("gap_fill", {}, needs_report=True) == [
-        "gather", "collect", "report", "comment"]
+        "gather", "collect", "audit", "report", "comment"]
 
 
 def test_a_section_request_survives_a_redirection():
     assert plan._chain_for("redirection", {}, needs_report=True) == [
-        "gather", "collect", "report", "comment"]
+        "gather", "collect", "audit", "report", "comment"]
+
+
+def test_audit_follows_collect_and_never_appears_without_it():
+    """The corpus-integrity rule: every chain that finalises new sources (has `collect`) audits
+    them exactly once, right after; a corpus that never changed (cosmetic) gets no audit."""
+    gf = plan._chain_for("gap_fill", {})
+    assert gf[gf.index("collect") + 1] == "audit"          # immediately after collect
+    assert gf.count("audit") == 1                           # exactly once
+    assert "audit" not in plan._chain_for("cosmetic", {})   # no collect -> no audit
+    assert plan._build_command("audit") == "haarpi rabbithole audit"
+
+
+def test_build_embeds_the_audited_corpus_before_a_revise_redraft():
+    """`revise` loads a cached corpus, so `build` must embed the audited collection right before
+    it: order is collect -> audit -> build -> revise, exactly once."""
+    gf = plan._chain_for("gap_fill", {})
+    assert gf.index("collect") < gf.index("audit") < gf.index("build") < gf.index("revise")
+    assert gf[gf.index("build") + 1] == "revise"           # immediately before revise
+    assert gf.count("build") == 1
+    assert plan._build_command("build") == "haarpi rabbithole build"
+
+
+def test_a_report_redraft_needs_no_separate_build():
+    """`report` embeds inline, so a report chain gets no `build` step (no double embedding)."""
+    assert "build" not in plan._chain_for("gap_fill", {}, needs_report=True)
+    assert "build" not in plan._chain_for("cosmetic", {})   # unchanged corpus, no build either
 
 
 def test_pasted_references_still_get_ingest_and_collect_before_report():
-    """`collect` must precede the re-draft whatever the re-draft is — the human uploads PDFs."""
+    """`collect` must precede the re-draft whatever the re-draft is — the human uploads PDFs —
+    and the pasted-in sources are audited too (audit follows the inserted collect)."""
     steps = plan._chain_for("cosmetic", {"added_references": True}, needs_report=True)
-    assert steps == ["ingest", "collect", "report", "comment"]
-    assert steps.index("collect") < steps.index("report")
+    assert steps == ["ingest", "collect", "audit", "report", "comment"]
+    assert steps.index("collect") < steps.index("audit") < steps.index("report")
 
 
-def test_pasted_references_without_a_section_still_end_in_revise():
+def test_pasted_references_without_a_section_get_build_before_revise():
     steps = plan._chain_for("cosmetic", {"added_references": True})
-    assert steps == ["ingest", "collect", "revise", "comment"]
+    assert steps == ["ingest", "collect", "audit", "build", "revise", "comment"]
 
 
 def test_report_is_a_known_step_with_a_command():
@@ -132,7 +160,7 @@ def test_no_section_comments_means_no_report_step():
     asks = revise._section_comments(outcomes, CMAP)
     assert asks == []
     assert plan._chain_for("gap_fill", {}, needs_report=bool(asks)) == [
-        "gather", "collect", "revise", "comment"]
+        "gather", "collect", "audit", "build", "revise", "comment"]
 
 
 if __name__ == "__main__":

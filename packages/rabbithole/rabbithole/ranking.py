@@ -165,20 +165,25 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
                 brain: Brain, top_n: int, domain_anchor: str = "",
                 exclude_topics: str = "", max_cpy: float = 0.0) -> list[Candidate]:
     head = ranked[:top_n]
-    anchor = (f"\nComponent fields and key concepts (covering ANY of these counts as "
-              f"relevant background): {domain_anchor}") if domain_anchor else ""
+    anchor = (f"\nComponent fields and key concepts whose ideas may TRANSFER to this work "
+              f"(a paper counts only if its use of them genuinely carries over, not merely "
+              f"shares the words): {domain_anchor}") if domain_anchor else ""
     excl = (f"\nScore LOW papers that are really about: {exclude_topics}") if exclude_topics else ""
-    sys = ("You are an expert academic reviewer curating a literature review reading "
-           "list. Score 0-10 for how valuable this paper would be as background or "
-           "cited work: 10 = essential, directly addresses the research question; "
-           "8-9 = covers a core component field or central method; 6-7 = relevant "
-           "background covering at least one important aspect of the topic; "
-           "4-5 = tangential; 0-3 = unrelated. For interdisciplinary research, a "
-           "paper that substantially covers ANY ONE of the component fields, methods, "
-           "or concepts is valuable background and should score ≥ 6. A systematic "
-           "review, meta-analysis, or literature review OF the topic is an especially "
-           "valuable entry point — score it at the high end of whatever its relevance "
-           "warrants. Judge by intellectual relevance, not prestige or citation count."
+    sys = ("You are an expert academic reviewer curating a literature review reading list. "
+           "Score 0-10 for how much this paper's CONTRIBUTION — a finding, method, or "
+           "concept — TRANSFERS to the research question, i.e. could actually inform this "
+           "work: 10 = essential, directly addresses the research question; 8-9 = a core "
+           "method or concept that transfers directly; 6-7 = a genuine idea or technique that "
+           "carries over, even from another discipline; 4-5 = only a loose thematic link; "
+           "0-3 = no transfer. Cross-disciplinary work is VALUABLE when its ideas carry over — "
+           "judge the transfer, not the field. But beware the homograph trap: a paper can "
+           "share a TERM with the research question while using it in a completely different "
+           "SENSE (molecular 'docking' of ligands vs 'docking' of software agents; wet-lab "
+           "'reproducibility' vs simulation 'reproducibility'). A shared word used in a "
+           "different sense is NOT relevance — score such a paper 0-3, however much vocabulary "
+           "it appears to share. A systematic review or meta-analysis OF the research question "
+           "is an especially valuable entry point. Judge by intellectual transfer, not "
+           "prestige or citation count."
            + anchor + excl +
            "\nRespond with ONLY the number.")
     jobs = []

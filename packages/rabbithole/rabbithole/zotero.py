@@ -148,6 +148,31 @@ class ZoteroClient:
         except Exception:  # noqa: BLE001
             return False
 
+    def move_item_between_collections(self, item: dict, from_key: str, to_key: str) -> bool:
+        """Move an item from one collection to another by PATCHing its `collections` array —
+        the quarantine mechanism. NON-DESTRUCTIVE: the item stays in the library and in any
+        OTHER collection it belongs to; only `from_key` is removed and `to_key` added. A no-op
+        (no PATCH, returns True) when the item already carries `to_key` and not `from_key`, so
+        re-running an audit is idempotent."""
+        data = item.get("data", {})
+        key = data.get("key") or item.get("key")
+        cols = list(data.get("collections", []))
+        new = [c for c in cols if c != from_key]
+        if to_key not in new:
+            new.append(to_key)
+        if new == cols:
+            return True                       # already where it should be — nothing to do
+        version = item.get("version") or data.get("version") or 0
+        try:
+            r = self._client.patch(
+                f"{self.prefix}/items/{key}",
+                json={"collections": new},
+                headers={"Content-Type": "application/json",
+                         "If-Unmodified-Since-Version": str(version)})
+            return r.status_code in (200, 204)
+        except Exception:  # noqa: BLE001
+            return False
+
     def item_children(self, item_key: str) -> list[dict]:
         r = self._client.get(f"{self.prefix}/items/{item_key}/children")
         r.raise_for_status()
