@@ -1807,8 +1807,12 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
     asks_trundlr = not no_trundlr and bool(tr_cfg.get("url"))
     m = project.Manifest(
         name=name or _ask("project name", default_name),
-        short_title=short_title or _ask("short title (filename stem)",
-                                        (name or default_name).lower()),
+        # Suggest the project name's OWN case (camelCase), not a lowercased slug: the tools
+        # name every file with the project name, and naming.parse matches the short_title
+        # case-sensitively — so a lowercased short_title makes `haarpi next` blind to its own
+        # markup and the ladder stalls silently (the postIneq case, 2026-08).
+        short_title=short_title or _ask("short title (filename stem — match the name's case)",
+                                        name or default_name),
         brief=brief if brief is not None else _ask_multiline("research brief (long-form)"),
         initials=initials or _ask("your initials (revision chain)", "DCR"),
         trundlr_priority=(trundlr.clamp_priority(priority) if priority is not None
