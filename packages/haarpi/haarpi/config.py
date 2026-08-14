@@ -86,10 +86,12 @@ tool_initials = "ra"         # trailing suffix on tool-authored files (revision 
 user_initials = "DCR"        # the human reviewer's initials
 
 [planner]
-# Tiers that insert an "approve plan" human task at the head of the rework
-# chain (mark it done in trundlr to release the chain). Cheap tiers run
-# hands-free; a redirection re-aims the whole stage, so it asks first.
-confirm_tiers = ["redirection"]
+# Tiers that insert an "approve plan" human task at the head of the rework chain
+# (mark it done in trundlr to release it). EMPTY by default: your COMMENTS are the
+# gate, so `next` queues the fix hands-free — including a redirection, whose re-aimed
+# brief is written to a steering file you can inspect/edit. Set e.g. ["redirection"]
+# to require a sign-off before that tier's chain runs.
+confirm_tiers = []
 
 # Per-tool overrides of any section above, e.g.:
 # [tools.raster.ollama]

@@ -248,9 +248,31 @@ def test_status_reports_stage_states(proj, capsys):
     assert "waiting" in outp                                     # downstream stages gated
 
 
-def test_redirection_inserts_approval_gate(proj, servers):
+def test_redirection_runs_hands_free_by_default(proj, servers):
+    """The author's COMMENTS are the gate. By default (confirm_tiers empty) even a redirection
+    queues its fix chain with NO 'approve plan' task — the head is the first real step."""
     tr, ol = servers
     # a 'redirect' task derives tier=redirection (and steers gather at its query).
+    ol.reply = json.dumps({"tasks": [{"comments": [1], "need": "redirect", "query": "Y"}]})
+    m = project.load_manifest(proj)
+    markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"
+    _make_markup(markup, resolved=False)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert not any(t["title"].startswith("rabbithole approve") for t in new)  # no gate
+    assert new[0]["command"].startswith("haarpi rabbithole")   # head is the first real step
+    assert "depends_on_id" not in new[0]                        # nothing gates the head
+
+
+def test_confirm_tiers_can_gate_a_chain_when_opted_in(proj, servers, monkeypatch):
+    """The knob is retained: set confirm_tiers and the 'approve plan' human gate returns at the
+    head of that tier's chain."""
+    tr, ol = servers
+    cfg = planner.pipeline_config()
+    cfg.setdefault("planner", {})["confirm_tiers"] = ["redirection"]
+    monkeypatch.setattr(planner, "pipeline_config", lambda: cfg)
     ol.reply = json.dumps({"tasks": [{"comments": [1], "need": "redirect", "query": "Y"}]})
     m = project.load_manifest(proj)
     markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"

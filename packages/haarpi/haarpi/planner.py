@@ -1667,7 +1667,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     steer_config = _write_litreview_steering(str(root), built) if built else None
     if steer_config:
         summary.append(f"  steering config: {steer_config}")
-    confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or ["redirection"])
+    confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or [])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
     if plan.get("gather_topics"):
