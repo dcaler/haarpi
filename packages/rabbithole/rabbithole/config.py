@@ -89,7 +89,7 @@ class ProjectConfig:
     use_style: bool = False
     style_author: str = ""
     style_paper_keys: list = field(default_factory=list)  # Zotero item keys confirmed in init
-    # trundlr task-queue binding (resolved by parseNplan; matched by project_name).
+    # trundlr task-queue binding (resolved by `haarpi next`; matched by project_name).
     trundlr_project_id: int | None = None
 
     def to_yaml(self) -> str:
@@ -224,7 +224,7 @@ class GlobalConfig:
     zotero_library_type: str = "user"  # "user" | "group"
     anthropic_api_key: str = ""
     s2_api_key: str = ""               # optional Semantic Scholar key
-    # trundlr task queue (parseNplan submits gather/collect/revise/comment chains here).
+    # trundlr task queue (`haarpi next` submits gather/collect/audit/build/revise chains here).
     trundlr_url: str = ""             # e.g. http://100.87.86.57:8251
     trundlr_runner_resource_id: int | None = None  # cpu/gpu resource the runner polls
     trundlr_human_resource_id: int | None = None   # human resource for collect/comment/init

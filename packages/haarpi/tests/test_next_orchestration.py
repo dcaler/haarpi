@@ -30,15 +30,20 @@ def test_all_edits_is_a_cosmetic_in_place_chain():
 def test_one_sources_task_prepends_a_steered_gather():
     built = planner.chain_from_tasks([_task("sources", "household distributional equity"),
                                       _task("edit")])
-    assert built["steps"] == ["gather", "collect", "revise", "comment"]
+    # New sources are audited (word-sense filter) then EMBEDDED (`build`) before revise — which
+    # loads a cached corpus and no longer embeds. build sits immediately before revise.
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "comment"]
     assert built["tier"] == "gap_fill"
     assert built["gather_topics"] == ["household distributional equity"]
     assert built["section_focus"] == []
 
 
 def test_a_section_routes_the_redraft_to_report():
+    """`report` re-plans the sections AND embeds inline, so a section chain gets an `audit` but
+    no separate `build` (no double embedding)."""
     built = planner.chain_from_tasks([_task("section", "supply-chain reshoring")])
-    assert built["steps"] == ["gather", "collect", "report", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "report", "comment"]
+    assert "build" not in built["steps"]
     assert built["section_focus"] == ["supply-chain reshoring"]
     assert built["tier"] == "gap_fill"
 
@@ -47,11 +52,14 @@ def test_redirect_is_redirection_and_redrafts_with_report():
     built = planner.chain_from_tasks([_task("redirect", "reframe around energy justice")])
     assert built["tier"] == "redirection"
     assert "report" in built["steps"] and "gather" in built["steps"]
+    assert "build" not in built["steps"]         # report embeds inline
 
 
-def test_ingest_prepends_the_ingest_verb():
+def test_ingest_gets_collect_audit_and_build_before_revise():
+    """Reviewer-supplied references not yet in Zotero are fetched (`ingest`), the human finalises
+    any the fetch missed (`collect`), the changed corpus is audited, then embedded (`build`)."""
     built = planner.chain_from_tasks([_task("ingest"), _task("edit")])
-    assert built["steps"] == ["ingest", "revise", "comment"]
+    assert built["steps"] == ["ingest", "collect", "audit", "build", "revise", "comment"]
     assert built["tier"] == "cosmetic"
 
 
@@ -64,13 +72,48 @@ def test_elephantroom_shaped_set_steers_gather_at_every_theme():
              _task("section", "supply-chain reshoring and domestic production"),
              _task("edit"), _task("edit")]
     built = planner.chain_from_tasks(tasks)
-    assert built["steps"] == ["gather", "collect", "report", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "report", "comment"]
     assert built["gather_topics"] == [
         "household distributional equity of ABM impacts",
         "consumption smoothing, savings drawdown, innovation",
         "supply-chain reshoring and domestic production"]
     assert built["section_focus"] == ["supply-chain reshoring and domestic production"]
     assert built["tier"] == "gap_fill"
+
+
+# ── cite: papers already in Zotero need only embedding, not a fetch ────────────
+
+def test_cite_is_build_then_revise_with_no_fetch():
+    """The reviewer says the papers are already in Zotero. Embed-and-cite: a lone `build` before
+    revise, with NO ingest/gather/collect (nothing to fetch) and NO audit (the reviewer named
+    them, so deference forbids quarantining)."""
+    built = planner.chain_from_tasks([_task("cite"), _task("edit")])
+    assert built["steps"] == ["build", "revise", "comment"]
+    assert built["tier"] == "cosmetic"
+    for verb in ("ingest", "gather", "collect", "audit"):
+        assert verb not in built["steps"]
+
+
+def test_cite_does_not_double_build_on_a_gather_chain():
+    """A sources chain already builds after collect; a co-occurring `cite` must not add a second
+    `build`."""
+    built = planner.chain_from_tasks([_task("cite"), _task("sources", "topic")])
+    assert built["steps"].count("build") == 1
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "comment"]
+
+
+def test_a_revise_redraft_never_reads_an_unembedded_corpus():
+    """The embedding contract: any chain whose corpus CHANGED (collect present) or that cites
+    reviewer-added papers must `build` immediately before a `revise` re-draft — never leave
+    revise to read a corpus `build` has not touched. `report` chains are exempt (embed inline)."""
+    for tasks in ([_task("sources", "q")], [_task("ingest")], [_task("cite")],
+                  [_task("cite"), _task("ingest")]):
+        steps = planner.chain_from_tasks(tasks)["steps"]
+        if steps[-2] == "revise":
+            assert steps[steps.index("revise") - 1] == "build"
+        # and audit, when present, sits right after collect
+        if "audit" in steps:
+            assert steps[steps.index("collect") + 1] == "audit"
 
 
 # ── _normalise_tasks: every comment lands in exactly one task ──────────────────
@@ -109,7 +152,7 @@ def test_an_explicit_section_ask_is_promoted_even_when_the_model_said_sources():
     assert [t["need"] for t in tasks] == ["section"]
     assert tasks[0]["query"] == text                 # the comment's own words steer the report
     assert planner.chain_from_tasks(tasks)["steps"] == \
-        ["gather", "collect", "report", "comment"]
+        ["gather", "collect", "audit", "report", "comment"]
 
 
 def test_an_edit_of_an_existing_section_is_not_promoted():
@@ -126,6 +169,37 @@ def test_promotion_splits_a_mixed_task_and_preserves_coverage():
     assert sorted(t["need"] for t in tasks) == ["edit", "section"]
     assert sorted(c for t in tasks for c in t["comments"]) == \
         ["Also fix this typo.", "Please add a section on lifecycle milestones."]
+
+
+# ── the deterministic cite floor: "already in Zotero, cite them" is never a fetch ──
+
+def test_already_in_zotero_is_promoted_to_cite_even_when_the_model_said_ingest():
+    """The exact DRvehicle misroute: the 8B coordinator filed 'cite Doblinger and Howell' under
+    `ingest` (→ a fetch that drops author-only mentions → 'none found'). The floor promotes it to
+    `cite`, so the chain embeds the already-collected papers (`build → revise`) instead."""
+    text = "I've added Doblinger 2019 and Howell 2017 to the zotero collection. cite them"
+    tasks = planner._normalise_tasks([{"comments": [1], "need": "ingest", "query": ""}], [text])
+    assert [t["need"] for t in tasks] == ["cite"]
+    assert planner.chain_from_tasks(tasks)["steps"] == ["build", "revise", "comment"]
+
+
+def test_a_genuine_ingest_is_not_stolen_by_the_cite_floor():
+    """The floor requires an explicit 'in Zotero / the collection / the library' assertion, so a
+    real fetch request keeps its `ingest` (and its collect/build) rather than being demoted."""
+    for text in ("cite Smith 2020 here",
+                 "add @foo2019 and these references: Bar 2021",
+                 "please incorporate the attached reference list"):
+        tasks = planner._normalise_tasks(
+            [{"comments": [1], "need": "ingest", "query": ""}], [text])
+        assert [t["need"] for t in tasks] == ["ingest"], text
+
+
+def test_a_section_ask_outranks_the_cite_floor():
+    """Section (rule 2) runs before cite (rule 3): 'add a section on X; the papers are already in
+    zotero' is a section task, not a cite task — the review's structure change wins."""
+    text = "Add a section on grants versus loans — the papers are already in the zotero collection."
+    tasks = planner._normalise_tasks([{"comments": [1], "need": "edit"}], [text])
+    assert [t["need"] for t in tasks] == ["section"]
 
 
 # ── decompose: brain output → tasks, with a safe fallback ──────────────────────
@@ -174,8 +248,8 @@ def test_steering_writes_a_gap_config_with_the_queries(monkeypatch):
             name = "litrev_2.yaml"
         return _P()
 
-    import rabbithole.plan as rhplan
-    monkeypatch.setattr(rhplan, "_write_gap_config", fake_gap)
+    import rabbithole.steering as rhsteer
+    monkeypatch.setattr(rhsteer, "_write_gap_config", fake_gap)
 
     built = planner.chain_from_tasks([_task("sources", "topic A"),
                                       _task("section", "topic B")])

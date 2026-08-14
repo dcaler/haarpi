@@ -229,8 +229,11 @@ def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = [t["title"] for t in tr.tasks[before:]]
-    assert new == ["rabbithole gather 2", "rabbithole collect 2", "rabbithole revise 2",
-                   "rabbithole comment 2", "rabbithole next 2"]    # gap_fill chain, cycle 2
+    # gap_fill chain, cycle 2: new sources are audited then EMBEDDED (`build`) before revise,
+    # which loads a cached corpus and no longer embeds.
+    assert new == ["rabbithole gather 2", "rabbithole collect 2", "rabbithole audit 2",
+                   "rabbithole build 2", "rabbithole revise 2", "rabbithole comment 2",
+                   "rabbithole next 2"]
     entry = [e for e in project.list_plans(proj) if e.get("type") == "plan"][-1]
     assert entry["tier"] == "gap_fill" and entry["annotation_hash"]
 

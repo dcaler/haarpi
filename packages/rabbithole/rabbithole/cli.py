@@ -5,7 +5,6 @@
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
     rabbitHole ingest     pull reviewer-supplied references (pasted into a _ra.docx) into the corpus
-    rabbitHole parseNplan read annotations, decide next steps, queue them in trundlr
     rabbitHole style      train a style profile on the author's Zotero publications
 
 Global options:
@@ -126,17 +125,6 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--file", default=None,
                      help="path to the annotated .docx (default: newest non-_ra docx in output/)")
 
-    pnp = sub.add_parser("parseNplan",
-                         help="read annotations, decide next steps, queue them in trundlr")
-    pnp.add_argument("--brain", choices=["ollama", "claude"], default=None,
-                     help="override the brain backend for the planning call")
-    pnp.add_argument("--file", default=None,
-                     help="path to the annotated .docx (default: newest non-_ra docx in output/)")
-    pnp.add_argument("--dry-run", action="store_true",
-                     help="print the plan and task chain without writing config or queuing tasks")
-    pnp.add_argument("--no-trundlr", action="store_true",
-                     help="skip trundlr; print the manual steps instead")
-
     sub.add_parser("style",
                    help="train a style profile on the author's Zotero publications")
 
@@ -190,12 +178,6 @@ def main(argv: list[str] | None = None) -> int:
         _check_env()
         from . import ingest
         return ingest.run(args.dir, brain_override=args.brain, docx_path=args.file)
-
-    if args.command == "parseNplan":
-        _check_env()
-        from . import plan
-        return plan.run(args.dir, brain_override=args.brain, docx_path=args.file,
-                        dry_run=args.dry_run, use_trundlr=not args.no_trundlr)
 
     if args.command == "style":
         from . import style

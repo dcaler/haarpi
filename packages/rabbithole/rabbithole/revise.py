@@ -17,10 +17,10 @@ Breadth guards deliberately do NOT run here. A revise answers the reviewer's ann
 nothing else; comments that need new sources route to the corpus chain below.
 
 Comments a redline cannot satisfy in place — "include paper X", "mine its citations",
-"a lot more on Y" — need the corpus to change first. After the redline, the parseNplan
-planner classifies the annotation set and, when any such corpus work is required, queues
-the gather→collect→revise→comment chain in trundlr (the chain's revise carries --no-queue
-so it re-drafts without re-planning). --no-queue / queue=False skips this step.
+"a lot more on Y" — need the corpus to change first. revise does NOT plan that follow-up:
+planning is `haarpi next`'s job (haarpi.planner), the pipeline's sole planner, which reads
+the finished redline at the gate and queues the corpus chain. revise drafts and replies
+only; each reply names the real reason a comment was left (so the gate's plan is grounded).
 
 Pass --resynth for the alternative clean rewrite (no tracked changes, comments dropped):
   1. Find *_ra.docx in output/ (or accept --file path)
@@ -471,6 +471,35 @@ def _named_citekeys(comments: list[str]) -> set[str]:
     return keys
 
 
+def _cite_targets(comments: list[str], corpus: list[Candidate],
+                  citekeys: dict[int, str]) -> list[str]:
+    """Corpus citekeys a reviewer NAMES in a comment — by explicit [@key] or by author-year
+    ("Doblinger 2019").
+
+    This is what turns "I've added Doblinger 2019 and Howell 2017 to Zotero, cite them", left on
+    a section heading, into the set of already-collected sources to cite in that section. Only
+    sources actually in the corpus are returned: the reviser can cite only what `build` embedded,
+    so a still-missing paper falls through to the sources route rather than being fabricated. The
+    author-year match needs BOTH the first-author surname and the year (when the corpus item has
+    one), so a bare surname or a stray year cannot pull in the wrong paper.
+    """
+    text = " ".join(comments)
+    named = _named_citekeys(comments)
+    out: list[str] = []
+    for i, c in enumerate(corpus):
+        ck = citekeys.get(i)
+        if not ck or ck in out:
+            continue
+        if ck in named:
+            out.append(ck)
+            continue
+        surname = (c.first_author_last or "").strip()
+        if surname and re.search(rf"\b{re.escape(surname)}\b", text, re.IGNORECASE) \
+                and (c.year is None or re.search(rf"\b{c.year}\b", text)):
+            out.append(ck)
+    return out
+
+
 class RabbitHolePolicy:
     """rabbitHole's dialect for the shared redline engine: evidence is the corpus digest, the
     prompts are the litreview house style, the guards are rabbitHole's set (every paragraph
@@ -616,10 +645,31 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
             skipped.append(f"para {a['para']} (no text or no comment body)")
             outcomes.update({i: "skipped" for i in ids})
             continue
-        # A comment on a heading is not a prose edit — rewriting the heading would mangle
-        # it. These are usually "add a source" / "find more" asks (a corpus action). Leave
-        # the heading and its comment intact for routing; do not fabricate a rewrite.
+        # A comment on a heading is not a prose edit — the heading itself must not be rewritten.
+        # But a heading comment that NAMES sources already in the corpus ("I've added X and Y,
+        # cite them") means "cite them IN THIS SECTION": answer it by citing those sources in the
+        # section's first body paragraph. A heading comment that names nothing citeable is a
+        # "find more" ask, and routes to the corpus chain as before.
         if redline.is_heading_style(a.get("style", "")):
+            targets = _cite_targets(comments, corpus, citekeys)
+            body = redline.first_body_paragraph_under(docx, a["para"]) if targets else None
+            if targets and body:
+                key_tags = ", ".join(f"[@{k}]" for k in targets)
+                ask = (f'The reviewer left this note on the section heading above: '
+                       f'"{" ".join(comments)[:300]}". Those sources are in the corpus and they '
+                       f'want them cited IN THIS SECTION. Cite {key_tags} in this paragraph where '
+                       f'they best support the text, keeping every existing citation and the '
+                       f"paragraph's meaning intact.")
+                print(f"  {runlog.stamp()}Para {a['para']} is a heading; citing {key_tags} "
+                      f"in the section body (para {body['para']})...", flush=True)
+                digest = _para_digest(compact, full, guards.all_citekeys(body["text"]))
+                new_text, outcome = _redline_para_adversary(
+                    brain, cfg, body["text"], [ask], digest, anchored=set(),
+                    source_lines=source_lines)
+                if new_text and outcome == "edited":
+                    edits.append({"para": body["para"], "op": "replace", "text": new_text})
+                    outcomes.update({i: f"cited_section:{body['para']}" for i in ids})
+                    continue
             skipped.append(f"para {a['para']} (comment on heading "
                            f"'{a['text'][:48]}' — needs ingest/gather routing, "
                            f"not a prose rewrite)")
@@ -724,89 +774,6 @@ def _synthesize_revision(brain: Brain, cfg, corpus: list[Candidate],
 
 # ── route comments that a redline cannot satisfy in place ──────────────────────
 
-def _section_comments(outcomes: dict[str, str], cmap: dict[str, dict]) -> list[str]:
-    """The reviewer's own words for every comment the audit judged to need a new section."""
-    return [cmap[cid]["text"] for cid, outcome in outcomes.items()
-            if outcome == "corpus:section" and cid in cmap and cmap[cid].get("text")]
-
-
-def _route_corpus_followups(brain: Brain, cfg, gc, directory: str, docx: Path,
-                            revision_context: str, corpus: list[Candidate],
-                            section_asks: list[str] | None = None) -> dict:
-    """Queue the work the comments imply but a redline cannot do in place.
-
-    The redline answers prose / quantify / scope comments now. Two kinds of comment it
-    cannot:
-
-      * NEW SOURCES — "include paper X", "mine its citations", "a lot more on Y". The corpus
-        must change first, which a paragraph rewrite cannot do.
-      * A NEW SECTION — the redline edits the paragraph a comment anchors to. It has no way
-        to add a section, however much evidence is already in the corpus. Such a comment
-        comes back from the audit as `CORPUS: section`.
-
-    Reuse the parseNplan planner to classify the annotation set, then queue the chain. The
-    re-draft step is `report` when a section was asked for and `revise` otherwise: `report`
-    re-plans the review's sections from the corpus, which is precisely the work requested.
-    That is orthogonal to the tier — a section may be wanted with or without new sources.
-
-    `report` never reads the annotated docx, so the reviewer's intent reaches it through the
-    project config's focus line, and the redline it supersedes stays on disk as the record of
-    this cycle. The chain's re-draft carries --no-queue so it does not re-plan (no runaway
-    re-queue). No-op for a purely cosmetic annotation set.
-    """
-    from . import plan
-    section_asks = section_asks or []
-    try:
-        coverage = plan._coverage_summary(corpus)
-        plan_obj = plan._make_plan(brain, cfg, coverage, revision_context)
-    except SystemExit:
-        print("  [warn] follow-up planning failed; no corpus work queued.",
-              file=sys.stderr)
-        return {"queued": False, "tier": None}
-    tier = plan_obj["tier"]
-    needs_corpus = (tier in ("gap_fill", "redirection")
-                    or plan_obj.get("added_references"))
-    needs_report = bool(section_asks)
-    if not needs_corpus and not needs_report:
-        print(f"  {runlog.stamp()}Follow-up: every comment was addressable in the "
-              f"redline (tier=cosmetic); no corpus work queued.", flush=True)
-        return {"queued": False, "tier": tier, "needs_report": False}
-
-    steps = plan._chain_for(tier, plan_obj, needs_report=needs_report)
-    extra_focus = plan.section_focus(section_asks)
-    print()
-    if needs_report:
-        print(f"  {runlog.stamp()}{len(section_asks)} comment(s) ask for a new section, "
-              f"which a redline cannot add — the chain re-drafts with `report`, not `revise`.")
-        print(f"  `report` re-plans every section from the corpus and does NOT read this "
-              f"redline; it starts a new revision cycle.")
-    if needs_corpus:
-        ref = ", references added" if plan_obj.get("added_references") else ""
-        print(f"  {runlog.stamp()}Some comments need new sources (tier={tier}{ref}).")
-    if plan_obj.get("assessment"):
-        print(f"  Why: {plan_obj['assessment']}")
-    print(f"  Follow-up chain: {' -> '.join(steps)}")
-
-    if tier == "gap_fill":
-        fp = plan._write_gap_config(directory, plan_obj, extra_focus)
-        print(f"  Wrote gather-steering config: {fp.name}")
-    elif tier == "redirection":
-        fp = plan._write_redirect_config(directory, plan_obj, extra_focus)
-        print(f"  Drafted redirected research brief: {fp.name} (inspect/edit any time)")
-    elif needs_report:
-        fp = plan._write_section_config(directory, extra_focus)
-        print(f"  Wrote section-steering config: {fp.name} (the only channel from your "
-              f"comments to `report` — inspect/edit any time)")
-
-    routing = {"tier": tier, "needs_report": needs_report}
-    if gc.have_trundlr:
-        rc = plan._submit_chain(gc, cfg, directory, steps, plan_obj)
-        return {**routing, "queued": rc == 0}
-    print("  [trundlr] not configured ([trundlr] url in config.toml) — "
-          "run these manually:")
-    plan._print_manual(steps)
-    return {**routing, "queued": False}
-
 
 def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) -> None:
     """Add a rabbitHole-authored threaded reply to each reviewer comment saying what was
@@ -856,6 +823,12 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
         if outcome == "edited":
             replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
                             "address this comment.")
+        elif outcome.startswith("cited_section"):
+            replies[cid] = ("rabbitHole: you left this on a section heading and named sources "
+                            "already in the corpus, so I cited them in this section's first body "
+                            "paragraph as a tracked change (a heading itself can't carry the "
+                            "citation). Move it to another paragraph in the section if you'd "
+                            "prefer it there.")
         elif outcome.startswith("override"):
             note = outcome.split(":", 1)[1] if ":" in outcome else "changed grounded content"
             replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
@@ -889,6 +862,10 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
 def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None, redline: bool = True,
         queue: bool = True) -> int:
+    # `queue` (and the CLI `--no-queue` flag) is retained for backward compatibility — revise
+    # no longer plans follow-ups in either mode; `haarpi next` is the sole planner. Kept so the
+    # pipeline's `haarpi rabbithole revise --no-queue` and any already-queued task still parse.
+    del queue
     docxio.require_docx()
     t0 = runlog.start()
 
@@ -933,9 +910,9 @@ def run(directory: str = ".", brain_override: str | None = None,
     # 4. Load the corpus + notes exactly as `build` left them. revise does NOT embed new
     #    sources: embedding lives solely in `build`, the one step that changes the corpus, so
     #    revise's learned duration is pure drafting and stays estimable. New Zotero papers
-    #    reach the review through a `build` step the planner queues ahead of revise (an "I've
-    #    added … to Zotero, cite them" comment triggers one — see plan._chain_for). Notes are
-    #    keyed by citekey, so the cached annotations stay aligned to their papers.
+    #    reach the review through a `build` step `haarpi next` queues ahead of revise (an "I've
+    #    added … to Zotero, cite them" comment routes the `cite` need — see haarpi.planner
+    #    chain_from_tasks). Notes are keyed by citekey, so the cached annotations stay aligned.
     corpus = _load_corpus(paths)
     if not corpus:
         print("[error] work/corpus.json not found — run 'rabbitHole report' first.",
@@ -965,7 +942,6 @@ def run(directory: str = ".", brain_override: str | None = None,
     #     comments anchored and un-flagged paragraphs untouched. Skips the full
     #     re-synthesis (steps 5-8) entirely.
     if redline:
-        from . import redline as redline_mod   # the parameter shadows the module here
         print()
         out_docx, summary = _redline_revise(brain, cfg, paths, docx,
                                             corpus, notes, citekeys)
@@ -985,14 +961,10 @@ def run(directory: str = ".", brain_override: str | None = None,
                 print(f"    - {s}")
         if out_docx.exists():
             print(f"  Review (docx): {out_docx}")
-        # Route comments a redline cannot satisfy (new sources, a new section) to a queued
-        # chain. --no-queue (chain revises, runner) skips this.
+        # Comments a redline cannot satisfy in place (new sources, a new section) are planned
+        # by `haarpi next` at the gate — not here. revise drafts and replies only; routing
+        # stays "not queued" so each reply names the real reason and points at the fix.
         routing = {"queued": False, "tier": None, "needs_report": False}
-        if queue:
-            outcomes = summary.get("comment_outcomes", {})
-            section_asks = _section_comments(outcomes, redline_mod.comments_by_id(docx))
-            routing = _route_corpus_followups(brain, cfg, gc, directory, docx,
-                                              revision_context, corpus, section_asks)
         # Reply to each reviewer comment, authored "rabbitHole", with what was done —
         # the docx itself becomes the accountability record (no separate ledger).
         _reply_to_comments(out_docx, summary.get("comment_outcomes", {}), routing)
@@ -1055,7 +1027,4 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  Review (md)  : {out_md}")
     if out_docx.exists():
         print(f"  Review (docx): {out_docx}")
-    if queue:
-        _route_corpus_followups(brain, cfg, gc, directory, docx,
-                                revision_context, corpus)
     return 0

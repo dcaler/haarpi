@@ -1,4 +1,5 @@
-"""Shared docx annotation parsing for `revise` and `parseNplan`.
+"""Shared docx annotation parsing for `revise` (and `haarpi next`, which reads the same
+annotations at the gate).
 
 Reads reviewer annotations out of an annotated .docx: comments, tracked
 insertions/deletions, and plain body text. Also locates the newest

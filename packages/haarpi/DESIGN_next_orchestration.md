@@ -29,20 +29,46 @@ instead of a single tier:
   { "comment_ids": ["10","11"], "need": "edit" } ]
 ```
 
-`need ∈ {edit, sources, section, redirect}` (the litreview verb-need vocabulary). Every comment
-lands in exactly one task; a `query` is required for `sources`/`section`/`redirect`. This is the
-"list all the tasks it needs to do."
+`need ∈ {edit, sources, section, ingest, cite, redirect}` (the litreview verb-need vocabulary).
+Every comment lands in exactly one task; a `query` is required for `sources`/`section`/`redirect`.
+The two source-provenance needs are distinct and easy to conflate:
+
+- **`ingest`** — references the reviewer supplied that are **not yet in Zotero** (pasted text,
+  "add @key", a reference list). They must be *fetched* before they can be cited.
+- **`cite`** — papers the reviewer says are **already in the Zotero collection** ("I've added
+  Doblinger 2019 and Howell 2017 to Zotero, cite them"). Nothing is fetched; they only need
+  *embedding*. A deterministic floor (`_CITE_ASK`) promotes an explicit "already in Zotero / the
+  collection / the library" assertion to `cite` no matter what the 8B model called it — the exact
+  DRvehicle misroute, where "cite Doblinger and Howell" was filed as `ingest` and the fetch
+  (which drops author-only mentions) reported "none found."
+
+This is the "list all the tasks it needs to do."
 
 ## 2 · Sequence — derive the chain from the tasks
 
 The chain is **built from the task set**, not looked up from a tier template. Verbs are unioned
 in dependency order:
 
-- any `sources` or `section` or `redirect` task → prepend **`gather → collect`**;
+- any `sources`/`section`/`redirect` task → prepend **`gather → collect`**; an `ingest` task with
+  no gather still gets a **`collect`** (the human finalises any reference the fetch missed);
+- any chain with a **`collect`** (the corpus changed) → **`audit`** it right after (word-sense
+  quarantine of lexical false-friends), then, for a `revise` re-draft, **`build`** it immediately
+  before revise — because `revise` loads a *cached* corpus and no longer embeds; embedding lives
+  solely in `build`;
+- a **`cite`** task (papers already in Zotero) → a lone **`build`** before revise, with no
+  gather/collect (nothing to fetch) and no audit (deference forbids quarantining sources the
+  reviewer named);
 - the redraft verb is **`report`** if any `section`/`redirect` task exists (it re-plans the
-  review's sections from the corpus), otherwise **`revise`** (in-place per-comment edits);
+  review's sections from the corpus *and embeds inline*, so a report chain never gets a separate
+  `build`), otherwise **`revise`** (in-place per-comment edits);
 - a `redirect` task also **rewrites the brief** before gather;
 - always end **`… → comment → next`**.
+
+**The embedding contract, enforced structurally:** a `revise` re-draft never reads a corpus
+`build` has not touched. Every path that changes the corpus (`collect` present) or cites
+reviewer-added papers (`cite`) carries a `build` immediately before revise; `report` paths are
+exempt because they embed inline. This is the invariant `test_a_revise_redraft_never_reads_an_
+unembedded_corpus` pins.
 
 **Tier becomes derived, not primary:** `cosmetic` = every task is `edit`; `gap_fill` = ≥1
 `sources`; `redirection` = ≥1 `redirect`. So everything downstream that keys on tier — the
@@ -67,12 +93,28 @@ This is current behaviour; the decomposition surfaces it honestly (a `section` t
 routes the redraft to `report`) rather than hiding it. Handling mixed section+edit in one pass is
 out of scope here.
 
+## Consolidation — `haarpi next` is the sole litreview planner (2026-08-14)
+
+rabbitHole once had its **own** planner (`rabbithole/plan.py`, the `rabbitHole parseNplan` verb;
+also invoked inline by `revise`'s auto-requeue). It collapsed the whole annotation set into one
+tier — the exact approach this decompose path replaced — and it **diverged**: `plan.py` learned to
+distinguish already-in-Zotero papers (embed-and-cite) while `decompose` did not, so a fix landed in
+the layer the pipeline never runs. The pipeline queues `haarpi next`, never `parseNplan`.
+
+That duplicate is now **retired**. `plan.py` and rabbitHole's own trundlr client are deleted; the
+`parseNplan` CLI verb is gone; `revise` is **draft-only** (its `--no-queue` flag is kept for
+compatibility but does nothing — revise never re-plans). The one piece that stayed in rabbitHole is
+the litreview config-steering writer, moved to `rabbithole/steering.py` (`_write_gap_config` /
+`_write_section_config`), which haarpi soft-imports. Porting `plan.py`'s `zotero_additions` rule
+here as the `cite` need — and bringing `audit`/`build` into the chain, which `decompose` had been
+missing — is what closed the divergence *and* the live embedding regression (revise stopped
+embedding, but the live chain had no `build`).
+
 ## Scope & blast radius
 
 `classify` and `STAGE_TIERS` are **shared with the paper ladder** (raconteur, with its own
-deliverable tier tables). This redesign lands for the **litreview stage first**: a new
-`decompose` path builds the litreview chain from tasks, while the paper stage stays on the
-existing tier classifier until we deliberately extend it. The paper ladder is untouched.
+deliverable tier tables). The decompose path is the **litreview** planner; the paper stage stays on
+the tier classifier. The paper ladder is untouched.
 
 ## Decisions to confirm
 

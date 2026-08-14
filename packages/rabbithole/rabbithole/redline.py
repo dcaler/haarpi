@@ -26,9 +26,10 @@ OOXML notes:
 
 The annotated bibliography is regenerated against the post-edit narrative (see
 `accepted_body_text` / `replace_bibliography`), so a newly-cited source still gets a
-verifiable entry. Comments anchored to a heading are NOT rewritten as prose — the caller
-routes those elsewhere (a heading comment usually means "add a source" / "find more",
-which is a corpus action, not a paragraph edit).
+verifiable entry. A comment anchored to a heading is never answered by rewriting the heading
+itself: when it NAMES sources already in the corpus ("cite Doblinger 2019 and Howell 2017"),
+the caller cites them in the section's first body paragraph (see `first_body_paragraph_under`);
+when it names nothing citeable it is a "find more" ask and routes to the corpus chain.
 
 A paragraph is modelled as an ordered stream of TEXT and OPAQUE atoms (equations,
 hyperlinks, footnote references), not as the text inside its ``w:r/w:t`` runs. That older
@@ -112,6 +113,30 @@ def comment_anchors(path: Path) -> list[dict]:
                     "style": p.style.name if p.style is not None else "",
                     "anchored": sorted(anchored)})
     return out
+
+
+def first_body_paragraph_under(path: Path, heading_para: int) -> dict | None:
+    """The first non-empty body paragraph in the section opened by the heading at
+    ``heading_para``.
+
+    A comment left on a heading cannot be answered by rewriting the heading — but "cite these
+    sources here" means "cite them in this section", so the answer belongs in the section's
+    prose. This finds where: the first body paragraph after the heading, stopping at the next
+    heading. Returns ``{para, text}`` (``text`` serialized as :func:`comment_anchors` does, so
+    the reviser reads the same string), or ``None`` when the section has no body paragraph
+    before the next heading or the document ends.
+    """
+    doc = Document(str(path))
+    for i, p in enumerate(doc.paragraphs):
+        if i <= heading_para:
+            continue
+        style = p.style.name if p.style is not None else ""
+        if is_heading_style(style):
+            return None
+        text = paragraph_text(p._p)
+        if text.strip():
+            return {"para": i, "text": text}
+    return None
 
 
 # ── post-edit narrative + bibliography regeneration ──────────────────────────────

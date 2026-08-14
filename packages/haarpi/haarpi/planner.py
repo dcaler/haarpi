@@ -62,6 +62,12 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "Discover & curate new sources into the Zotero collection."),
         "collect": Step(None, 0.25,
                         "Download the new PDFs and add them to the Zotero collection."),
+        "audit":   Step("haarpi rabbithole audit", 0.5,
+                        "Word-sense filter: quarantine lexical false-friends (shared word, no "
+                        "conceptual transfer) from the finalised corpus (reversible)."),
+        "build":   Step("haarpi rabbithole build", 1.0,
+                        "Embed the audited Zotero collection into the working corpus "
+                        "(candidates, citekeys, ChromaDB index, per-paper notes)."),
         "revise":  Step("haarpi rabbithole revise --no-queue", 4.0,
                         "Re-draft the review from the expanded corpus + annotations."),
         "report":  Step("haarpi rabbithole report", 3.0,
@@ -130,10 +136,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
 # literature support" on the paper queues a litreview chain; the paper's own
 # refresh then arrives via staleness propagation when that gate passes).
 STAGE_TIERS: dict[str, dict[str, list[str]]] = {
+    # Litreview always plans through `decompose`/`chain_from_tasks` (the per-comment path);
+    # this table is the tier-summary shape, kept in step with the chain the decomposition
+    # builds — new sources are audited then embedded (`build`) before a `revise` re-draft.
     "litreview": {
         "cosmetic":    ["revise", "comment"],
-        "gap_fill":    ["gather", "collect", "revise", "comment"],
-        "redirection": ["gather", "collect", "revise", "comment"],
+        "gap_fill":    ["gather", "collect", "audit", "build", "revise", "comment"],
+        "redirection": ["gather", "collect", "audit", "build", "revise", "comment"],
     },
     "paper": {
         "cosmetic":   ["revise", "comment"],
@@ -767,7 +776,7 @@ def classify(stage: str, check: dict, cfg: dict,
 # decomposition of the current annotations. See DESIGN_next_orchestration.md.
 
 # The verb-need vocabulary. Every unresolved comment maps to exactly one.
-_LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "redirect")
+_LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "cite", "redirect")
 
 _DECOMPOSE_PROMPT = """\
 A reviewer left these unresolved annotations on a literature-review draft, numbered:
@@ -787,16 +796,22 @@ earlier one:
    and how to use them", "this is too high level — I want the concrete X". A demand to
    build out a topic into its own strand is section, NOT sources, even when that topic is
    already mentioned in passing. When in doubt between section and sources, choose section.
-3. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
-   in ("add @key", "cite Smith 2020", "these references:").
-4. "sources": wants more evidence UNDER the structure that already exists — thicker support
+3. "cite": the reviewer says the papers are ALREADY in the Zotero library/collection and
+   asks to cite them — "I've added Doblinger 2019 and Howell 2017 to Zotero, cite them",
+   "these are in the collection now, use them". Nothing is fetched; the papers only need
+   embedding so the reviser can cite them. Choose this, NOT ingest, whenever the reviewer
+   states the works are already in the library/collection.
+4. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
+   in that are NOT yet in the library — pasted reference text, "add @key", "cite Smith 2020",
+   "these references:". The works must be fetched before they can be cited.
+5. "sources": wants more evidence UNDER the structure that already exists — thicker support
    for a point the review already makes ("more on X", "go deeper", "what about Y"). Use this
    only when no new section is being asked for; it gathers literature, it does not re-plan.
-5. "edit": satisfiable by rewriting text that is already there — reword, restructure,
+6. "edit": satisfiable by rewriting text that is already there — reword, restructure,
    clarify, cut. No new sources, no new structure.
 
 For "redirect", "section", and "sources" give a specific, searchable "query" (the topic to
-gather or the section to plan). For "edit" and "ingest" set "query" to "".
+gather or the section to plan). For "edit", "ingest", and "cite" set "query" to "".
 
 Respond ONLY with JSON:
 {{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}}, ...]}}"""
@@ -860,7 +875,7 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
     if missed:
         tasks.append({"comments": [texts[i - 1] for i in missed],
                       "need": "edit", "query": ""})
-    return _promote_explicit_sections(tasks)
+    return _promote_explicit_cites(_promote_explicit_sections(tasks))
 
 
 # A reviewer who writes "a section on X" is asking for STRUCTURE, and an in-place reviser
@@ -898,14 +913,60 @@ def _promote_explicit_sections(tasks: list[dict]) -> list[dict]:
     return kept
 
 
+# A reviewer who says the papers are ALREADY in Zotero and asks to cite them wants embed-and-cite
+# (`build → revise`), NOT a fetch (`ingest`). The 8B coordinator files this under `ingest` even
+# when the wording is unambiguous — it sees "cite <author> <year>" and stops there — which is
+# exactly the DRvehicle misroute. This is the deterministic floor under the `cite` rule: an
+# explicit "already in Zotero / in the collection / in the library" membership assertion is a
+# `cite` task no matter what the model called it. Kept tight — it requires naming zotero / the
+# collection / the library, so a genuine ingest ("cite Smith 2020", "add @key", "these
+# references:") never trips it and gets wrongly routed away from the fetch it needs.
+_CITE_ASK = re.compile(
+    r"\b(?:added?|already|now|have|has|it'?s|they'?re|these are|are)\b[^.!?]*"
+    r"\b(?:zotero|the collection|the library)\b",
+    re.IGNORECASE)
+
+
+def _promote_explicit_cites(tasks: list[dict]) -> list[dict]:
+    """Move any comment asserting its papers are ALREADY in Zotero into a ``cite`` task.
+
+    The deterministic floor under decompose rule ``cite``: an explicit "already in Zotero / the
+    collection / the library" assertion routes embed-and-cite (``build → revise``), never a fetch
+    (``ingest``). ``section``/``redirect`` asks outrank it — they re-plan the review, and run
+    first, so their tasks are left intact; only edit/sources/ingest comments are demoted here.
+    Coverage is preserved exactly as in :func:`_promote_explicit_sections`."""
+    promoted: list[str] = []
+    kept: list[dict] = []
+    for t in tasks:
+        if t["need"] in ("section", "redirect", "cite"):
+            kept.append(t)
+            continue
+        stay = [c for c in t["comments"] if not _CITE_ASK.search(c)]
+        promoted += [c for c in t["comments"] if _CITE_ASK.search(c)]
+        if stay:
+            kept.append({**t, "comments": stay})
+    for c in promoted:
+        kept.append({"comments": [c], "need": "cite", "query": ""})
+    return kept
+
+
 def chain_from_tasks(tasks: list[dict]) -> dict:
     """Derive the litreview rework chain, its instructions, and a summary tier FROM the tasks.
 
-    The chain is BUILT, not looked up: any task needing new corpus prepends ``gather → collect``;
-    the redraft verb is ``report`` when a section/redirect is in play (it re-plans the review's
-    sections) else ``revise``; a redirect also re-aims the brief; specific references prepend
-    ``ingest``. ``gather_topics`` and ``section_focus`` are the exact queries of the tasks that
-    need them — the specific comments deterministically steer the gather.
+    The chain is BUILT, not looked up. Sources reach the corpus by two routes that end the
+    same way — a word-sense ``audit`` of what changed, then (for a ``revise`` re-draft) a
+    ``build`` that embeds it, because ``revise`` loads a cached corpus and no longer embeds:
+
+      * ``sources``/``section``/``redirect`` fetch new literature: ``gather → collect → audit``.
+      * ``ingest`` pulls reviewer-supplied references not yet in Zotero: ``ingest → collect →
+        audit`` (collect lets the human add any the fetch missed).
+      * ``cite`` names papers the reviewer already put in Zotero: no fetch, no audit (deference
+        forbids quarantining sources the reviewer named) — only a ``build`` to embed them.
+
+    The redraft verb is ``report`` when a section/redirect is in play (it re-plans the review's
+    sections AND embeds inline, so it needs no separate ``build``) else ``revise``. ``gather_topics``
+    and ``section_focus`` are the exact queries of the tasks that need them — the specific
+    comments deterministically steer the gather.
 
     ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
@@ -923,7 +984,20 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
         steps.append("ingest")
     if needs_sources:
         steps += ["gather", "collect"]
-    steps.append("report" if needs_report else "revise")
+    elif "ingest" in needs:
+        # ingest matches what it can in Zotero and lists the rest; the human finalises those at
+        # a collect step before the re-draft.
+        steps.append("collect")
+    # A changed corpus is word-sense audited before any re-draft reads it.
+    if "collect" in steps:
+        steps.append("audit")
+    redraft = "report" if needs_report else "revise"
+    # `revise` loads a cached corpus, so a corpus that CHANGED (collect present) or papers the
+    # reviewer added straight to Zotero for citing (`cite`) must be EMBEDDED first: `build` runs
+    # immediately before revise. A `report` re-draft embeds inline, so it never gets a build.
+    if redraft == "revise" and ("collect" in steps or "cite" in needs):
+        steps.append("build")
+    steps.append(redraft)
     steps.append("comment")
 
     tier = ("redirection" if "redirect" in needs
@@ -950,16 +1024,16 @@ def _write_litreview_steering(directory: str, built: dict) -> str | None:
     if not (built["gather_topics"] or built["section_focus"]):
         return None
     try:
-        from rabbithole import plan as _rhplan
+        from rabbithole import steering as _rhsteer
     except ImportError:
         return None
     extra_focus = "; ".join(built["section_focus"])
     try:
         if "gather" in built["steps"]:
-            fp = _rhplan._write_gap_config(
+            fp = _rhsteer._write_gap_config(
                 directory, {"gather_topics": built["gather_topics"]}, extra_focus)
         elif extra_focus:
-            fp = _rhplan._write_section_config(directory, extra_focus)
+            fp = _rhsteer._write_section_config(directory, extra_focus)
         else:
             return None
     except Exception as e:  # noqa: BLE001 — a steering-config failure must not crash the gate;
