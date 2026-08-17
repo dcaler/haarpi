@@ -18,6 +18,46 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from rabbithole import summarize
+from rabbithole.models import Candidate
+
+
+class _FakeBrain:
+    def __init__(self, reply):
+        self.reply, self.calls = reply, 0
+
+    def coordinator(self, prompt, system="", **kw):
+        self.calls += 1
+        return self.reply
+
+
+def test_locate_reruns_an_empty_cache_but_trusts_a_grounded_one(tmp_path):
+    # a source located before it was cited caches [] (no statements); once cited it must RE-locate,
+    # else the annotated bibliography reports 'no supporting passage' for a paper that now has one.
+    paths = SimpleNamespace(work=tmp_path)
+    corpus = [Candidate(title="Grants and R&D", year=2019, abstract="Grants raised firm R&D.")]
+    narrative = "Public grants raise private R&D investment [@key1]."
+    ck = {0: "key1"}
+    fp = tmp_path / "located" / f"{summarize._located_filename('key1')}.json"
+    fp.parent.mkdir(parents=True, exist_ok=True)
+
+    fp.write_text("[]")                                        # stale empty cache (pre-citation)
+    brain = _FakeBrain('[{"claim": "Grants raise R&D", "quote": "Grants raised firm R&D.", "location": "abstract"}]')
+    out = summarize.locate_claims(brain, narrative, corpus, [{}], None, paths, citekeys=ck)
+    assert out[0] and out[0][0]["claim"] == "Grants raise R&D"   # empty cache ignored -> re-located
+    assert brain.calls == 1                                      # it actually re-ran locate
+
+    grounded = _FakeBrain("[]")                                  # now a non-empty cache exists
+    out2 = summarize.locate_claims(grounded, narrative, corpus, [{}], None, paths, citekeys=ck)
+    assert out2[0][0]["claim"] == "Grants raise R&D" and grounded.calls == 0   # trusted, not re-run
+
+
+def test_paper_text_falls_back_to_abstract_when_no_pdf_or_fulltext():
+    # a reviewer-added source (the `cite` path) lives as metadata + abstract only; its abstract must
+    # be the text located against, else the annotated bibliography reports 'no supporting passage'.
+    assert summarize._paper_text(Candidate(abstract="Grants raised R&D by easing firm liquidity.")) \
+        == "Grants raised R&D by easing firm liquidity."
+    assert summarize._paper_text(Candidate(fulltext="full body", abstract="abs")) == "full body"
+    assert summarize._paper_text(Candidate()) == ""
 
 
 class _Paper:

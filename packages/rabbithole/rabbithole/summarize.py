@@ -107,11 +107,16 @@ def _chunk(text: str, size: int) -> list[str]:
 
 
 def _paper_text(c: Candidate) -> str:
+    """The best available text of a source, for note-writing, retrieval indexing, and claim-locating.
+    Falls back to the abstract when there is no PDF and no extracted full text — a reviewer-added
+    source (the `cite` path) often lives in the corpus as metadata + abstract only, and its abstract
+    is a legitimate place to ground an annotated-bibliography claim. Without this fallback such a
+    source located against an empty string and the bibliography reported 'no supporting passage'."""
     if c.pdf_path and Path(c.pdf_path).exists():
         t = page_marked_text(Path(c.pdf_path))
         if t:
             return t
-    return c.fulltext
+    return c.fulltext or c.abstract
 
 
 def _parse_json_obj(raw: str) -> dict:
@@ -1309,8 +1314,14 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
         # the narrative actually cites with.
         fp = located_dir / f"{_located_filename(ck)}.json"
         if fp.exists():
-            located[i] = json.loads(fp.read_text(encoding="utf-8"))
-            continue
+            cached = json.loads(fp.read_text(encoding="utf-8"))
+            if cached:                       # only a NON-EMPTY cache is authoritative
+                located[i] = cached
+                continue
+            # An empty cache means 'not yet grounded' — it is written when locate ran before this
+            # source was cited (no statements to query). A later cite (e.g. the `cite`-on-heading
+            # path) DOES give it statements, so an empty cache must be RE-located, not trusted;
+            # otherwise the newly-cited source shows 'no supporting passage' in the bibliography.
         statements = _claim_sentences(narrative, citekeys.get(i, ""))
         if not statements:
             n = notes[i] if i < len(notes) and notes[i] else {}
@@ -1336,7 +1347,8 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
                 print(f"  [warn] locate failed for {c.first_author_last}: {e}",
                       file=sys.stderr)
                 items = []
-        fp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+        if items:                            # cache only a grounded result; retry an empty one later
+            fp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
         located[i] = items
     print(f"  locate complete: {len(located)} papers  [{_fmt_dt(time.time() - t_step)}]")
     return located
