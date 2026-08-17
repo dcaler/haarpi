@@ -72,6 +72,10 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "Re-draft the review from the expanded corpus + annotations."),
         "report":  Step("haarpi rabbithole report", 3.0,
                         "Re-plan the review's sections and re-synthesise from the corpus."),
+        "mindmap": Step("haarpi rabbithole mindmap", 0.5,
+                        "Regenerate the contribution map beside the new draft — a per-draft "
+                        "diagnostic of the reference budget and which themes are peripheral.",
+                        resource="gpu"),
         "comment": Step(None, 0.15, "Review the new draft and annotate it."),
     },
     "paper": {
@@ -998,6 +1002,7 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
     if redraft == "revise" and ("collect" in steps or "cite" in needs):
         steps.append("build")
     steps.append(redraft)
+    steps.append("mindmap")     # per-draft diagnostic: regenerate the contribution map beside the draft
     steps.append("comment")
 
     tier = ("redirection" if "redirect" in needs
@@ -1804,7 +1809,7 @@ def run_queue(root: Path) -> int:
                   f"({len(titles)} total) — nothing to queue.")
             return 0
         queued = queue_chain(client, m.trundlr_project_id, "litreview",
-                             ["gather", "collect", "report", "comment"], tr_cfg,
+                             ["gather", "collect", "report", "mindmap", "comment"], tr_cfg,
                              description=m.brief[:300])
         print(f"haarpi queue: litreview cycle {queued['cycle']} queued "
               f"({len(queued['tasks'])} tasks, ends in `haarpi next`).")
@@ -1906,7 +1911,7 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
                          + (f", created at priority {m.trundlr_priority})" if created
                             else ")"))
             queued = queue_chain(client, pid, "litreview",
-                                 ["gather", "collect", "report", "comment"], tr_cfg,
+                                 ["gather", "collect", "report", "mindmap", "comment"], tr_cfg,
                                  description=m.brief[:300])
             lines.append(f"queued litreview cycle {queued['cycle']} "
                          f"({len(queued['tasks'])} tasks, ends in `haarpi next`)")

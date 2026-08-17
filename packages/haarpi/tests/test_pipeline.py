@@ -120,13 +120,14 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert (proj / ".haarpi" / "plans").is_dir()
     titles = [t["title"] for t in tr.tasks]
     assert titles == ["rabbithole gather 1", "rabbithole collect 1",
-                      "rabbithole report 1", "rabbithole comment 1",
+                      "rabbithole report 1", "rabbithole mindmap 1", "rabbithole comment 1",
                       "rabbithole next 1"]
     # chained, umbrella-form commands, human steps command-less
     assert tr.tasks[1]["depends_on_id"] == tr.tasks[0]["id"]
     assert tr.tasks[0]["command"].startswith("haarpi rabbithole")
-    assert "command" not in tr.tasks[3]
-    assert tr.tasks[4]["command"] == "haarpi next"
+    assert tr.tasks[3]["command"] == "haarpi rabbithole mindmap"   # the per-draft map, on the runner
+    assert "command" not in tr.tasks[4]                            # comment is the human step
+    assert tr.tasks[5]["command"] == "haarpi next"
 
 
 def test_init_asks_priority_and_defaults_to_trundlrs_own_band(tmp_path, servers,
@@ -232,8 +233,8 @@ def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
     # gap_fill chain, cycle 2: new sources are audited then EMBEDDED (`build`) before revise,
     # which loads a cached corpus and no longer embeds.
     assert new == ["rabbithole gather 2", "rabbithole collect 2", "rabbithole audit 2",
-                   "rabbithole build 2", "rabbithole revise 2", "rabbithole comment 2",
-                   "rabbithole next 2"]
+                   "rabbithole build 2", "rabbithole revise 2", "rabbithole mindmap 2",
+                   "rabbithole comment 2", "rabbithole next 2"]
     entry = [e for e in project.list_plans(proj) if e.get("type") == "plan"][-1]
     assert entry["tier"] == "gap_fill" and entry["annotation_hash"]
 
@@ -479,4 +480,4 @@ def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     assert titles[0].startswith("rabbithole gather")
     assert planner.run_queue(root) == 0                         # idempotent: nothing doubled
     assert len([t for t in tr.tasks
-                if t.get("project_id") == m.trundlr_project_id]) == 5
+                if t.get("project_id") == m.trundlr_project_id]) == 6

@@ -22,7 +22,7 @@ def _task(need, query="", comments=("c",)):
 
 def test_all_edits_is_a_cosmetic_in_place_chain():
     built = planner.chain_from_tasks([_task("edit"), _task("edit")])
-    assert built["steps"] == ["revise", "comment"]
+    assert built["steps"] == ["revise", "mindmap", "comment"]
     assert built["tier"] == "cosmetic"
     assert built["gather_topics"] == []
 
@@ -32,7 +32,7 @@ def test_one_sources_task_prepends_a_steered_gather():
                                       _task("edit")])
     # New sources are audited (word-sense filter) then EMBEDDED (`build`) before revise — which
     # loads a cached corpus and no longer embeds. build sits immediately before revise.
-    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "mindmap", "comment"]
     assert built["tier"] == "gap_fill"
     assert built["gather_topics"] == ["household distributional equity"]
     assert built["section_focus"] == []
@@ -42,7 +42,7 @@ def test_a_section_routes_the_redraft_to_report():
     """`report` re-plans the sections AND embeds inline, so a section chain gets an `audit` but
     no separate `build` (no double embedding)."""
     built = planner.chain_from_tasks([_task("section", "supply-chain reshoring")])
-    assert built["steps"] == ["gather", "collect", "audit", "report", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "report", "mindmap", "comment"]
     assert "build" not in built["steps"]
     assert built["section_focus"] == ["supply-chain reshoring"]
     assert built["tier"] == "gap_fill"
@@ -59,7 +59,7 @@ def test_ingest_gets_collect_audit_and_build_before_revise():
     """Reviewer-supplied references not yet in Zotero are fetched (`ingest`), the human finalises
     any the fetch missed (`collect`), the changed corpus is audited, then embedded (`build`)."""
     built = planner.chain_from_tasks([_task("ingest"), _task("edit")])
-    assert built["steps"] == ["ingest", "collect", "audit", "build", "revise", "comment"]
+    assert built["steps"] == ["ingest", "collect", "audit", "build", "revise", "mindmap", "comment"]
     assert built["tier"] == "cosmetic"
 
 
@@ -72,7 +72,7 @@ def test_elephantroom_shaped_set_steers_gather_at_every_theme():
              _task("section", "supply-chain reshoring and domestic production"),
              _task("edit"), _task("edit")]
     built = planner.chain_from_tasks(tasks)
-    assert built["steps"] == ["gather", "collect", "audit", "report", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "report", "mindmap", "comment"]
     assert built["gather_topics"] == [
         "household distributional equity of ABM impacts",
         "consumption smoothing, savings drawdown, innovation",
@@ -88,7 +88,7 @@ def test_cite_is_build_then_revise_with_no_fetch():
     revise, with NO ingest/gather/collect (nothing to fetch) and NO audit (the reviewer named
     them, so deference forbids quarantining)."""
     built = planner.chain_from_tasks([_task("cite"), _task("edit")])
-    assert built["steps"] == ["build", "revise", "comment"]
+    assert built["steps"] == ["build", "revise", "mindmap", "comment"]
     assert built["tier"] == "cosmetic"
     for verb in ("ingest", "gather", "collect", "audit"):
         assert verb not in built["steps"]
@@ -99,7 +99,7 @@ def test_cite_does_not_double_build_on_a_gather_chain():
     `build`."""
     built = planner.chain_from_tasks([_task("cite"), _task("sources", "topic")])
     assert built["steps"].count("build") == 1
-    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise", "mindmap", "comment"]
 
 
 def test_a_revise_redraft_never_reads_an_unembedded_corpus():
@@ -152,7 +152,7 @@ def test_an_explicit_section_ask_is_promoted_even_when_the_model_said_sources():
     assert [t["need"] for t in tasks] == ["section"]
     assert tasks[0]["query"] == text                 # the comment's own words steer the report
     assert planner.chain_from_tasks(tasks)["steps"] == \
-        ["gather", "collect", "audit", "report", "comment"]
+        ["gather", "collect", "audit", "report", "mindmap", "comment"]
 
 
 def test_an_edit_of_an_existing_section_is_not_promoted():
@@ -180,7 +180,7 @@ def test_already_in_zotero_is_promoted_to_cite_even_when_the_model_said_ingest()
     text = "I've added Doblinger 2019 and Howell 2017 to the zotero collection. cite them"
     tasks = planner._normalise_tasks([{"comments": [1], "need": "ingest", "query": ""}], [text])
     assert [t["need"] for t in tasks] == ["cite"]
-    assert planner.chain_from_tasks(tasks)["steps"] == ["build", "revise", "comment"]
+    assert planner.chain_from_tasks(tasks)["steps"] == ["build", "revise", "mindmap", "comment"]
 
 
 def test_a_genuine_ingest_is_not_stolen_by_the_cite_floor():

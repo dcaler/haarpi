@@ -7,9 +7,11 @@ refs.bib, or it is dropped — the model may summarise, never invent a paper.
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,11 +59,12 @@ _FIELD = lambda name, blob: (m := re.search(rf"\b{name}\s*=\s*[{{\"]\s*(.*?)\s*[
 
 
 def _label(author: str | None, year: str | None) -> str:
-    """'Rousta 2015', 'Rousta et al. 2015', or a graceful fallback."""
-    yr = (year or "").strip()
+    """'Rousta 2015', 'Rousta et al. 2015', or a graceful fallback. Strips the stray biblatex
+    braces a name field can carry ({Bonjoc, X} -> Bonjoc) so they never reach a node label."""
+    yr = (year or "").strip().strip("{}")
     if author:
         first = author.split(" and ")[0].strip()
-        surname = first.split(",")[0].strip() or first
+        surname = (first.split(",")[0].strip() or first).strip("{}")
         etal = " et al." if " and " in author else ""
         return f"{surname}{etal} {yr}".strip()
     return yr or "?"
@@ -76,6 +79,139 @@ def bib_keys(refs_bib: str) -> dict[str, str]:
     return out
 
 
+def _norm_doi(s: str | None) -> str:
+    """Bare, lowercased DOI — strip a doi.org URL prefix so refs.bib and OpenAlex compare equal."""
+    d = (s or "").strip().lower()
+    return re.sub(r"^https?://(dx\.)?doi\.org/", "", d).strip()
+
+
+def bib_dois(refs_bib: str) -> dict[str, str]:
+    """citekey -> bare DOI, for the entries that carry one (the citation-graph grounding set)."""
+    out: dict[str, str] = {}
+    for m in _ENTRY.finditer(refs_bib):
+        key, blob = m.group(1).strip(), m.group(2)
+        if d := _norm_doi(_FIELD("doi", blob) or ""):
+            out[key] = d
+    return out
+
+
+def _review_sentences(md: str):
+    """Yield (citekeys, clean_sentence) for each body sentence that cites something — bibliography
+    tail and markdown headings excluded, ``[@..]`` tags stripped and punctuation gaps tidied. Shared
+    by the findings-evidence and the project-importance measures."""
+    body = md
+    cut = re.search(r"^##\s+(?:annotated\s+bibliography|references|bibliography)\b", md, re.I | re.M)
+    if cut:
+        body = md[: cut.start()]
+    body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))  # drop headings
+    for sent in re.split(r"(?<=[.!?])\s+", body.replace("\n", " ")):
+        s = sent.strip()
+        if "@" not in s:
+            continue
+        keys = {k for grp in _CITE_GROUP.findall(s) for k in _CITE_KEY.findall(grp)}
+        clean = _CITE_GROUP.sub("", s)                              # drop the [@..] tags
+        clean = re.sub(r"\s+([.,;:!?])", r"\1", " ".join(clean.split()))  # tidy the gaps they leave
+        if keys and clean:
+            yield keys, clean
+
+
+def citation_evidence(md: str) -> dict[str, list[str]]:
+    """citekey -> the review sentence(s) that cite it — the grounding for a *findings* phrase.
+
+    The composer otherwise sees only citekeys and can only guess a paper's topic; the actual
+    result ('cut miss-sorting 55%→39% over two years') lives in the prose beside the ``[@key]``.
+    At most two sentences per key, each bounded, so the prompt stays small."""
+    out: dict[str, list[str]] = {}
+    for keys, clean in _review_sentences(md):
+        for k in keys:
+            out.setdefault(k, [])
+            if len(out[k]) < 2:                                    # at most two sentences per key
+                out[k].append(clean[:300])
+    return out
+
+
+def evidence_weight(md: str) -> dict[str, int]:
+    """citekey -> importance to THIS project, as a diagnostic: total words of review prose devoted
+    to the paper (summed over every sentence that cites it). A load-bearing paper earns paragraphs
+    and sits central; a perfunctory one-clause citation earns few words and drifts to the rim, so the
+    radius surfaces where the review actually invests its argument. A sentence citing several papers
+    credits its words to each (co-cited papers are genuinely discussed together)."""
+    out: Counter = Counter()
+    for keys, clean in _review_sentences(md):
+        wc = len(clean.split())
+        for k in keys:
+            out[k] += wc
+    return dict(out)
+
+
+# ── the real citation graph (OpenAlex referenced_works, deterministic) ─────────
+# The arrows are not the model's guesses: an edge A→B exists iff B is in A's actual OpenAlex
+# reference list. Grounded and checkable. Papers without a DOI (or missing from OpenAlex) simply
+# get no arrows — an honest gap, never an invented link. Network lives behind an injectable
+# ``fetch`` so the edge logic is unit-tested offline.
+
+def _short(oaid: str | None) -> str:
+    return (oaid or "").rsplit("/", 1)[-1]
+
+
+def _openalex_fetch_refs(dois: list[str], email: str) -> list[dict]:
+    """Batch OpenAlex works by DOI -> [{id, doi, referenced_works}]. Best-effort; [] on failure."""
+    import httpx
+    out: list[dict] = []
+    for i in range(0, len(dois), 50):
+        filt = "doi:" + "|".join(dois[i:i + 50])
+        try:
+            r = httpx.get("https://api.openalex.org/works",
+                          params={"filter": filt, "per-page": 50,
+                                  "select": "id,doi,referenced_works,cited_by_count",
+                                  "mailto": email},
+                          timeout=30)
+            r.raise_for_status()
+            out += r.json().get("results", [])
+        except Exception as e:  # noqa: BLE001 — a citation graph is a bonus, never fatal
+            print(f"[mindmap] OpenAlex citation fetch failed: {e}", file=sys.stderr)
+    return out
+
+
+def citation_graph(papers: list["Paper"], dois: dict[str, str], email: str = "",
+                   *, fetch=_openalex_fetch_refs) -> tuple[list["Edge"], dict[str, int]]:
+    """One OpenAlex pass -> (real citation edges, world citation counts).
+
+    Edge(A, B, 'cites') whenever B is in A's ``referenced_works`` and both are corpus papers; the
+    counts map each citekey to its OpenAlex ``cited_by_count`` (total citations in the field, used to
+    size the node). Deterministic given ``fetch``; papers without a DOI/OpenAlex record just don't
+    appear (no invented links, no invented counts)."""
+    keys = {p.key for p in papers}
+    doi_ck = {dois[k]: k for k in dois if k in keys}                # doi -> citekey, corpus only
+    if not doi_ck:
+        return [], {}
+    id_ck: dict[str, str] = {}
+    refs: dict[str, set[str]] = {}
+    world: dict[str, int] = {}
+    for w in fetch(sorted(doi_ck), email):
+        ck = doi_ck.get(_norm_doi(w.get("doi")))
+        if not ck:
+            continue
+        id_ck[_short(w.get("id"))] = ck
+        refs[ck] = {_short(x) for x in (w.get("referenced_works") or [])}
+        world[ck] = int(w.get("cited_by_count") or 0)
+    edges: list[Edge] = []
+    seen: set[tuple[str, str]] = set()
+    for ck, rf in refs.items():
+        for rid in rf:
+            b = id_ck.get(rid)
+            if b and b != ck and (ck, b) not in seen:
+                edges.append(Edge(src=ck, dst=b, kind="cites"))
+            seen.add((ck, b))
+    return edges, world
+
+
+def citation_edges(papers: list["Paper"], dois: dict[str, str], email: str = "",
+                   *, fetch=_openalex_fetch_refs) -> list["Edge"]:
+    """Just the citation edges (thin wrapper over :func:`citation_graph`)."""
+    return citation_graph(papers, dois, email, fetch=fetch)[0]
+
+
 # ── the spec (the frozen contract) ─────────────────────────────────────────────
 
 @dataclass
@@ -84,6 +220,8 @@ class Paper:
     label: str
     theme: str
     phrase: str
+    cited_by: int = 0          # OpenAlex total citations (field-wide); sizes the node. 0 = unknown
+    importance: int = 0        # words of review prose devoted to it; pulls the node toward centre
 
 
 @dataclass
@@ -122,6 +260,13 @@ def parse_spec(reply: str) -> dict:
     return {}
 
 
+def _clean_phrase(s: str) -> str:
+    """Collapse whitespace and strip the stray braces / markdown emphasis a model sometimes
+    wraps a phrase in (the ``{Bonjoc 2025…`` bug), bounded to a tooltip-sized length."""
+    s = " ".join(str(s).split())
+    return s.strip("{}*` ")[:180]
+
+
 def validate(raw: dict, valid_keys: dict[str, str], themes: list[str]) -> Mindmap:
     """Apply the grounding law. Drop any paper/edge whose citekey is not in refs.bib; coerce theme
     to a real thread; label from refs.bib; default an unknown kind to 'influence'. Never raises."""
@@ -135,7 +280,7 @@ def validate(raw: dict, valid_keys: dict[str, str], themes: list[str]) -> Mindma
         if key not in valid_keys or key in papers:
             continue                                   # grounding: unknown or duplicate key
         theme = tset.get(str(p.get("theme", "")).strip().lower(), default_theme)
-        phrase = " ".join(str(p.get("phrase", "")).split())[:180]
+        phrase = _clean_phrase(str(p.get("contribution") or p.get("finding") or p.get("phrase") or ""))
         papers[key] = Paper(key=key, label=valid_keys[key], theme=theme, phrase=phrase)
     edges: list[Edge] = []
     seen_e: set[tuple[str, str]] = set()
@@ -152,20 +297,88 @@ def validate(raw: dict, valid_keys: dict[str, str], themes: list[str]) -> Mindma
     return Mindmap(themes=used or [default_theme], papers=list(papers.values()), edges=edges)
 
 
-# ── DOT (deterministic) ────────────────────────────────────────────────────────
+# ── DOT (deterministic) — a radial twopi mind-map ────────────────────────────────
+# The map is radial, not a left-right DAG: a centre (the review) → a ring of themes →
+# a ring of papers. `twopi` gives that shape for free (the `dot` binary honours the in-file
+# `layout=twopi` attribute, so `figure.render` needs no change). Each theme owns a hue; its
+# papers are a pale tint of the same hue, so the branches read at a glance (the graphviz
+# "happiness" technique). Each paper node carries its `Author Year` citation followed by the
+# one-sentence contribution phrase (radial layout + colour keep this legible where the old
+# left-right wall did not). The theme spokes carry no arrowhead; the influence/temporal/evolution
+# links are drawn as directed citation ARROWS overlaid with `constraint=false` (so they never
+# distort the rings) and decoded by a legend of the kinds actually present.
 
-_EDGE_STYLE = {
-    "influence": 'color="#334155"',                                  # who built on whom
-    "temporal":  'color="#2563eb", style=dashed',                    # time ordering
-    "evolution": 'color="#7c3aed", penwidth=2',                      # how the theme evolved
+# a strong hue + a pale tint per theme, cycled when there are more themes than entries
+_PALETTE = [
+    ("#2563eb", "#dbeafe"), ("#059669", "#d1fae5"), ("#d97706", "#fef3c7"),
+    ("#dc2626", "#fee2e2"), ("#7c3aed", "#ede9fe"), ("#0891b2", "#cffafe"),
+    ("#db2777", "#fce7f3"), ("#65a30d", "#ecfccb"), ("#475569", "#e2e8f0"),
+    ("#ea580c", "#ffedd5"),
+]
+
+_CROSSLINK = {                                                       # directed, constraint=false
+    "cites":     'color="#47556955", penwidth=1.2',                # A cites B (OpenAlex); alpha-faded
+    "influence": 'color="#334155", penwidth=1.6',                   # who built on whom
+    "temporal":  'color="#1d4ed8", style=dashed, penwidth=1.4',     # time ordering
+    "evolution": 'color="#7c3aed", penwidth=2.4',                   # how the theme evolved
 }
+_KIND_LABEL = {"cites":     "cites — A cites B (from OpenAlex)",
+               "influence": "influence — one paper built on another",
+               "temporal":  "temporal — earlier ▸ later",
+               "evolution": "evolution — the theme shifting"}
+_KIND_ORDER = ("cites", "influence", "temporal", "evolution")       # stable legend order
+
+
+def _node_fontsize(cited_by: int) -> float:
+    """Node size encodes TOTAL (field-wide) citations. Citation counts are heavy-tailed, so the map
+    is log-scaled and clamped: 0→8pt, 10→~13, 100→~18, 1000+→22 — perceptible without one blob
+    dwarfing the rest."""
+    return round(min(22.0, 8.0 + 5.0 * math.log10(1 + max(0, cited_by))), 1)
+
+
+def _node_border(in_degree: int) -> float:
+    """Black-ring thickness encodes citations WITHIN this review (in-corpus in-degree). 0→no ring;
+    otherwise a bounded penwidth so the local pillar stands out without a cartoon-thick border."""
+    return 0.0 if in_degree <= 0 else round(min(5.0, 0.8 + 0.6 * in_degree), 1)
+
+
+# ── packed-bands pie-slice layout (points; rendered by `dot -Kneato -n2`) ────────
+# Papers are ranked by importance to THIS review (evidence_weight) and split into three IMPORTANCE
+# bands — the core `target_min`, the budget up to `target_max`, and the overflow — separated by
+# radial gaps that hold the red target rings. Each band is packed tight into concentric rings; a
+# paper sits at its THEME's angular sector (a coloured pie slice), so a peripheral theme shows an
+# empty inner slice (the diagnostic). Band MEMBERSHIP carries the meaning (inside/between/outside the
+# rings); radius WITHIN a band is just packing. Blob size = total citations; black ring = in-corpus.
+_HALF_FILL = 0.92        # fraction of each theme's angular sector used (leaves gaps between slices)
+_R0 = 210.0              # inner radius, points (leaves room for the centre hub)
+_GAP = 48.0              # radial gap between bands (holds a target ring)
+_PAD = 12.0              # minimum spacing between boxes, points
+_LABEL_GAP = 130.0       # theme-label distance beyond the outermost paper, points
+_HUB_W, _HUB_H = 2.3, 1.0    # centre hub size, inches
+
+
+def _legend(kinds: list[str], target_min: int, target_max: int) -> str:
+    """Graph-label legend decoding every channel: the red target rings (reference budget), blob size
+    (total citations), black-ring thickness (in-corpus citations), and the citation arrows present."""
+    rows = [f'<TR><TD ALIGN="LEFT"><FONT COLOR="#dc2626"><B>red rings</B></FONT> = target reference '
+            f'budget ({target_min}\u2013{target_max}); papers outside exceed it</TD></TR>',
+            '<TR><TD ALIGN="LEFT"><B>nearer the centre</B> = more discussed in this review</TD></TR>',
+            '<TR><TD ALIGN="LEFT"><B>blob size</B> = total citations (OpenAlex)</TD></TR>',
+            '<TR><TD ALIGN="LEFT"><B>black ring</B> = citations within this review</TD></TR>']
+    for k in kinds:
+        hue = _CROSSLINK[k].split('"')[1]                            # the colour out of the style
+        rows.append(f'<TR><TD ALIGN="LEFT"><FONT COLOR="{hue}"><B>&#8594;</B></FONT> '
+                    f'{_KIND_LABEL[k]}</TD></TR>')
+    return ('<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2" CELLPADDING="2">'
+            '<TR><TD ALIGN="LEFT"><B>legend</B></TD></TR>'
+            + "".join(rows) + "</TABLE>>")
 
 
 def _q(s: str, limit: int = 90) -> str:
     return str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").strip()[:limit]
 
 
-def _wrap(s: str, width: int = 26) -> str:
+def _wrap_lines(s: str, width: int = 22) -> list[str]:
     words, lines, cur = s.split(), [], ""
     for w in words:
         if len(cur) + len(w) + 1 > width and cur:
@@ -174,79 +387,248 @@ def _wrap(s: str, width: int = 26) -> str:
             cur = f"{cur} {w}".strip()
     if cur:
         lines.append(cur)
-    return "\\n".join(lines)
+    return lines or [""]
 
 
-def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "") -> str:
-    """themes = clusters, papers = nodes ('Author Year' + wrapped phrase), edges styled by kind."""
+def _wrap(s: str, width: int = 20) -> str:
+    return "\\n".join(_wrap_lines(s, width))
+
+
+def _node_label(p: Paper) -> tuple[str, list[str]]:
+    """The node's label string and its lines: the ``Author Year`` citation, then the wrapped
+    contribution phrase (when present — labels-only draft maps pass papers with an empty phrase)."""
+    lines = [_q(p.label, 40)] + (_wrap_lines(_q(p.phrase, 160), 22) if p.phrase else [])
+    return "\\n".join(lines), lines
+
+
+def _extents(p: Paper) -> tuple[float, float]:
+    """Estimated box (width, height) in points — used to pack tight and to guarantee no overlap."""
+    _, lines = _node_label(p)
+    fs = _node_fontsize(p.cited_by)
+    return max(len(l) for l in lines) * fs * 0.60 + 24, len(lines) * fs * 1.34 + 20
+
+
+def _place_band(ps: list[Paper], r0: float, pos: dict[str, tuple[float, float]],
+                theme_idx: dict[str, int], n: int, half: float) -> float:
+    """Pack one importance band into concentric rings, box-aware, each paper at its theme's sector.
+    Returns the band's outer radius. Rings fill in importance order with a per-theme angular budget,
+    so the band is radially dense; a theme absent from a ring just leaves an angular gap."""
+    ps = sorted(ps, key=lambda p: (p.importance, p.cited_by), reverse=True)
+    r, idx, outer = r0, 0, r0
+    while idx < len(ps):
+        ring, used = [], defaultdict(float)                          # per-theme arc used
+        while idx < len(ps):
+            p = ps[idx]; w, h = _extents(p)
+            arc = 2 * half * (r + h / 2)
+            if used[p.theme] and used[p.theme] + w > arc:
+                break                                                # this theme full at this radius
+            ring.append((p, w, h)); used[p.theme] += w + _PAD; idx += 1
+        if not ring:                                                 # safety: never stall
+            p = ps[idx]; w, h = _extents(p); ring = [(p, w, h)]; idx += 1
+        rowh = max(h for _, _, h in ring)
+        Rc = r + rowh / 2
+        by_theme: dict[str, list] = defaultdict(list)
+        for p, w, h in ring:
+            by_theme[p.theme].append((p, w))
+        for th, items in by_theme.items():
+            ac = 2 * math.pi * theme_idx[th] / n
+            span = sum(w for _, w in items) + _PAD * (len(items) - 1)
+            acc = 0.0
+            for p, w in items:
+                ang = ac + (acc + w / 2 - span / 2) / Rc
+                pos[p.key] = (Rc * math.cos(ang), Rc * math.sin(ang))
+                acc += w + _PAD
+        r = Rc + rowh / 2 + _PAD
+        outer = r
+    return outer
+
+
+def _collision_scale(m: Mindmap, pos: dict[str, tuple[float, float]]) -> float:
+    """Smallest S >= 1 such that multiplying every position by S leaves no two boxes overlapping —
+    the guarantee that packing overlaps (from size variation) are removed with minimal expansion."""
+    he = {p.key: _extents(p) for p in m.papers}
+    keys = [p.key for p in m.papers if p.key in pos]
+    s = 1.0
+    for i in range(len(keys)):
+        xi, yi = pos[keys[i]]; wi, hi = he[keys[i]]
+        for j in range(i + 1, len(keys)):
+            xj, yj = pos[keys[j]]; wj, hj = he[keys[j]]
+            dx, dy = abs(xi - xj), abs(yi - yj)
+            sx = (wi / 2 + wj / 2) / dx if dx > 1e-6 else 1e9
+            sy = (hi / 2 + hj / 2) / dy if dy > 1e-6 else 1e9
+            s = max(s, min(sx, sy))
+    return s * 1.02
+
+
+def band_layout(m: Mindmap, target_min: int, target_max: int
+                ) -> tuple[dict[str, tuple[float, float]], list[float], dict[int, tuple[float, float]], float]:
+    """The full geometry: pinned (x,y) points per paper, the two target-ring radii, per-theme label
+    anchors, and the outer radius. Pure + deterministic (unit-testable). Papers rank by importance;
+    the top ``target_min`` form the inner band, the next up to ``target_max`` the middle band, the
+    rest the outer band; a red ring sits in each gap so exactly ``target_min``/``target_max`` fall
+    inside. Then a single collision-scale guarantees zero overlap."""
+    n = max(1, len(m.themes))
+    half = (math.pi / n) * _HALF_FILL
+    theme_idx = {t: i for i, t in enumerate(m.themes)}
+    ranked = sorted(m.papers, key=lambda p: (p.importance, p.cited_by, p.key), reverse=True)
+    bands = [ranked[:target_min], ranked[target_min:target_max], ranked[target_max:]]
+    pos: dict[str, tuple[float, float]] = {}
+    r0, circle_r, outer = _R0, [], _R0
+    for bi, ps in enumerate(bands):
+        bmax = _place_band(ps, r0, pos, theme_idx, n, half) if ps else r0
+        if bi < 2:
+            circle_r.append(bmax + _GAP / 2)
+            r0 = bmax + _GAP
+        else:
+            outer = bmax
+    s = _collision_scale(m, pos)
+    if s > 1.0:
+        pos = {k: (x * s, y * s) for k, (x, y) in pos.items()}
+        circle_r = [r * s for r in circle_r]
+        outer *= s
+    label_pos = {i: ((outer + _LABEL_GAP) * math.cos(2 * math.pi * i / n),
+                     (outer + _LABEL_GAP) * math.sin(2 * math.pi * i / n)) for i in range(n)}
+    return pos, circle_r, label_pos, outer
+
+
+def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
+           target_min: int = 20, target_max: int = 50) -> str:
+    """The contribution map: importance BANDS (core / budget / overflow) packed into theme pie-slices,
+    with red target rings marking the ``target_min``/``target_max`` reference budget. Blob size = total
+    citations, black ring = in-corpus citations, faded arrows = the real OpenAlex citation graph, a
+    centre hub, theme labels outside. Emits pinned coordinates in points — render with ``dot -Kneato
+    -n2`` (see :func:`_render_pinned`)."""
     prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview"}
+    pos, circle_r, label_pos, outer = band_layout(m, target_min, target_max)
+    shown = set(pos)
+    indeg = Counter(e.dst for e in m.edges if e.src in shown and e.dst in shown)
     L = [figure._dot_header(fig_id, title or "Contribution map.", prov),
-         f"digraph {fig_id} {{", '  rankdir=LR; bgcolor="#ffffff"; compound=true;',
-         '  node [shape=box, style="rounded,filled", fillcolor="#eef2ff", '
-         'color="#94a3b8", fontname="Helvetica", fontsize=9];',
-         '  edge [fontname="Helvetica", fontsize=8];']
-    if title:
-        L.append(f'  labelloc=t; fontsize=15; fontname="Helvetica-Bold"; label="{_q(title, 120)}";')
-    by_theme: dict[str, list[Paper]] = {}
+         f"digraph {fig_id} {{",
+         '  bgcolor="#ffffff"; outputorder=edgesfirst; fontname="Helvetica";',
+         '  node [shape=box, style="rounded,filled", fontname="Helvetica", penwidth=0, '
+         'margin="0.06,0.03"];',
+         f'  "__hub__" [pos="0,0!", shape=ellipse, style=filled, fillcolor="#0f172a", '
+         f'fontcolor="#ffffff", fontsize=20, fixedsize=true, width={_HUB_W}, height={_HUB_H}, '
+         f'label="{_wrap(_q(title or fig_id, 48), 20)}"];']
     for p in m.papers:
-        by_theme.setdefault(p.theme, []).append(p)
-    for i, theme in enumerate(m.themes):
-        L.append(f"  subgraph cluster_t{i} {{")
-        L.append(f'    label="{_q(theme, 60)}"; style=rounded; color="#cbd5e1"; '
-                 'fontname="Helvetica-Bold"; fontsize=10;')
-        for p in by_theme.get(theme, []):
-            lab = f"{_q(p.label, 40)}" + (f"\\n{_wrap(_q(p.phrase, 160))}" if p.phrase else "")
-            L.append(f'    "{p.key}" [label="{lab}"];')
-        L.append("  }")
+        if p.key not in pos:
+            continue
+        hue, tint = _PALETTE[m.themes.index(p.theme) % len(_PALETTE)] if p.theme in m.themes \
+            else _PALETTE[0]
+        x, y = pos[p.key]
+        lab, _lines = _node_label(p)
+        fs = _node_fontsize(p.cited_by)
+        border = _node_border(indeg.get(p.key, 0))
+        ring = (f', penwidth={border}, color="#0f172a"' if border else ', penwidth=0')
+        L.append(f'  "{p.key}" [label="{lab}", pos="{x:.1f},{y:.1f}!", fillcolor="{tint}", '
+                 f'fontcolor="#1e293b", fontsize={fs}{ring}];')
+    present: list[str] = []
     for e in m.edges:
-        L.append(f'  "{e.src}" -> "{e.dst}" [{_EDGE_STYLE.get(e.kind, _EDGE_STYLE["influence"])}];')
+        if e.src in shown and e.dst in shown:
+            style = _CROSSLINK.get(e.kind, _CROSSLINK["influence"])
+            kind = e.kind if e.kind in _CROSSLINK else "influence"
+            if kind not in present:
+                present.append(kind)
+            L.append(f'  "{e.src}" -> "{e.dst}" [{style}, arrowsize=0.6];')
+    # native red target rings (drawn on top) + their labels
+    for rr, t in zip(circle_r, (target_min, target_max)):
+        L.append(f'  "__ring{t}__" [pos="0,0!", shape=circle, fixedsize=true, width={2*rr/72:.3f}, '
+                 f'height={2*rr/72:.3f}, label="", style=solid, fillcolor="none", color="#dc2626", '
+                 'penwidth=4];')
+        L.append(f'  "__ringlbl{t}__" [pos="0,{rr+34:.0f}!", shape=plaintext, label="target {t}", '
+                 f'fontcolor="#dc2626", fontsize=26, fontname="Helvetica-Bold"];')
+    # theme labels outside the outermost ring
+    for i, theme in enumerate(m.themes):
+        hue, _tint = _PALETTE[i % len(_PALETTE)]
+        lx, ly = label_pos[i]
+        L.append(f'  "__t{i}__" [pos="{lx:.1f},{ly:.1f}!", shape=box, style="rounded,filled", '
+                 f'fillcolor="{hue}", fontcolor="#ffffff", fontsize=16, label="{_wrap(_q(theme, 70), 18)}"];')
+    legend = _legend([k for k in _KIND_ORDER if k in present], target_min, target_max)
+    L.append(f'  label={legend}; labelloc=b; fontsize=11; fontname="Helvetica";')
     L.append("}")
     return "\n".join(L) + "\n"
 
 
+def _render_pinned(source: str, out_svg: Path) -> Path | None:
+    """Render a pinned-coordinate DOT with ``dot -Kneato -n2`` (positions are final; no layout).
+    Best-effort: a missing/failing renderer keeps the source and returns None."""
+    if not __import__("shutil").which("dot"):
+        return None
+    out_svg.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(["dot", "-Kneato", "-n2", "-Tsvg"], input=source, capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout:
+        print(f"[mindmap] dot -Kneato -n2 failed: {r.stderr.strip()[:200]}", file=sys.stderr)
+        return None
+    out_svg.write_text(r.stdout)
+    return out_svg
+
+
 # ── the LLM step: brain builds the spec, grounded + validated ──────────────────
 
-_SYS = ("You map a literature review into a themed contribution graph. You output ONE JSON object "
-        "and nothing else. You never invent a paper: use only the citekeys given to you.")
+_SYS = ("You state each paper's key CONTRIBUTION to knowledge — at a high level, in plain words: what "
+        "we now know from this paper that we did not before. You output ONE JSON object and nothing "
+        "else. Use ONLY the citekeys given. Ground every contribution in that paper's evidence "
+        "sentences; never invent a claim the evidence does not support.")
 
-_PROMPT = """From this literature review, build a contribution map.
+_PROMPT = """From this literature review, state each paper's key CONTRIBUTION — qualitatively and at a
+high level, what we now know from it that we did not before.
 
 Themes (use these verbatim as the "theme" values):
 {themes}
 
-Papers you may use (ONLY these citekeys — inventing a key is forbidden):
-{papers}
+For each paper below you are given its citekey, its label, and the review sentence(s) that cite it
+(its evidence). Use ONLY these citekeys — inventing a key is forbidden.
 
-The review's threads (for context; each paper's citekey appears here in use):
-{threads}
+{papers}
 
 Return ONE JSON object, no prose:
 {{"papers": [{{"key": "<citekey>", "theme": "<a theme above>",
-              "phrase": "<one sentence: this paper's specific contribution>"}}],
-  "edges":  [{{"src": "<citekey>", "dst": "<citekey>",
-              "kind": "influence" | "temporal" | "evolution"}}]}}
+              "contribution": "<what we now know from this paper>"}}]}}
 
-- one entry in "papers" per citekey, assigned to its most fitting theme, phrase <= 25 words;
-- "edges" connect papers where one plausibly influenced another, orders them in time, or shows a
-  theme evolving; keep edges few and defensible; every src/dst must be a citekey above."""
+Rules for "contribution" (<= 20 words each, plain language):
+- State the QUALITATIVE takeaway — the claim the paper established, in words. What do we now know?
+- NO statistics: no numbers, percentages, coefficients, p-values, effect sizes, or sample sizes.
+  Say "far more than", not "b=0.74"; say "rarely", not "in 3 of 11 cases".
+- NEVER a methods description ("Examines / Analyzes / Explores / Investigates / Studies / Reviews /
+  Quantifies / Models how ..."). That is what a paper DID, not what we learned from it.
+- Ground ONLY in that paper's own evidence; if the evidence is a framework/theory, state the claim
+  it makes about the world, not that it "proposes a framework".
+
+Examples (evidence -> contribution):
+- evidence: "Bringing bins closer cut miss-sorted packaging by 28 percent, lowering the miss-sorted
+  ratio from 55 to 39 percent over two years."
+  BAD (methods): "Examines how proximity to bins affects household sorting."
+  BAD (stats):   "Cut miss-sorting from 55% to 39% over two years."
+  GOOD:          "Bringing collection closer to homes cuts sorting errors by lowering the effort to sort."
+- evidence: "A review of 38 studies found information alone rarely reduced energy use, while direct
+  feedback outperformed indirect feedback."
+  GOOD: "Information alone rarely changes behavior; direct feedback does more than indirect."
+"""
 
 _REPAIR = ("That was not one valid JSON object of the required shape. Return ONLY the JSON object "
-           "({{\"papers\": [...], \"edges\": [...]}}), nothing else.")
+           "({{\"papers\": [{{\"key\":..., \"theme\":..., \"contribution\":...}}]}}), nothing else.")
 
 
-def _threads_block(threads: list[Thread]) -> str:
-    return "\n".join(f"## {t.theme}\n  cites: {', '.join(t.citekeys)}" for t in threads)
+def _papers_block(cited: list[str], valid_keys: dict[str, str],
+                  evidence: dict[str, list[str]]) -> str:
+    """One block per paper: citekey, label, and its review evidence sentence(s) — the grounding the
+    model distils a finding from (it otherwise sees only the citekey and can only guess a topic)."""
+    out = []
+    for k in cited:
+        ev = " ".join(evidence.get(k, [])) or "(no citing sentence found in the review)"
+        out.append(f"- {k}  ({valid_keys[k]})\n    evidence: {ev}")
+    return "\n".join(out)
 
 
 def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
-            repair: bool = True) -> Mindmap:
-    """Brain builds the spec; parsed, grounded, validated. One repair pass; a labelled-stub Mindmap
-    on total failure (an empty map with one note), never an exception."""
+            evidence: dict[str, list[str]] | None = None, repair: bool = True) -> Mindmap:
+    """Brain distils a findings phrase per paper; parsed, grounded, validated. One repair pass; a
+    labelled-stub Mindmap on total failure, never an exception. Edges are NOT the model's job — the
+    caller overlays the real OpenAlex citation graph (see :func:`citation_edges`)."""
     themes = [t.theme for t in threads]
-    cited = {k for t in threads for k in t.citekeys if k in valid_keys}
-    papers_lines = "\n".join(f"- {k}  ({valid_keys[k]})" for k in sorted(cited))
+    cited = sorted({k for t in threads for k in t.citekeys if k in valid_keys})
     prompt = _PROMPT.format(themes="\n".join(f"- {t}" for t in themes),
-                            papers=papers_lines, threads=_threads_block(threads))
+                            papers=_papers_block(cited, valid_keys, evidence or {}))
     raw = parse_spec(brain.coordinator(prompt, _SYS))
     m = validate(raw, {k: valid_keys[k] for k in cited}, themes)
     if not m.papers and repair:
@@ -257,17 +639,30 @@ def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
 
 # ── orchestration ──────────────────────────────────────────────────────────────
 
-def build_spec(review_md: str, refs_bib: str, brain, *, fig_id: str = "litmap",
-               title: str = "") -> figure.FigureSpec:
-    """Core, testable with a fake brain: review + refs.bib -> composed, grounded FigureSpec."""
-    threads = parse_threads(review_md)
-    keys = bib_keys(refs_bib)
-    m = compose(brain, threads, keys)
-    dot = to_dot(m, fig_id=fig_id, title=title)
+def spec_from_map(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
+                  target_min: int = 20, target_max: int = 50) -> figure.FigureSpec:
+    """Render an already-composed Mindmap (all papers) to a FigureSpec, with the target rings drawn
+    at the project's reference budget ``target_min``/``target_max``."""
+    dot = to_dot(m, fig_id=fig_id, title=title, target_min=target_min, target_max=target_max)
     prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview",
-            "papers": len(m.papers), "edges": len(m.edges)}
+            "themes": len(m.themes), "papers": len(m.papers), "edges": len(m.edges),
+            "target_min": target_min, "target_max": target_max}
     return figure.FigureSpec(id=fig_id, kind="mindmap", format="dot", source=dot,
                              caption=title or "Contribution map.", provenance=prov)
+
+
+def build_spec(review_md: str, refs_bib: str, brain, *, fig_id: str = "litmap", title: str = "",
+               target_min: int = 20, target_max: int = 50) -> figure.FigureSpec:
+    """Core, testable with a fake brain: review + refs.bib -> composed, grounded FigureSpec. The
+    contribution phrases come from the brain (grounded in the review's citing sentences) and node
+    centrality from the review's own prose weight; the citation arrows + sizes are overlaid in
+    :func:`run` (they need the network), so this seam stays offline."""
+    m = compose(brain, parse_threads(review_md), bib_keys(refs_bib),
+                evidence=citation_evidence(review_md))
+    weight = evidence_weight(review_md)
+    for p in m.papers:
+        p.importance = weight.get(p.key, 0)
+    return spec_from_map(m, fig_id=fig_id, title=title, target_min=target_min, target_max=target_max)
 
 
 def _renders(dot: str) -> bool:
@@ -289,7 +684,7 @@ def emit(outdir: Path, short: str, spec: figure.FigureSpec) -> dict:
     src = outdir / naming.minor_name(short, [spec.id], ext, datestamp=ds)
     svg = outdir / naming.minor_name(short, [spec.id], "svg", datestamp=ds)
     src.write_text(spec.source)
-    rendered = figure.render(spec, svg)
+    rendered = _render_pinned(spec.source, svg)          # pinned coords -> dot -Kneato -n2
     if rendered:
         figure.export_png(rendered, rendered.with_suffix(".png"))
     if figure._has_finished_version(outdir, short, spec.id):
@@ -298,41 +693,66 @@ def emit(outdir: Path, short: str, spec: figure.FigureSpec) -> dict:
     return {"id": spec.id, "datestamp": ds, "source": src, "svg": rendered}
 
 
-def _find_minted_review(out: Path) -> Path | None:
-    """The newest MINTED review in litReview/output — a token-free ``*_litreview.md`` (a draft
-    ends in ``_ra``/``_ra_DCR``, so its stem does not end in 'litreview')."""
-    rel = [p for p in out.glob("*.md") if p.stem.endswith("litreview")]
+def _find_review_md(out: Path) -> Path | None:
+    """The newest litreview markdown in litReview/output — DRAFT (``*_litreview_ra.md``, written by
+    render every cycle) or minted (``*_litreview.md``). The map is a per-DRAFT diagnostic: it steers
+    while the review is still being written, so it consumes whatever the current draft is, not only a
+    release. The last draft's map is also the minted map, so nothing is lost at mint."""
+    rel = [p for p in out.glob("*.md") if "litreview" in p.stem]
     return max(rel, key=lambda p: p.stat().st_mtime) if rel else None
 
 
+def _project_short(stem: str) -> str:
+    """The project short name from a litreview stem ``{date}_{project}_litreview[_ra[_DCR]]``."""
+    parts = stem.split("_")
+    li = parts.index("litreview") if "litreview" in parts else len(parts)
+    return "_".join(parts[1:li]) or stem
+
+
 def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str = "litmap") -> int:
-    """CLI entry: read the MINTED litreview + refs.bib, build the contribution map, write it onto
-    the project's figure pool. Requires a minted review (per the design — not a draft)."""
+    """CLI entry: read the current litreview DRAFT (or minted release) + refs.bib and write the
+    contribution map beside it. A per-draft diagnostic — regenerated each revise cycle so the author
+    can see the reference budget and which themes are peripheral while there is still time to act."""
     from . import config as _config
     from .brain import Brain
     cfg = _config.load_project(directory)
     gc = _config.load_global()
     paths = _config.project_paths(directory)
-    review = _find_minted_review(paths.output)
+    review = _find_review_md(paths.output)
     if review is None:
-        print(f"[mindmap] no MINTED litreview (a token-free *_litreview.md) in {paths.output} — "
-              "mint a review first (this verb consumes the release, not a draft).", file=sys.stderr)
+        print(f"[mindmap] no litreview markdown (*_litreview*.md) in {paths.output} — render a draft "
+              "first.", file=sys.stderr)
         return 1
     refs = paths.output / "refs.bib"
     if not refs.is_file():
         print(f"[mindmap] no refs.bib in {paths.output} — cannot ground the map.", file=sys.stderr)
         return 1
-    parts = review.stem.split("_")
-    short = "_".join(parts[1:-1]) if len(parts) >= 3 else review.stem
-    title = f"Contribution map — {short}"
+    short = _project_short(review.stem)
     print(f"[mindmap] reading {review.name}  (coordinator={cfg.brain.coordinator_model})",
           file=sys.stderr)
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
-    spec = build_spec(review.read_text(), refs.read_text(), brain, fig_id=fig_id, title=title)
-    if not spec.provenance.get("papers"):
+    review_md, refs_bib = review.read_text(), refs.read_text()
+    # Compose the findings phrases (grounded in the review's citing sentences).
+    m = compose(brain, parse_threads(review_md), bib_keys(refs_bib),
+                evidence=citation_evidence(review_md))
+    if not m.papers:
         print("[mindmap] the brain returned no grounded papers — wrote a stub; re-run or check "
               "the review.", file=sys.stderr)
+    # Node channels: importance-to-this-review (prose weight) pulls a paper toward the centre;
+    # OpenAlex citation counts size each blob; the real citation graph draws the faded arrows.
+    weight = evidence_weight(review_md)
+    edges, world = citation_graph(m.papers, bib_dois(refs_bib), gc.contact_email)
+    for p in m.papers:
+        p.cited_by = world.get(p.key, 0)
+        p.importance = weight.get(p.key, 0)
+    m.edges = edges
+    print(f"[mindmap] citation graph: {len(edges)} real edges, {len(world)} papers sized by "
+          f"OpenAlex citations (email={gc.contact_email or 'unset'})", file=sys.stderr)
+    # ONE big map: importance bands (core / budget / overflow) as theme pie-slices, with the red
+    # target rings drawn at the project's reference budget; size = total citations, ring = in-corpus.
+    spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
+                         target_min=cfg.target_min, target_max=cfg.target_max)
     res = emit(paths.output, short, spec)          # into litReview/output, NOT the figures pool
-    print(f"[mindmap] {spec.provenance['papers']} papers, {spec.provenance['edges']} edges  ->  "
-          f"{res.get('svg') or res.get('source')}")
+    print(f"[mindmap] {spec.provenance['papers']} papers, {spec.provenance['edges']} citation "
+          f"edges  ->  {res.get('svg') or res.get('source')}")
     return 0
