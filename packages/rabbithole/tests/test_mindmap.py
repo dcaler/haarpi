@@ -301,3 +301,26 @@ def test_compose_survives_a_garbage_reply():
     m = mindmap.compose(fb, threads, keys)
     assert m.papers == [] and m.edges == []           # graceful empty, never an exception
     assert fb.calls == 2                              # tried once, then the repair pass
+
+
+def test_parse_spec_accepts_a_bare_top_level_array():
+    # a reasoning model routinely drops the {"papers":...} wrapper and returns just the list; the old
+    # object-only regex spanned first-{ to last-} across two objects → invalid JSON → silent stub.
+    reply = ('[{"key": "rousta2015", "theme": "T", "contribution": "distance cuts missorting"},\n'
+             ' {"key": "best2011", "theme": "T", "contribution": "curbside helps"}]')
+    out = mindmap.parse_spec(reply)
+    assert [p["key"] for p in out["papers"]] == ["rousta2015", "best2011"]
+
+
+def test_parse_spec_accepts_a_fenced_array():
+    reply = '```json\n[{"key": "rousta2015", "theme": "T", "contribution": "x"}]\n```'
+    assert mindmap.parse_spec(reply)["papers"][0]["key"] == "rousta2015"
+
+
+def test_compose_grounds_papers_from_an_array_reply():
+    # the end-to-end regression: an array reply must yield a grounded map, not a stub.
+    threads = mindmap.parse_threads(MD)
+    keys = mindmap.bib_keys(BIB)
+    reply = '[{"key": "rousta2015", "theme": "Structural convenience drives compliance", "contribution": "distance cuts missorting"}]'
+    m = mindmap.compose(FakeBrain(reply), threads, keys)
+    assert [p.key for p in m.papers] == ["rousta2015"]

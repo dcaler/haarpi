@@ -240,23 +240,36 @@ class Mindmap:
 
 KINDS = ("influence", "temporal", "evolution")
 
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
-_JSON_BARE = re.compile(r"(\{.*\})", re.S)
+_JSON_FENCE = re.compile(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", re.S)   # object OR array in a fence
+_JSON_OBJ = re.compile(r"(\{.*\})", re.S)                                 # widest bare object
+_JSON_ARR = re.compile(r"(\[.*\])", re.S)                                 # widest bare array
 
 
 def parse_spec(reply: str) -> dict:
-    """Pull the JSON object out of a brain reply (fenced first, else the widest bare braces)."""
+    """Pull the paper spec out of a brain reply, tolerant of the two shapes a model actually returns:
+    the requested ``{"papers": [...]}`` object AND a bare (or fenced) top-level ARRAY ``[{...}, ...]``
+    — a reasoning model very often drops the wrapper and returns just the list. A list is wrapped as
+    ``{"papers": [...]}`` so the caller always sees one contract. Tries the fenced block first, then
+    the whole reply, then the widest bare object / array; the old regex matched only ``{..}`` and so
+    turned every array reply into a stub (first ``{`` to last ``}`` spans two objects → invalid JSON)."""
     if not reply:
         return {}
-    for pat in (_JSON_FENCE, _JSON_BARE):
-        m = pat.search(reply)
-        if m:
-            try:
-                obj = json.loads(m.group(1))
-                if isinstance(obj, dict):
-                    return obj
-            except json.JSONDecodeError:
-                continue
+    candidates: list[str] = []
+    if m := _JSON_FENCE.search(reply):
+        candidates.append(m.group(1))
+    candidates.append(reply)                                   # a clean reply is itself the JSON
+    for pat in (_JSON_OBJ, _JSON_ARR):                         # else the widest object / array in prose
+        if mm := pat.search(reply):
+            candidates.append(mm.group(1))
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, list):
+            return {"papers": obj}
     return {}
 
 
@@ -629,11 +642,25 @@ def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
     cited = sorted({k for t in threads for k in t.citekeys if k in valid_keys})
     prompt = _PROMPT.format(themes="\n".join(f"- {t}" for t in themes),
                             papers=_papers_block(cited, valid_keys, evidence or {}))
-    raw = parse_spec(brain.coordinator(prompt, _SYS))
+    # think=False: a contribution phrase is a grounded rewrite of the paper's evidence sentence,
+    # governed by the prompt's few-shot rules — not judgement work. Leaving the coordinator's default
+    # chain-of-thought on made it reason across every paper at once (a 69-paper review ran past a
+    # 500s wall before emitting any JSON); without it the model streams the spec directly.
+    reply = brain.coordinator(prompt, _SYS, think=False)
+    raw = parse_spec(reply)
     m = validate(raw, {k: valid_keys[k] for k in cited}, themes)
     if not m.papers and repair:
-        raw = parse_spec(brain.coordinator(_REPAIR, _SYS))
+        # The repair must CARRY the papers: the coordinator is stateless, so a bare "return JSON"
+        # follow-up asks the model to re-emit a spec it can no longer see. Re-send the full prompt.
+        reply = brain.coordinator(prompt + "\n\n" + _REPAIR, _SYS, think=False)
+        raw = parse_spec(reply)
         m = validate(raw, {k: valid_keys[k] for k in cited}, themes)
+    if not m.papers and cited:
+        # A per-draft diagnostic that never runs a model is worthless; surface WHY it grounded
+        # nothing (into the task log_tail) so the next failure is diagnosable without a live re-run.
+        print(f"[mindmap] compose grounded 0 of {len(cited)} cited papers "
+              f"(reply parsed {len(raw.get('papers') or [])} entries). raw reply head: "
+              f"{(reply or '')[:400]!r}", file=sys.stderr)
     return m
 
 
