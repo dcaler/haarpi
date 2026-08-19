@@ -284,6 +284,29 @@ def test_redline_parser_preserves_tiers():
     assert subs == ["Cited in the review", "Additional curated sources"]
 
 
+def test_replace_bibliography_survives_control_chars_from_pdf_text():
+    """A located quote pulled from PDF fulltext can carry a NULL / form-feed; lxml rejects the whole
+    write ("All strings must be XML compatible") and the stale bibliography is kept. The write must
+    strip the illegal chars, not fail — one glyph lost, never the section."""
+    import tempfile
+    from pathlib import Path
+
+    doc = Document()
+    doc.add_paragraph("Body sentence with a citation [@zhang2011].")
+    doc.add_paragraph("Annotated Bibliography").style = doc.styles["Heading 1"]
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "doc.docx"
+        doc.save(str(p))
+        biblio = ("## Annotated Bibliography\n\n### Cited in the review\n\n"
+                  "**Zhang, J. (2011).**\n"
+                  "- Tipping\x00 cascades\x0c begin\x0b abruptly (p.7): \"seg\x07regation\"\n")
+        res = redline.replace_bibliography(p, biblio)          # must not raise
+        assert res["bib_entries"] == 1
+        text = "\n".join(par.text for par in Document(str(p)).paragraphs)
+        assert "Tipping cascades begin abruptly" in text        # control chars gone, words intact
+        assert "\x00" not in text and "\x0c" not in text and "\x07" not in text
+
+
 # ── plain-python runner ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":

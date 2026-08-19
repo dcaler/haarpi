@@ -191,9 +191,22 @@ def _parse_bibliography_md(md: str) -> tuple[str, list[tuple[str, object]]]:
     return heading, items
 
 
+# XML 1.0 forbids most C0 control characters in element text (only \t \n \r and the printable
+# ranges are legal). PDF-extracted fulltext — the source of the bibliography's located quotes —
+# routinely carries NULLs, form-feeds, and other control bytes; python-docx (lxml) then raises
+# "All strings must be XML compatible" and the WHOLE bibliography write fails, so the stale one is
+# kept. Strip the illegal chars at the write chokepoint: one bad glyph is dropped, never the section.
+_XML_ILLEGAL = re.compile(r"[^\x09\x0A\x0D\x20-퟿-�\U00010000-\U0010FFFF]")
+
+
+def _xml_safe(text: str) -> str:
+    return _XML_ILLEGAL.sub("", text)
+
+
 def _strip_md(text: str) -> str:
-    """Drop the light markdown emphasis the bibliography lines carry (*…*)."""
-    return text.replace("*", "")
+    """Drop the light markdown emphasis the bibliography lines carry (*…*) and remove any
+    XML-illegal control characters so the run is always writable (see :data:`_XML_ILLEGAL`)."""
+    return _xml_safe(text.replace("*", ""))
 
 
 def replace_bibliography(path: Path, biblio_md: str) -> dict:
@@ -203,6 +216,10 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
     ``biblio_md``, reusing the heading's own style so it matches the document. The body
     (and its tracked changes + comments) above the heading is untouched. Returns a summary.
     """
+    # Sanitize the whole markdown up front: PDF fulltext (the quotes' source) carries NULLs and
+    # form-feeds, and a form-feed is a page break — str.splitlines() would split a claim mid-line
+    # (silently truncating it) before the illegal char ever reached the docx write. Strip both here.
+    biblio_md = _xml_safe(biblio_md)
     doc = Document(str(path))
     bib_idx = None
     for i, p in enumerate(doc.paragraphs):
@@ -218,7 +235,7 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
     h = doc.add_paragraph()
     if heading_style is not None:
         h.style = heading_style
-    h.add_run(heading)
+    h.add_run(_xml_safe(heading))
     n_entries = 0
     for kind, payload in items:
         if kind == "sub":
