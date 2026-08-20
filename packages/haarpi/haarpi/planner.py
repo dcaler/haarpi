@@ -1450,31 +1450,25 @@ _OPENING: dict[str, tuple[str, str, str]] = {
     "experiments": ("plan", "experiment design session",
                     "Design the executable experiments that use the built tooling to fulfil the "
                     "framework, then hand off to conduct"),
-    # (deck opens via `_open_deck` — it forks per presentation format, so it is not a single
-    # opening move keyed here.)
+    # (deck opens via `_open_deck` — its opening move is the `razzle interview` configure task, and
+    # the per-format authoring is run by hand from the commands the interview prints, so it is not a
+    # simple `haarpi <tool> <verb>` keyed here.)
 }
 
 
 def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
-    """Open the deck stage: a `razzle deck --format <fmt>` authoring session per chosen format, or —
-    if none is chosen — one prompt to pick them. razzle owns the format vocabulary, so haarpi passes
-    the names through verbatim (razzle validates on run) rather than importing them."""
-    fmts = [str(f).strip() for f in (m.deck_formats or []) if str(f).strip()]
-    if not fmts:
-        client.create_task(
-            "razzle deck: pick format(s)", m.trundlr_project_id,
-            description="Configure this project's deck(s): run `haarpi razzle interview` — a pure-"
-                        "python (no-LLM) session that picks the presentation format(s) and, per "
-                        "format, the venue, date, presenting authors, affiliation logos, and "
-                        "funders. It writes the config and queues one authoring session per format.",
-            resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
-        return
-    for fmt in fmts:
-        client.create_task(
-            f"razzle deck {fmt}", m.trundlr_project_id,
-            description=f"Author the {fmt} deck from the paper's one-pager + the figures/claims, "
-                        f"then render — run: haarpi razzle deck --format {fmt}",
-            resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
+    """Open the deck stage with ONE human task, exactly like `rayleigh design session`: run
+    `haarpi razzle interview`. The interview (pure-python, no LLM) captures the deck facts and then
+    prints the per-format authoring commands to run — haarpi does not create a task per format. The
+    deck stage is tracked by its DELIVERABLE (the `_ra.pptx` that enters the gate), not by bookkeeping
+    tasks for a fork haarpi cannot see, so the board stays the same shape as every other stage."""
+    client.create_task(
+        "razzle deck: configure", m.trundlr_project_id,
+        description="Configure this project's deck(s): run `haarpi razzle interview` — a pure-python "
+                    "(no-LLM) session that captures the presentation format(s) and, per format, the "
+                    "venue, date, presenting authors, affiliation logos, and funders. It writes the "
+                    "config and prints the `haarpi razzle deck --format <fmt>` command to author each.",
+        resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
 
 
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
@@ -1488,11 +1482,14 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue
         if not project.unlocked(root, m, stage):
             continue
+        if stage == "deck" and not _has_assembled_submission(root, m):
+            continue        # the deck opens on submission-assembled, not a bare manuscript release
         tool = spec["tool"]
         if stage == "deck":
-            # The deck stage FORKS per presentation format (razzle's venue-analogue): one authoring
-            # session per format the author chose. deck_formats verbatim — haarpi does not own the
-            # format vocabulary (razzle validates on run), keeping the dependency one-directional.
+            # The deck stage opens with a single `razzle interview` configure task (like every other
+            # stage's one opening move). The interview captures the formats + facts and prints the
+            # per-format `razzle deck --format <fmt>` commands; haarpi does not own the format
+            # vocabulary and does not queue a task per format — the deck is tracked by its deliverable.
             _open_deck(client, m, tr_cfg)
         elif spec.get("attended"):
             verb, label, blurb = _OPENING.get(stage, ("init", "design session",
@@ -1958,6 +1955,20 @@ def _paper_pick(root: Path, m: project.Manifest, includes: list[str],
             if best is None or p.stat().st_mtime > best.stat().st_mtime:
                 best = p
     return best
+
+
+def _submission_assembled(state: str) -> bool:
+    """A submission-state string (:func:`_submission_state`) that means the submission is at least
+    assembled — 'assembled …' (built, maybe uncompiled) or 'packaged …' (compiled PDF/docx)."""
+    return state.startswith(("assembled", "packaged"))
+
+
+def _has_assembled_submission(root: Path, m: project.Manifest) -> bool:
+    """True once at least one selected venue's submission is assembled — the 'paper is finished and
+    going out' milestone that opens the deck stage. A deck is built from the one-pager + manuscript +
+    figures, but it should not open the moment a manuscript mints: it opens when the paper is actually
+    done and committed to a venue, so the deck's venue is known and its narrative/results are final."""
+    return any(_submission_assembled(_submission_state(root, m, v)) for v in _selected_venues(root))
 
 
 def _paper_rung_state(root: Path, m: project.Manifest, includes: list[str]) -> str:

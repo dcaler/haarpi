@@ -6,23 +6,21 @@ their affiliation logos, and the funders to acknowledge — while the AUTHORING 
 from the one-pager + figures) stays the LLM session `razzle deck`. Facts a tool must never invent
 belong to the human, so they are collected by asking, not by a model.
 
-It writes `deck_formats` + `decks` to the manifest and auto-queues one `razzle deck` authoring
-session per format (removing the deck-open "pick format(s)" prompt it fulfils). Input is plain
-`input()`, so it is scriptable in tests by patching builtins.input.
+It writes `deck_formats` + `decks` to the manifest — and nothing else. It does NOT touch trundlr:
+task creation and closing belong to haarpi (the board's owner), exactly as `rayleigh init` writes a
+preregistration and never queues its own downstream. `haarpi next` reads the config this writes and
+queues one `razzle deck --format <fmt>` authoring session per format. Input is plain `input()`, so it
+is scriptable in tests by patching builtins.input.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from haarpi import config as _hconfig
 from haarpi import project as _hproject
-from haarpi import trundlr as _trundlr
 
 from razzle import assets
 from razzle import formats as _formats
-
-_PROMPT_TITLE = "razzle deck: pick format(s)"      # the deck-open task this interview fulfils
 
 
 def _ask(label: str, default: str = "") -> str:
@@ -58,11 +56,13 @@ def _funder_names(m) -> list[str]:
     return [f.get("name") for f in (m.funders or []) if isinstance(f, dict) and f.get("name")]
 
 
-def _affiliations_of(m, author_names: list[str]) -> list[str]:
-    """The affiliations of the presenting authors, de-duplicated in first-seen order."""
+def _all_affiliations(m) -> list[str]:
+    """Every author's affiliations, de-duplicated in first-seen order. The title slide shows all
+    co-authors' affiliations regardless of who is at the podium, so the logo question must offer
+    them all — a co-author's affiliation is not skipped just because they are not presenting."""
     seen: dict[str, None] = {}
     for a in (m.authors or []):
-        if isinstance(a, dict) and a.get("name") in author_names:
+        if isinstance(a, dict):
             for aff in a.get("affiliations", []) or []:
                 seen.setdefault(aff, None)
     return list(seen)
@@ -83,7 +83,7 @@ def _configure_format(m, fmt: str) -> dict:
     date = _ask("  Date")
     authors = _pick_many("  Presenting authors", _author_names(m))
     affs = []
-    for aff in _affiliations_of(m, authors):
+    for aff in _all_affiliations(m):        # every author's affiliations, not just the presenter's
         if _ask_yn(f"  Include affiliation logo '{aff}' ({_logo_status(aff)})", default=True):
             affs.append(aff)
     funders = _pick_many("  Funders to acknowledge", _funder_names(m))
@@ -91,38 +91,16 @@ def _configure_format(m, fmt: str) -> dict:
             "affiliations": affs, "funders": funders}
 
 
-def _queue_sessions(m, formats_chosen: list[str]) -> list[str]:
-    """One `razzle deck --format <fmt>` authoring session per format; delete the pick-format prompt
-    it fulfils. Best-effort — no trundlr configured means the interview still wrote the config."""
-    tr = _hconfig.merged_config("haarpi", {}).get("trundlr", {})
-    if not (tr.get("url") and m.trundlr_project_id):
-        return []
-    try:
-        client = _trundlr.TrundlrClient(tr["url"])
-        human = tr.get("human_resource") or None
-        for fmt in formats_chosen:
-            client.create_task(
-                f"razzle deck {fmt}", m.trundlr_project_id,
-                description=f"Author the {fmt} deck from the paper's one-pager + the figures/claims, "
-                            f"then render — run: haarpi razzle deck --format {fmt}",
-                resource_id=human, duration=2.0)
-        for t in client.list_tasks(m.trundlr_project_id):
-            if (t.get("title") or "").strip() == _PROMPT_TITLE and t.get("status") != "done":
-                client.delete_task(t["id"])
-    except _trundlr.TrundlrError:
-        return []
-    return formats_chosen
-
-
-def run(root: Path, *, queue: bool = True) -> dict:
-    """The interview: configure the project's decks and (optionally) queue the authoring sessions.
-    Returns {"formats": [...], "decks": {...}, "queued": [...]}."""
+def run(root: Path) -> dict:
+    """The interview: configure the project's decks. Writes `deck_formats` + `decks` to the manifest
+    and stops there — haarpi (`haarpi next`) reads that config and queues the authoring sessions, so
+    the tool never touches the board. Returns {"formats": [...], "decks": {...}}."""
     m = _hproject.load_manifest(root)
     print(f"razzle interview — configuring decks for {m.name or root.name}\n")
     chosen = _pick_many("Presentation formats to build", list(_formats.FORMATS))
     if not chosen:
         print("No formats chosen — nothing to configure.")
-        return {"formats": [], "decks": dict(m.decks or {}), "queued": []}
+        return {"formats": [], "decks": dict(m.decks or {})}
 
     decks = dict(m.decks or {})
     for fmt in chosen:
@@ -131,10 +109,8 @@ def run(root: Path, *, queue: bool = True) -> dict:
     m.decks = decks
     _hproject.save_manifest(m, root)
 
-    queued = _queue_sessions(m, chosen) if queue else []
     print(f"\nWrote deck config for: {', '.join(chosen)}")
-    if queued:
-        print(f"Queued authoring session(s): {', '.join('razzle deck ' + f for f in queued)}")
-    elif queue:
-        print("(no trundlr configured — run `haarpi razzle deck --format <fmt>` yourself)")
-    return {"formats": chosen, "decks": decks, "queued": queued}
+    print("Author each deck now:")
+    for fmt in chosen:
+        print(f"  haarpi razzle deck --format {fmt}")
+    return {"formats": chosen, "decks": decks}

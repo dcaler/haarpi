@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from raconteur.context import (
-    find_methods_file, find_results_file, load_methods, load_results,
+    find_methods_file, find_results_file, load_methods, load_manuscript, load_results,
 )
 
 
@@ -11,6 +11,22 @@ def _mk(p: Path, text: str = "x") -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
     return p
+
+
+# ── manuscript (the deck's substance) ─────────────────────────────────────────
+
+def test_manuscript_prefers_the_minted_release_over_a_draft(tmp_path):
+    ms = tmp_path / "paper" / "css2026" / "manuscript"
+    _mk(ms / "260721_demo_css2026_ra.md", "draft body")                 # working chain
+    _mk(ms / "output" / "260722_demo_css2026.md", "released body")      # gate-minted release
+    assert load_manuscript(tmp_path, "demo", "css2026") == "released body"   # release outranks draft
+
+
+def test_manuscript_falls_back_to_the_newest_draft_and_is_venue_scoped(tmp_path):
+    _mk(tmp_path / "paper" / "css2026" / "manuscript" / "260721_demo_css2026_ra.md", "the css draft")
+    _mk(tmp_path / "paper" / "jasss" / "manuscript" / "260721_demo_jasss_ra.md", "the jasss draft")
+    assert load_manuscript(tmp_path, "demo", "css2026") == "the css draft"   # scoped to the venue
+    assert load_manuscript(tmp_path, "demo", "nope") == ""                   # absent venue → ""
 
 
 # ── methods writeup ───────────────────────────────────────────────────────────

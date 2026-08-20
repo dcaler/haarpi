@@ -19,10 +19,15 @@ _HAS_MASTER = assets.master_pptx("default") is not None
 
 def _fixture_project(root):
     project.save_manifest(project.Manifest(name="demo", short_title="demo", brief="x"), root)
-    # a one-pager on the naming chain (a tool draft)
-    pout = root / "paper" / "output"
+    # a one-pager on the naming chain (a tool draft), in its canonical deliverable folder
+    pout = root / "paper" / "onepager"
     pout.mkdir(parents=True)
     (pout / "260809_demo_onepager_ra.md").write_text("# The through-line\n\nFrictions and prices differ.")
+    # the full manuscript (the SUBSTANCE) — venue-scoped, a tool draft on the chain
+    mout = root / "paper" / "acorn2026" / "manuscript"
+    mout.mkdir(parents=True)
+    (mout / "260809_demo_acorn2026_ra.md").write_text(
+        "# Full paper\n\nThe elasticity of matching is what the deck must present.")
     # rayleigh findings.json
     (root / "results").mkdir()
     (root / "results" / "findings.json").write_text(json.dumps({"experiments": [
@@ -35,7 +40,8 @@ def test_gather_pulls_the_real_inputs(tmp_path):
     _fixture_project(tmp_path)
     b = gather.bundle(tmp_path)
     assert b["short_title"] == "demo"
-    assert "Frictions and prices differ" in b["narrative"]        # the one-pager
+    assert "Frictions and prices differ" in b["narrative"]        # the one-pager (spine)
+    assert "elasticity of matching" in b["manuscript"]             # the full paper (substance)
     assert any(f["id"] == "stageLadder" for f in b["figures"])     # the pool
     assert "0.42 (95% CI 0.31–0.53)" in b["claims"]                # the real finding, verbatim
     assert isinstance(b["logos"], list)                            # no funders/affiliations → []

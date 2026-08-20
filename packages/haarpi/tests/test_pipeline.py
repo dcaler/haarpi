@@ -439,28 +439,39 @@ def _human_client(tr):
     return trundlr.TrundlrClient(f"http://127.0.0.1:{tr.server_address[1]}")
 
 
-def test_deck_opens_one_session_per_chosen_format(proj, servers):
-    """The deck stage FORKS per presentation format — one authoring session each."""
+def test_deck_opens_one_configure_task_pointing_at_the_interview(proj, servers):
+    """The deck stage opens with ONE human task (like `rayleigh design session`): run the interview.
+    haarpi never creates a task per format — the deck is tracked by its deliverable, not bookkeeping
+    tasks for a fork it cannot see. Holds whether or not formats are already chosen."""
     tr, _ = servers
+    for fmts in ([], ["shorttalk", "longtalk"]):
+        m = project.load_manifest(proj)
+        m.deck_formats = fmts
+        before = len(tr.tasks)
+        planner._open_deck(_human_client(tr), m, {"human_resource": 1})
+        new = tr.tasks[before:]
+        assert len(new) == 1                                    # exactly one, regardless of formats
+        assert "configure" in new[0]["title"]
+        assert "razzle interview" in new[0]["description"]      # points at the pure-python interview
+        assert "command" not in new[0]                          # attended (human), not a runner task
+
+
+def test_submission_assembled_recognises_built_submissions():
+    assert planner._submission_assembled("assembled  (no PDF; template ready)")
+    assert planner._submission_assembled("packaged   260901_x_submission.docx")
+    assert not planner._submission_assembled("pending    (no template)")
+
+
+def test_deck_trigger_waits_for_an_assembled_submission(proj, monkeypatch):
+    """The deck opens on submission-assembled (paper finished + venue committed), not a bare
+    manuscript release — a built submission for a selected venue is what flips the gate."""
     m = project.load_manifest(proj)
-    m.deck_formats = ["shorttalk", "longtalk"]
-    before = len(tr.tasks)
-    planner._open_deck(_human_client(tr), m, {"human_resource": 1})
-    new = tr.tasks[before:]
-    assert [t["title"] for t in new] == ["razzle deck shorttalk", "razzle deck longtalk"]
-    assert all("razzle deck --format" in t["description"] for t in new)
-    assert all("command" not in t for t in new)                 # attended sessions, yours
-
-
-def test_deck_opening_prompts_when_no_format_chosen(proj, servers):
-    """No format chosen → one prompt to pick them (razzle owns the vocabulary)."""
-    tr, _ = servers
-    m = project.load_manifest(proj)                             # deck_formats empty by default
-    before = len(tr.tasks)
-    planner._open_deck(_human_client(tr), m, {"human_resource": 1})
-    new = tr.tasks[before:]
-    assert len(new) == 1 and "pick format" in new[0]["title"]
-    assert "razzle interview" in new[0]["description"]     # the prompt points at the pure-python interview
+    monkeypatch.setattr(planner, "_selected_venues", lambda root: ["css2026"])
+    assert not planner._has_assembled_submission(proj, m)          # nothing built yet
+    sub = m.stage_dir(proj, "paper") / "submission" / "css2026"
+    sub.mkdir(parents=True)
+    (sub / "draft.tex").write_text("x")                            # assembled (uncompiled)
+    assert planner._has_assembled_submission(proj, m)
 
 
 def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):

@@ -22,8 +22,13 @@ _SYS = ("You turn a finished paper into a conference slide deck. You output JSON
 
 _PROMPT = """Turn this paper into a slide deck: a {fmt}{mins}, at most {max_slides} slides.
 
-NARRATIVE (the spine — the one-pager):
+NARRATIVE (the SPINE — the one-pager): use this for the deck's arc and slide order — motivation →
+question → approach → results → takeaway. It decides WHICH slides and in what sequence.
 {narrative}
+
+FULL PAPER (the SUBSTANCE): draw the actual claims, framing, key citations and secondary results
+from here to fill the slides the spine calls for. Re-present it; do not re-argue or add beyond it.
+{manuscript}
 
 AVAILABLE FIGURES (a figure slide shows exactly ONE, referenced by id):
 {figures}
@@ -77,16 +82,19 @@ def _normalise(slides, figure_ids: set[str]) -> list[dict]:
 
 
 def compose(brain, narrative: str, figures: list[dict], claims: str = "", *,
-            fmt: str = "longtalk", max_slides: int | None = None) -> list[dict]:
+            manuscript: str = "", fmt: str = "longtalk", max_slides: int | None = None) -> list[dict]:
     """Author the deck spec, sized to the presentation `fmt` (razzle.formats — 1 slide/minute).
-    `figures` is [{id, caption}] of what the pool holds; `claims` are the real numbers verbatim.
-    `max_slides` overrides the format's budget. Returns a normalised list of slides for `render_deck`."""
+    `narrative` (the one-pager) is the spine; `manuscript` (the full paper) is the substance the
+    slides draw their real claims from; `figures` is [{id, caption}] of what the pool holds; `claims`
+    are the real numbers verbatim. `max_slides` overrides the format's budget. Returns a normalised
+    list of slides for `render_deck`."""
     budget = max_slides or _formats.slide_budget(fmt) or 15   # poster/unknown → a sane default
     mins = _formats.minutes(fmt)
     fig_lines = "\n".join(f"- {f['id']}: {f.get('caption', '')}" for f in (figures or [])) or "(none)"
     ids = {f["id"] for f in (figures or [])}
     reply = brain.coordinator(
         _PROMPT.format(fmt=fmt, mins=(f" (~{mins} minutes)" if mins else ""), max_slides=budget,
-                       narrative=(narrative or "")[:8000], figures=fig_lines,
-                       claims=(claims or "(none provided)")[:4000]), _SYS)
+                       narrative=(narrative or "")[:6000],
+                       manuscript=(manuscript or "(not available — compose from the spine)")[:9000],
+                       figures=fig_lines, claims=(claims or "(none provided)")[:4000]), _SYS)
     return _normalise(_parse(reply).get("slides", []), ids)[:budget]

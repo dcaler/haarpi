@@ -96,7 +96,7 @@ def run_deck(args) -> int:
 def run_interview(args) -> int:
     from razzle import interview
     root = Path(args.dir).resolve() if args.dir else Path.cwd()
-    interview.run(root, queue=not getattr(args, "no_queue", False))
+    interview.run(root)
     return 0
 
 
@@ -113,10 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "deck":
             p.add_argument("--no-launch", action="store_true",
                            help="gather + print the manual path instead of launching claude")
-    iv = sub.add_parser("interview", help="pure-python interview: configure the deck(s) + queue sessions")
+    iv = sub.add_parser("interview", help="pure-python interview: configure the deck(s) (writes config only)")
     iv.add_argument("--dir", help="project root (default: cwd)")
-    iv.add_argument("--no-queue", action="store_true",
-                    help="write the config but do not queue authoring sessions")
     return ap
 
 

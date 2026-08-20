@@ -28,21 +28,38 @@ def short_title(root: Path) -> str:
 
 
 def narrative(root: Path, short: str) -> str:
-    """The one-pager — raconteur's loader (release > working chain) if available, else the newest
-    `paper/output/*_onepager*.md` by the naming chain."""
+    """The one-pager — the talk's SPINE. raconteur's loader (release > working chain); it resolves
+    `paper/onepager/` itself, so there is no separate fallback path to keep in sync here."""
     try:
         from raconteur import context as _ctx
-        n = _ctx.load_onepager(root, short)
-        if n:
-            return n
+        return _ctx.load_onepager(root, short) or ""
     except Exception:
-        pass
-    pdir = root / "paper" / "output"
-    if not pdir.is_dir():
         return ""
-    p = (_naming.find_latest_release(pdir, short, "md", chain_includes="onepager")
-         or _naming.find_latest(pdir, short, "md", chain_includes="onepager"))
-    return p.read_text(encoding="utf-8") if p and p.is_file() else ""
+
+
+def _venue_folder(root: Path, cfg: dict) -> str:
+    """The venue whose manuscript backs this deck. The deck config's venue (from the interview /
+    the triggering submission) is authoritative; absent that, auto-detect the sole `paper/<venue>/`
+    that holds a manuscript (deliverable_dir lower-cases, so 'CSS2026' and 'css2026' both resolve)."""
+    if cfg.get("venue"):
+        return str(cfg["venue"])
+    paper = root / "paper"
+    if not paper.is_dir():
+        return ""
+    venues = [d.name for d in paper.iterdir()
+              if d.is_dir() and (d / "manuscript").is_dir()]
+    return venues[0] if len(venues) == 1 else ""
+
+
+def manuscript(root: Path, short: str, venue: str = "") -> str:
+    """The full paper — the deck's SUBSTANCE (the real claims, framing, citations, secondary results
+    the one-pager compresses away). raconteur's `load_manuscript` (minted release > newest draft),
+    scoped to `venue`. Best-effort: absent → "" (the deck still composes from the one-pager)."""
+    try:
+        from raconteur import context as _ctx
+        return _ctx.load_manuscript(root, short, venue) or ""
+    except Exception:
+        return ""
 
 
 def figures(root: Path, short: str) -> list[dict]:
@@ -121,7 +138,9 @@ def bundle(root: Path, fmt: str | None = None) -> dict:
     venue/date to that format's deck config when the interview has set one."""
     short = short_title(root)
     cfg = deck_config(root, fmt)
+    venue = _venue_folder(root, cfg)
     return {"short_title": short, "narrative": narrative(root, short),
+            "manuscript": manuscript(root, short, venue),
             "figures": figures(root, short), "claims": claims(root),
             "logos": logos(root, fmt), "byline": byline(root, fmt),
             "venue": cfg.get("venue", ""), "date": cfg.get("date", "")}

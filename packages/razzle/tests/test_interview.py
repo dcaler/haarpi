@@ -1,5 +1,6 @@
 """razzle.interview — the pure-python (no-LLM) deck configurator: scripted `input()`, config written
-to the manifest, per-format consumption by gather, and best-effort session queueing."""
+to the manifest, per-format consumption by gather. It writes config ONLY — task creation belongs to
+haarpi, so the interview must never touch trundlr."""
 
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ def test_interview_writes_deck_config(tmp_path, monkeypatch):
         "n",              # skip Cambridge logo
         "",               # funders: Enter = all
     ])
-    out = interview.run(root, queue=False)
+    out = interview.run(root)
     assert out["formats"] == ["shorttalk"]
 
     m = project.load_manifest(root)
@@ -44,6 +45,28 @@ def test_interview_writes_deck_config(tmp_path, monkeypatch):
     d = m.decks["shorttalk"]
     assert d == {"venue": "ISMIR 2026", "date": "2026-11-01",
                  "authors": ["Ada", "Bo"], "affiliations": ["UC Berkeley"], "funders": ["Sloan"]}
+
+
+def test_interview_offers_every_authors_affiliation_logo_not_just_the_presenter(tmp_path, monkeypatch):
+    """A co-author's affiliation logo must be offered even when they are not presenting — the title
+    slide shows all co-authors' affiliations. Presenting = Ada alone, but both UC Berkeley (Ada) and
+    Cambridge (Bo) are asked."""
+    monkeypatch.setenv("RAZZLE_HOME", str(tmp_path / "razzle_home"))   # empty registry
+    root = _project(tmp_path)                                          # Ada@UC Berkeley, Bo@Cambridge
+    asked: list[str] = []
+    real_input = _feed  # noqa: F841
+    it = iter(["2", "ISMIR 2026", "2026-11-01", "1",   # formats, venue, date, presenting = Ada only
+               "y", "y", ""])                            # UC Berkeley y, Cambridge y, funders all
+    def _rec(prompt=""):
+        if "affiliation logo" in prompt:
+            asked.append(prompt)
+        return next(it)
+    monkeypatch.setattr("builtins.input", _rec)
+
+    out = interview.run(root)
+    assert out["decks"]["shorttalk"]["authors"] == ["Ada"]            # only Ada presents
+    assert any("UC Berkeley" in q for q in asked) and any("Cambridge" in q for q in asked)
+    assert out["decks"]["shorttalk"]["affiliations"] == ["UC Berkeley", "Cambridge"]   # both offered + taken
 
 
 def test_gather_scopes_byline_and_logos_to_the_deck(tmp_path, monkeypatch):
@@ -77,24 +100,19 @@ def test_apply_byline_stamps_the_title_slide():
     assert "subtitle" not in spec[1]                       # only the title slide is stamped
 
 
-def test_queue_sessions_creates_per_format_and_removes_the_prompt(tmp_path, monkeypatch):
-    """_queue_sessions posts one authoring task per format and deletes the pick-format prompt."""
-    m = project.Manifest(name="demo", short_title="demo", brief="x", trundlr_project_id=7)
+def test_interview_never_touches_trundlr(tmp_path, monkeypatch):
+    """The board belongs to haarpi: the interview writes config and queues/deletes NOTHING. Any
+    import of the trundlr module is a regression (that job moved to `haarpi next`)."""
+    monkeypatch.setenv("RAZZLE_HOME", str(tmp_path / "razzle_home"))
+    root = _project(tmp_path)
 
-    created, deleted = [], []
+    import sys
+    class _Boom:
+        def __getattr__(self, _):  # any use of trundlr through the interview explodes
+            raise AssertionError("razzle.interview must not touch trundlr")
+    monkeypatch.setitem(sys.modules, "haarpi.trundlr", _Boom())
 
-    class FakeClient:
-        def __init__(self, url): pass
-        def create_task(self, title, pid, **kw): created.append((title, pid)); return {"id": 1}
-        def list_tasks(self, pid):
-            return [{"id": 99, "title": "razzle deck: pick format(s)", "status": "todo"}]
-        def delete_task(self, tid): deleted.append(tid)
-
-    monkeypatch.setattr(interview._hconfig, "merged_config",
-                        lambda *a, **k: {"trundlr": {"url": "http://x", "human_resource": 1}})
-    monkeypatch.setattr(interview._trundlr, "TrundlrClient", FakeClient)
-
-    queued = interview._queue_sessions(m, ["shorttalk", "longtalk"])
-    assert queued == ["shorttalk", "longtalk"]
-    assert [t for t, _ in created] == ["razzle deck shorttalk", "razzle deck longtalk"]
-    assert deleted == [99]                                 # the fulfilled prompt is removed
+    _feed(monkeypatch, ["2", "ISMIR 2026", "2026-11-01", "", "y", "n", ""])
+    out = interview.run(root)                              # completes without any trundlr call
+    assert out["formats"] == ["shorttalk"] and "queued" not in out
+    assert project.load_manifest(root).deck_formats == ["shorttalk"]

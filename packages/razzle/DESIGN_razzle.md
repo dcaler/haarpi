@@ -28,9 +28,17 @@ produces a per-venue **deck** off the same narrative.
 ```python
 "deck": {
     "dir": "slides", "tool": "razzle", "inputs": ["paper", "experiments"],
-    "infix": "deck", "attended": False,   # opens per selected venue once its paper deliverable exists
+    "infix": "deck", "attended": True,   # opens when a submission is ASSEMBLED (paper done + venue committed)
 },
 ```
+
+**Trigger (submission-assembled, not a bare manuscript release).** The deck's data dependency is the
+one-pager + manuscript + figures, all available early — but the stage does **not** open the moment a
+manuscript mints. It opens when at least one selected venue's **submission is assembled**
+(`_has_assembled_submission` in the planner), i.e. the paper is finished and committed to a venue. That
+way the deck's venue is known and its narrative/results are final. A re-submission (revised per reviewer
+comments) is a newer-datestamped submission, and the manuscript loader picks the newest release, so the
+deck always draws on the latest paper.
 
 - **Inputs**: `paper` (the narrative + claims — the spine) and `experiments` (the figures + real
   numbers). It reads the conceptual figures (the figure engine) and rayleigh's data figures from
@@ -41,8 +49,10 @@ produces a per-venue **deck** off the same narrative.
 
 ## What razzle feeds on (five sources)
 
-1. **raconteur's narrative + claims** — the paper stage's one-pager is the **talk's spine**; the
-   manuscript supplies the claims and their support. razzle does not re-argue; it re-presents.
+1. **raconteur's narrative + claims** — the paper stage's one-pager is the **talk's spine** (the arc
+   and slide order); the **full manuscript is the substance** — the real claims, framing, key citations
+   and secondary results the slides draw on. Both are read (`context.load_onepager` +
+   `context.load_manuscript`); razzle does not re-argue, it re-presents.
 2. **Figures** — rayleigh's data figures (already rendered) + the conceptual figures from the figure
    engine. Slides are mostly figures + a sentence, so this is razzle's main visual payload.
 3. **The master slide set** — a branded `.pptx` template with named layouts and logo placeholders
@@ -89,9 +99,10 @@ funder logo in the corner of the title slide. So:
 Same shape as every deliverable — the LLM authors a **structured deck spec**, a deterministic
 renderer draws it, and a human gates it.
 
-1. **gather** — collect the narrative (one-pager), the figures, the claims/numbers, the selected
-   authors/affiliations/funders + resolved logos, the venue's constraints (kind, length → slide
-   budget, aspect ratio), and the chosen master + its layout descriptor.
+1. **gather** — collect the narrative (one-pager, the spine), the **full manuscript** (the substance),
+   the figures, the claims/numbers, the selected authors/affiliations/funders + resolved logos, the
+   venue's constraints (kind, length → slide budget, aspect ratio), and the chosen master + its layout
+   descriptor.
 2. **author the deck spec** (LLM) — a per-slide structured spec grounded in the one-pager arc
    (motivation → question → approach → results → takeaway), each slide naming its **role** (→ master
    layout), title, bullets, the **figure** it shows, and **speaker notes**. Venue-aware: an 12-min
@@ -150,27 +161,35 @@ a promotion, not a contract.
    launch an authoring session, or `--no-launch` to print the manual path) and `render`
    (`slides/<fmt>/spec.json` → the branded `.pptx`). Stage-graph + CLI tests.
    **Per-project format selection + migration (DONE):** the manifest gained `deck_formats` (the
-   presentation formats this project builds a deck in — razzle's venue-analogue). The deck stage FORKS
-   per format — `_open_deck` queues one `razzle deck --format <fmt>` session per entry; an empty list
-   opens a single "pick format(s)" prompt (razzle owns the vocabulary, so haarpi passes names through
-   verbatim and razzle validates on run, keeping the dependency one-directional). Migration is **by
+   presentation formats this project builds a deck in — razzle's venue-analogue) and a `decks` block.
+   The deck stage opens with a **single** `razzle deck: configure` task (run the interview); the
+   per-format authoring is run by hand from the commands the interview prints — `_open_deck` never
+   queues a task per format, and razzle owns the format vocabulary (validated on run), keeping the
+   dependency one-directional. Migration is **by
    load**: `load_manifest` merges `DEFAULT_STAGES`, so a manifest written before the deck stage existed
    loads with it and an empty `deck_formats` — no rewrite needed. (`_OPENING` no longer keys `deck`.)
 
-   **The deck-open interview (DONE):** the deck stage's opening splits in two — configuration is a
-   **pure-python, no-LLM** `razzle interview` (`razzle/interview.py`), and only the AUTHORING (composing
-   the spec) is the LLM `razzle deck` session. The interview asks, via plain `input()`: which formats,
-   and per format the venue, date, presenting authors, which of their affiliation logos to include (each
-   shown as `logo ✓` / `NO LOGO → text only` against the neutral registry), and the funders to
-   acknowledge. It writes `deck_formats` + a `decks` block (keyed by format) to the manifest and
-   auto-queues one `razzle deck --format <fmt>` session per format, deleting the "pick format(s)" prompt
-   it fulfils (via the new `trundlr.delete_task` — trundlr has no cancelled status). `gather` consumes
-   `decks[fmt]`: the logos and byline are scoped to the deck's chosen affiliations/authors/funders
-   (falling back to all when no config), and the presenting authors are stamped onto the title slide's
-   subtitle deterministically (`apply_byline`) — a fact, never the LLM's to write. `venue`/`date` are
-   captured and exposed in the bundle for the master's footer once that furniture is redesigned. The
-   deck-open prompt now points at `haarpi razzle interview`. Tested: scripted-input interview, per-format
-   gather scoping, byline stamping, and the queue/delete path.
+   **The deck-open interview (DONE, reworked):** the deck stage's opening splits in two — configuration
+   is a **pure-python, no-LLM** `razzle interview` (`razzle/interview.py`), and only the AUTHORING
+   (composing the spec) is the LLM `razzle deck` session. The interview asks, via plain `input()`: which
+   formats, and per format the venue, date, presenting authors, which affiliation logos to include —
+   **every author's** affiliations, not just the presenter's, since the title slide shows all co-authors
+   (each shown `logo ✓` / `NO LOGO → text only` against the neutral registry) — and the funders to
+   acknowledge. It writes `deck_formats` + a `decks` block (keyed by format) to the manifest **and
+   nothing else**: it does NOT touch trundlr. Task creation belongs to haarpi — the board's owner — so
+   the interview mirrors `rayleigh init` (write a deliverable, never queue your own downstream). It ends
+   by **printing** the per-format `haarpi razzle deck --format <fmt>` commands to run.
+
+   **haarpi owns the board (Option C).** `_open_deck` opens the deck stage with **one** human task,
+   `razzle deck: configure` (run the interview) — exactly one opening move, like `rayleigh design
+   session`. haarpi does **not** queue a task per format and there is **no `delete_task` anywhere** in
+   the pipeline (a fulfilled prompt is closed by marking it done, never destroyed). The deck stage is
+   tracked by its DELIVERABLE (the `_ra.pptx` that enters the gate), not by bookkeeping tasks for a fork
+   haarpi cannot see. `gather` consumes `decks[fmt]`: the logos and byline are scoped to the deck's
+   chosen affiliations/authors/funders (falling back to all when no config), and the presenting authors
+   are stamped onto the title slide's subtitle deterministically (`apply_byline`). Tested: scripted-input
+   interview, the co-author-logo offer, the no-trundlr guarantee, per-format gather scoping, byline
+   stamping, and the single-configure-task opening.
 2. **Asset registries**: the three loaders (`masters/<name>.pptx` + `.layouts.yaml`,
    `affiliations.yaml`, `funders.yaml`) in neutral `~/.config/haarpi/razzle/`, with graceful
    text-fallback + warnings for missing logos. Ship one default master + layout descriptor.

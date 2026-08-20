@@ -658,6 +658,30 @@ def load_onepager(project_dir: Path, short_title: str) -> str:
     return text
 
 
+def load_manuscript(project_dir: Path, short_title: str, venue: str = "") -> str:
+    """Return the full paper manuscript — the SUBSTANCE behind the one-pager's spine.
+
+    A talk is built from the one-pager's arc, but the real claims, framing, citations and
+    secondary results a slide draws on live in the manuscript, not the one-pager. The gate-
+    minted release (paper/{venue}/manuscript/output/{date}_{short}_{venue}.md) is the author-
+    approved text and outranks the working chain; the newest ``*_ra.md`` draft is the fallback.
+    ``venue`` scopes to that venue's manuscript (a venue-free project passes "")."""
+    from .naming import find_latest, deliverable_dir
+    from haarpi.naming import find_latest_release
+    paper_dir = deliverable_dir(project_dir / "paper", "manuscript", venue)
+    includes = [venue] if venue else None
+    path = find_latest_release(
+        paper_dir / "output", short_title, "md", chain_includes=includes,
+    ) or find_latest(
+        paper_dir, short_title, "md", last_initials="ra", chain_includes=includes,
+    )
+    if path is None:
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    log(f"[raconteur] reading manuscript: {path.name}")
+    return text
+
+
 # Everything from here on is the argument for CHOOSING a venue — the shortlist, the tiers,
 # the conference options, the recommendation, the slate. Once a venue is chosen that work is
 # finished, and an outline written FOR css2026 does not need the case for picking css2026.
