@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,25 +100,57 @@ def _from_cache(d: dict, key: str, label: str) -> Verdict:
                    its_sense=d.get("its_sense", ""), review_sense=d.get("review_sense", ""))
 
 
+def format_progress(i: int, total: int, v: Verdict, cached: bool,
+                    min_confidence: float = 7.0) -> str:
+    """One human-readable progress line for a judged item: counter, label, and the verdict — with
+    the shared term and sense-clash spelled out for a would-be quarantine. Each judgment is a whole
+    model pass (minutes on old hardware), so the run must narrate itself as it goes rather than sit
+    silent from the opening 'Judging N items…' to the final summary."""
+    if v.kind == "false_friend" and v.confidence >= min_confidence:
+        detail = (f"⚑ QUARANTINE ({v.confidence:.0f}/10)  \"{v.term}\": "
+                  f"{v.its_sense or '?'} ↮ {v.review_sense or '?'}")
+    elif v.kind == "false_friend":
+        detail = f"keep · weak false-friend ({v.confidence:.0f}/10) \"{v.term}\""
+    else:
+        detail = "keep · transfers"
+    tag = " · cached" if cached else ""
+    return f"[{i:>3}/{total}] {v.label:<26.26} {detail}{tag}"
+
+
 def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
-                 cache: dict | None = None,
-                 min_confidence: float = 7.0) -> tuple[list[Verdict], list[Verdict]]:
+                 cache: dict | None = None, min_confidence: float = 7.0,
+                 *, progress=None, checkpoint=None, checkpoint_every: int = 5
+                 ) -> tuple[list[Verdict], list[Verdict]]:
     """Judge every corpus item (each a dict of key/label/title/abstract/keywords) for word-sense
     transfer. Returns (flagged, all_verdicts); flagged = the CONFIDENT false-friends only. A
     ``cache`` keyed by item key is consulted first and updated, so a re-run judges only new
-    items and never re-litigates a decision."""
+    items and never re-litigates a decision.
+
+    ``progress(i, total, verdict, cached, seconds)`` is called after each item (for live logging);
+    ``checkpoint(cache)`` is called every ``checkpoint_every`` FRESHLY-judged items so a long run's
+    work survives an interruption (the corpus can be hundreds of items at minutes each). Both are
+    optional and pure-core-preserving — omitted, the behaviour is exactly as before."""
     cache = cache if cache is not None else {}
     verdicts: list[Verdict] = []
-    for it in items:
+    total = len(items)
+    fresh = 0
+    for i, it in enumerate(items, 1):
         key, label = it["key"], it.get("label", it["key"])
-        if key in cache:
+        cached = key in cache
+        t0 = time.monotonic()
+        if cached:
             v = _from_cache(cache[key], key, label)
         else:
             v = judge_item(brain, topic, focus, key=key, label=label,
                            title=it.get("title", ""), abstract=it.get("abstract", ""),
                            keywords=it.get("keywords", ()))
             cache[key] = _to_cache(v)
+            fresh += 1
         verdicts.append(v)
+        if progress is not None:
+            progress(i, total, v, cached, time.monotonic() - t0)
+        if checkpoint is not None and not cached and fresh % checkpoint_every == 0:
+            checkpoint(cache)
     flagged = [v for v in verdicts
                if v.kind == "false_friend" and v.confidence >= min_confidence]
     return flagged, verdicts
@@ -192,10 +226,12 @@ def _judge_fields(raw: dict, labels: dict | None = None) -> dict:
 def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                   quarantine_key: str, items: list[dict], outdir, dry_run: bool = False,
                   cache: dict | None = None, min_confidence: float = 7.0,
-                  labels: dict | None = None) -> dict:
+                  labels: dict | None = None, progress=None, checkpoint=None,
+                  checkpoint_every: int = 5) -> dict:
     """Judge the raw Zotero ``items``, move each confident false-friend from the project
     collection to quarantine (unless ``dry_run``), and write the reasons log. Pure but for the
-    injected ``zc``/``brain``, so the whole flow is testable without the network."""
+    injected ``zc``/``brain``, so the whole flow is testable without the network. ``progress`` and
+    ``checkpoint`` are passed straight through to :func:`audit_corpus` (see there)."""
     raw_by_key = {}
     judge_items = []
     for raw in items:
@@ -203,7 +239,8 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
         judge_items.append(f)
         raw_by_key[f["key"]] = raw
     flagged, verdicts = audit_corpus(brain, topic, focus, judge_items, cache=cache,
-                                     min_confidence=min_confidence)
+                                     min_confidence=min_confidence, progress=progress,
+                                     checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     moved: list[str] = []
     if not dry_run:
         for v in flagged:
@@ -247,7 +284,12 @@ def _save_cache(paths, sig: str, cache: dict) -> None:
 
 
 def _sig(topic: str, focus: str) -> str:
-    return str(hash((topic, focus)))
+    """A STABLE signature of the research question, so a re-run reloads the cache instead of
+    re-judging. Must not use builtin ``hash()``: string hashing is salted per process, so that
+    signature changes every invocation and ``_load_cache`` would discard the cache every time —
+    making the cache (and the incremental checkpoints) useless for resuming a long run."""
+    import hashlib
+    return hashlib.sha1(f"{topic}\x00{focus}".encode("utf-8")).hexdigest()
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
@@ -285,15 +327,39 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     items = [it for it in zc.collection_items(project_key)
              if it.get("data", {}).get("itemType") not in ("attachment", "note")]
-    print(f"  {runlog.stamp()}Judging {len(items)} corpus item(s) for word-sense transfer"
-          f"{' (dry run)' if dry_run else ''}...", flush=True)
+    total = len(items)
+    print(f"  {runlog.stamp()}Judging {total} corpus item(s) for word-sense transfer"
+          f"{' (dry run)' if dry_run else ''} — one model pass each; on this hardware allow "
+          f"a few minutes per item. Progress below (resumable — verdicts are cached).", flush=True)
 
     sig = _sig(cfg.topic, cfg.focus or "")
     cache = _load_cache(paths, sig)
+    min_conf = 7.0
+    # Live reporter: a line per item, plus a rolling ETA from the freshly-judged rate (cached items
+    # are instant, so they don't skew it) — the run narrates itself instead of going dark for hours.
+    counts: Counter = Counter()
+    seen = {"fresh_n": 0, "fresh_s": 0.0}
+
+    def _report(i, n, v, cached, dt):
+        counts[v.kind] += 1
+        print(f"  {runlog.stamp()}{format_progress(i, n, v, cached, min_conf)}", flush=True)
+        if not cached:
+            seen["fresh_n"] += 1
+            seen["fresh_s"] += dt
+        if seen["fresh_n"] and (i % 10 == 0 or i == n) and i < n:
+            avg = seen["fresh_s"] / seen["fresh_n"]
+            print(f"  {runlog.stamp()}… {i}/{n} judged · ~{runlog.fmt_dt(avg)}/item · "
+                  f"~{runlog.fmt_dt((n - i) * avg)} left", flush=True)
+
     summary = perform_audit(zc, brain, cfg.topic, cfg.focus or "",
                             project_key=project_key, quarantine_key=quarantine_key,
-                            items=items, outdir=paths.output, dry_run=dry_run, cache=cache)
+                            items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
+                            min_confidence=min_conf, progress=_report,
+                            checkpoint=lambda c: _save_cache(paths, sig, c))
     _save_cache(paths, sig, cache)
+    tr, ff = counts.get("transfer", 0), counts.get("false_friend", 0)
+    print(f"  {runlog.stamp()}Judged {total}: {tr} transfer, {ff} false-friend "
+          f"({len(summary['flagged'])} confident ≥ {min_conf:.0f}/10).")
 
     # Safety net for a STANDALONE audit (no `build` after): drop the quarantined papers from the
     # cached corpus too, so a following `revise` that loads work/corpus.json can't resurrect them.

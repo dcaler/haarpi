@@ -117,6 +117,48 @@ def test_the_cache_prevents_re_judging():
     assert [v.key for v in flagged] == ["AV"]          # and the verdict survived the round-trip
 
 
+# ── live progress + resumable checkpointing (a corpus is hundreds of slow items) ──
+
+def test_format_progress_spells_out_a_quarantine_and_a_keep():
+    ff = audit.Verdict(key="AV", label="Vina 2016", kind="false_friend", confidence=9.0,
+                       term="docking", its_sense="ligand binding", review_sense="agent alignment")
+    line = audit.format_progress(1, 188, ff, cached=False, min_confidence=7.0)
+    assert "1/188" in line and "Vina 2016" in line
+    assert "QUARANTINE" in line and "docking" in line
+    assert "ligand binding" in line and "agent alignment" in line     # the sense-clash is shown
+    tr = audit.Verdict(key="X", label="X 2020", kind="transfer", confidence=8.0)
+    keep = audit.format_progress(2, 188, tr, cached=True)
+    assert "transfers" in keep and "cached" in keep and "QUARANTINE" not in keep
+    weak = audit.format_progress(3, 188, audit.Verdict("Y", "Y 2020", "false_friend", confidence=4.0,
+                                                       term="model"), cached=False, min_confidence=7.0)
+    assert "weak false-friend" in weak and "QUARANTINE" not in weak    # below threshold = a keep
+
+
+def test_audit_corpus_reports_every_item_and_checkpoints_only_fresh_ones():
+    items = [_item(k, "T") for k in ("A", "B", "C", "D")]
+    cache = {"B": audit._to_cache(audit.Verdict("B", "B 2020", "transfer", confidence=8))}  # pre-cached
+    brain = SeqBrain([_transfer(), _transfer(), _transfer()])          # A, C, D judged fresh
+    seen, saves = [], []
+    audit.audit_corpus(brain, "t", "f", items, cache=cache,
+                       progress=lambda i, n, v, c, dt: seen.append((i, n, v.key, c)),
+                       checkpoint=lambda c: saves.append(len(c)), checkpoint_every=2)
+    assert [s[0] for s in seen] == [1, 2, 3, 4] and seen[0][1] == 4    # one call per item, i and total
+    assert seen[1] == (2, 4, "B", True)                               # B reported as cached
+    assert brain.calls == 3                                            # only the three uncached judged
+    assert len(saves) == 1                                            # checkpoint after the 2nd FRESH item, not the cached one
+
+
+def test_sig_is_stable_and_question_specific():
+    # the cache/checkpoint signature must be identical across processes (no builtin hash(), which is
+    # salted per run) or _load_cache discards the cache every time and resume never works.
+    import subprocess, sys
+    code = "from rabbithole import audit; print(audit._sig('ABM','agent docking'))"
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True).stdout
+            for _ in range(2)}
+    assert len(outs) == 1                                             # same value in two fresh processes
+    assert audit._sig("ABM", "agent docking") != audit._sig("ABM", "other focus")  # question-specific
+
+
 # ── perform_audit: move only the flagged, log the reasons, respect dry-run ────
 
 def test_perform_audit_moves_only_the_flagged_and_logs_reasons(tmp_path):
