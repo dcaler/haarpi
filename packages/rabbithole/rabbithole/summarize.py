@@ -92,6 +92,7 @@ except ImportError:
 _MAP_CHUNK_CHARS = 14000
 _DIRECT_CHARS = 20000
 _LOCATE_FALLBACK_CHARS = 24000  # used only when ChromaDB is unavailable
+_CLAIM_DISPLAY_CHARS = 600      # annotated-bibliography bullet cap — display only, never the store
 _LOCATE_TOP_K = 4               # chunks to retrieve per claim via ChromaDB
 
 
@@ -745,18 +746,34 @@ def _tail_sentence(text: str) -> str:
     return units[-1].strip() if units else ""
 
 
+_HEADING_LINE = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+.*$")
+
+
+def strip_headings(text: str) -> str:
+    """Drop markdown heading lines from drafted body prose.
+
+    A section's heading is written by ``_assemble``, never by the model. When the model emitted
+    one anyway it landed verbatim in the assembly, which is how a review shipped a bare
+    ``## Political economy limits pricing intensity`` with no body directly above the section
+    that actually had the prose — and how a heading travelled into the located-claims store and
+    got printed inside the annotated bibliography.
+    """
+    out = _HEADING_LINE.sub("", text or "")
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def _draft_section(brain: Brain, cfg, sections: list[Section], i: int,
                    full: dict[str, str], sys_prompt: str,
                    prev_tail: str = "", extra: list[str] = ()) -> str:
     sec = sections[i]
     transition = (f"\nThe previous section ends: \"{prev_tail}\"\nOpen so the argument "
                   f"continues from there.\n" if prev_tail else "")
-    return brain.coordinator(
+    return strip_headings(brain.coordinator(
         _DRAFT_PROMPT.format(
             topic=cfg.topic, focus=cfg.focus or "", outline=_outline(sections, i),
             heading=sec.heading, claim=sec.claim, transition=transition,
             candidates=_candidate_block(sec, full, extra)),
-        sys_prompt, num_ctx=16384).strip()
+        sys_prompt, num_ctx=16384))
 
 
 def _section_guards(sec: Section, text: str, corpus_keys: set[str]) -> list[guards.Finding]:
@@ -831,7 +848,8 @@ def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
                     topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
                     claim=sec.claim, narrative=text, critique="\n\n".join(parts),
                     candidates=_candidate_block(sec, full, budget=_REVISE_CANDIDATE_CHARS)),
-                sys_prompt, num_ctx=16384, think=False).strip()
+                sys_prompt, num_ctx=16384, think=False)
+            text = strip_headings(text)
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] section revision failed ({e}); keeping current.", file=sys.stderr)
             break
@@ -841,6 +859,38 @@ def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
 def _assemble(sections: list[Section]) -> str:
     return "\n\n".join(f"## {s.heading}\n\n{s.text.strip()}"
                        for s in sections if s.text.strip())
+
+
+_NARRATIVE_H2 = re.compile(r"(?m)^##[ \t]+(.+?)[ \t]*$")
+
+
+def sections_from_markdown(narrative: str) -> list[Section]:
+    """The inverse of :func:`_assemble` — a drafted narrative back into ``Section`` objects.
+
+    This is what makes a graft possible. Adding a section used to mean re-planning the whole
+    review because the drafter could only ever build a narrative forwards, from a plan; with no
+    way back from prose to sections there was nothing to splice INTO. Round-trips exactly:
+    ``_assemble(sections_from_markdown(md)) == md`` for any md ``_assemble`` produced.
+
+    ``claim`` is not recoverable from prose — it was the planner's instruction, not something
+    the section says about itself — so it comes back empty and a caller that needs one derives
+    it. The bibliography and any front matter above the first ``## `` are not sections and are
+    dropped; a graft re-renders both anyway.
+    """
+    if cut := re.search(r"(?m)^##\s+(?:annotated\s+bibliography|references|bibliography)\b",
+                        narrative or "", re.I):
+        narrative = narrative[: cut.start()]
+    heads = list(_NARRATIVE_H2.finditer(narrative or ""))
+    out: list[Section] = []
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(narrative)
+        heading = m.group(1).strip()
+        if heading.lower() in ("narrative review",):        # the wrapper, not a section
+            continue
+        body = narrative[m.end():end].strip()
+        if body:
+            out.append(Section(heading=heading, claim="", text=body))
+    return out
 
 
 # ── 5. orphans and the rejection ledger ───────────────────────────────────────
@@ -897,8 +947,8 @@ Focus: {focus}
 
 Section: {heading} — {claim}
 
-The section as it stands:
-{narrative}
+This section's paragraphs, numbered:
+{numbered}
 
 These curated sources are cited nowhere in the review, and of all its sections this one is
 the closest match:
@@ -906,29 +956,41 @@ the closest match:
 
 For each offered source, decide whether it genuinely supports, qualifies, or complicates a
 claim this section makes. A source belongs here only if you can say what it ADDS — never
-append a sentence that merely names it.
+add a sentence that merely names it.
 
-Write ONE new paragraph, to stand as this section's last, weaving in every source that
-belongs. Connect them to what the section has already established; set them against the work
-it already cites. Cite with [@citekey]. If no offered source belongs here, write NONE in
-place of the paragraph.
+Choose the ONE numbered paragraph the belonging sources most bear on, and rewrite THAT
+paragraph so they are woven into its argument. Set them against the work it already cites.
+Cite with [@citekey].
+
+Two hard rules for the rewrite:
+  - Keep every [@citekey] the paragraph already cites. You are deepening its argument, not
+    replacing it.
+  - Return the whole revised paragraph, not an addition to it, and never restate it followed
+    by new sentences.
+
+If no offered source belongs anywhere in this section, write NONE in place of the paragraph.
 
 Then list the offered sources you left out, each with one sentence saying why it bears on
 nothing THIS section argues. Judge it against this section only — another section may yet
 take it.
 
-Output exactly this shape, both headers present:
+Output exactly this shape, all three headers present:
 
-PARAGRAPH:
-<the paragraph, or NONE>
+PARAGRAPH: <the number of the paragraph you rewrote>
+
+REVISED:
+<the whole revised paragraph, or NONE>
 
 DECLINED:
 {{"citekey": "why it bears on nothing this section argues", ...}}"""
 
 
-def _parse_weave(raw: str) -> tuple[str, dict[str, str]]:
-    """Split a weave reply into (paragraph, declined). Tolerant: a reply that is bare prose
-    with no headers is taken as the paragraph, declining nothing.
+def _parse_weave(raw: str) -> tuple[int | None, str, dict[str, str]]:
+    """Split a weave reply into (paragraph_index, revised_paragraph, declined).
+
+    ``paragraph_index`` is 0-based, or None when the reply named no paragraph — in which case
+    the caller treats the text as an append candidate and puts it through the same guards.
+    Tolerant: a reply that is bare prose with no headers is taken as the paragraph.
 
     Strict `json.loads` on the DECLINED block, not `_parse_json_obj` — that helper salvages
     non-JSON by wrapping it in a dict, which turns a prose apology into a citekey named
@@ -944,11 +1006,19 @@ def _parse_weave(raw: str) -> tuple[str, dict[str, str]]:
                         for k, v in json.loads(obj.group(0)).items() if v} if obj else {}
         except (json.JSONDecodeError, AttributeError, TypeError):
             declined = {}
-    body = re.sub(r"^.*?PARAGRAPH:\s*", "", body, flags=re.DOTALL | re.IGNORECASE)
-    body = re.sub(r"^\s*#+\s.*$", "", body, flags=re.MULTILINE).strip()
+    idx = None
+    if pm := re.search(r"PARAGRAPH:\s*#?\s*(\d+)", body, re.IGNORECASE):
+        idx = int(pm.group(1)) - 1                     # the prompt numbers from 1
+    # Everything after REVISED: is the paragraph. Fall back to the old PARAGRAPH:-then-prose
+    # shape so a model that answers in the previous format still parses.
+    if rm := re.search(r"REVISED:\s*(.*)$", body, re.DOTALL | re.IGNORECASE):
+        body = rm.group(1)
+    else:
+        body = re.sub(r"^.*?PARAGRAPH:\s*\d*\s*", "", body, flags=re.DOTALL | re.IGNORECASE)
+    body = strip_headings(body)
     if body.strip().upper().startswith("NONE"):
         body = ""
-    return body, declined
+    return idx, body, declined
 
 
 def _weave_sys(sys_prompt: str) -> str:
@@ -962,25 +1032,55 @@ def _weave_sys(sys_prompt: str) -> str:
     return _WEAVE_SYS + (f"\n\n{sys_prompt[i:]}" if i >= 0 else "")
 
 
-def _weave_orphans(brain: Brain, cfg, sec: Section, orphans: list[str],
-                   full: dict[str, str], sys_prompt: str) -> tuple[str, dict[str, str]]:
-    """Offer `orphans` to one section. Returns (paragraph, declined).
+def _paragraphs(text: str) -> list[str]:
+    """A section's body split into paragraphs (the unit weaving and splicing work in)."""
+    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
 
-    The prompt carries the section's own text and the orphans' digest lines — and nothing
+
+def _weave_orphans(brain: Brain, cfg, sec: Section, orphans: list[str],
+                   full: dict[str, str], sys_prompt: str) -> tuple[int | None, str, dict[str, str]]:
+    """Offer `orphans` to one section. Returns (paragraph_index, paragraph, declined).
+
+    The prompt carries the section's own paragraphs and the orphans' digest lines — and nothing
     else. Withholding the shortlist halves the prompt and removes the only way this call can
     cite a source it was not asked about.
+
+    The reply REPLACES the numbered paragraph it names rather than being appended after it.
+    Appending is what let four placement rounds stack near-identical paragraphs on one section
+    — 126 -> 188 -> 284 words, each a strict prefix of the next, all three shipped. It is also
+    the wrong shape for the work: a section is an argument, and a source that belongs in it
+    belongs inside the paragraph it bears on, not bolted to the end.
     """
+    paras = _paragraphs(sec.text)
+    if not paras:
+        return None, "", {}
     offers = "\n".join(full.get(k, f"- [@{k}]") for k in orphans)
+    numbered = "\n\n".join(f"{i + 1}. {p}" for i, p in enumerate(paras))
     raw = brain.coordinator(
         _WEAVE_PROMPT.format(topic=cfg.topic, focus=cfg.focus or "", heading=sec.heading,
-                             claim=sec.claim, narrative=sec.text, offers=offers),
+                             claim=sec.claim, numbered=numbered, offers=offers),
         _weave_sys(sys_prompt), num_ctx=16384, think=False)
-    para, declined = _parse_weave(raw)
-    # A paragraph that cites none of the offered sources has not placed any of them; appending
-    # it would grow the section without earning it. Drop it and let the orphans route on.
-    if para and not (set(guards.all_citekeys(para)) & set(orphans)):
-        para = ""
-    return para, {k: v for k, v in declined.items() if k in orphans}
+    idx, para, declined = _parse_weave(raw)
+    declined = {k: v for k, v in declined.items() if k in orphans}
+    if not para:
+        return None, "", declined
+
+    # ── the guards, in order. Any failure is a decline: the orphans route on to the next
+    # section rather than a bad rewrite landing in the review.
+    keys = set(guards.all_citekeys(para))
+    if not keys & set(orphans):
+        return None, "", declined        # placed none of what it was offered
+    if idx is None or not (0 <= idx < len(paras)):
+        return None, "", declined        # named no paragraph we can identify
+    original = paras[idx]
+    if not keys >= set(guards.all_citekeys(original)):
+        return None, "", declined        # a rewrite must never drop evidence the paragraph had
+    norm_new, norm_old = " ".join(para.split()), " ".join(original.split())
+    if norm_new == norm_old:
+        return None, "", declined        # nothing actually changed
+    if norm_new.startswith(norm_old):
+        return None, "", declined        # the accretion shape: the old paragraph plus a tail
+    return idx, para, declined
 
 
 def _reject_ledger(brain: Brain, cfg, sections: list[Section], unplaced: set[str],
@@ -1084,12 +1184,14 @@ def _place_orphans(brain: Brain, cfg, sections: list[Section], matrix: list[list
             for k in orphans:
                 tried[k].add(si)
             try:
-                para, declined = _weave_orphans(brain, cfg, sec, orphans, full, sys_prompt)
+                idx, para, declined = _weave_orphans(brain, cfg, sec, orphans, full, sys_prompt)
             except Exception as e:  # noqa: BLE001
                 print(f"  [warn] orphan placement in §{si + 1} failed ({e}).", file=sys.stderr)
                 continue
-            if para:
-                sec.text = f"{sec.text.rstrip()}\n\n{para}"
+            if para and idx is not None:
+                paras = _paragraphs(sec.text)
+                paras[idx] = para
+                sec.text = "\n\n".join(paras)
             for k, why in declined.items():
                 refusals.setdefault(k, []).append(f"§{si + 1} ({sec.heading}): {why}")
             took = [k for k in orphans if k not in declined and para
@@ -1273,9 +1375,15 @@ def _located_filename(citekey: str) -> str:
 
 
 def _claim_sentences(narrative: str, citekey: str) -> str:
-    """Sentences in the narrative that cite this citekey (incl. grouped citations)."""
+    """Sentences in the narrative that cite this citekey (incl. grouped citations).
+
+    Headings are stripped first. The splitter breaks on `(?<=[.!?])\\s+`, and a heading carries
+    no terminal punctuation, so it glues onto the sentence that follows and rides into the
+    located-claims store — which is how `## Political economy limits pricing intensity` ended up
+    printed as the opening of a bibliography entry.
+    """
     return " ".join(
-        s.strip() for s in re.split(r"(?<=[.!?])\s+", narrative)
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", strip_headings(narrative))
         if citekey in _all_citekeys(s))
 
 
@@ -1357,8 +1465,36 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
 # ──────────────────────────────────────────────────────────────────────────
 # Annotated bibliography (cited sources only) + citation guard
 # ──────────────────────────────────────────────────────────────────────────
+# A source's own annotation saying it does not belong. These are phrases the locate step writes
+# when it is asked to ground a paper the review never cited and finds nothing to ground it in —
+# the paper disqualifying itself, in its own entry. Deliberately literal and few: this screens the
+# self-evident cases, and anything subtler is a judgement the reject ledger already demands.
+_SELF_DISQUALIFYING = re.compile(
+    r"\b(?:largely\s+)?irrelevant\s+to\b"
+    r"|\blacks?\s+any\s+(?:analysis|discussion|treatment)\b"
+    r"|\bdoes\s+not\s+(?:address|examine|analyz|analys|discuss|engage)\w*\b"
+    r"|\bno\s+(?:direct\s+)?(?:bearing|relevance)\s+(?:on|to)\b"
+    r"|\bnot\s+(?:directly\s+)?relevant\s+to\b",
+    re.IGNORECASE)
+
+
+def self_disqualified(claims: list) -> str:
+    """The phrase by which an uncited source's own annotation says it does not belong, or "".
+
+    Only ever applied to the *curated* tier — sources the narrative declined to cite. A source
+    the review actually uses has earned its place regardless of how an annotation is worded.
+    """
+    for cl in claims or []:
+        if not isinstance(cl, dict):
+            continue
+        if m := _SELF_DISQUALIFYING.search(cl.get("claim", "") or ""):
+            return m.group(0)
+    return ""
+
+
 def bibliography(corpus: list[Candidate], located: dict[int, list],
-                 cited_indices: set[int] | None = None) -> str:
+                 cited_indices: set[int] | None = None,
+                 screen_curated: bool = True) -> str:
     """Annotated bibliography as markdown.
 
     When ``cited_indices`` is given, entries split into two tiers: **Cited in the review**
@@ -1373,7 +1509,10 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
                   if isinstance(cl, dict) and (cl.get("claim") or "").strip()]
         if claims:
             for cl in claims:
-                claim = cl.get("claim", "").strip()
+                # Display-time truncation, on a word boundary and marked with an ellipsis.
+                # Claims are stored whole (see chroma.locate_direct); a hard slice in the store
+                # used to ship bullets that stopped mid-word ("does not report any quantit").
+                claim = _truncate(cl.get("claim", "").strip(), _CLAIM_DISPLAY_CHARS)
                 loc = (cl.get("location") or "").strip()
                 quote = (cl.get("quote") or "").strip()
                 line = f"- {claim}"
@@ -1400,6 +1539,19 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
 
     cited = keys & set(cited_indices)
     extra = keys - cited
+    # Screen the curated tier. A litreview is read to judge whether the corpus is right, so a
+    # source presented as curated is a claim that it belongs — and one whose own annotation says
+    # "largely irrelevant to the specific review focus" makes that claim false. Those move to a
+    # named list of exclusions, which is a fact about coverage rather than a hidden deletion.
+    dropped: list[tuple[int, str]] = []
+    if screen_curated:
+        keep = set()
+        for i in extra:
+            if why := self_disqualified(located.get(i) or []):
+                dropped.append((i, why))
+            else:
+                keep.add(i)
+        extra = keep
     out += ["### Cited in the review", ""]
     for i in _in_order(cited):
         out += _entry(i)
@@ -1407,6 +1559,104 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
         out += ["### Additional curated sources", ""]
         for i in _in_order(extra):
             out += _entry(i)
+    if dropped:
+        out += ["### Screened out of the curated list", "",
+                "*Uncited sources whose own annotation says they do not bear on this review. "
+                "They remain in the corpus and in Zotero — this records the judgement, it does "
+                "not delete anything.*", ""]
+        for i, why in sorted(dropped, key=lambda d: corpus[d[0]].first_author_last.lower()):
+            out.append(f"- {corpus[i].full_citation()} — *self-excluded:* “{why}…”")
+        out.append("")
+    return "\n".join(out)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Load-bearing sources — the coverage check, at the top of the review
+# ──────────────────────────────────────────────────────────────────────────
+# A litreview is read to answer one question: does rabbitHole hold the literature this project
+# needs? Nine lines answer it faster than 33,000 words. This is the same ranking and the same cut
+# as the contribution map's innermost ring, so the header and the map are one statement.
+
+_TOP_FLOOR, _TOP_CEILING = 5, 15     # a small review still gets a list; a huge one stays scannable
+
+_TOP_SYS = ("You explain why a source is load-bearing for a specific research project. "
+            "Respond with ONLY a JSON object, nothing else.")
+
+_TOP_PROMPT = """\
+Research project: {topic}
+Focus: {focus}
+
+These are the sources this review leans on most, each with the review's own sentences citing it:
+
+{papers}
+
+For EACH, write ONE sentence (<= 25 words) saying why it is load-bearing FOR THIS PROJECT — what
+the project relies on it for. Not what the paper is about; what work it does here.
+
+- Ground the sentence in that source's evidence below. Never invent a finding.
+- No statistics: no numbers, percentages, coefficients, or sample sizes.
+- Never a methods description ("Examines / Analyzes / Explores how ..."). Say what it gives us.
+
+Return ONE JSON object, no prose:
+{{"<citekey>": "<why it is load-bearing here>", ...}}"""
+
+
+def top_source_count(corpus_size: int, quantile: float = 0.05) -> int:
+    """How many sources the header lists: a share of the PROJECT CORPUS, floored and capped.
+
+    The corpus is the denominator rather than the cited set, because the question is what share of
+    what we gathered the review actually rests on.
+    """
+    n = round(max(0, corpus_size) * quantile)
+    return max(_TOP_FLOOR, min(_TOP_CEILING, max(1, n)))
+
+
+def top_sources(narrative: str, corpus: list[Candidate], citekeys: dict[int, str],
+                quantile: float = 0.05) -> list[tuple[str, Candidate, int]]:
+    """The top slice of sources by importance to this project, most load-bearing first.
+
+    Importance is ``mindmap.evidence_weight`` — the words of review prose devoted to a source.
+    A paper the review builds paragraphs on outranks one it name-checks, which is the property
+    the question "did it find the right literature?" actually turns on.
+    """
+    from .mindmap import evidence_weight
+    weight = evidence_weight(narrative)
+    by_key = {citekeys[i]: corpus[i] for i in range(len(corpus)) if i in citekeys}
+    ranked = sorted(((k, by_key[k], w) for k, w in weight.items() if k in by_key),
+                    key=lambda kv: (-kv[2], kv[0]))
+    return ranked[:top_source_count(len(corpus), quantile)]
+
+
+def top_sources_block(brain: Brain, cfg, narrative: str, corpus: list[Candidate],
+                      citekeys: dict[int, str], quantile: float = 0.05) -> str:
+    """The markdown block that opens the review. Empty string when there is nothing to rank."""
+    top = top_sources(narrative, corpus, citekeys, quantile)
+    if not top:
+        return ""
+    from .mindmap import citation_evidence
+    ev = citation_evidence(narrative)
+    papers = "\n".join(
+        f"- {k}  ({c.author_year()})\n    evidence: {' '.join(ev.get(k, [])) or '(none)'}"
+        for k, c, _w in top)
+    reasons: dict[str, str] = {}
+    try:
+        raw = brain.coordinator(
+            _TOP_PROMPT.format(topic=cfg.topic, focus=cfg.focus or "", papers=papers),
+            _TOP_SYS, num_ctx=16384, think=False)
+        reasons = {str(k): str(v).strip() for k, v in _parse_json_obj(raw).items() if v}
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] load-bearing rationales failed ({e}); listing without them.",
+              file=sys.stderr)
+    pct = f"{quantile * 100:g}%"
+    out = [f"## Most load-bearing sources (top {pct} of {len(corpus)})", "",
+           "*The sources this review rests on most, by the amount of its argument each carries — "
+           "the same ranking as the contribution map's innermost ring. Read this first to judge "
+           "whether the corpus is right.*", ""]
+    for k, c, w in top:
+        why = reasons.get(k, "").strip()
+        out.append(f"- **{c.author_year()}** [@{k}] — {why}" if why
+                   else f"- **{c.author_year()}** [@{k}] — carries {w} words of the review's argument.")
+    out.append("")
     return "\n".join(out)
 
 
@@ -1615,9 +1865,11 @@ def run(directory: str = ".", brain_override: str | None = None,
     # it belongs to is a trap waiting for the first consumer who reads them in order.
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
 
+    print(f"  {_stamp()}ranking the load-bearing sources...", flush=True)
     out_md, out_docx = render.write_review(
         cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
-        metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line())
+        metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line(),
+        top_block=top_sources_block(brain, cfg, narrative, corpus, citekeys))
 
     elapsed = time.time() - t0
     print("\n" + "=" * 60)

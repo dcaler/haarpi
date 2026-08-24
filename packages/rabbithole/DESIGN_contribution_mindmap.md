@@ -1,25 +1,40 @@
-# rabbitHole `mindmap` — a per-draft contribution map + reference-budget diagnostic
+# rabbitHole `mindmap` — a per-draft contribution map + coverage diagnostic
 
 ## What it is
 
 A rabbitHole verb that reads the **current litreview draft** (or the minted release) and renders a
 **contribution map** into the review's own outputs (`litReview/output/`). It is a *diagnostic the
 author consults while writing*, not a mint-only deliverable: it surfaces, every revise cycle,
-whether the review is over its reference budget and which themes are peripheral to its core — while
+where the review actually invests its argument and which themes are peripheral to its core — while
 there is still time to act. It does **not** enter the shared `figures/` pool (nothing here reaches a
 paper or deck). The last draft's map is also the minted map, so nothing is lost at release.
 
-Diagram-as-code, no diffusion: deterministic geometry + one model call for the node phrases.
+Diagram-as-code, no diffusion: deterministic geometry + batched model calls for the node phrases.
+
+`compose` runs **one call per chunk of papers within a theme** (`_COMPOSE_BATCH = 25`), never one
+call for the review. A single whole-review call does not fit: a 160-paper review built a
+14.7k-token prompt and then needed ~5.6k tokens of JSON back, against a 16k window — the reply
+truncated, the repair pass re-sent the same oversized prompt and truncated identically, and the map
+shipped with **zero** papers, a blank diagnostic that still looked like a rendered figure. Batching
+also contains failure: an unparseable batch costs its own papers, not the whole map. Each paper is
+composed once, under the first theme that cites it.
 
 ## The map (what the reader sees)
 
 One node per cited paper, laid out so that **four orthogonal signals** read at a glance:
 
 - **Radial band = importance to THIS review.** Papers rank by `evidence_weight` (the words of review
-  prose devoted to them) and split into three bands — the core **`target_min`**, the budget up to
-  **`target_max`**, and the overflow — separated by radial gaps. Two **red target rings** sit in the
-  gaps, so *exactly* `target_min` / `target_max` papers fall inside; anything outside the outer ring
-  is beyond the project's reference budget (`ProjectConfig.target_min`/`target_max`). Band membership
+  prose devoted to them) and split into four bands by fixed **quantiles of the project corpus** —
+  `BAND_QUANTILES = (0.05, 0.25, 0.50)` — separated by radial gaps. Three **red rings** sit in the
+  gaps, so *exactly* the top 5% / 25% / 50% of the corpus fall inside each. The innermost ring is
+  the same slice the review's **Most load-bearing sources** header prints, so map and header are one
+  ranking.
+
+  The rings are **not a budget.** They used to be (`target_min`/`target_max`), and the legend said
+  "papers outside exceed it" — a false claim about a healthy review, since a litreview is a coverage
+  instrument and exceeding a reference target when the work asks for it is correct. They now report
+  where a paper sits in the corpus by importance, which is a fact rather than a verdict. Band
+  membership
   is the diagnostic; radius *within* a band is just packing.
 - **Angle = theme.** Each theme owns an angular **pie slice**. A theme with no core papers shows an
   empty inner slice — the signal that the topic is peripheral to the review's argument.
@@ -79,7 +94,7 @@ never invent a paper; a reply with no usable JSON yields a labelled-stub map, ne
  → **model** distils a contribution per paper from its citing sentences (`compose`, grounded)
  → `evidence_weight` (importance) + `citation_graph` (edges, sizes) overlaid on the papers
  → `band_layout` → `to_dot` (importance bands as theme pie-slices, packed rings, collision-scaled to
-   zero overlap, native red target rings from `target_min`/`target_max`, centre hub, outside labels)
+   zero overlap, native red rings at the corpus quantiles, centre hub, outside labels)
  → `_render_pinned` renders the pinned coordinates with **`dot -Kneato -n2`** (positions are final;
    no layout) → `emit` writes `…_litmap_ra.{dot,svg,png}` into `litReview/output/` (same `_ra`-only
    clobber guard and Inkscape hand-edit workflow as the figures pool, but **not** the pool).
@@ -105,9 +120,9 @@ so the diagnostic lands beside each `_ra` draft. `run()` consumes the newest `*_
 4. `citation_graph` — the real reference graph from a fake `fetch` (edges + `cited_by_count`), with
    non-corpus and DOI-less papers correctly dropped.
 5. `band_layout` — bands by importance (most-discussed nearest the centre), the target rings holding
-   **exactly** `target_min`/`target_max`, and a collision-scale that leaves **zero** overlapping
+   **exactly** each quantile cut, and a collision-scale that leaves **zero** overlapping
    boxes across varied sizes and themes.
-6. `to_dot` — a pinned `digraph` with the centre hub, both red target rings, theme labels, size +
+6. `to_dot` — a pinned `digraph` with the centre hub, a red ring per quantile cut, theme labels, size +
    black-ring encoding, faded citation arrows, and a legend; renders under `dot -Kneato -n2`.
 7. `build_spec` against a **fake brain** → the composed, grounded `FigureSpec` is deterministic.
 

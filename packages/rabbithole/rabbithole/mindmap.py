@@ -17,15 +17,34 @@ from pathlib import Path
 
 from haarpi import figure, naming
 
+from . import guards
+
 # ── parsing the review (deterministic, no LLM) ─────────────────────────────────
 
 _H2 = re.compile(r"^##[ \t]+(.+?)[ \t]*$", re.M)
 # citekeys are read only inside bracketed pandoc citation groups [@a][@b] or [@a; @b] — so a
 # stray `@` (an email, a handle) outside a citation is never mistaken for a paper.
 _CITE_GROUP = re.compile(r"\[([^\]]*@[^\]]*)\]")
-_CITE_KEY = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_:\-]*)")
 # threads that are wrappers, not themes:
 _SKIP = ("narrative review", "annotated bibliography", "references", "bibliography")
+# where the bibliography starts — everything from here on is back matter, never a thread. Matching
+# by HEADING NAME alone was not enough: a stray heading emitted inside the bibliography opened a
+# thread whose body ran to EOF and scooped 62 citekeys out of the reference list.
+_BIB_START = re.compile(r"^##\s+(?:annotated\s+bibliography|references|bibliography)\b",
+                        re.I | re.M)
+
+
+def _cite_keys(text: str) -> list[str]:
+    """Citekeys inside bracketed citation groups, using the ONE shared extractor.
+
+    This used to own a private `@([A-Za-z0-9_][A-Za-z0-9_:\\-]*)` pattern, which is ASCII-only:
+    `böhringerPotential2022` matched as `b`. The stub then failed the grounding law in
+    :func:`validate` and the paper vanished from the map — 9 of 167 cited sources in a real
+    review, replaced by phantom keys (b, d, g, gr, h, k, m, n, pe). ``guards.all_citekeys``
+    already splits grouped citations correctly and is Unicode-safe, so there is no reason for a
+    second extractor that disagrees with it.
+    """
+    return [k for grp in _CITE_GROUP.findall(text) for k in guards.all_citekeys(f"[{grp}]")]
 
 
 @dataclass
@@ -36,7 +55,13 @@ class Thread:
 
 def parse_threads(md: str) -> list[Thread]:
     """Every ``## `` thesis thread (minus the Narrative-Review wrapper and the bibliography tail),
-    each with the ``[@citekey]`` it cites, deduped in first-seen order."""
+    each with the ``[@citekey]`` it cites, deduped in first-seen order.
+
+    The bibliography is CUT, not name-matched: a heading that leaks into the reference list (see
+    the claim-extraction fix in summarize) is not in ``_SKIP``, so it opened a thread whose body
+    ran to end-of-file and harvested the whole reference list as one theme."""
+    if cut := _BIB_START.search(md):
+        md = md[: cut.start()]
     heads = [(m.group(1).strip(), m.start(), m.end()) for m in _H2.finditer(md)]
     out: list[Thread] = []
     for i, (name, _s, e) in enumerate(heads):
@@ -44,9 +69,8 @@ def parse_threads(md: str) -> list[Thread]:
             continue
         body = md[e: heads[i + 1][1]] if i + 1 < len(heads) else md[e:]
         seen: dict[str, None] = {}
-        for grp in _CITE_GROUP.findall(body):
-            for k in _CITE_KEY.findall(grp):
-                seen.setdefault(k, None)
+        for k in _cite_keys(body):
+            seen.setdefault(k, None)
         if seen:
             out.append(Thread(theme=name, citekeys=list(seen)))
     return out
@@ -100,15 +124,14 @@ def _review_sentences(md: str):
     tail and markdown headings excluded, ``[@..]`` tags stripped and punctuation gaps tidied. Shared
     by the findings-evidence and the project-importance measures."""
     body = md
-    cut = re.search(r"^##\s+(?:annotated\s+bibliography|references|bibliography)\b", md, re.I | re.M)
-    if cut:
+    if cut := _BIB_START.search(md):
         body = md[: cut.start()]
     body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))  # drop headings
     for sent in re.split(r"(?<=[.!?])\s+", body.replace("\n", " ")):
         s = sent.strip()
         if "@" not in s:
             continue
-        keys = {k for grp in _CITE_GROUP.findall(s) for k in _CITE_KEY.findall(grp)}
+        keys = set(_cite_keys(s))
         clean = _CITE_GROUP.sub("", s)                              # drop the [@..] tags
         clean = re.sub(r"\s+([.,;:!?])", r"\1", " ".join(clean.split()))  # tidy the gaps they leave
         if keys and clean:
@@ -356,12 +379,33 @@ def _node_border(in_degree: int) -> float:
 
 
 # ── packed-bands pie-slice layout (points; rendered by `dot -Kneato -n2`) ────────
-# Papers are ranked by importance to THIS review (evidence_weight) and split into three IMPORTANCE
-# bands — the core `target_min`, the budget up to `target_max`, and the overflow — separated by
-# radial gaps that hold the red target rings. Each band is packed tight into concentric rings; a
-# paper sits at its THEME's angular sector (a coloured pie slice), so a peripheral theme shows an
-# empty inner slice (the diagnostic). Band MEMBERSHIP carries the meaning (inside/between/outside the
-# rings); radius WITHIN a band is just packing. Blob size = total citations; black ring = in-corpus.
+# Papers are ranked by importance to THIS review (evidence_weight) and split into IMPORTANCE bands
+# cut at fixed QUANTILES OF THE PROJECT CORPUS, separated by radial gaps that hold the red rings.
+# Each band is packed tight into concentric rings; a paper sits at its THEME's angular sector (a
+# coloured pie slice), so a peripheral theme shows an empty inner slice (the diagnostic). Band
+# MEMBERSHIP carries the meaning; radius WITHIN a band is just packing. Blob size = total citations;
+# black ring = in-corpus.
+#
+# The rings used to mark a reference BUDGET (target_min/target_max). They no longer do: a litreview
+# is a coverage instrument, and exceeding a reference target when the work asks for it is correct,
+# so a ring labelled "papers outside exceed it" was making a false claim about a healthy review.
+# They now mark where a paper sits in the corpus by importance, which is a fact rather than a verdict.
+BAND_QUANTILES = (0.05, 0.25, 0.50)   # innermost cut is the top-5% slice the review's header prints
+
+
+def band_cuts(corpus_size: int, quantiles: tuple[float, ...] = BAND_QUANTILES) -> list[int]:
+    """Rank positions of the rings, as a share of the project corpus. Strictly increasing.
+
+    A small corpus can round several quantiles onto the same rank; collapsing them means one ring
+    rather than three drawn on top of each other (the duplicate-node-id bug the old two-ring code
+    shipped whenever ``target_min == target_max``).
+    """
+    cuts: list[int] = []
+    for q in quantiles:
+        c = max(1, round(max(0, corpus_size) * q))
+        if not cuts or c > cuts[-1]:
+            cuts.append(c)
+    return cuts
 _HALF_FILL = 0.92        # fraction of each theme's angular sector used (leaves gaps between slices)
 _R0 = 210.0              # inner radius, points (leaves room for the centre hub)
 _GAP = 48.0              # radial gap between bands (holds a target ring)
@@ -370,11 +414,15 @@ _LABEL_GAP = 130.0       # theme-label distance beyond the outermost paper, poin
 _HUB_W, _HUB_H = 2.3, 1.0    # centre hub size, inches
 
 
-def _legend(kinds: list[str], target_min: int, target_max: int) -> str:
-    """Graph-label legend decoding every channel: the red target rings (reference budget), blob size
-    (total citations), black-ring thickness (in-corpus citations), and the citation arrows present."""
-    rows = [f'<TR><TD ALIGN="LEFT"><FONT COLOR="#dc2626"><B>red rings</B></FONT> = target reference '
-            f'budget ({target_min}\u2013{target_max}); papers outside exceed it</TD></TR>',
+def _legend(kinds: list[str], cuts: list[int], corpus_size: int,
+            quantiles: tuple[float, ...] = BAND_QUANTILES) -> str:
+    """Graph-label legend decoding every channel: the red quantile rings, blob size (total
+    citations), black-ring thickness (in-corpus citations), and the citation arrows present."""
+    pcts = "% / ".join(f"{q * 100:g}" for q in quantiles[:len(cuts)]) + "%"
+    ranks = " / ".join(str(c) for c in cuts)
+    rows = [f'<TR><TD ALIGN="LEFT"><FONT COLOR="#dc2626"><B>red rings</B></FONT> = top {pcts} '
+            f'of the {corpus_size}-source corpus by importance to this review '
+            f'({ranks} papers)</TD></TR>',
             '<TR><TD ALIGN="LEFT"><B>nearer the centre</B> = more discussed in this review</TD></TR>',
             '<TR><TD ALIGN="LEFT"><B>blob size</B> = total citations (OpenAlex)</TD></TR>',
             '<TR><TD ALIGN="LEFT"><B>black ring</B> = citations within this review</TD></TR>']
@@ -473,23 +521,26 @@ def _collision_scale(m: Mindmap, pos: dict[str, tuple[float, float]]) -> float:
     return s * 1.02
 
 
-def band_layout(m: Mindmap, target_min: int, target_max: int
+def band_layout(m: Mindmap, cuts: list[int]
                 ) -> tuple[dict[str, tuple[float, float]], list[float], dict[int, tuple[float, float]], float]:
-    """The full geometry: pinned (x,y) points per paper, the two target-ring radii, per-theme label
-    anchors, and the outer radius. Pure + deterministic (unit-testable). Papers rank by importance;
-    the top ``target_min`` form the inner band, the next up to ``target_max`` the middle band, the
-    rest the outer band; a red ring sits in each gap so exactly ``target_min``/``target_max`` fall
-    inside. Then a single collision-scale guarantees zero overlap."""
+    """The full geometry: pinned (x,y) points per paper, one ring radius per cut, per-theme label
+    anchors, and the outer radius. Pure + deterministic (unit-testable).
+
+    Papers rank by importance; ``cuts`` (from :func:`band_cuts`) splits the ranking into
+    ``len(cuts) + 1`` bands, and a red ring sits in each gap so exactly ``cuts[i]`` papers fall
+    inside ring *i*. Then a single collision-scale guarantees zero overlap."""
     n = max(1, len(m.themes))
     half = (math.pi / n) * _HALF_FILL
     theme_idx = {t: i for i, t in enumerate(m.themes)}
     ranked = sorted(m.papers, key=lambda p: (p.importance, p.cited_by, p.key), reverse=True)
-    bands = [ranked[:target_min], ranked[target_min:target_max], ranked[target_max:]]
+    edges_ = [0, *cuts, len(ranked)]
+    bands = [ranked[a:b] for a, b in zip(edges_, edges_[1:])]
     pos: dict[str, tuple[float, float]] = {}
     r0, circle_r, outer = _R0, [], _R0
+    last = len(bands) - 1
     for bi, ps in enumerate(bands):
         bmax = _place_band(ps, r0, pos, theme_idx, n, half) if ps else r0
-        if bi < 2:
+        if bi < last:
             circle_r.append(bmax + _GAP / 2)
             r0 = bmax + _GAP
         else:
@@ -505,14 +556,14 @@ def band_layout(m: Mindmap, target_min: int, target_max: int
 
 
 def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
-           target_min: int = 20, target_max: int = 50) -> str:
-    """The contribution map: importance BANDS (core / budget / overflow) packed into theme pie-slices,
-    with red target rings marking the ``target_min``/``target_max`` reference budget. Blob size = total
-    citations, black ring = in-corpus citations, faded arrows = the real OpenAlex citation graph, a
-    centre hub, theme labels outside. Emits pinned coordinates in points — render with ``dot -Kneato
-    -n2`` (see :func:`_render_pinned`)."""
+           corpus_size: int = 0, quantiles: tuple[float, ...] = BAND_QUANTILES) -> str:
+    """The contribution map: importance BANDS packed into theme pie-slices, with red rings at fixed
+    quantiles of the project corpus. Blob size = total citations, black ring = in-corpus citations,
+    faded arrows = the real OpenAlex citation graph, a centre hub, theme labels outside. Emits pinned
+    coordinates in points — render with ``dot -Kneato -n2`` (see :func:`_render_pinned`)."""
     prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview"}
-    pos, circle_r, label_pos, outer = band_layout(m, target_min, target_max)
+    cuts = band_cuts(corpus_size or len(m.papers), quantiles)
+    pos, circle_r, label_pos, outer = band_layout(m, cuts)
     shown = set(pos)
     indeg = Counter(e.dst for e in m.edges if e.src in shown and e.dst in shown)
     L = [figure._dot_header(fig_id, title or "Contribution map.", prov),
@@ -543,12 +594,15 @@ def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
             if kind not in present:
                 present.append(kind)
             L.append(f'  "{e.src}" -> "{e.dst}" [{style}, arrowsize=0.6];')
-    # native red target rings (drawn on top) + their labels
-    for rr, t in zip(circle_r, (target_min, target_max)):
-        L.append(f'  "__ring{t}__" [pos="0,0!", shape=circle, fixedsize=true, width={2*rr/72:.3f}, '
+    # native red quantile rings (drawn on top) + their labels. Node ids are the ring INDEX, never
+    # the cut value: two equal cuts used to emit the same id twice and graphviz silently kept one.
+    for bi, (rr, cut) in enumerate(zip(circle_r, cuts)):
+        pct = f"{quantiles[bi] * 100:g}%" if bi < len(quantiles) else f"top {cut}"
+        L.append(f'  "__ring{bi}__" [pos="0,0!", shape=circle, fixedsize=true, width={2*rr/72:.3f}, '
                  f'height={2*rr/72:.3f}, label="", style=solid, fillcolor="none", color="#dc2626", '
                  'penwidth=4];')
-        L.append(f'  "__ringlbl{t}__" [pos="0,{rr+34:.0f}!", shape=plaintext, label="target {t}", '
+        L.append(f'  "__ringlbl{bi}__" [pos="0,{rr+34:.0f}!", shape=plaintext, '
+                 f'label="top {pct} ({cut})", '
                  f'fontcolor="#dc2626", fontsize=26, fontname="Helvetica-Bold"];')
     # theme labels outside the outermost ring
     for i, theme in enumerate(m.themes):
@@ -556,7 +610,8 @@ def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
         lx, ly = label_pos[i]
         L.append(f'  "__t{i}__" [pos="{lx:.1f},{ly:.1f}!", shape=box, style="rounded,filled", '
                  f'fillcolor="{hue}", fontcolor="#ffffff", fontsize=16, label="{_wrap(_q(theme, 70), 18)}"];')
-    legend = _legend([k for k in _KIND_ORDER if k in present], target_min, target_max)
+    legend = _legend([k for k in _KIND_ORDER if k in present], cuts, corpus_size or len(m.papers),
+                     quantiles)
     L.append(f'  label={legend}; labelloc=b; fontsize=11; fontname="Helvetica";')
     L.append("}")
     return "\n".join(L) + "\n"
@@ -633,63 +688,115 @@ def _papers_block(cited: list[str], valid_keys: dict[str, str],
     return "\n".join(out)
 
 
-def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
-            evidence: dict[str, list[str]] | None = None, repair: bool = True) -> Mindmap:
-    """Brain distils a findings phrase per paper; parsed, grounded, validated. One repair pass; a
-    labelled-stub Mindmap on total failure, never an exception. Edges are NOT the model's job — the
-    caller overlays the real OpenAlex citation graph (see :func:`citation_edges`)."""
-    themes = [t.theme for t in threads]
-    cited = sorted({k for t in threads for k in t.citekeys if k in valid_keys})
+_COMPOSE_BATCH = 25      # papers per compose call — see the note in :func:`compose`
+
+
+def _compose_batch(brain, themes: list[str], batch: list[str], valid_keys: dict[str, str],
+                   evidence: dict[str, list[str]], repair: bool) -> tuple[list[Paper], str]:
+    """One compose call over one batch of papers. Returns (grounded papers, last raw reply)."""
     prompt = _PROMPT.format(themes="\n".join(f"- {t}" for t in themes),
-                            papers=_papers_block(cited, valid_keys, evidence or {}))
+                            papers=_papers_block(batch, valid_keys, evidence))
+    sub = {k: valid_keys[k] for k in batch}
     # think=False: a contribution phrase is a grounded rewrite of the paper's evidence sentence,
     # governed by the prompt's few-shot rules — not judgement work. Leaving the coordinator's default
     # chain-of-thought on made it reason across every paper at once (a 69-paper review ran past a
     # 500s wall before emitting any JSON); without it the model streams the spec directly.
     reply = brain.coordinator(prompt, _SYS, think=False)
-    raw = parse_spec(reply)
-    m = validate(raw, {k: valid_keys[k] for k in cited}, themes)
+    m = validate(parse_spec(reply), sub, themes)
     if not m.papers and repair:
         # The repair must CARRY the papers: the coordinator is stateless, so a bare "return JSON"
         # follow-up asks the model to re-emit a spec it can no longer see. Re-send the full prompt.
         reply = brain.coordinator(prompt + "\n\n" + _REPAIR, _SYS, think=False)
-        raw = parse_spec(reply)
-        m = validate(raw, {k: valid_keys[k] for k in cited}, themes)
-    if not m.papers and cited:
+        m = validate(parse_spec(reply), sub, themes)
+    return m.papers, reply
+
+
+def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
+            evidence: dict[str, list[str]] | None = None, repair: bool = True,
+            batch_size: int = _COMPOSE_BATCH) -> Mindmap:
+    """Brain distils a findings phrase per paper; parsed, grounded, validated. A labelled-stub
+    Mindmap on total failure, never an exception. Edges are NOT the model's job — the caller
+    overlays the real OpenAlex citation graph (see :func:`citation_edges`).
+
+    Composed in BATCHES, one call per chunk of papers within a theme. A single call carrying the
+    whole review does not fit: a 160-paper review built a 14.7k-token prompt and then needed ~5.6k
+    tokens of JSON back, against a 16k window. The reply truncated, the repair pass re-sent the same
+    oversized prompt and truncated identically, and the map shipped with zero papers — a blank
+    diagnostic that reported nothing while looking like a rendered figure. Batching also contains
+    failure: a batch that comes back unparseable costs its own papers, not the whole map.
+    """
+    evidence = evidence or {}
+    themes = [t.theme for t in threads]
+    # Each paper is composed ONCE, under the first theme that cites it — a paper cited in four
+    # sections must not be sent four times, nor land as four nodes.
+    seen: set[str] = set()
+    batches: list[list[str]] = []
+    for t in threads:
+        keys = [k for k in t.citekeys if k in valid_keys and k not in seen]
+        seen.update(keys)
+        for i in range(0, len(keys), max(1, batch_size)):
+            batches.append(keys[i:i + max(1, batch_size)])
+    cited = sorted(seen)
+
+    papers: dict[str, Paper] = {}
+    last_reply, failed = "", 0
+    for bi, batch in enumerate(batches, 1):
+        try:
+            got, last_reply = _compose_batch(brain, themes, batch, valid_keys, evidence, repair)
+        except Exception as e:                                       # noqa: BLE001
+            print(f"[mindmap] compose batch {bi}/{len(batches)} failed ({e}) — "
+                  f"{len(batch)} paper(s) will be missing.", file=sys.stderr)
+            failed += 1
+            continue
+        if not got:
+            failed += 1
+        for p in got:
+            papers.setdefault(p.key, p)
+    if failed:
+        print(f"[mindmap] compose: {failed} of {len(batches)} batch(es) grounded nothing; "
+              f"{len(papers)} of {len(cited)} cited papers on the map.", file=sys.stderr)
+    if not papers and cited:
         # A per-draft diagnostic that never runs a model is worthless; surface WHY it grounded
         # nothing (into the task log_tail) so the next failure is diagnosable without a live re-run.
-        print(f"[mindmap] compose grounded 0 of {len(cited)} cited papers "
-              f"(reply parsed {len(raw.get('papers') or [])} entries). raw reply head: "
-              f"{(reply or '')[:400]!r}", file=sys.stderr)
-    return m
+        print(f"[mindmap] compose grounded 0 of {len(cited)} cited papers. "
+              f"raw reply head: {(last_reply or '')[:400]!r}", file=sys.stderr)
+    used = [t for t in themes if any(p.theme == t for p in papers.values())]
+    return Mindmap(themes=used or ([themes[0]] if themes else ["papers"]),
+                   papers=list(papers.values()), edges=[])
 
 
 # ── orchestration ──────────────────────────────────────────────────────────────
 
 def spec_from_map(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
-                  target_min: int = 20, target_max: int = 50) -> figure.FigureSpec:
-    """Render an already-composed Mindmap (all papers) to a FigureSpec, with the target rings drawn
-    at the project's reference budget ``target_min``/``target_max``."""
-    dot = to_dot(m, fig_id=fig_id, title=title, target_min=target_min, target_max=target_max)
+                  corpus_size: int = 0,
+                  quantiles: tuple[float, ...] = BAND_QUANTILES) -> figure.FigureSpec:
+    """Render an already-composed Mindmap (all papers) to a FigureSpec, with the red rings drawn at
+    fixed quantiles of the project corpus (``corpus_size``)."""
+    dot = to_dot(m, fig_id=fig_id, title=title, corpus_size=corpus_size, quantiles=quantiles)
+    cuts = band_cuts(corpus_size or len(m.papers), quantiles)
     prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview",
             "themes": len(m.themes), "papers": len(m.papers), "edges": len(m.edges),
-            "target_min": target_min, "target_max": target_max}
+            "corpus_size": corpus_size or len(m.papers),
+            "quantiles": list(quantiles[:len(cuts)]), "cuts": cuts}
     return figure.FigureSpec(id=fig_id, kind="mindmap", format="dot", source=dot,
                              caption=title or "Contribution map.", provenance=prov)
 
 
 def build_spec(review_md: str, refs_bib: str, brain, *, fig_id: str = "litmap", title: str = "",
-               target_min: int = 20, target_max: int = 50) -> figure.FigureSpec:
+               corpus_size: int = 0,
+               quantiles: tuple[float, ...] = BAND_QUANTILES) -> figure.FigureSpec:
     """Core, testable with a fake brain: review + refs.bib -> composed, grounded FigureSpec. The
     contribution phrases come from the brain (grounded in the review's citing sentences) and node
     centrality from the review's own prose weight; the citation arrows + sizes are overlaid in
     :func:`run` (they need the network), so this seam stays offline."""
-    m = compose(brain, parse_threads(review_md), bib_keys(refs_bib),
+    keys = bib_keys(refs_bib)
+    m = compose(brain, parse_threads(review_md), keys,
                 evidence=citation_evidence(review_md))
     weight = evidence_weight(review_md)
     for p in m.papers:
         p.importance = weight.get(p.key, 0)
-    return spec_from_map(m, fig_id=fig_id, title=title, target_min=target_min, target_max=target_max)
+    return spec_from_map(m, fig_id=fig_id, title=title,
+                         corpus_size=corpus_size or len(keys), quantiles=quantiles)
 
 
 def _renders(dot: str) -> bool:
@@ -777,8 +884,10 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
           f"OpenAlex citations (email={gc.contact_email or 'unset'})", file=sys.stderr)
     # ONE big map: importance bands (core / budget / overflow) as theme pie-slices, with the red
     # target rings drawn at the project's reference budget; size = total citations, ring = in-corpus.
+    # The rings are quantiles of the PROJECT CORPUS — refs.bib is that corpus as exported, and is
+    # the same universe the grounding law admits papers from, so it is the honest denominator.
     spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
-                         target_min=cfg.target_min, target_max=cfg.target_max)
+                         corpus_size=len(bib_keys(refs_bib)))
     res = emit(paths.output, short, spec)          # into litReview/output, NOT the figures pool
     print(f"[mindmap] {spec.provenance['papers']} papers, {spec.provenance['edges']} citation "
           f"edges  ->  {res.get('svg') or res.get('source')}")

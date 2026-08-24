@@ -38,12 +38,15 @@ def test_one_sources_task_prepends_a_steered_gather():
     assert built["section_focus"] == []
 
 
-def test_a_section_routes_the_redraft_to_report():
-    """`report` re-plans the sections AND embeds inline, so a section chain gets an `audit` but
-    no separate `build` (no double embedding)."""
+def test_a_section_routes_the_redraft_to_graft():
+    """A section ask is drafted and spliced in; only a redirect earns a whole-document `report`.
+
+    `graft` reads a cached corpus, so a chain that changed the corpus embeds with `build` first
+    — the same reason `revise` does."""
     built = planner.chain_from_tasks([_task("section", "supply-chain reshoring")])
-    assert built["steps"] == ["gather", "collect", "audit", "report", "mindmap", "comment"]
-    assert "build" not in built["steps"]
+    assert built["steps"] == ["gather", "collect", "audit", "build", "graft",
+                              "mindmap", "comment"]
+    assert "report" not in built["steps"], "a section must not cost a whole-document re-draft"
     assert built["section_focus"] == ["supply-chain reshoring"]
     assert built["tier"] == "gap_fill"
 
@@ -65,14 +68,15 @@ def test_ingest_gets_collect_audit_and_build_before_revise():
 
 def test_elephantroom_shaped_set_steers_gather_at_every_theme():
     """Three broad new themes (two 'sources', one 'section') plus two in-place edits: the gather
-    is steered at all three queries, the redraft is `report` (a section is present), and the two
+    is steered at all three queries, the redraft is `graft` (a section is present), and the two
     edits ride along — the exact set that fell through the old whole-set classifier."""
     tasks = [_task("sources", "household distributional equity of ABM impacts"),
              _task("sources", "consumption smoothing, savings drawdown, innovation"),
              _task("section", "supply-chain reshoring and domestic production"),
              _task("edit"), _task("edit")]
     built = planner.chain_from_tasks(tasks)
-    assert built["steps"] == ["gather", "collect", "audit", "report", "mindmap", "comment"]
+    assert built["steps"] == ["gather", "collect", "audit", "build", "graft",
+                              "mindmap", "comment"]
     assert built["gather_topics"] == [
         "household distributional equity of ABM impacts",
         "consumption smoothing, savings drawdown, innovation",
@@ -145,14 +149,14 @@ def test_no_comments_is_no_tasks():
 
 def test_an_explicit_section_ask_is_promoted_even_when_the_model_said_sources():
     """The 8B coordinator filed 'a section on X' under sources (→ revise → decline). The floor
-    promotes it to a section task, so the chain re-plans (`report`) instead."""
+    promotes it to a section task, so the chain grafts the strand in instead."""
     text = "It would be great to have a section identifying regular milestones."
     tasks = planner._normalise_tasks(
         [{"comments": [1], "need": "sources", "query": "milestones"}], [text])
     assert [t["need"] for t in tasks] == ["section"]
-    assert tasks[0]["query"] == text                 # the comment's own words steer the report
+    assert tasks[0]["query"] == text                 # the comment's own words steer the graft
     assert planner.chain_from_tasks(tasks)["steps"] == \
-        ["gather", "collect", "audit", "report", "mindmap", "comment"]
+        ["gather", "collect", "audit", "build", "graft", "mindmap", "comment"]
 
 
 def test_an_edit_of_an_existing_section_is_not_promoted():
@@ -256,9 +260,25 @@ def test_steering_writes_a_gap_config_with_the_queries(monkeypatch):
     name = planner._write_litreview_steering("/proj", built)
     assert name == "litrev_2.yaml"
     assert calls["topics"] == ["topic A", "topic B"]
-    assert calls["extra_focus"] == "topic B"          # the section query is the report focus
+    assert calls["extra_focus"] == "topic B"          # the section query is the graft focus
 
 
 def test_steering_is_a_noop_when_nothing_needs_sources():
     built = planner.chain_from_tasks([_task("edit")])
     assert planner._write_litreview_steering("/proj", built) is None
+
+
+def test_only_a_redirect_can_cost_a_whole_document_redraft():
+    """The wave-4 promise. `report` re-plans and regenerates every section, discarding the
+    reviewer's comment threads with it, so a single `section` ask must never reach it."""
+    for need in ("edit", "sources", "section", "cite", "ingest"):
+        built = planner.chain_from_tasks([_task(need, "a topic")])
+        assert "report" not in built["steps"], f"{need!r} must not trigger a full re-draft"
+    assert "report" in planner.chain_from_tasks([_task("redirect", "new direction")])["steps"]
+
+
+def test_a_section_alongside_an_edit_still_only_grafts():
+    """A heavier need used to drag the whole set into `report`; the point of graft is that the
+    rework scales to the ask, not to the heaviest member of the set."""
+    built = planner.chain_from_tasks([_task("section", "reshoring"), _task("edit")])
+    assert "graft" in built["steps"] and "report" not in built["steps"]

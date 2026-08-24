@@ -1012,13 +1012,17 @@ def run(directory: str = ".", brain_override: str | None = None,
     metrics_line = guards.metrics(narrative, set(citekeys.values())).line()
     print(f"  {runlog.stamp()}[polestar] {metrics_line}")
     out_md, out_docx = _revision_paths(paths, docx)
-    from .render import build_markdown, pandoc_convert
+    from .render import _paged_reference, build_markdown, pandoc_convert
+    from .summarize import top_sources_block
+    # Re-ranked, not carried over: a revise changes which paragraphs carry the argument, so the
+    # load-bearing list is only true of the draft it was computed from.
     md_text = build_markdown(cfg, brain.backend, narrative, biblio, corpus, unmatched,
-                             metrics_line)
+                             metrics_line,
+                             top_sources_block(brain, cfg, narrative, corpus, citekeys))
     out_md.write_text(md_text, encoding="utf-8")
     # No citeproc: the [@citekeys] stay as written, and the annotated bibliography that
     # names each one is already in the document. See render.write_review.
-    pandoc_convert(out_md, out_docx)
+    pandoc_convert(out_md, out_docx, reference_doc=_paged_reference(paths))
 
     print()
     print("=" * 60)

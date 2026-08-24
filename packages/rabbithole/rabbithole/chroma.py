@@ -16,6 +16,7 @@ import sys
 
 _CHUNK_CHARS = 1800       # max chars per chunk (≈ 450 tokens — leaves room for query + output)
 _COLLECTION_NAME = "papers"
+_LOCATE_CANDIDATES = 3    # chunks fetched per claim, so a collision can fall through to the next
 
 
 def get_collection(chroma_dir):
@@ -153,25 +154,37 @@ def locate_direct(collection, brain, citekey: str, statements: str) -> list[dict
             q_emb = brain.embed(claim)
         except Exception:  # noqa: BLE001
             continue
+        # Ask for several chunks, not one. Two claims about the same finding legitimately
+        # retrieve the same top chunk; taking the best UNSEEN one gives the second claim its
+        # own passage instead of making it collide.
         r = collection.query(
             query_embeddings=[q_emb],
             where={"citekey": citekey},
-            n_results=1,
+            n_results=_LOCATE_CANDIDATES,
             include=["documents", "metadatas"],
         )
         docs = r.get("documents", [[]])[0]
         metas = r.get("metadatas", [[]])[0]
         if not docs:
             continue
-        meta, chunk = metas[0], docs[0]
-        chunk_idx = meta.get("chunk_idx", 0)
-        if chunk_idx in seen_chunks:
-            continue  # skip duplicate chunk across claims
-        seen_chunks.add(chunk_idx)
+        # Prefer the best-ranked chunk nobody has quoted yet; fall back to the top chunk when
+        # every candidate is already spoken for. A claim is NEVER dropped for colliding — the
+        # annotated bibliography is where this review's facts live, and a repeated passage is
+        # a far smaller defect than a fact that silently vanishes.
+        pick = 0
+        for j, meta in enumerate(metas):
+            if meta.get("chunk_idx", 0) not in seen_chunks:
+                pick = j
+                break
+        meta, chunk = metas[pick], docs[pick]
+        seen_chunks.add(meta.get("chunk_idx", 0))
         page = meta.get("page", "?")
         quote = _best_sentence(chunk, claim)
         results.append({
-            "claim": claim[:300],
+            # Stored WHOLE. The store is not the place to lose information; the annotated
+            # bibliography truncates for display (see summarize.bibliography), where the cut
+            # lands on a word boundary and says so with an ellipsis.
+            "claim": claim,
             "location": f"p.{page}",
             "quote": quote,
         })

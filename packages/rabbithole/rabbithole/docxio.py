@@ -31,8 +31,52 @@ def require_docx() -> None:
         raise SystemExit(1)
 
 
+def is_section_heading(style_name: str) -> bool:
+    """True for the heading level a litreview SECTION uses — ``## `` renders as Heading 2.
+
+    Deliberately narrower than ``redline.is_heading_style``, which is also true of the document
+    title (Heading 1). Counting the title as a section put every anchor one out of step with
+    ``summarize.sections_from_markdown``, whose list starts at the first ``## ``.
+    """
+    return (style_name or "").strip().lower() in ("heading 2", "heading2")
+
+
+def comment_sections(path: Path) -> dict[str, int]:
+    """Comment id -> the index of the ``## `` section its anchor sits in (-1 before the first).
+
+    Where a comment SITS is a statement about where its ask belongs, and the planner never got to
+    hear it: this used to be dropped on the floor, so "add a section on X" arrived with no idea
+    the reviewer wrote it inside the border-adjustments discussion. Sections are counted over
+    heading-styled paragraphs, in document order.
+    """
+    out: dict[str, int] = {}
+    try:
+        doc = Document(str(path))
+        idx = -1
+        for p in doc.paragraphs:
+            if is_section_heading(p.style.name if p.style is not None else ""):
+                idx += 1
+                continue
+            for start in p._p.findall(qn("w:commentRangeStart")):
+                if (cid := start.get(qn("w:id"))) is not None:
+                    out.setdefault(cid, idx)
+            # A comment anchored to a zero-length range carries only the reference run.
+            for ref in p._p.iter(qn("w:commentReference")):
+                if (cid := ref.get(qn("w:id"))) is not None:
+                    out.setdefault(cid, idx)
+    except Exception:  # noqa: BLE001 — an anchor is a hint; never fail a read over one
+        pass
+    return out
+
+
 def read_comments(path: Path) -> list[dict]:
+    """Every reviewer comment: ``{author, text, id, section}``.
+
+    ``section`` is the index of the ``## `` section the comment is anchored in, or -1 when it
+    could not be located — the signal a graft uses to decide where a requested section goes.
+    """
     doc = Document(str(path))
+    where = comment_sections(path)
     comments = []
     try:
         for rel in doc.part.rels.values():
@@ -45,9 +89,11 @@ def read_comments(path: Path) -> list[dict]:
                 continue
             for c in rel.target_part._element.findall(".//" + qn("w:comment")):
                 author = c.get(qn("w:author"), "reviewer")
+                cid = c.get(qn("w:id"), "")
                 texts = [t.text for t in c.findall(".//" + qn("w:t")) if t.text]
                 if texts:
-                    comments.append({"author": author, "text": " ".join(texts)})
+                    comments.append({"author": author, "text": " ".join(texts),
+                                     "id": cid, "section": where.get(cid, -1)})
             break
     except Exception:  # noqa: BLE001
         pass

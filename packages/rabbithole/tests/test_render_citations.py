@@ -20,6 +20,8 @@ class _Paths:
     def __init__(self, root: Path):
         self.output = root / "output"
         self.output.mkdir(parents=True, exist_ok=True)
+        self.work = root / "work"
+        self.work.mkdir(parents=True, exist_ok=True)
 
 
 def _cfg():
@@ -33,8 +35,8 @@ def test_the_review_renders_without_citeproc(tmp_path, monkeypatch):
     seen = {}
 
     def fake_convert(src, dst, bib_path=None, resource_path=None,
-                     suppress_bibliography=False):
-        seen.update(bib=bib_path, suppress=suppress_bibliography)
+                     suppress_bibliography=False, reference_doc=None, **kw):
+        seen.update(bib=bib_path, suppress=suppress_bibliography, ref=reference_doc)
         dst.write_bytes(b"docx")
         return True
 
@@ -46,6 +48,9 @@ def test_the_review_renders_without_citeproc(tmp_path, monkeypatch):
 
     assert out_docx is not None
     assert seen["bib"] is None, "no bibliography means no citeproc means the key survives"
+    assert seen["ref"] is not None and seen["ref"].name == "reference_paged.docx", \
+        "the review renders against the page-numbered reference doc"
+    assert seen["ref"].is_file()
 
 
 def test_the_key_survives_into_the_markdown(tmp_path, monkeypatch):

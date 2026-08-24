@@ -29,8 +29,9 @@ instead of a single tier:
   { "comment_ids": ["10","11"], "need": "edit" } ]
 ```
 
-`need ∈ {edit, sources, section, ingest, cite, redirect}` (the litreview verb-need vocabulary).
-Every comment lands in exactly one task; a `query` is required for `sources`/`section`/`redirect`.
+`need ∈ {edit, sources, section, ingest, cite, redirect, correct}` (the litreview verb-need
+vocabulary). Every comment lands in exactly one task; a `query` is required for
+`sources`/`section`/`redirect`, and a `wrong`/`right` pair for `correct`.
 The two source-provenance needs are distinct and easy to conflate:
 
 - **`ingest`** — references the reviewer supplied that are **not yet in Zotero** (pasted text,
@@ -58,15 +59,26 @@ in dependency order:
 - a **`cite`** task (papers already in Zotero) → a lone **`build`** before revise, with no
   gather/collect (nothing to fetch) and no audit (deference forbids quarantining sources the
   reviewer named);
-- the redraft verb is **`report`** if any `section`/`redirect` task exists (it re-plans the
-  review's sections from the corpus *and embeds inline*, so a report chain never gets a separate
+- the redraft verb is **`graft`** if any `section` task exists, **`report`** only for a
+  `redirect`, else **`revise`**. `report` re-plans the review's sections from the corpus *and
+  embeds inline*, so a report chain never gets a separate
   `build`), otherwise **`revise`** (in-place per-comment edits);
 - a `redirect` task also **rewrites the brief** before gather;
+- a `correct` task adds **no step at all**. A reviewer correcting a name is saying the project
+  has a fact wrong, and the fix is one deterministic substitution — applied by the planner, before
+  the chain is queued, across `haarpi.yaml:brief`, the litrev config's
+  `topic`/`focus`/`research_prompt` and the current `*_litreview_ra.md` (re-rendered to .docx).
+  Queueing it would make a one-right-answer edit depend on a task running, which is the failure it
+  exists to fix: a span-local reviser corrected one of six occurrences of a wrong model name and
+  left the brief — the string every gather searches with — untouched, so the next cycle re-injected
+  it. A correction that matches nothing is reported as `NOTHING MATCHED` rather than passing
+  silently; the counts land on the plan record. When a chain's only need is `correct`, no redraft
+  is queued at all.
 - always end **`… → comment → next`**.
 
 **The embedding contract, enforced structurally:** a `revise` re-draft never reads a corpus
 `build` has not touched. Every path that changes the corpus (`collect` present) or cites
-reviewer-added papers (`cite`) carries a `build` immediately before revise; `report` paths are
+reviewer-added papers (`cite`) carries a `build` immediately before revise or graft; `report` paths are
 exempt because they embed inline. This is the invariant `test_a_revise_redraft_never_reads_an_
 unembedded_corpus` pins.
 
@@ -80,12 +92,30 @@ unembedded_corpus` pins.
 - **`gather`** ← `gather_topics` = the `query` of every `sources`/`section` task. The specific
   comments that need sources deterministically drive and steer the gather — not an LLM's
   whole-set guess. (This is the elephantRoom fix, generalized to all comment types.)
-- **`report`** ← the `section`/`redirect` queries as focus additions (its only channel from the
-  comments, since `report` does not read the docx).
+- **`graft`** ← the `section` queries as focus additions, and the requesting comment's own
+  anchor as the insertion position.
+- **`report`** ← the `redirect` query as a focus addition (its only channel from the comments,
+  since `report` does not read the docx).
 - **`revise`** ← the docx itself, for the reviser's own per-comment routing (unchanged).
 - **`redirect`** ← the rewritten brief.
 
 ## Known limitation (preserved, made explicit)
+
+### Why a section no longer costs a re-draft
+
+`graft` exists because rework was scaled to the heaviest ask in a set rather than to the ask
+itself. One `section` need sent the whole annotation set to `report`, which re-plans and
+regenerates every section — a second full read of a 27-page document to see two new ones, with
+every comment thread discarded because `report` writes a fresh .docx with no anchors.
+
+`graft` drafts only the requested strand and splices it into a COPY of the reviewer's own .docx
+as a tracked insertion. Existing paragraphs are never passed to a model, so they come through
+byte-identical and the comment threads survive. That is also what makes the diff mean anything to
+the redline engine: a document that changes 100% every cycle gives it nothing to anchor against.
+
+Position, in priority order: the requesting comment's own anchor (deference — where the reviewer
+wrote is a statement about where the ask belongs); else the nearest existing section by
+embedding; else the end of the review, **reported to the human**, never silent.
 
 `report` regenerates the review from the corpus and does not read the redline, so a cycle that
 adds a section cannot also carry in-place sentence edits — **section-add dominates a cycle.**
@@ -122,7 +152,8 @@ the tier classifier. The paper ladder is untouched.
    derived summary. (The general solution.) Recommend: yes.
 2. **Litreview first**, paper ladder unchanged for now. Recommend: yes (safe blast radius; the
    observed failure and the retry are both litreview).
-3. **Accept the `report` section-dominates-a-cycle limitation** for now (surface it, don't solve
+3. ~~**Accept the `report` section-dominates-a-cycle limitation**~~ — SOLVED by `graft`; a
+   section no longer dominates a cycle. Was: (surface it, don't solve
    it). Recommend: yes.
 
 ## Build order (each step ends green)

@@ -193,26 +193,59 @@ def _sections_citing(*keysets):
 
 def test_orphans_are_offered_to_their_nearest_section():
     """Each orphan goes to the section it is closest to — using the similarity already
-    computed for the shortlist — and an offer costs one appended paragraph, never a re-draft
-    of the section."""
+    computed for the shortlist — and an offer REWRITES one numbered paragraph, never appends
+    a new one and never re-drafts the section."""
     sections = _sections_citing(["a1"], ["b2"])
     keys = ["a1", "b2", "c3", "d4", "e5"]
     # matrix[section][source]: c3, d4, e5 all sit closest to section 1
     matrix = [[1.0, 0.0, 0.0, 0.1, 0.0],
               [0.0, 1.0, 0.5, 0.9, 0.5]]
-    brain = _FakeBrain(weave=["PARAGRAPH:\nand now [@d4] and [@c3] and [@e5].\n\nDECLINED:\n{}"],
+    brain = _FakeBrain(weave=["PARAGRAPH: 1\n\nREVISED:\nA deepened claim [@b2], now also "
+                              "[@d4] and [@c3] and [@e5].\n\nDECLINED:\n{}"],
                        reject="{}")
     rejected = summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
                                         "SYS", CORPUS, COMPACT, rounds=1)
     assert brain.calls.count("weave") == 1, "section 0 is nearest to nothing; do not call it"
     assert "revise" not in brain.calls, "an offer must not re-emit the whole section"
     assert sections[0].text == "claim [@a1]."     # untouched
-    assert sections[1].text.startswith("claim [@b2].")   # kept, with the paragraph appended
     assert "[@d4]" in sections[1].text
+    assert "[@b2]" in sections[1].text, "a rewrite keeps the evidence the paragraph already had"
+    assert len(summarize._paragraphs(sections[1].text)) == 1, "replaced in place, not appended"
     assert rejected == {}
     # the orphan's own digest line must reach the model, and the shortlist must not
     assert "[@d4] full digest" in brain.weave_prompts[0]
     assert "[@a1]" not in brain.weave_prompts[0], "a weave may only cite what it was offered"
+
+
+def test_a_weave_that_drops_the_paragraphs_own_citations_is_refused():
+    """A rewrite deepens a paragraph's argument; it must never cost the evidence already
+    standing in it. Losing a citekey is a decline, so the orphan routes on instead."""
+    sections = _sections_citing(["a1"], ["b2"])
+    keys = ["a1", "b2", "c3", "d4", "e5"]
+    matrix = [[1.0, 0.0, 0.0, 0.1, 0.0],
+              [0.0, 1.0, 0.5, 0.9, 0.5]]
+    # cites the orphan but silently drops [@b2], the paragraph's own source
+    brain = _FakeBrain(weave=["PARAGRAPH: 1\n\nREVISED:\nOnly [@d4] now.\n\nDECLINED:\n{}"],
+                       reject='{"c3": "no", "d4": "no", "e5": "no"}')
+    summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
+                             "SYS", CORPUS, COMPACT, rounds=1)
+    assert sections[1].text == "claim [@b2].", "the original paragraph survives untouched"
+
+
+def test_a_weave_that_restates_the_paragraph_and_appends_is_refused():
+    """The accretion shape: the paragraph echoed back with new sentences bolted on. This is
+    what stacked 126 -> 188 -> 284-word near-duplicates across placement rounds."""
+    sections = _sections_citing(["a1"], ["b2"])
+    keys = ["a1", "b2", "c3", "d4", "e5"]
+    matrix = [[1.0, 0.0, 0.0, 0.1, 0.0],
+              [0.0, 1.0, 0.5, 0.9, 0.5]]
+    original = sections[1].text
+    echo = f"{original} Furthermore [@d4] agrees."
+    brain = _FakeBrain(weave=[f"PARAGRAPH: 1\n\nREVISED:\n{echo}\n\nDECLINED:\n{{}}"],
+                       reject='{"c3": "no", "d4": "no", "e5": "no"}')
+    summarize._place_orphans(brain, _Cfg(), sections, matrix, keys, FULL,
+                             "SYS", CORPUS, COMPACT, rounds=1)
+    assert sections[1].text == original, "an echo-plus-tail rewrite is refused"
 
 
 def test_a_declined_orphan_is_offered_to_the_next_nearest_section_then_stops():
@@ -328,3 +361,120 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+# ── the load-bearing header (the coverage check) ─────────────────────────────
+
+def _corpus_of(*keys):
+    from rabbithole.models import Author, Candidate
+    return ([Candidate(title=f"Paper {k}", authors=[Author(family=f"Auth{k}")], year=2020)
+             for k in keys],
+            {i: k for i, k in enumerate(keys)})
+
+
+def test_top_source_count_is_a_corpus_share_floored_and_capped():
+    assert summarize.top_source_count(181) == 9          # 5% of the corpus
+    assert summarize.top_source_count(40) == 5           # floor: a small review still gets a list
+    assert summarize.top_source_count(600) == 15         # ceiling: a huge one stays scannable
+    assert summarize.top_source_count(0) == 5
+
+
+def test_top_sources_ranks_by_the_argument_each_source_carries():
+    """Importance is words of review prose devoted to a source, not citation count — a paper the
+    review builds a paragraph on outranks one it name-checks in a list."""
+    corpus, citekeys = _corpus_of("heavy", "light", "unused")
+    narrative = (
+        "## T\n\n"
+        "The framework establishes that coordinated pricing reshapes firm-level investment "
+        "across every sector the model covers, and that the effect compounds over time [@heavy]. "
+        "Also [@light].\n")
+    top = summarize.top_sources(narrative, corpus, citekeys)
+    assert [k for k, _c, _w in top] == ["heavy", "light"]     # uncited source cannot rank
+    assert top[0][2] > top[1][2]
+
+
+def test_top_sources_block_carries_a_reason_per_source():
+    corpus, citekeys = _corpus_of("a1", "b2")
+    narrative = "## T\n\nA claim [@a1]. Another claim [@b2].\n"
+
+    class _B:
+        backend = "ollama"
+        def coordinator(self, prompt, sys="", **kw):
+            assert "a1" in prompt and "evidence:" in prompt   # grounded in the review's own prose
+            return '{"a1": "supplies the pricing mechanism the argument turns on", ' \
+                   '"b2": "supplies the leakage counter-case"}'
+    block = summarize.top_sources_block(_B(), _Cfg(), narrative, corpus, citekeys)
+    assert block.startswith("## Most load-bearing sources (top 5% of 2)")
+    assert "[@a1] — supplies the pricing mechanism" in block
+    assert "[@b2] — supplies the leakage counter-case" in block
+
+
+def test_top_sources_block_still_lists_when_the_rationale_call_fails():
+    """The ranking is deterministic; only the sentences need a model. A failed call must not
+    cost the coverage check."""
+    corpus, citekeys = _corpus_of("a1")
+    narrative = "## T\n\nA claim [@a1].\n"
+
+    class _B:
+        backend = "ollama"
+        def coordinator(self, *a, **kw):
+            raise RuntimeError("ollama down")
+    block = summarize.top_sources_block(_B(), _Cfg(), narrative, corpus, citekeys)
+    assert "[@a1]" in block and "words of the review's argument" in block
+
+
+def test_top_sources_block_is_empty_when_nothing_is_cited():
+    corpus, citekeys = _corpus_of("a1")
+    assert summarize.top_sources_block(None, _Cfg(), "## T\n\nNo citations here.\n",
+                                       corpus, citekeys) == ""
+
+
+# ── the curated-tier screen ──────────────────────────────────────────────────
+
+def _bib_corpus():
+    from rabbithole.models import Author, Candidate
+    return [Candidate(title="Cited work", authors=[Author(family="Able")], year=2020),
+            Candidate(title="Off topic", authors=[Author(family="Baker")], year=2004),
+            Candidate(title="Curated", authors=[Author(family="Carter")], year=2021)]
+
+
+def test_a_source_whose_own_annotation_disqualifies_it_leaves_the_curated_list():
+    """Pacala & Socolow shipped as a 'curated source' under an annotation calling it
+    'largely irrelevant to the specific review focus'."""
+    located = {
+        0: [{"claim": "Supplies the pricing mechanism.", "location": "p.3", "quote": "q"}],
+        1: [{"claim": "While foundational, this paper is largely irrelevant to the specific "
+                      "review focus, as it lacks any analysis of firm-level innovation.",
+             "location": "p.2", "quote": "q"}],
+        2: [{"claim": "Offers a directly comparable leakage estimate.", "location": "p.1",
+             "quote": "q"}],
+    }
+    bib = summarize.bibliography(_bib_corpus(), located, cited_indices={0})
+    assert "### Additional curated sources" in bib
+    assert "Carter" in bib.split("### Additional curated sources")[1].split("###")[0]
+    assert "### Screened out of the curated list" in bib
+    screened = bib.split("### Screened out of the curated list")[1]
+    assert "Baker" in screened and "largely irrelevant to" in screened
+    assert "remain in the corpus" in screened, "a screen records a judgement, it deletes nothing"
+
+
+def test_the_screen_never_touches_a_source_the_review_actually_cites():
+    """A source the narrative uses has earned its place however its annotation is worded."""
+    located = {0: [{"claim": "This does not address household impacts, but supplies the "
+                             "pricing mechanism.", "location": "p.3", "quote": "q"}]}
+    bib = summarize.bibliography(_bib_corpus(), located, cited_indices={0})
+    assert "Able" in bib.split("### Cited in the review")[1]
+    assert "Screened out" not in bib
+
+
+def test_the_screen_can_be_turned_off():
+    located = {1: [{"claim": "largely irrelevant to this review.", "location": "p.1",
+                    "quote": "q"}]}
+    bib = summarize.bibliography(_bib_corpus(), located, cited_indices=set(),
+                                 screen_curated=False)
+    assert "Screened out" not in bib and "Baker" in bib
+
+
+def test_self_disqualified_needs_a_real_phrase_not_a_hedge():
+    assert summarize.self_disqualified([{"claim": "This is only partly relevant but useful."}]) == ""
+    assert summarize.self_disqualified([{"claim": "Irrelevant to the review's focus."}])

@@ -52,7 +52,25 @@ Two commands with one human gate in the middle; both are repeatable:
 rabbitHole gather   ── machine ──▶ candidates.md  (only what's missing from Zotero)
    (you download PDFs, add them to the Zotero collection)   ◀── human gate
 rabbitHole report   ── machine ──▶ <project>_litreview_<brain>.{md,docx}
+   (you comment on the .docx)                              ◀── human gate
+rabbitHole revise   ── machine ──▶ the same document, redlined in place
+rabbitHole graft    ── machine ──▶ the same document, plus ONE new section
 ```
+
+### Three ways to rework a draft, in ascending cost
+
+| Verb | Touches | When |
+|---|---|---|
+| `revise` | the paragraphs a comment is anchored to | the ask can be met by editing what is there |
+| `graft` | nothing existing — inserts a new section | the ask is for a strand the review lacks |
+| `report` | every section, re-planned from the corpus | the review is aimed wrong (a redirect) |
+
+Only `report` costs the reviewer a second full read, and only a genuine change of direction
+reaches it. `graft` drafts the requested strand and splices it into a copy of the reviewer's own
+.docx as a tracked insertion: existing paragraphs are never passed to a model, so they come
+through byte-identical and every comment thread survives. Its insertion point is the requesting
+comment's own anchor where one survives, the nearest section by embedding otherwise, and the end
+of the review as a last resort that is always reported rather than taken quietly.
 
 ### report — three stages
 
@@ -60,7 +78,18 @@ rabbitHole report   ── machine ──▶ <project>_litreview_<brain>.{md,doc
 |---|---|---|
 | **1. Read** | Per-paper notes (argument/methods/findings/themes). ChromaDB indexes each paper; long papers retrieved via 3-query semantic retrieval rather than brute-force condensing. Incremental — resumes from `work/annotations/`. | coordinator × N papers |
 | **2. Synthesise** | Sectioned — see below. | coordinator × (1 + ~4 per section) |
-| **3. Locate** | For each curated source: embed claim sentences → retrieve top-1 chunk → extract quote + page location. No LLM call — pure embedding arithmetic. Incremental — resumes from `work/located/`. | none (embedding only) |
+| **3. Locate** | For each curated source: embed claim sentences → retrieve the best chunk not already quoted → extract quote + page location. Claims are stored **whole** (the bibliography truncates for display); a claim is never dropped for colliding on a chunk. No LLM call — pure embedding arithmetic. Incremental — resumes from `work/located/`. | none (embedding only) |
+
+### The annotated bibliography's three tiers
+
+**Cited in the review** (narrative-linked claims), **Additional curated sources** (grounded via
+their own text), and **Screened out of the curated list**. The third tier exists because a review
+is read to judge whether the corpus is right, so presenting a source as *curated* is a claim that
+it belongs — and one whose own annotation reads "largely irrelevant to the specific review focus"
+makes that claim false. Uncited sources that disqualify themselves in their own words move to a
+named list. They stay in the corpus and in Zotero: the tier records a judgement, it deletes
+nothing. The test is deliberately literal and few; anything subtler is a judgement the rejection
+ledger already demands a reason for.
 
 ### Synthesise, section by section
 
@@ -116,7 +145,7 @@ sources cited 62/83 · rejected 21 · unplaced 0 · mean sources/para 3.4 · tri
 
 ```
 rabbithole/
-  cli.py        entry point: init | gather | report
+  cli.py        entry point: init | gather | build | report | revise | graft | audit | mindmap
   config.py     ProjectConfig (litrev.yaml) + GlobalConfig (~/.config/rabbithole) + paths
   wizard.py     `init` interactive setup
   models.py     Candidate (+ Author): identity/dedup keys, author-year + full citation

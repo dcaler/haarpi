@@ -47,9 +47,11 @@ class FakeBrain:
     """A stand-in for the ollama coordinator: returns a fixed reply, counts calls."""
     def __init__(self, reply):
         self.reply, self.calls = reply, 0
+        self.prompts: list[str] = []
 
     def coordinator(self, prompt, system="", **kw):
         self.calls += 1
+        self.prompts.append(prompt)
         return self.reply
 
 
@@ -114,30 +116,50 @@ def _sample_map():
 
 
 def test_to_dot_is_a_pinned_banded_map_that_renders():
-    dot = mindmap.to_dot(_sample_map(), title="Test map", target_min=1, target_max=2)
+    # corpus of 8 -> cuts at 5%/25%/50% collapse to ranks 1 and 2 (rounding), so two rings
+    dot = mindmap.to_dot(_sample_map(), title="Test map", corpus_size=8)
     assert "digraph litmap {" in dot                              # pinned digraph (render: dot -Kneato -n2)
     assert '"__hub__"' in dot and "Contribution map" not in dot   # centre hub carries the title
     assert '"__t0__"' in dot and '"__t1__"' in dot                # a theme label node per theme, outside
-    assert '"__ring1__"' in dot and '"__ring2__"' in dot          # the two red target rings
+    assert '"__ring0__"' in dot and '"__ring1__"' in dot          # rings identified by INDEX
     assert '"rousta2015"' in dot and '"allcott2011"' in dot       # a node per paper
     assert '!"' in dot and dot.count('pos="') >= 5                # everything pinned
     assert "distance cuts" in dot and "tooltip" not in dot        # phrase in the node, no tooltips
-    assert 'color="#dc2626"' in dot and "target 1" in dot         # red rings + their labels
-    assert "target reference budget" in dot                       # legend explains the rings
+    assert 'color="#dc2626"' in dot and "top 5% (1)" in dot       # red rings + their labels
+    assert "of the 8-source corpus by importance" in dot          # legend explains the rings
+    assert "budget" not in dot                                    # a ring is not a cap any more
     assert mindmap._render_pinned(dot, tmp := Path(__file__).parent / "_x.svg") and tmp.unlink() is None
 
 
-def test_band_layout_bands_by_importance_with_exact_target_rings():
-    # 8 papers, descending importance; target rings at 2 and 5 must enclose exactly 2 and 5.
+def test_band_layout_bands_by_importance_with_exact_quantile_rings():
+    # 8 papers, descending importance; rings at ranks 2 and 5 must enclose exactly 2 and 5.
     papers = [mindmap.Paper(f"p{i}", f"A{i}", "T", "", importance=100 - i) for i in range(8)]
     m = mindmap.Mindmap(themes=["T"], papers=papers, edges=[])
-    pos, circle_r, _label, outer = mindmap.band_layout(m, target_min=2, target_max=5)
+    pos, circle_r, _label, outer = mindmap.band_layout(m, [2, 5])
     r = lambda k: (pos[k][0] ** 2 + pos[k][1] ** 2) ** 0.5
     assert r("p0") < r("p7")                                      # most-important nearer the centre
     inside2 = sum(1 for i in range(8) if r(f"p{i}") < circle_r[0])
     inside5 = sum(1 for i in range(8) if r(f"p{i}") < circle_r[1])
-    assert inside2 == 2 and inside5 == 5                          # rings hold exactly target_min/target_max
+    assert inside2 == 2 and inside5 == 5                          # rings hold exactly their cuts
     assert circle_r[0] < circle_r[1] < outer
+
+
+def test_band_layout_draws_a_ring_per_cut():
+    """Three quantiles -> three rings and four bands, not the old fixed two."""
+    papers = [mindmap.Paper(f"p{i}", f"A{i}", "T", "", importance=100 - i) for i in range(20)]
+    m = mindmap.Mindmap(themes=["T"], papers=papers, edges=[])
+    _pos, circle_r, _label, outer = mindmap.band_layout(m, [1, 5, 10])
+    assert len(circle_r) == 3
+    assert circle_r[0] < circle_r[1] < circle_r[2] < outer
+
+
+def test_band_cuts_are_corpus_quantiles_and_strictly_increasing():
+    assert mindmap.band_cuts(181) == [9, 45, 90]                  # 5% / 25% / 50%
+    assert mindmap.band_cuts(8) == [1, 2, 4]
+    # a tiny corpus rounds several quantiles onto one rank; collapse rather than stack rings
+    assert mindmap.band_cuts(2) == [1]
+    assert mindmap.band_cuts(0) == [1]
+    assert mindmap.band_cuts(181) == sorted(set(mindmap.band_cuts(181)))
 
 
 def test_band_layout_has_no_overlapping_boxes():
@@ -146,7 +168,7 @@ def test_band_layout_has_no_overlapping_boxes():
                             "a contribution phrase that wraps onto a few lines here",
                             cited_by=10 ** (i % 4), importance=50 - i) for i in range(16)]
     m = mindmap.Mindmap(themes=["A", "B"], papers=papers, edges=[])
-    pos, *_ = mindmap.band_layout(m, target_min=4, target_max=10)
+    pos, *_ = mindmap.band_layout(m, [4, 10])
     ext = {p.key: mindmap._extents(p) for p in papers}
     for i in range(16):
         for j in range(i + 1, 16):
@@ -300,7 +322,44 @@ def test_compose_survives_a_garbage_reply():
     fb = FakeBrain("there is no json in here at all")
     m = mindmap.compose(fb, threads, keys)
     assert m.papers == [] and m.edges == []           # graceful empty, never an exception
-    assert fb.calls == 2                              # tried once, then the repair pass
+    # one try + one repair PER BATCH; this fixture has two themes, so two batches
+    assert fb.calls == 2 * len(mindmap.parse_threads(MD))
+
+
+def test_compose_batches_so_one_call_never_carries_the_whole_review():
+    """A single call carrying 160 papers built a 14.7k-token prompt needing ~5.6k tokens back,
+    against a 16k window; it truncated and the map shipped empty."""
+    threads = [mindmap.Thread(theme="T", citekeys=[f"k{i}" for i in range(12)])]
+    keys = {f"k{i}": f"A{i} 2020" for i in range(12)}
+    fb = FakeBrain("[]")
+    mindmap.compose(fb, threads, keys, repair=False, batch_size=5)
+    assert fb.calls == 3, "12 papers at batch_size=5 is three calls"
+    assert all(p.count("- k") <= 5 for p in fb.prompts), "no call carries more than the batch"
+
+
+def test_a_failing_batch_costs_only_its_own_papers():
+    """Batching contains failure: an unparseable batch must not empty the whole map."""
+    class _Flaky:
+        def __init__(self): self.n = 0
+        def coordinator(self, prompt, sys, **kw):
+            self.n += 1
+            if "k0" in prompt:
+                return "no json here"                      # first batch is unparseable
+            return '[{"key": "k5", "theme": "T", "contribution": "a thing we now know"}]'
+    threads = [mindmap.Thread(theme="T", citekeys=["k0", "k5"])]
+    keys = {"k0": "A0 2020", "k5": "A5 2020"}
+    m = mindmap.compose(_Flaky(), threads, keys, repair=False, batch_size=1)
+    assert [p.key for p in m.papers] == ["k5"], "the surviving batch still lands"
+
+
+def test_a_paper_cited_in_several_themes_is_composed_once():
+    threads = [mindmap.Thread(theme="A", citekeys=["k1"]),
+               mindmap.Thread(theme="B", citekeys=["k1"])]
+    keys = {"k1": "A1 2020"}
+    fb = FakeBrain('[{"key": "k1", "theme": "A", "contribution": "a thing we now know"}]')
+    m = mindmap.compose(fb, threads, keys, repair=False)
+    assert fb.calls == 1, "the second theme has nothing left to compose"
+    assert [p.key for p in m.papers] == ["k1"]
 
 
 def test_parse_spec_accepts_a_bare_top_level_array():

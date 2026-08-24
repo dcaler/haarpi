@@ -12,8 +12,23 @@ from pathlib import Path
 from haarpi.render import pandoc_convert  # noqa: F401 — re-exported for callers
 
 
+def _paged_reference(paths):
+    """The project's page-numbered reference doc, built on first use.
+
+    Pandoc's default template has no footer, so every litreview .docx this pipeline rendered came
+    out unpaginated — a 27-page review with no way to point at a place in it. Best-effort: a
+    failure here costs page numbers, never the document.
+    """
+    try:
+        from haarpi.pagination import reference_for
+        return reference_for(paths.work)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
-                   corpus, unmatched: list[str], metrics_line: str = "") -> str:
+                   corpus, unmatched: list[str], metrics_line: str = "",
+                   top_block: str = "") -> str:
     brain = cfg.brain
     if brain_backend == "claude":
         model_str = brain.claude_model
@@ -33,7 +48,12 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
         # Breadth, depth, and verifiability, in the document itself. A reader should not have
         # to open the run log to learn that the review cites 15 of its 83 curated sources.
         parts.append(f"*Foundation:* {metrics_line}  ")
-    parts += ["", "## Narrative Review", "", narrative.strip(), "", biblio.strip(), ""]
+    parts.append("")
+    # The coverage check goes ABOVE the narrative: it is the fastest way to judge whether the
+    # corpus is right, which is what this document exists to be read for.
+    if top_block:
+        parts += [top_block.strip(), ""]
+    parts += ["## Narrative Review", "", narrative.strip(), "", biblio.strip(), ""]
 
     if unmatched:
         parts += [
@@ -48,18 +68,21 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
 
 
 def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
-                 corpus, unmatched: list[str], metrics_line: str = "") -> tuple[Path, Path | None]:
-    md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched, metrics_line)
+                 corpus, unmatched: list[str], metrics_line: str = "",
+                 top_block: str = "") -> tuple[Path, Path | None]:
+    md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched, metrics_line,
+                        top_block)
     today = date.today().strftime("%y%m%d")
     stem = f"{today}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
 
     out_docx = paths.output / f"{stem}.docx"
+    ref = _paged_reference(paths)
     # No citeproc, deliberately. The narrative keeps its [@citekeys] as written (author's
     # call, 2026-07-14): the key names the exact entry in the annotated bibliography below,
     # where "(Bowling et al. 2018)" would leave the reader guessing between three Bowlings.
     # The bibliography is ours, not citeproc's, so nothing is missing from the document.
-    if pandoc_convert(out_md, out_docx):
+    if pandoc_convert(out_md, out_docx, reference_doc=ref):
         return out_md, out_docx
     return out_md, None

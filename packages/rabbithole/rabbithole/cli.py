@@ -3,6 +3,7 @@
     rabbitHole init       interactive project setup -> litrev.yaml
     rabbitHole gather     discover & curate sources missing from your Zotero collection
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
+    rabbitHole graft      add a requested section, leaving the rest of the review untouched
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
     rabbitHole ingest     pull reviewer-supplied references (pasted into a _ra.docx) into the corpus
     rabbitHole style      train a style profile on the author's Zotero publications
@@ -102,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
     bld.add_argument("--no-refresh-notes", action="store_true",
                      help="keep cached per-paper notes even when the extraction logic changed")
 
+    gft = sub.add_parser("graft",
+                         help="add a reviewer-requested section to their annotated .docx, "
+                              "leaving every existing paragraph untouched")
+    gft.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    gft.add_argument("--file", default=None,
+                     help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
+
     rev = sub.add_parser("revise",
                          help="apply reviewer annotations from a _ra.docx to re-draft")
     rev.add_argument("--brain", choices=["ollama", "claude"], default=None,
@@ -167,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import build
         return build.run(args.dir, from_folder=args.from_folder,
                          refresh_notes=not args.no_refresh_notes, brain_override=args.brain)
+
+    if args.command == "graft":
+        _check_env(need_pandoc=True)
+        from . import graft
+        return graft.run(args.dir, brain_override=args.brain, file=args.file)
 
     if args.command == "revise":
         _check_env(need_pandoc=True)

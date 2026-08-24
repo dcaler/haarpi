@@ -70,6 +70,10 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "(candidates, citekeys, ChromaDB index, per-paper notes)."),
         "revise":  Step("haarpi rabbithole revise --no-queue", 4.0,
                         "Re-draft the review from the expanded corpus + annotations."),
+        "graft":   Step("haarpi rabbithole graft", 2.0,
+                        "Draft ONLY the requested section and splice it into the reviewer's "
+                        "own .docx as a tracked insertion — existing paragraphs untouched, "
+                        "comment threads intact."),
         "report":  Step("haarpi rabbithole report", 3.0,
                         "Re-plan the review's sections and re-synthesise from the corpus."),
         "mindmap": Step("haarpi rabbithole mindmap", 0.5,
@@ -145,8 +149,8 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     # builds — new sources are audited then embedded (`build`) before a `revise` re-draft.
     "litreview": {
         "cosmetic":    ["revise", "comment"],
-        "gap_fill":    ["gather", "collect", "audit", "build", "revise", "comment"],
-        "redirection": ["gather", "collect", "audit", "build", "revise", "comment"],
+        "gap_fill":    ["gather", "collect", "audit", "build", "graft", "comment"],
+        "redirection": ["gather", "collect", "audit", "build", "report", "comment"],
     },
     "paper": {
         "cosmetic":   ["revise", "comment"],
@@ -780,7 +784,7 @@ def classify(stage: str, check: dict, cfg: dict,
 # decomposition of the current annotations. See DESIGN_next_orchestration.md.
 
 # The verb-need vocabulary. Every unresolved comment maps to exactly one.
-_LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "cite", "redirect")
+_LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "cite", "redirect", "correct")
 
 _DECOMPOSE_PROMPT = """\
 A reviewer left these unresolved annotations on a literature-review draft, numbered:
@@ -792,33 +796,42 @@ work into one task. Every annotation number must appear in exactly one task.
 Decide in THIS ORDER and stop at the first that fits — a later type never overrides an
 earlier one:
 
-1. "redirect": the review is aimed wrong or needs a fundamentally different scope — a
+1. "correct": the reviewer states that a NAME OR TERM the review uses is factually wrong, and
+   says (or clearly implies) the right one — "you mean X, not Y", "that's called X", "get the
+   name right, it's X". The work is a substitution, not a rewrite. Give "wrong" (the term as
+   the review has it) and "right" (the term it should be). Choose this ONLY for a term the
+   review actually uses; a request to discuss a new topic is "section" or "sources".
+2. "redirect": the review is aimed wrong or needs a fundamentally different scope — a
    genuine change of direction, not "add more".
-2. "section": asks for a new section, theme, strand, or sub-topic to be DEVELOPED as its
+3. "section": asks for a new section, theme, strand, or sub-topic to be DEVELOPED as its
    own treatment — the review's STRUCTURE must change, not just its wording. Triggers:
    "a section on X", "identify/enumerate/lay out the Xs", "cover the specific techniques
    and how to use them", "this is too high level — I want the concrete X". A demand to
    build out a topic into its own strand is section, NOT sources, even when that topic is
-   already mentioned in passing. When in doubt between section and sources, choose section.
-3. "cite": the reviewer says the papers are ALREADY in the Zotero library/collection and
+   already mentioned in passing. When in doubt between section and sources, choose section:
+   a section is drafted and spliced in without touching the rest of the review, so guessing
+   this one wrong costs a strand the reviewer can reject, never a re-read of the document.
+4. "cite": the reviewer says the papers are ALREADY in the Zotero library/collection and
    asks to cite them — "I've added Doblinger 2019 and Howell 2017 to Zotero, cite them",
    "these are in the collection now, use them". Nothing is fetched; the papers only need
    embedding so the reviser can cite them. Choose this, NOT ingest, whenever the reviewer
    states the works are already in the library/collection.
-4. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
+5. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
    in that are NOT yet in the library — pasted reference text, "add @key", "cite Smith 2020",
    "these references:". The works must be fetched before they can be cited.
-5. "sources": wants more evidence UNDER the structure that already exists — thicker support
+6. "sources": wants more evidence UNDER the structure that already exists — thicker support
    for a point the review already makes ("more on X", "go deeper", "what about Y"). Use this
    only when no new section is being asked for; it gathers literature, it does not re-plan.
-6. "edit": satisfiable by rewriting text that is already there — reword, restructure,
+7. "edit": satisfiable by rewriting text that is already there — reword, restructure,
    clarify, cut. No new sources, no new structure.
 
 For "redirect", "section", and "sources" give a specific, searchable "query" (the topic to
 gather or the section to plan). For "edit", "ingest", and "cite" set "query" to "".
+For "correct" set "query" to "" and give "wrong" and "right" instead.
 
 Respond ONLY with JSON:
-{{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}}, ...]}}"""
+{{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}},
+            {{"comments": [3], "need": "correct", "wrong": "...", "right": "..."}}]}}"""
 
 
 def decompose(comments: list[dict], cfg: dict) -> list[dict]:
@@ -873,8 +886,15 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
         if not idxs:
             continue
         query = (t.get("query") or "").strip() if isinstance(t, dict) else ""
-        tasks.append({"comments": [texts[i - 1] for i in idxs],
-                      "need": need, "query": query})
+        task = {"comments": [texts[i - 1] for i in idxs], "need": need, "query": query}
+        if need == "correct":
+            task["wrong"] = (t.get("wrong") or "").strip()
+            task["right"] = (t.get("right") or "").strip()
+            # A correction the model could not pin down to a term pair is not actionable as a
+            # substitution. Degrade to `edit` rather than queueing a no-op step.
+            if not (task["wrong"] and task["right"]):
+                task["need"] = "edit"
+        tasks.append(task)
     missed = [i for i in range(1, n + 1) if i not in claimed]
     if missed:
         tasks.append({"comments": [texts[i - 1] for i in missed],
@@ -980,10 +1000,18 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
                      if t["need"] in ("sources", "section", "redirect") and t["query"]]
     section_focus = [t["query"] for t in tasks
                      if t["need"] in ("section", "redirect") and t["query"]]
+    corrections = [{"wrong": t["wrong"], "right": t["right"]} for t in tasks
+                   if t["need"] == "correct" and t.get("wrong") and t.get("right")]
     needs_sources = bool(needs & {"sources", "section", "redirect"})
-    needs_report = bool(needs & {"section", "redirect"})
+    needs_graft = bool(needs & {"section"})
+    needs_redirect = bool(needs & {"redirect"})
+    needs_report = needs_redirect
 
     steps: list[str] = []
+    # A correction is NOT a queued step. It is a deterministic substitution across the brief, the
+    # litrev config and the current draft, applied by the planner before the chain is queued, so
+    # everything downstream reads the corrected term. Queueing it would make a one-right-answer
+    # edit depend on a task running, which is the failure it exists to fix.
     if "ingest" in needs:
         steps.append("ingest")
     if needs_sources:
@@ -995,19 +1023,30 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
     # A changed corpus is word-sense audited before any re-draft reads it.
     if "collect" in steps:
         steps.append("audit")
-    redraft = "report" if needs_report else "revise"
+    # `report` regenerates every section, so it is reachable ONLY from a redirect — a genuine
+    # change of direction, where a second full read is the honest price. A `section` ask gets
+    # `graft`, which drafts the new strand and leaves the rest of the document alone.
+    redraft = ("report" if needs_redirect
+               else "graft" if needs_graft else "revise")
     # `revise` loads a cached corpus, so a corpus that CHANGED (collect present) or papers the
     # reviewer added straight to Zotero for citing (`cite`) must be EMBEDDED first: `build` runs
     # immediately before revise. A `report` re-draft embeds inline, so it never gets a build.
-    if redraft == "revise" and ("collect" in steps or "cite" in needs):
+    # `revise` and `graft` both load a cached corpus, so a corpus that CHANGED (collect present)
+    # or papers the reviewer added straight to Zotero for citing (`cite`) must be EMBEDDED first.
+    # A `report` re-draft embeds inline, so it never gets a build.
+    if redraft in ("revise", "graft") and ("collect" in steps or "cite" in needs):
         steps.append("build")
-    steps.append(redraft)
+    # A chain whose ONLY work is a correction needs no re-draft: the substitution is
+    # deterministic and total, and a reviser adds nothing but the chance of missing an
+    # occurrence. It still re-renders so the reviewer gets the corrected document back.
+    if not (corrections and needs == {"correct"}):
+        steps.append(redraft)
     steps.append("mindmap")     # per-draft diagnostic: regenerate the contribution map beside the draft
     steps.append("comment")
 
     tier = ("redirection" if "redirect" in needs
             else "gap_fill" if needs_sources else "cosmetic")
-    return {"steps": steps, "tier": tier,
+    return {"steps": steps, "tier": tier, "corrections": corrections,
             "gather_topics": gather_topics, "section_focus": section_focus}
 
 
@@ -1016,6 +1055,46 @@ def _tasks_assessment(tasks: list[dict]) -> str:
     from collections import Counter
     counts = Counter(t["need"] for t in tasks)
     return ", ".join(f"{counts[n]}×{n}" for n in _LITREVIEW_NEEDS if counts[n])
+
+
+def _apply_corrections(root: Path, m: project.Manifest, directory: str,
+                       corrections: list[dict]) -> dict[str, int]:
+    """Substitute a corrected term everywhere the project states it about ITSELF.
+
+    The brief in haarpi.yaml is haarpi's; the litrev config's topic/focus/research_prompt are
+    rabbitHole's, reached through the same soft-import as the gather steering. Both must move
+    together — the brief seeds a re-init and the config drives every gather, so correcting one
+    and not the other leaves the error live in the half that was missed.
+
+    Returns ``{target: substitutions}``, which the caller records on the plan and reports. A
+    correction that changes NOTHING is reported as such: it means the term the reviewer named
+    is not the term the project holds, and quietly succeeding would hide that.
+    """
+    counts: dict[str, int] = {}
+    for c in corrections:
+        wrong, right = c.get("wrong", ""), c.get("right", "")
+        if not (wrong and right):
+            continue
+        try:
+            from rabbithole import steering as _rhsteer
+        except ImportError:
+            _rhsteer = None
+        if _rhsteer is not None:
+            try:
+                for k, v in _rhsteer.apply_correction(directory, wrong, right).items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as e:  # noqa: BLE001 — never crash the gate on a steering write
+                print(f"  [warn] could not correct the litrev config ({e})")
+        try:
+            from rabbithole.steering import _sub_term
+            new_brief, n = _sub_term(m.brief, wrong, right)
+        except ImportError:
+            new_brief, n = m.brief, 0
+        if n:
+            m.brief = new_brief
+            project.save_manifest(m, root)
+            counts[project.MANIFEST] = counts.get(project.MANIFEST, 0) + n
+    return counts
 
 
 def _write_litreview_steering(directory: str, built: dict) -> str | None:
@@ -1741,6 +1820,14 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     steer_config = _write_litreview_steering(str(root), built) if built else None
     if steer_config:
         summary.append(f"  steering config: {steer_config}")
+    # CORRECT: a factual correction is applied to the project's own statements of itself before
+    # anything else in the chain reads them. Deterministic, so it happens here rather than
+    # becoming a task nobody can verify ran.
+    corrections = (built or {}).get("corrections") or []
+    corr_counts = _apply_corrections(root, m, str(root), corrections) if corrections else {}
+    for c in corrections:
+        applied = ", ".join(f"{k} ×{v}" for k, v in corr_counts.items()) or "NOTHING MATCHED"
+        summary.append(f"  correction: {c['wrong']!r} -> {c['right']!r}  [{applied}]")
     confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or [])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
@@ -1751,6 +1838,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
              "steer_config": steer_config,
+             "corrections": corrections, "correction_counts": corr_counts,
              "bindings": _current_bindings(root, m, stage)}
     if not queueing:
         project.record_plan(root, entry)
