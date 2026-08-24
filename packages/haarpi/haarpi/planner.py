@@ -910,9 +910,18 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
 # the chain re-plans (`report`) instead of sending a reviser at a job it cannot do. Kept tight
 # on purpose — an indefinite/new determiner before "section", so "this section is unclear"
 # (an edit of existing structure) never trips it.
+_SECTION_UNIT = r"(?:section|theme|strand|sub-?topic)"
 _SECTION_ASK = re.compile(
-    r"\b(?:a|an|another|new|separate|dedicated|standalone|whole)\s+section\b"
-    r"|\bits own section\b|\badd a section\b",
+    # A determiner, then up to two words of adjective, then the unit. Requiring the determiner
+    # IMMEDIATELY before it missed "add an entire section on X" and "another important section"
+    # -- ordinary phrasings a reviewer has no reason to avoid. The unit list matches the words
+    # _DECOMPOSE_PROMPT already invites ("a new section, theme, strand, or sub-topic"): the
+    # deterministic floor was narrower than the vocabulary the prompt asks for, so a reviewer
+    # writing "an entire theme" fell through to the 8B model, which flattened it to an edit.
+    rf"\b(?:a|an|another|new|separate|dedicated|standalone|whole|entire)\s+"
+    rf"(?:\w+\s+){{0,2}}{_SECTION_UNIT}\b"
+    rf"|\bits own\s+(?:\w+\s+){{0,1}}{_SECTION_UNIT}\b"
+    rf"|\badd a\s+(?:\w+\s+){{0,2}}{_SECTION_UNIT}\b",
     re.IGNORECASE)
 
 

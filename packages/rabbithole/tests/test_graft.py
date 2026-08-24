@@ -67,9 +67,11 @@ def test_the_comments_anchor_wins():
     assert at == 1 and why == "the comment's own anchor"
 
 
-def test_an_anchor_above_the_first_section_opens_the_review():
+def test_a_front_matter_comment_is_document_scoped_not_positional():
+    """Reviewers put general asks at the top. Reading that as "open the review with this" would
+    stack every such ask ahead of the section that grounds the review."""
     at, why = graft.choose_position(_Brain(), _existing(), Section("New", "n"), anchor=-1)
-    assert at == -1 and "anchor" in why
+    assert why != "the comment's own anchor"
 
 
 def test_without_an_anchor_it_falls_back_to_the_nearest_section():
@@ -226,3 +228,75 @@ def test_insertion_indexes_sections_the_same_way_the_anchor_does(tmp_path):
     texts = _paragraph_texts(fp)
     assert texts.index("New") > texts.index("Body of Alpha.")
     assert texts.index("New") < texts.index("Beta"), "section 0 is Alpha, not the title"
+
+
+def test_the_narrative_review_wrapper_is_not_a_section(tmp_path):
+    """`sections_from_markdown` skips the wrapper and cuts at the bibliography; anything counting
+    sections in the .docx must do the same or the two index spaces drift apart."""
+    from rabbithole import docxio
+    d = docx.Document()
+    d.add_heading("Literature Review: a topic", level=1)
+    d.add_heading("Narrative Review", level=2)          # wrapper — counted by neither side
+    d.add_heading("Alpha", level=2)
+    d.add_paragraph("Body of Alpha.")
+    d.add_heading("Beta", level=2)
+    p = d.add_paragraph("Body of Beta.")
+    d.add_heading("Annotated Bibliography", level=2)    # back matter — stop counting
+    d.add_paragraph("An entry.")
+    fp = tmp_path / "w.docx"
+    d.save(str(fp))
+    try:
+        doc2 = docx.Document(str(fp))
+        target = [q for q in doc2.paragraphs if q.text == "Body of Beta."][0]
+        doc2.add_comment(runs=target.runs, text="add a section here", author="R")
+        doc2.save(str(fp))
+    except (AttributeError, TypeError):
+        pytest.skip("python-docx build has no comment API")
+    assert docxio.read_comments(fp)[0]["section"] == 1, "Beta is 1: Alpha is 0, wrapper is neither"
+
+
+def test_counting_stops_at_the_bibliography(tmp_path):
+    """A heading bled into the reference list must not open a phantom section."""
+    from rabbithole import docxio
+    d = docx.Document()
+    d.add_heading("Alpha", level=2)
+    d.add_paragraph("Body.")
+    d.add_heading("Annotated Bibliography", level=2)
+    d.add_heading("Polycentric governance stabilizes commons", level=2)   # the real bleed
+    d.add_paragraph("An entry.")
+    fp = tmp_path / "b.docx"
+    d.save(str(fp))
+    assert max(docxio.comment_sections(fp).values(), default=0) <= 0
+
+
+def test_the_base_markdown_is_found_through_the_initials_chain(tmp_path):
+    """The reviewer's copy carries their initials and has no markdown of its own; the markdown
+    belongs to the tool's draft it was made from, which may already be archived in old/."""
+    out = tmp_path / "output"
+    (out / "old").mkdir(parents=True)
+    (out / "old" / "260815_x_litreview_ra.md").write_text("## A\n\nBody.", encoding="utf-8")
+    markup = out / "260815_x_litreview_ra_DCR.docx"
+    markup.write_bytes(b"")
+    paths = type("P", (), {"output": out})()
+    found = graft._base_markdown(markup, paths)
+    assert found is not None and found.name == "260815_x_litreview_ra.md"
+
+
+def test_a_sibling_markdown_still_wins_when_one_exists(tmp_path):
+    out = tmp_path / "output"
+    out.mkdir(parents=True)
+    (out / "260815_x_litreview_ra_DCR.md").write_text("## A\n\nBody.", encoding="utf-8")
+    (out / "260815_x_litreview_ra.md").write_text("## Older\n\nBody.", encoding="utf-8")
+    markup = out / "260815_x_litreview_ra_DCR.docx"
+    markup.write_bytes(b"")
+    paths = type("P", (), {"output": out})()
+    assert graft._base_markdown(markup, paths).name == "260815_x_litreview_ra_DCR.md"
+
+
+def test_no_markdown_anywhere_is_reported_not_guessed(tmp_path):
+    out = tmp_path / "output"
+    out.mkdir(parents=True)
+    markup = out / "260815_x_litreview_ra_DCR.docx"
+    markup.write_bytes(b"")
+    paths = type("P", (), {"output": out})()
+    assert graft._base_markdown(markup, paths) is None

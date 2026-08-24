@@ -96,10 +96,15 @@ def choose_position(brain: Brain, existing: list[Section], new: Section,
                     anchor: int | None) -> tuple[int, str]:
     """Where the new section goes: ``(index_to_insert_after, why)``.
 
-    ``anchor`` is the section index a requesting comment sat in, or None. -1 means the comment
-    sat above the first section, which is a request to open the review with it.
+    ``anchor`` is the section index a requesting comment sat in, or None when there was none.
+
+    A comment in the FRONT MATTER (anchor -1: the title block, the focus line, the metrics line)
+    is document-scoped, not positional — reviewers put general asks at the top of a document.
+    Reading it as "open the review with this" would dress a guess up as deference and, for a set
+    of three such asks, stack all three ahead of the section that grounds the review. It falls
+    through to the embedding instead, which at least places each one near what it relates to.
     """
-    if anchor is not None and -1 <= anchor < len(existing):
+    if anchor is not None and 0 <= anchor < len(existing):
         return anchor, "the comment's own anchor"
     try:
         vecs = brain.embed_batch([f"{s.heading}. {s.claim or s.text[:400]}" for s in existing]
@@ -172,6 +177,30 @@ def _style_as_heading(p_el, style: str = "Heading2") -> None:
     ppr.insert(0, pstyle)
 
 
+def _base_markdown(docx: Path, paths) -> Path | None:
+    """The markdown of the draft an annotated .docx was made from.
+
+    The reviewer's copy carries their initials (``..._ra_DCR.docx``) and has no markdown of its
+    own — the markdown belongs to the tool's draft it was made from (``..._ra.md``). Walk the
+    initials chain back until a markdown turns up, and look in ``output/old/`` too, since a
+    superseded cycle's draft is archived there while its markup stays in play.
+    """
+    stem = docx.stem
+    seen: list[Path] = []
+    while stem:
+        for d in (docx.parent, paths.output, paths.output / "old"):
+            cand = d / f"{stem}.md"
+            seen.append(cand)
+            if cand.is_file():
+                return cand
+        if "_" not in stem:
+            break
+        stem = stem.rsplit("_", 1)[0]      # drop one initials segment and retry
+    print(f"[graft] looked for: {', '.join(str(p) for p in dict.fromkeys(seen))}",
+          file=sys.stderr)
+    return None
+
+
 def _section_asks(comments: list[dict]) -> list[tuple[str, int]]:
     """Reviewer comments that ask for a new section, with the section index each sits in."""
     from haarpi.planner import _SECTION_ASK
@@ -190,10 +219,10 @@ def run(directory: str = ".", brain_override: str | None = None,
     if docx is None or not Path(docx).is_file():
         print("[graft] no annotated .docx found — nothing to graft onto.", file=sys.stderr)
         return 1
-    md = docx.with_suffix(".md")
-    if not md.is_file():
-        print(f"[graft] no {md.name} beside the markup — graft needs the draft it was made "
-              "from to know the existing sections.", file=sys.stderr)
+    md = _base_markdown(docx, paths)
+    if md is None:
+        print(f"[graft] no markdown found for {docx.name} — graft needs the draft the markup "
+              "was made from to know the existing sections.", file=sys.stderr)
         return 1
 
     comments = docxio.read_comments(docx)

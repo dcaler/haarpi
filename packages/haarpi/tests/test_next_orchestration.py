@@ -282,3 +282,25 @@ def test_a_section_alongside_an_edit_still_only_grafts():
     rework scales to the ask, not to the heaviest member of the set."""
     built = planner.chain_from_tasks([_task("section", "reshoring"), _task("edit")])
     assert "graft" in built["steps"] and "report" not in built["steps"]
+
+
+def test_a_section_ask_survives_an_adjective_and_the_prompts_own_vocabulary():
+    """The deterministic floor was narrower than the vocabulary _DECOMPOSE_PROMPT invites, so
+    "add an entire section" and "an entire theme" both fell through to the 8B model."""
+    for text in ["I'd like to add an entire section on household impacts",
+                 "another important section on reshoring",
+                 "I'd like an entire theme on distributional equity",
+                 "consumption smoothing needs its own sub-topic",
+                 "a whole new strand on supply chains"]:
+        tasks = planner._normalise_tasks(
+            [{"comments": [1], "need": "edit", "query": ""}], [text])
+        assert [t["need"] for t in tasks] == ["section"], text
+
+
+def test_ordinary_talk_about_an_existing_section_is_still_an_edit():
+    for text in ["this section is unclear — tighten it",
+                 "the section on clubs is too long",
+                 "in section 3 you say the opposite"]:
+        tasks = planner._normalise_tasks(
+            [{"comments": [1], "need": "edit", "query": ""}], [text])
+        assert [t["need"] for t in tasks] == ["edit"], text

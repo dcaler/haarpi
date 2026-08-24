@@ -31,6 +31,16 @@ def require_docx() -> None:
         raise SystemExit(1)
 
 
+# Headings that are furniture, not sections. `summarize.sections_from_markdown` skips the
+# "Narrative Review" wrapper and cuts at the bibliography, so anything counting sections in the
+# .docx must do exactly the same or the two index spaces drift apart. Wave 4 fixed the H1 title
+# and missed these: the wrapper is an H2, so every anchor came back one too high, and counting
+# continued into the reference list (a real draft reported eight "sections", two of them inside
+# the bibliography). A graft would have landed one section late.
+_WRAPPER_HEADINGS = ("narrative review",)
+_BIB_HEADINGS = ("annotated bibliography", "references", "bibliography")
+
+
 def is_section_heading(style_name: str) -> bool:
     """True for the heading level a litreview SECTION uses — ``## `` renders as Heading 2.
 
@@ -55,6 +65,11 @@ def comment_sections(path: Path) -> dict[str, int]:
         idx = -1
         for p in doc.paragraphs:
             if is_section_heading(p.style.name if p.style is not None else ""):
+                name = (p.text or "").strip().lower()
+                if name in _BIB_HEADINGS:
+                    break                        # back matter: nothing past here is a section
+                if name in _WRAPPER_HEADINGS:
+                    continue                     # counted by neither side
                 idx += 1
                 continue
             for start in p._p.findall(qn("w:commentRangeStart")):
