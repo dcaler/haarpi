@@ -48,10 +48,13 @@ def test_starting_the_clock_does_not_change_the_prefix():
     assert len(runlog.stamp()) == len(before)
 
 
-# ── the rule, applied to the long-running verbs ──────────────────────────────
-# Interactive wizards and one-shot summary banners are deliberately exempt: a prompt is not a
-# log. What must be timestamped is any verb that can run for minutes or hours, because that is
-# where "is it stuck?" gets asked.
+# ── the rule, enforced structurally ──────────────────────────────────────────
+# EVERY line in a log begins with a timestamp — no exemptions (author, 2026-08-25). Hand-stamping
+# each print cannot deliver that, because it is a convention and conventions leak: one verb
+# forgot `runlog.start()` and lost stamps across eleven hours, and `mindmap` shipped with none at
+# all. `runlog.stamp_output()` wraps stdout/stderr at CLI entry so an unstamped line is
+# impossible rather than merely discouraged, and a line added later by someone not thinking
+# about logging is stamped anyway.
 
 _PKGS = Path(__file__).resolve().parents[3] / "packages"
 _LONG_RUNNING = [
@@ -72,3 +75,45 @@ def test_a_long_running_verb_timestamps_its_progress(pkg, mod):
     if "def run(" not in src:
         pytest.skip(f"{mod} has no run() entry point")
     assert "stamp()" in src, f"{mod} logs no timestamps at all"
+
+
+def test_the_stamper_prefixes_every_line_including_code_that_never_asked():
+    """The point of wrapping the stream: prose printed by a module that knows nothing about
+    runlog still comes out stamped."""
+    import io as _io
+    buf = _io.StringIO()
+    st = runlog._LineStamper(buf)
+    st.write("plain line\n")
+    st.write("=" * 10 + "\n")
+    st.write("multi\nline\n")
+    lines = [l for l in buf.getvalue().split("\n") if l]
+    assert lines and all(_WALL.match(l + " ") or l.startswith("[") for l in lines), lines
+    assert all(re.match(r"^\[\d{2}:\d{2}:\d{2}\] ", l) for l in lines), lines
+
+
+def test_the_stamper_leaves_blank_spacers_and_partial_lines_alone():
+    import io as _io
+    buf = _io.StringIO()
+    st = runlog._LineStamper(buf)
+    st.write("\n")                       # a blank spacer is formatting, not information
+    st.write("partial ")                 # print(..., end="") must not be chopped
+    st.write("continues\n")
+    out = buf.getvalue()
+    assert out.startswith("\n")
+    assert re.search(r"^\[\d{2}:\d{2}:\d{2}\] partial continues$", out.split("\n")[1])
+
+
+def test_the_stamper_does_not_double_stamp():
+    import io as _io
+    buf = _io.StringIO()
+    st = runlog._LineStamper(buf)
+    st.write(f"{runlog.stamp()}already stamped\n")
+    assert buf.getvalue().count("[") == 1, buf.getvalue()
+
+
+@pytest.mark.parametrize("pkg", ["haarpi", "rabbithole", "raconteur", "raster",
+                                 "rayleigh", "razzle"])
+def test_every_cli_installs_the_line_stamper(pkg):
+    """One call per tool is what makes the rule hold for code nobody has written yet."""
+    src = (_PKGS / pkg / pkg / "cli.py").read_text(encoding="utf-8")
+    assert "stamp_output()" in src, f"{pkg}/cli.py never installs the line stamper"

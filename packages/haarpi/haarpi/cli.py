@@ -19,6 +19,7 @@ import importlib
 import os
 import shutil
 import sys
+from haarpi import runlog
 
 # canonical package name <- accepted spellings on the command line
 TOOLS = {
@@ -160,6 +161,7 @@ def _doctor() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    runlog.stamp_output()
     args = sys.argv[1:] if argv is None else list(argv)
     if not args or args[0] in ("-h", "--help"):
         print(_USAGE, end="")

@@ -15,6 +15,9 @@ correctly no matter who called it.
 
 from __future__ import annotations
 
+import io
+import re
+import sys
 import time
 from datetime import datetime
 
@@ -47,6 +50,72 @@ def stamp() -> str:
     time is still worth printing ONCE at the end of a run; see :func:`start` and :func:`fmt_dt`.
     """
     return f"[{time.strftime('%H:%M:%S', time.localtime())}] "
+
+
+_ALREADY_STAMPED = re.compile(r"^\s*\[\d{2}:\d{2}:\d{2}\]")
+
+
+class _LineStamper(io.TextIOBase):
+    """A stdout/stderr wrapper that puts ``[HH:MM:SS] `` at the front of every line.
+
+    The rule is that EVERY log line begins with a timestamp. Hand-stamping each ``print`` cannot
+    deliver that: it is a convention, and conventions leak — one verb forgot ``runlog.start()``
+    and lost stamps across eleven hours of output, and `mindmap` shipped with no stamps at all.
+    Wrapping the stream makes an unstamped line impossible instead of merely discouraged, so a
+    line added later by someone not thinking about logging is stamped anyway.
+
+    Care taken:
+      * only at a real line START, so ``print(..., end="")`` progress lines are not chopped up;
+      * a line that already carries a stamp is left alone, so existing ``stamp()`` calls do not
+        double up;
+      * a bare newline stays bare — a blank spacer is formatting, and stamping it would add
+        noise without adding information.
+    """
+
+    def __init__(self, wrapped):
+        self._w = wrapped
+        self._at_line_start = True
+
+    def write(self, s: str) -> int:                       # noqa: D102
+        if not s:
+            return 0
+        out = []
+        for part in s.splitlines(keepends=True):
+            body = part.rstrip("\r\n")
+            if self._at_line_start and body.strip() and not _ALREADY_STAMPED.match(body):
+                out.append(stamp())
+            out.append(part)
+            self._at_line_start = part.endswith(("\n", "\r"))
+        self._w.write("".join(out))
+        return len(s)
+
+    # -- pass-through, so callers see a normal stream ------------------------
+    def flush(self):                 return self._w.flush()
+    def isatty(self):                return self._w.isatty()
+    def fileno(self):                return self._w.fileno()
+    @property
+    def encoding(self):              return getattr(self._w, "encoding", "utf-8")
+    @property
+    def buffer(self):                return getattr(self._w, "buffer", None)
+    def writable(self):              return True
+
+
+def stamp_output() -> None:
+    """Route stdout and stderr through the line stamper. Call once, at CLI entry.
+
+    Idempotent, and a no-op when the stream is not a text stream (pytest's capture replaces it).
+    """
+    global _STAMPING
+    if _STAMPING:
+        return
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "write"):
+            setattr(sys, name, _LineStamper(stream))
+    _STAMPING = True
+
+
+_STAMPING = False
 
 
 def log(msg: str, tool: str = "haarpi") -> None:

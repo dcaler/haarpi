@@ -3,6 +3,7 @@
 import argparse
 
 from rayleigh import __version__
+from haarpi import runlog
 
 
 def _common(p):
@@ -80,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    runlog.stamp_output()
     args = build_parser().parse_args(argv)
     if args.cmd == "init":
         from rayleigh.init import run_init

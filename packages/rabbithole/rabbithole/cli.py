@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+from haarpi import runlog
 
 
 def _check_env(need_pandoc: bool = False) -> None:
@@ -68,6 +69,7 @@ def _line_buffer_output() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _line_buffer_output()
+    runlog.stamp_output()
     parser = argparse.ArgumentParser(
         prog="rabbitHole",
         description="Offline-first literature-review assistant.",

@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from haarpi import runlog
 
 
 def _line_buffer_output() -> None:
@@ -39,6 +40,7 @@ def _check_python() -> None:
 
 def main() -> None:
     _line_buffer_output()
+    runlog.stamp_output()
     _check_python()
 
     parser = argparse.ArgumentParser(

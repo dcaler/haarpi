@@ -21,6 +21,7 @@ from haarpi import figure as _figure
 from haarpi import naming as _naming
 
 from razzle import assets, formats, gather, render
+from haarpi import runlog
 
 
 DECK_PROMPT = (
@@ -119,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    runlog.stamp_output()
     args = build_parser().parse_args(argv)
     if args.cmd == "interview":
         return run_interview(args)
