@@ -11,13 +11,14 @@ import math
 import re
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from haarpi import figure, naming
 
-from . import guards
+from . import guards, runlog
 
 # ── parsing the review (deterministic, no LLM) ─────────────────────────────────
 
@@ -740,7 +741,12 @@ def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
 
     papers: dict[str, Paper] = {}
     last_reply, failed = "", 0
+    print(f"  {runlog.stamp()}[mindmap] composing {len(cited)} paper(s) in {len(batches)} "
+          f"batch(es) of <= {batch_size}...", flush=True)
     for bi, batch in enumerate(batches, 1):
+        t_b = time.time()
+        print(f"  {runlog.stamp()}[mindmap] batch {bi}/{len(batches)} — {len(batch)} paper(s)...",
+              flush=True)
         try:
             got, last_reply = _compose_batch(brain, themes, batch, valid_keys, evidence, repair)
         except Exception as e:                                       # noqa: BLE001
@@ -752,6 +758,8 @@ def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
             failed += 1
         for p in got:
             papers.setdefault(p.key, p)
+        print(f"  {runlog.stamp()}[mindmap] batch {bi}/{len(batches)} grounded {len(got)}"
+              f"/{len(batch)} in {runlog.fmt_dt(time.time() - t_b)}", flush=True)
     if failed:
         print(f"[mindmap] compose: {failed} of {len(batches)} batch(es) grounded nothing; "
               f"{len(papers)} of {len(cited)} cited papers on the map.", file=sys.stderr)
@@ -849,6 +857,7 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     can see the reference budget and which themes are peripheral while there is still time to act."""
     from . import config as _config
     from .brain import Brain
+    runlog.start()               # the run clock every stamp() in this process reads
     cfg = _config.load_project(directory)
     gc = _config.load_global()
     paths = _config.project_paths(directory)
@@ -862,8 +871,8 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
         print(f"[mindmap] no refs.bib in {paths.output} — cannot ground the map.", file=sys.stderr)
         return 1
     short = _project_short(review.stem)
-    print(f"[mindmap] reading {review.name}  (coordinator={cfg.brain.coordinator_model})",
-          file=sys.stderr)
+    print(f"  {runlog.stamp()}[mindmap] reading {review.name}  "
+          f"(coordinator={cfg.brain.coordinator_model})", flush=True)
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     review_md, refs_bib = review.read_text(), refs.read_text()
     # Compose the findings phrases (grounded in the review's citing sentences).
@@ -880,15 +889,18 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
         p.cited_by = world.get(p.key, 0)
         p.importance = weight.get(p.key, 0)
     m.edges = edges
-    print(f"[mindmap] citation graph: {len(edges)} real edges, {len(world)} papers sized by "
-          f"OpenAlex citations (email={gc.contact_email or 'unset'})", file=sys.stderr)
+    print(f"  {runlog.stamp()}[mindmap] citation graph: {len(edges)} real edges, {len(world)} "
+          f"papers sized by OpenAlex citations (email={gc.contact_email or 'unset'})", flush=True)
     # ONE big map: importance bands (core / budget / overflow) as theme pie-slices, with the red
     # target rings drawn at the project's reference budget; size = total citations, ring = in-corpus.
     # The rings are quantiles of the PROJECT CORPUS — refs.bib is that corpus as exported, and is
     # the same universe the grounding law admits papers from, so it is the honest denominator.
     spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
                          corpus_size=len(bib_keys(refs_bib)))
+    print(f"  {runlog.stamp()}[mindmap] rendering...", flush=True)
     res = emit(paths.output, short, spec)          # into litReview/output, NOT the figures pool
-    print(f"[mindmap] {spec.provenance['papers']} papers, {spec.provenance['edges']} citation "
-          f"edges  ->  {res.get('svg') or res.get('source')}")
+    print(f"  {runlog.stamp()}[mindmap] {spec.provenance['papers']} papers, "
+          f"{spec.provenance['edges']} citation edges, rings at "
+          f"{spec.provenance['cuts']} of {spec.provenance['corpus_size']}  ->  "
+          f"{res.get('svg') or res.get('source')}", flush=True)
     return 0

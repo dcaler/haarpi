@@ -70,7 +70,14 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "(candidates, citekeys, ChromaDB index, per-paper notes)."),
         "revise":  Step("haarpi rabbithole revise --no-queue", 4.0,
                         "Re-draft the review from the expanded corpus + annotations."),
-        "graft":   Step("haarpi rabbithole graft", 2.0,
+        # 3.5h is PER NEW SECTION, measured: drafting and peer-review both run with the
+        # coordinator's chain-of-thought on (they are judgement work, unlike lint and revise),
+        # so a section costs three thinking calls. A `Step` carries one scalar and the planner
+        # cannot know how many sections a markup asks for, so this cold start assumes one and
+        # will read low for a multi-section graft until history fills in. The saving over
+        # `report` is proportional, not absolute: graft drafts only the new sections, report
+        # re-drafts every one of them.
+        "graft":   Step("haarpi rabbithole graft", 3.5,
                         "Draft ONLY the requested section and splice it into the reviewer's "
                         "own .docx as a tracked insertion — existing paragraphs untouched, "
                         "comment threads intact."),

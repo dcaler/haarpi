@@ -211,7 +211,7 @@ def _section_asks(comments: list[dict]) -> list[tuple[str, int]]:
 def run(directory: str = ".", brain_override: str | None = None,
         file: str | None = None) -> int:
     """CLI entry: add the reviewer's requested section(s) to their annotated .docx."""
-    t0 = time.time()
+    t0 = runlog.start()          # the run clock every shared helper's stamp() reads
     cfg = config.load_project(directory)
     gc = config.load_global()
     paths = config.project_paths(directory)
@@ -249,15 +249,23 @@ def run(directory: str = ".", brain_override: str | None = None,
     corpus_keys = set(citekeys.values())
 
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
-    print(f"  {runlog.stamp()}[graft] {len(existing)} existing section(s); planning "
-          f"{len(asks)} ask(s)...", flush=True)
+    print(f"  {runlog.stamp()}[graft] {docx.name}", flush=True)
+    print(f"  {runlog.stamp()}[graft] base markdown: {md.name} "
+          f"({'output/old' if md.parent.name == 'old' else 'output'})", flush=True)
+    print(f"  {runlog.stamp()}[graft] {len(existing)} existing section(s); "
+          f"{len(comments)} comment(s), {len(asks)} section ask(s)", flush=True)
+    print(f"  {runlog.stamp()}[graft] planning the new section(s)...", flush=True)
     new = _plan_new_sections(brain, cfg, existing, [a for a, _ in asks])
     if not new:
         print("[graft] the ask is already covered by an existing section — nothing added.",
               file=sys.stderr)
         return 1
 
+    print(f"  {runlog.stamp()}[graft] planned {len(new)}: "
+          f"{', '.join(repr(s.heading) for s in new)}", flush=True)
     # Shortlist over the new sections ONLY; the existing ones keep the evidence they have.
+    print(f"  {runlog.stamp()}[graft] shortlisting evidence over {len(corpus)} sources...",
+          flush=True)
     _shortlist(brain, new, compact, full)
     out_docx = paths.output / f"{docx.stem}_ra.docx"
     shutil.copyfile(docx, out_docx)
@@ -265,15 +273,30 @@ def run(directory: str = ".", brain_override: str | None = None,
     placed: list[tuple[Section, int, str]] = []
     for i, sec in enumerate(new):
         anchor = asks[i][1] if i < len(asks) else None
-        print(f"  {runlog.stamp()}[graft] drafting §{sec.heading!r}...", flush=True)
+        # Timestamp the START of each expensive call, not just its end: a start line with no
+        # successor is what makes a stall visible. Drafting and peer review run with the
+        # coordinator's chain-of-thought ON (they are judgement work), so each section is three
+        # slow calls — roughly 3.5h — and silence between them is normal, not a hang.
+        t_sec = time.time()
+        print(f"  {runlog.stamp()}[graft] §{i + 1}/{len(new)} drafting {sec.heading!r} "
+              f"({len(sec.candidates)} candidate sources)...", flush=True)
         sec.text = _draft_section(brain, cfg, new, i, full, SYNTH_SYS)
+        print(f"  {runlog.stamp()}[graft] §{i + 1} drafted {len(sec.text.split())}w in "
+              f"{runlog.fmt_dt(time.time() - t_sec)}; polishing...", flush=True)
+        t_pol = time.time()
         sec.text = _polish_section(brain, cfg, new, i, full, SYNTH_SYS, corpus_keys)
+        print(f"  {runlog.stamp()}[graft] §{i + 1} polished to {len(sec.text.split())}w in "
+              f"{runlog.fmt_dt(time.time() - t_pol)}", flush=True)
         at, why = choose_position(brain, existing, sec, anchor)
+        after = repr(existing[at].heading) if 0 <= at < len(existing) else "the top"
+        print(f"  {runlog.stamp()}[graft] §{i + 1} placing after {after} — {why}", flush=True)
         if not _insert_section(out_docx, at, sec, _AUTHOR):
             print(f"  [warn] could not insert {sec.heading!r} into the .docx", file=sys.stderr)
             continue
         existing.insert(at + 1, sec)
         placed.append((sec, at, why))
+        print(f"  {runlog.stamp()}[graft] §{i + 1} inserted as a tracked change "
+              f"({runlog.fmt_dt(time.time() - t_sec)} for the section)", flush=True)
         if "NO position signal" in why:
             print(f"  [warn] {sec.heading!r} was appended at the end — no anchor and no "
                   "embedding signal. Check its placement.", file=sys.stderr)
@@ -285,6 +308,8 @@ def run(directory: str = ".", brain_override: str | None = None,
 
     out_md = out_docx.with_suffix(".md")
     out_md.write_text(_assemble(existing), encoding="utf-8")
+    print(f"  {runlog.stamp()}[graft] wrote {out_md.name} "
+          f"({len(existing)} sections)", flush=True)
 
     print()
     print("=" * 60)
