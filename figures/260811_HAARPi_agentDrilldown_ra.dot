@@ -65,6 +65,42 @@ then the experiment design (experiments.yaml)"];
   a2_design [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: DESIGN.md"];
   a2_fig [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: framework figure (-> figures pool)"];
   a2_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the preregistration (experiments.yaml)"];
+  // Invisible gutter lanes: a revision arc is routed through these so it runs
+  // STRAIGHT UP the west side of its own column instead of being flung across the
+  // figure by the spline router. Lane 0 hugs the column; higher lanes sit further
+  // west, so several arcs out of one gate never overlap.
+  s2g0_0 [shape=point, width=0.01, style=invis, group=s2gut0];
+  s2g0_1 [shape=point, width=0.01, style=invis, group=s2gut0];
+  s3g0_0 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s3g0_1 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s3g0_2 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s3g0_3 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s3g0_4 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s3g0_5 [shape=point, width=0.01, style=invis, group=s3gut0];
+  s4g0_0 [shape=point, width=0.01, style=invis, group=s4gut0];
+  s4g1_0 [shape=point, width=0.01, style=invis, group=s4gut1];
+  s4g1_1 [shape=point, width=0.01, style=invis, group=s4gut1];
+  s4g1_2 [shape=point, width=0.01, style=invis, group=s4gut1];
+  s5g0_0 [shape=point, width=0.01, style=invis, group=s5gut0];
+  s5g1_0 [shape=point, width=0.01, style=invis, group=s5gut1];
+  s5g1_1 [shape=point, width=0.01, style=invis, group=s5gut1];
+  s5g1_2 [shape=point, width=0.01, style=invis, group=s5gut1];
+  s5g1_3 [shape=point, width=0.01, style=invis, group=s5gut1];
+  s5g1_4 [shape=point, width=0.01, style=invis, group=s5gut1];
+  s5g2_0 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_1 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_2 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_3 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_4 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_5 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_6 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_7 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_8 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_9 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_10 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s5g2_11 [shape=point, width=0.01, style=invis, group=s5gut2];
+  s6g0_0 [shape=point, width=0.01, style=invis, group=s6gut0];
+  s6g0_1 [shape=point, width=0.01, style=invis, group=s6gut0];
   l2_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g2, label="experiment-design release"];
   l3_s [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g3, label="Human + Claude DESIGN & CHECK the plan (one session):
 author DESIGN.md + tasks.yaml (modules, tasks,
@@ -176,6 +212,8 @@ spec (spec.json) from the one-pager spine
   l1_rev -> l1_mm [color="#7c3aed", style=dashed, constraint=false,
                    tailport=w, headport=w];
   // the rework arc, in the source rather than post-drawn onto the render
+  // Stage 1 needs no gutter: its rework column is ALREADY west of the spine, so the arc
+  // has clear air to cross. Adding lanes here pushed it to the figure's edge instead.
   l1_h -> l1_a [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
                 tailport=w, headport=w, label="comments\nremain"];
   { rank=same; l1_g a1_refs }
@@ -195,18 +233,115 @@ spec (spec.json) from the one-pager spine
   // paperInflow uses for its abstract edges. Each one restates the gate node's own routing.
   edge [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
         fontsize=8.5, tailport=w, headport=w];
-  l2_h -> l2_s  [label="comments\nre-open the session"];
-  l3_h -> l3_s  [label="comments\nre-open the session"];
-  l4_h -> l4_p  [label="cosmetic:\nre-run process"];
-  l4_h -> l4_s  [label="extend:\nneeds new data"];
-  l5_h2 -> l5_out [label="comments\nre-outline"];
+
+
+
+
+
+  l2_h -> s2g0_1 [dir=none, headport=s];
+  s2g0_1 -> s2g0_0 [dir=none, tailport=n, headport=s];
+  s2g0_0 -> l2_s [label="comments\nre-open the session", tailport=n, headport=w];
+  l3_h -> s3g0_5 [dir=none, headport=s];
+  s3g0_5 -> s3g0_4 [dir=none, tailport=n, headport=s];
+  s3g0_4 -> s3g0_3 [dir=none, tailport=n, headport=s];
+  s3g0_3 -> s3g0_2 [dir=none, tailport=n, headport=s];
+  s3g0_2 -> s3g0_1 [dir=none, tailport=n, headport=s];
+  s3g0_1 -> s3g0_0 [dir=none, tailport=n, headport=s];
+  s3g0_0 -> l3_s [label="comments\nre-open the session", tailport=n, headport=w];
+  l4_h -> s4g0_0 [dir=none, headport=s];
+  s4g0_0 -> l4_p [label="cosmetic:\nre-run process", tailport=n, headport=w];
+  l4_h -> s4g1_2 [dir=none, headport=s];
+  s4g1_2 -> s4g1_1 [dir=none, tailport=n, headport=s];
+  s4g1_1 -> s4g1_0 [dir=none, tailport=n, headport=s];
+  s4g1_0 -> l4_s [label="extend:\nneeds new data", tailport=n, headport=w];
+  l5_h2 -> s5g0_0 [dir=none, headport=s];
+  s5g0_0 -> l5_out [label="comments\nre-outline", tailport=n, headport=w];
+  l5_h3 -> s5g1_4 [dir=none, headport=s];
+  s5g1_4 -> s5g1_3 [dir=none, tailport=n, headport=s];
+  s5g1_3 -> s5g1_2 [dir=none, tailport=n, headport=s];
+  s5g1_2 -> s5g1_1 [dir=none, tailport=n, headport=s];
+  s5g1_1 -> s5g1_0 [dir=none, tailport=n, headport=s];
+  s5g1_0 -> l5_out [label="structural:\nre-outline", tailport=n, headport=w];
+  l5_h3 -> s5g2_11 [dir=none, headport=s];
+  s5g2_11 -> s5g2_10 [dir=none, tailport=n, headport=s];
+  s5g2_10 -> s5g2_9 [dir=none, tailport=n, headport=s];
+  s5g2_9 -> s5g2_8 [dir=none, tailport=n, headport=s];
+  s5g2_8 -> s5g2_7 [dir=none, tailport=n, headport=s];
+  s5g2_7 -> s5g2_6 [dir=none, tailport=n, headport=s];
+  s5g2_6 -> s5g2_5 [dir=none, tailport=n, headport=s];
+  s5g2_5 -> s5g2_4 [dir=none, tailport=n, headport=s];
+  s5g2_4 -> s5g2_3 [dir=none, tailport=n, headport=s];
+  s5g2_3 -> s5g2_2 [dir=none, tailport=n, headport=s];
+  s5g2_2 -> s5g2_1 [dir=none, tailport=n, headport=s];
+  s5g2_1 -> s5g2_0 [dir=none, tailport=n, headport=s];
+  s5g2_0 -> l5_op [label="narrative:\nrecut", tailport=n, headport=w];
+  l6_h -> s6g0_1 [dir=none, headport=s];
+  s6g0_1 -> s6g0_0 [dir=none, tailport=n, headport=s];
+  s6g0_0 -> l6_b [label="comments\nre-open the session", tailport=n, headport=w];
   l5_h3 -> l5_rev [label="cosmetic"];
-  l5_h3 -> l5_out [label="structural:\nre-outline"];
-  l5_h3 -> l5_op  [label="narrative:\nrecut"];
-  l6_h -> l6_b  [label="comments\nre-open the session"];
+
+
+
   edge [color="#334155", fontcolor="#334155", constraint=true, style=solid, fontsize=9,
         tailport=s, headport=n];
 
+  { rank=same; s2g0_0 l2_w }
+  s2g0_0 -> l2_w [style=invis, weight=100];
+  { rank=same; s2g0_1 l2_gate }
+  s2g0_1 -> l2_gate [style=invis, weight=100];
+  { rank=same; s3g0_0 l3_lint }
+  s3g0_0 -> l3_lint [style=invis, weight=100];
+  { rank=same; s3g0_1 l3_q }
+  s3g0_1 -> l3_q [style=invis, weight=100];
+  { rank=same; s3g0_2 l3_build }
+  s3g0_2 -> l3_build [style=invis, weight=100];
+  { rank=same; s3g0_3 l3_test }
+  s3g0_3 -> l3_test [style=invis, weight=100];
+  { rank=same; s3g0_4 l3_hand }
+  s3g0_4 -> l3_hand [style=invis, weight=100];
+  { rank=same; s3g0_5 l3_gate }
+  s3g0_5 -> l3_gate [style=invis, weight=100];
+  { rank=same; s4g1_2 s4g0_0 l4_gate }
+  s4g1_2 -> s4g0_0 [style=invis, weight=100];
+  s4g0_0 -> l4_gate [style=invis, weight=100];
+  { rank=same; s4g1_0 l4_c }
+  s4g1_0 -> l4_c [style=invis, weight=100];
+  { rank=same; s4g1_1 l4_p }
+  s4g1_1 -> l4_p [style=invis, weight=100];
+  { rank=same; s5g2_7 s5g1_0 s5g0_0 l5_outg }
+  s5g2_7 -> s5g1_0 [style=invis, weight=100];
+  s5g1_0 -> s5g0_0 [style=invis, weight=100];
+  s5g0_0 -> l5_outg [style=invis, weight=100];
+  { rank=same; s5g2_8 s5g1_1 l5_h2 }
+  s5g2_8 -> s5g1_1 [style=invis, weight=100];
+  s5g1_1 -> l5_h2 [style=invis, weight=100];
+  { rank=same; s5g2_9 s5g1_2 l5_r2 }
+  s5g2_9 -> s5g1_2 [style=invis, weight=100];
+  s5g1_2 -> l5_r2 [style=invis, weight=100];
+  { rank=same; s5g2_10 s5g1_3 l5_dr }
+  s5g2_10 -> s5g1_3 [style=invis, weight=100];
+  s5g1_3 -> l5_dr [style=invis, weight=100];
+  { rank=same; s5g2_11 s5g1_4 l5_drg }
+  s5g2_11 -> s5g1_4 [style=invis, weight=100];
+  s5g1_4 -> l5_drg [style=invis, weight=100];
+  { rank=same; s5g2_0 l5_opg }
+  s5g2_0 -> l5_opg [style=invis, weight=100];
+  { rank=same; s5g2_1 l5_h1 }
+  s5g2_1 -> l5_h1 [style=invis, weight=100];
+  { rank=same; s5g2_2 l5_r1 }
+  s5g2_2 -> l5_r1 [style=invis, weight=100];
+  { rank=same; s5g2_3 l5_ven }
+  s5g2_3 -> l5_ven [style=invis, weight=100];
+  { rank=same; s5g2_4 l5_veng }
+  s5g2_4 -> l5_veng [style=invis, weight=100];
+  { rank=same; s5g2_5 l5_sk }
+  s5g2_5 -> l5_sk [style=invis, weight=100];
+  { rank=same; s5g2_6 l5_out }
+  s5g2_6 -> l5_out [style=invis, weight=100];
+  { rank=same; s6g0_0 l6_ren }
+  s6g0_0 -> l6_ren [style=invis, weight=100];
+  { rank=same; s6g0_1 l6_gate }
+  s6g0_1 -> l6_gate [style=invis, weight=100];
   l2_h -> l2_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l2_w a2_design a2_fig }
   l2_w -> a2_design [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
