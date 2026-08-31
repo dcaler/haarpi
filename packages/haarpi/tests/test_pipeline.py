@@ -130,6 +130,63 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert tr.tasks[5]["command"] == "haarpi next"
 
 
+def test_init_does_not_publish_runnable_work_before_the_project_exists(
+        tmp_path, servers, monkeypatch):
+    """A queued `rabbithole gather` is claimable the instant it is POSTed.
+
+    init used to queue the chain BEFORE scaffolding, so a runner idle at that moment took the
+    gather and died on "No litrev.yaml found in litReview" one second later — and, unable to
+    record a failure that finished before its own scheduled start, held the task in_progress and
+    stopped every other task on its resource (humanTraject, 2026-08-31). Registering the trundlr
+    PROJECT first is fine; it creates no runnable work.
+    """
+    root = tmp_path / "260831_racy"
+    root.mkdir()
+    seen = {}
+    real = planner.queue_chain
+
+    def spy(*a, **kw):
+        seen["litrev"] = (root / "litReview" / "litrev.yaml").is_file()
+        seen["manifest"] = (root / project.MANIFEST).is_file()
+        seen["output_dir"] = (root / "litReview" / "output").is_dir()
+        return real(*a, **kw)
+
+    monkeypatch.setattr(planner, "queue_chain", spy)
+    assert planner.run_init(root, name="racy", short_title="racy", brief="b",
+                            initials="DCR", priority=2) == 0
+    assert seen["litrev"], "the gather was queued before litrev.yaml existed"
+    assert seen["manifest"], "the gather was queued before haarpi.yaml existed"
+    assert seen["output_dir"], "the gather was queued before its output dir existed"
+
+
+def test_init_still_records_the_trundlr_id_it_registered_before_scaffolding(tmp_path, servers):
+    """The manifest is saved after the id is known, so splitting register from queue must not
+    lose it."""
+    root = tmp_path / "260831_ided"
+    root.mkdir()
+    assert planner.run_init(root, name="ided", short_title="ided", brief="b",
+                            initials="DCR", priority=2) == 0
+    assert project.load_manifest(root).trundlr_project_id == 1
+
+
+def test_init_that_cannot_reach_trundlr_still_scaffolds_the_project(tmp_path, servers,
+                                                                    monkeypatch):
+    """A queue failure must not cost the project its directories: the scaffold now happens
+    before the queueing, so an unreachable server leaves a usable project behind."""
+    root = tmp_path / "260831_offline"
+    root.mkdir()
+
+    def boom(*a, **kw):
+        raise trundlr.TrundlrError("connection refused")
+
+    monkeypatch.setattr(planner, "queue_chain", boom)
+    assert planner.run_init(root, name="offline", short_title="offline", brief="b",
+                            initials="DCR", priority=2) == 0
+    assert (root / "litReview" / "litrev.yaml").is_file()
+    assert (root / "litReview" / "output").is_dir()
+    assert (root / ".haarpi" / "plans").is_dir()
+
+
 def test_init_asks_priority_and_defaults_to_trundlrs_own_band(tmp_path, servers,
                                                               monkeypatch):
     """Unanswered, a new project takes trundlr's default band — it does not barge in

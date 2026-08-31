@@ -2003,6 +2003,10 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
                           else trundlr.PRIORITY_DEFAULT),
     )
     lines = []
+    client = None
+    pid = None
+    # REGISTERING the trundlr project is safe here: it creates no runnable work. Only the
+    # queueing below has to wait for the project to exist on disk.
     if asks_trundlr:
         try:
             client = trundlr.TrundlrClient(tr_cfg["url"])
@@ -2014,21 +2018,35 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
             lines.append(f"trundlr project '{m.name}' (id {pid}"
                          + (f", created at priority {m.trundlr_priority})" if created
                             else ")"))
+        except trundlr.TrundlrError as e:
+            client = None
+            lines.append(f"[trundlr] skipped ({e}) — register + queue later with "
+                         "`haarpi queue`")
+    else:
+        lines.append("[trundlr] not configured/disabled — queue later with `haarpi queue`")
+
+    # The project must EXIST before any runnable task naming it is published. `queue_chain` used
+    # to run above these three lines, so a `rabbithole gather` was claimable while init was still
+    # scaffolding: an idle runner took it and died on "No litrev.yaml found in litReview. Run
+    # `rabbitHole init` first" one second after init queued it (humanTraject, 2026-08-31). The
+    # task then sat in_progress — the runner could not record a failure that finished before its
+    # own scheduled start — and every other task on that runner's resource stopped with it.
+    project.save_manifest(m, root)
+    project.scaffold(root, m)
+    seeded = project.seed_tool_configs(root, m)
+    if seeded:
+        lines.append("seeded stage config(s): " + ", ".join(seeded))
+
+    if client is not None and pid is not None:
+        try:
             queued = queue_chain(client, pid, "litreview",
                                  ["gather", "collect", "report", "mindmap", "comment"], tr_cfg,
                                  description=m.brief[:300])
             lines.append(f"queued litreview cycle {queued['cycle']} "
                          f"({len(queued['tasks'])} tasks, ends in `haarpi next`)")
         except trundlr.TrundlrError as e:
-            lines.append(f"[trundlr] skipped ({e}) — register + queue later with "
+            lines.append(f"[trundlr] registered but queued nothing ({e}) — queue with "
                          "`haarpi queue`")
-    else:
-        lines.append("[trundlr] not configured/disabled — queue later with `haarpi queue`")
-    project.save_manifest(m, root)
-    project.scaffold(root, m)
-    seeded = project.seed_tool_configs(root, m)
-    if seeded:
-        lines.append("seeded stage config(s): " + ", ".join(seeded))
     project.record_plan(root, {"type": "opened", "stage": "litreview"})
     print(f"haarpi init: {m.name} ({m.short_title}) — stages: "
           + ", ".join(m.stages) + "\n  " + "\n  ".join(lines))
