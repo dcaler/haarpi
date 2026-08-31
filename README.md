@@ -43,7 +43,10 @@ HAARPi acting as conductor.
 ![Inside each agent — the process every stage runs, and who acts at each step](figures/260811_HAARPi_agentDrilldown_ra.png)
 
 *(Wide diagram — open [the SVG](figures/260811_HAARPi_agentDrilldown_ra.svg) to
-read it at size. Source: [`.dot`](figures/260811_HAARPi_agentDrilldown_ra.dot).)*
+read it at size. Source: [`.dot`](figures/260811_HAARPi_agentDrilldown_ra.dot).
+Solid = the work moves on; dashed grey = the step produces that artifact; dashed
+purple = where a gate sends the work when it does not mint; green = the gate was
+clean.)*
 
 The cycle is always the same four beats:
 

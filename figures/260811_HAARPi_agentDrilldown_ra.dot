@@ -4,7 +4,7 @@
 digraph agentDrilldown {
   rankdir=TB; bgcolor="#ffffff";
   labelloc=t;
-  label=<<FONT POINT-SIZE="20" FACE="Helvetica-Bold"><B>Inside each agent &#8212; the process every stage runs, and who acts at each step</B></FONT><BR/><BR/><FONT POINT-SIZE="11.5" FACE="Helvetica">Amber = the Human&#8217;s step &#160;&#183;&#160; indigo = the agent working alone &#160;&#183;&#160; purple = HAARPi, the conductor. At each gate HAARPi evaluates the edited draft, parses the unresolved comments, and by their severity designs &amp; queues the response; &#8220;all resolved&#8221; mints the release. rayleigh is one tool split across stages 2 &amp; 4; raconteur climbs three gate cycles.</FONT>>;
+  label=<<FONT POINT-SIZE="20" FACE="Helvetica-Bold"><B>Inside each agent &#8212; the process every stage runs, and who acts at each step</B></FONT><BR/><BR/><FONT POINT-SIZE="11.5" FACE="Helvetica">Amber = the Human&#8217;s step &#160;&#183;&#160; indigo = the agent working alone &#160;&#183;&#160; purple = HAARPi, the conductor.<BR/><B>Solid</B> = the work moves on &#160;&#183;&#160; <B>dashed grey</B> = the step produces this artifact &#160;&#183;&#160; <B>dashed purple</B> = where a gate sends the work when it does not mint &#160;&#183;&#160; <B>green</B> = the gate was clean.<BR/>At each gate HAARPi decomposes the unresolved comments one at a time and builds the chain their needs require; &#8220;all resolved&#8221; mints the release. rayleigh is one tool split across stages 2 &amp; 4; raconteur climbs three gate cycles.</FONT>>;
   node [fontname="Helvetica", fontsize=9.5];
   edge [color="#334155", fontname="Helvetica", fontsize=9];
   nodesep=0.6; ranksep=0.5;
@@ -44,6 +44,7 @@ comment that asked, corrections applied document-wide"];
   l1_pad [shape=point, width=0.01, style=invis, group=g1];
   a1_refs [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: refs.bib"];
   a1_corpus [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: embedded corpus"];
+  a1_map [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: the contribution map"];
   a1_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: literature review -
 load-bearing sources, narrative,
 annotated bibliography"];
@@ -140,7 +141,9 @@ spec (spec.json) from the one-pager spine
   a6_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the .pptx presentation"];
   l6_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g6, label="presentation release"];
 
-  h1 -> l1_b -> l1_g -> l1_c -> l1_r -> l1_mm -> l1_gate -> l1_h;
+  h1 -> l1_b -> l1_g -> l1_c -> l1_r [weight=100];
+  // the spine is weighted so the rework column's ranking edge cannot bend it sideways
+  l1_r -> l1_mm -> l1_gate -> l1_h [weight=100];
   h2 -> l2_s -> l2_w -> l2_gate -> l2_h;
   h3 -> l3_s -> l3_lint -> l3_q -> l3_build -> l3_test;
   h4 -> l4_s -> l4_c -> l4_p -> l4_gate -> l4_h;
@@ -152,17 +155,20 @@ spec (spec.json) from the one-pager spine
   { rank=same; l1_rev l1_pad }
   // The rework path is its own ranked column beside the main one: audit -> build -> revise.
   // Constrained, so graphviz stacks them; an unconstrained chain floats to rank 0.
-  l1_r -> l1_a [style=invis, weight=10];
+  l1_mm -> l1_a [style=invis, weight=1];   // ranking only: audit sits below the map
   l1_a -> l1_bd -> l1_rev [color="#334155", weight=10];
   l1_rev -> l1_pad [style=invis];
-  l1_rev -> l1_gate [color="#334155", constraint=false];
+  // every re-draft ends at the map: it is a per-draft diagnostic, not a one-off
+  l1_rev -> l1_mm [color="#334155", constraint=false];
   // the rework arc, in the source rather than post-drawn onto the render
-  l1_h -> l1_a [color="#7c3aed", fontcolor="#7c3aed", constraint=false,
-                tailport=w, headport=w, label="comments\nremain"];
+  l1_h -> l1_a [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
+                label="comments\nremain"];
   { rank=same; l1_g a1_refs }
   l1_g -> a1_refs [style=dashed, color="#a8a29e", arrowsize=0.5];
   { rank=same; l1_bd a1_corpus }
   l1_bd -> a1_corpus [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l1_mm a1_map }
+  l1_mm -> a1_map [style=dashed, color="#a8a29e", arrowsize=0.5];
   { rank=same; l1_rel a1_mint }
   l1_rel -> a1_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
   // ── the rework arcs ────────────────────────────────────────────────────────
@@ -173,7 +179,7 @@ spec (spec.json) from the one-pager spine
   // sweep up the left of each column without disturbing the ranking -- the idiom
   // paperInflow uses for its abstract edges. Each one restates the gate node's own routing.
   edge [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
-        tailport=w, headport=w, fontsize=8.5];
+        fontsize=8.5];
   l2_h -> l2_s  [label="comments\nre-open the session"];
   l3_h -> l3_s  [label="comments\nre-open the session"];
   l4_h -> l4_p  [label="cosmetic:\nre-run process"];
@@ -183,8 +189,7 @@ spec (spec.json) from the one-pager spine
   l5_h3 -> l5_out [label="structural:\nre-outline"];
   l5_h3 -> l5_op  [label="narrative:\nrecut"];
   l6_h -> l6_b  [label="comments\nre-open the session"];
-  edge [color="#334155", fontcolor="#334155", constraint=true, style=solid,
-        tailport="", headport="", fontsize=9];
+  edge [color="#334155", fontcolor="#334155", constraint=true, style=solid, fontsize=9];
 
   l2_h -> l2_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l2_w a2_design a2_fig }
