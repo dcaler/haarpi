@@ -665,6 +665,33 @@ def _sections_from_docx(docx: Path) -> tuple[list[Section], list[int]]:
     return out, heads
 
 
+def _pending_corrections(paths) -> list[dict]:
+    """The term corrections the planner recorded for the latest litreview cycle.
+
+    Read from the plan ledger rather than re-derived here: `haarpi next` already decided what is
+    wrong and what is right, and a reviser that made its own call could disagree with the
+    substitution already applied to the brief and the config — which is exactly the split that
+    let a wrong term live in two places at once.
+    """
+    try:
+        from haarpi import project as _hproject
+    except ImportError:
+        return []
+    root = paths.root.parent          # paths.root is the litReview dir
+    try:
+        plans = _hproject.list_plans(root)
+    except Exception:  # noqa: BLE001
+        return []
+    for plan in reversed(plans):
+        if (plan or {}).get("stage") != "litreview":
+            continue
+        if plan.get("type") not in (None, "plan"):
+            continue
+        return [c for c in (plan.get("corrections") or [])
+                if c.get("wrong") and c.get("right")]
+    return []
+
+
 def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
                  compact, full, citekeys: dict[int, str],
                  outcomes: dict[str, str], grafted_at: dict[int, str]) -> list[dict]:
@@ -870,6 +897,23 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] bibliography regeneration failed ({e}); "
               f"keeping the carried-over bibliography.", file=sys.stderr)
+
+    # A correction is total, not span-local: the reviewer is saying the project has a fact wrong,
+    # so it is wrong in every paragraph, including the ones they left no note on. The planner
+    # already fixed the brief, the config and the draft markdown; this is the .docx they hold.
+    try:
+        corrections = _pending_corrections(paths)
+        if corrections:
+            print(f"  {runlog.stamp()}Applying {len(corrections)} term correction(s) "
+                  f"across the narrative...", flush=True)
+            sub = redline.tracked_substitute(out_docx, corrections)
+            summary.update({"corrections": sub["substitutions"],
+                            "correction_paragraphs": sub["paragraphs"]})
+            for term, n in sub["per_term"].items():
+                print(f"    {term!r}: {n} substitution(s)"
+                      + ("   NOTHING MATCHED" if not n else ""))
+    except Exception as e:  # noqa: BLE001 — a correction must not cost the redline
+        print(f"  [warn] could not apply the term corrections ({e}).", file=sys.stderr)
 
     # The load-bearing block is only true of the draft it was computed from, and this pass has
     # just changed which sources carry the argument — a redline adds citations, a graft adds

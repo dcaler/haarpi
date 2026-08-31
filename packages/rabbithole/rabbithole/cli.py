@@ -4,6 +4,7 @@
     rabbitHole gather     discover & curate sources missing from your Zotero collection
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
     rabbitHole graft      add a requested section, leaving the rest of the review untouched
+    rabbitHole refresh    recompute the load-bearing block on an existing draft
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
     rabbitHole ingest     pull reviewer-supplied references (pasted into a _ra.docx) into the corpus
     rabbitHole style      train a style profile on the author's Zotero publications
@@ -139,6 +140,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("style",
                    help="train a style profile on the author's Zotero publications")
 
+    rfr = sub.add_parser("refresh",
+                         help="recompute the load-bearing block on an existing draft "
+                              "(no re-draft, comment threads intact)")
+    rfr.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                     help="override the brain backend for this run")
+    rfr.add_argument("--file", default=None,
+                     help="refresh this .docx instead of the newest one in output/")
+
     mm = sub.add_parser("mindmap",
                         help="mint a themed contribution map (mind-map) from the minted litreview")
     mm.add_argument("--brain", choices=["ollama", "claude"], default=None,
@@ -198,6 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "style":
         from . import style
         return style.run(args.dir)
+
+    if args.command == "refresh":
+        _check_env(need_pandoc=False)          # edits the .docx in place; no pandoc render
+        from . import refresh
+        return refresh.run(args.dir, brain_override=args.brain, file=args.file)
 
     if args.command == "mindmap":
         _check_env(need_pandoc=False)          # needs the brain (Ollama); no pandoc

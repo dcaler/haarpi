@@ -478,3 +478,35 @@ def test_the_screen_can_be_turned_off():
 def test_self_disqualified_needs_a_real_phrase_not_a_hedge():
     assert summarize.self_disqualified([{"claim": "This is only partly relevant but useful."}]) == ""
     assert summarize.self_disqualified([{"claim": "Irrelevant to the review's focus."}])
+
+
+# ── a claim can never inject structure into the bibliography ─────────────────
+
+def test_a_claim_carrying_a_heading_cannot_break_the_reference_list():
+    """The elephantRoom entry that split in half: a section heading rode into the claim store,
+    rendered as `- ## Polycentric governance...`, and pandoc turned it into a real Heading 2
+    inside the reference list — so Keohane's annotation became a narrative section."""
+    from rabbithole.summarize import _bullet_safe
+    got = _bullet_safe("## Polycentric governance stabilizes commons management\n\n"
+                       "Effective global climate governance likely requires a regime complex.")
+    assert not got.startswith("#")
+    assert "\n" not in got
+    assert got.startswith("Polycentric governance")
+
+
+def test_bullet_safe_strips_nested_markers_and_keeps_prose():
+    from rabbithole.summarize import _bullet_safe
+    assert _bullet_safe("- ## - a claim") == "a claim"
+    assert _bullet_safe("> quoted claim") == "quoted claim"
+    assert _bullet_safe("1. numbered claim") == "numbered claim"
+    assert _bullet_safe("A normal claim about x - y.") == "A normal claim about x - y."
+    assert _bullet_safe("") == ""
+
+
+def test_a_claim_that_is_only_markup_is_dropped_not_rendered_empty():
+    from rabbithole.summarize import bibliography
+    from rabbithole.models import Author, Candidate
+    c = Candidate(title="T", authors=[Author(family="Able")], year=2020)
+    md = bibliography([c], {0: [{"claim": "## "}, {"claim": "A real claim."}]})
+    assert "- A real claim." in md
+    assert "- ##" not in md and "- \n" not in md

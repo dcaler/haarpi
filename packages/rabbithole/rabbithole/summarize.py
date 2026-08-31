@@ -1492,6 +1492,32 @@ def self_disqualified(claims: list) -> str:
     return ""
 
 
+# The trailing separator is optional at end-of-string: whitespace is collapsed before this runs,
+# so a claim that is ONLY a marker ("## ") arrives as "##" with nothing after it to match.
+_BULLET_MARKER = re.compile(r"^\s*(?:[#>]+|[-*+]|\d+[.)])(?:\s+|$)")
+
+
+def _bullet_safe(text: str) -> str:
+    """One bibliography bullet's worth of text: single line, no block markup of its own.
+
+    A claim is interpolated into ``- {claim}``, so anything in it that markdown reads as
+    STRUCTURE escapes the list and becomes part of the document. A section heading that rode
+    into the claim store printed as ``- ## Polycentric governance...``, which pandoc rendered as
+    a real Heading 2 in the middle of the reference list, splitting one source's entry in half
+    and leaving the next source looking like a narrative section.
+
+    `_claim_sentences` strips headings at the source, which is where that particular leak was
+    fixed. This is the guard that makes the CLASS impossible: whatever reaches the renderer, a
+    bullet stays a bullet.
+    """
+    flat = " ".join((text or "").split())
+    prev = None
+    while flat != prev:                 # "## - foo" is still structure after one strip
+        prev = flat
+        flat = _BULLET_MARKER.sub("", flat)
+    return flat.strip()
+
+
 def bibliography(corpus: list[Candidate], located: dict[int, list],
                  cited_indices: set[int] | None = None,
                  screen_curated: bool = True) -> str:
@@ -1512,9 +1538,11 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
                 # Display-time truncation, on a word boundary and marked with an ellipsis.
                 # Claims are stored whole (see chroma.locate_direct); a hard slice in the store
                 # used to ship bullets that stopped mid-word ("does not report any quantit").
-                claim = _truncate(cl.get("claim", "").strip(), _CLAIM_DISPLAY_CHARS)
-                loc = (cl.get("location") or "").strip()
-                quote = (cl.get("quote") or "").strip()
+                claim = _truncate(_bullet_safe(cl.get("claim", "")), _CLAIM_DISPLAY_CHARS)
+                loc = _bullet_safe(cl.get("location") or "")
+                quote = _bullet_safe(cl.get("quote") or "")
+                if not claim:
+                    continue
                 line = f"- {claim}"
                 if loc:
                     line += f" — *{loc}*"

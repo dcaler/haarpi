@@ -187,5 +187,103 @@ def test_every_outcome_the_loop_can_record_produces_a_reply(tmp_path, monkeypatc
     assert all(v.startswith("rabbitHole:") for v in written.values())
 
 
+# ── a correction is total, and bounded at the bibliography ───────────────────
+
+def _doc_with_term(path, term: str):
+    d = docx.Document()
+    d.add_heading("Literature Review: T", level=1)
+    d.add_heading("Narrative Review", level=2)
+    d.add_heading("Alpha", level=2)
+    d.add_paragraph(f"The {term} framework predicts collapse [@k1].")
+    d.add_paragraph(f"Later work extends the {term} model [@k2].")
+    d.add_heading("Annotated Bibliography", level=2)
+    d.add_paragraph("Someone, A. (2020). A paper.")
+    d.add_paragraph(f"p.4: \u201cwe adopt the {term} framework\u201d")
+    d.save(str(path))
+    return path
+
+
+def test_a_correction_reaches_every_paragraph_not_just_the_annotated_one(tmp_path):
+    """The failure this closes: a wrong model name sat in six places with one comment on it.
+    A span-local reviser fixed the one and left five, and the next cycle re-injected them."""
+    src = _doc_with_term(tmp_path / "d.docx", "Dosi-Stiglitz-Keynes")
+    out = redline.tracked_substitute(
+        src, [{"wrong": "Dosi-Stiglitz-Keynes", "right": "Dystopian Schumpeter-meeting-Keynes"}])
+    assert out["substitutions"] == 2 and out["paragraphs"] == 2
+    texts = [t for _s, t in _rows(src)]
+    assert not any("Dosi-Stiglitz-Keynes" in t for t in texts[:5])
+    assert sum("Dystopian Schumpeter-meeting-Keynes" in t for t in texts) == 2
+
+
+def test_a_correction_never_rewrites_a_quotation_in_the_bibliography(tmp_path):
+    """The bibliography's claims are passages quoted from the sources. Making a quotation agree
+    with the project's preferred term would falsify the one part meant to be verbatim."""
+    src = _doc_with_term(tmp_path / "d.docx", "Dosi-Stiglitz-Keynes")
+    redline.tracked_substitute(
+        src, [{"wrong": "Dosi-Stiglitz-Keynes", "right": "Dystopian Schumpeter-meeting-Keynes"}])
+    quoted = [t for _s, t in _rows(src) if t.startswith("p.4:")]
+    assert quoted and "Dosi-Stiglitz-Keynes" in quoted[0], "a quoted passage was rewritten"
+
+
+def test_a_correction_matching_nothing_is_reported_as_zero(tmp_path):
+    src = _doc_with_term(tmp_path / "d.docx", "Dosi-Stiglitz-Keynes")
+    out = redline.tracked_substitute(src, [{"wrong": "Keynes-Schumpeter", "right": "DSK"}])
+    assert out["substitutions"] == 0 and out["per_term"] == {"Keynes-Schumpeter": 0}
+
+
+def test_a_correction_lands_as_a_tracked_change(tmp_path):
+    """It arrives as something the reviewer can reject, like every other edit."""
+    src = _doc_with_term(tmp_path / "d.docx", "Dosi-Stiglitz-Keynes")
+    redline.tracked_substitute(src, [{"wrong": "Dosi-Stiglitz-Keynes", "right": "DSK"}])
+    import zipfile
+    xml = zipfile.ZipFile(src).read("word/document.xml").decode()
+    assert "<w:ins " in xml and "<w:del " in xml
+
+
+def test_corrections_come_from_the_planners_ledger_not_a_fresh_guess(tmp_path):
+    """`haarpi next` already decided wrong/right and applied it to the brief and the config. A
+    reviser making its own call could disagree with what is already on disk."""
+    from haarpi import project as hproject
+    root = tmp_path / "proj"
+    (root / "litReview").mkdir(parents=True)
+    hproject.record_plan(root, {"type": "plan", "stage": "litreview",
+                                "corrections": [{"wrong": "A B", "right": "C D"},
+                                                {"wrong": "", "right": "x"}]})
+    from rabbithole import config as rhconfig
+    got = revise._pending_corrections(rhconfig.project_paths(str(root)))
+    assert got == [{"wrong": "A B", "right": "C D"}]
+
+
+def test_no_ledger_is_no_corrections_not_a_crash(tmp_path):
+    from rabbithole import config as rhconfig
+    (tmp_path / "litReview").mkdir()
+    assert revise._pending_corrections(rhconfig.project_paths(str(tmp_path))) == []
+
+
+# ── refresh picks the draft a reader would open ──────────────────────────────
+
+def test_refresh_targets_the_newest_draft_annotated_or_not(tmp_path):
+    from rabbithole import config as rhconfig, refresh
+    out = tmp_path / "litReview" / "output"
+    out.mkdir(parents=True)
+    import time as _t
+    for i, name in enumerate(["260810_p_litreview_ra.docx",
+                              "260815_p_litreview_ra_DCR.docx",
+                              "260820_p_litreview_ra_DCR_ra.docx"]):
+        f = out / name
+        _doc(f, ["Alpha"])
+        _t.time()
+        import os
+        os.utime(f, (1000 + i * 100, 1000 + i * 100))
+    got = refresh.latest_draft(rhconfig.project_paths(str(tmp_path)))
+    assert got.name == "260820_p_litreview_ra_DCR_ra.docx"
+
+
+def test_refresh_on_an_empty_output_dir_finds_nothing(tmp_path):
+    from rabbithole import config as rhconfig, refresh
+    (tmp_path / "litReview" / "output").mkdir(parents=True)
+    assert refresh.latest_draft(rhconfig.project_paths(str(tmp_path))) is None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

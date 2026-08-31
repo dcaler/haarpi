@@ -253,6 +253,52 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
     return {"bib_entries": n_entries, "had_existing_section": bib_idx is not None}
 
 
+def tracked_substitute(path: Path, corrections: list[dict],
+                       author: str = "rabbitHole") -> dict:
+    """Apply the reviewer's term corrections across the NARRATIVE, as tracked changes.
+
+    A correction is not a paragraph edit — the reviewer is saying the project has a fact wrong,
+    and it is wrong everywhere it appears, not only where they happened to leave a note. The
+    planner already substitutes across the brief, the litrev config and the draft markdown, which
+    is what stops the next gather re-injecting the term. This is the half that was missing: the
+    .docx the reviewer is actually holding. Without it a wrong model name survived five cycles of
+    elephantRoom, corrected in the config and still printed six times in the document.
+
+    Deliberately bounded at the annotated bibliography. Its claims are passages QUOTED from the
+    sources, and rewriting a quotation so it agrees with the project's preferred term would
+    falsify the record — the one place the review is supposed to be verbatim.
+
+    Returns ``{"substitutions", "paragraphs", "per_term"}``; a term that matches nothing is
+    reported as 0 rather than passing silently.
+    """
+    from .steering import _sub_term
+    pairs = [(c.get("wrong", ""), c.get("right", "")) for c in corrections or []]
+    pairs = [(w, r) for w, r in pairs if w and r]
+    per_term = {w: 0 for w, _r in pairs}
+    if not pairs:
+        return {"substitutions": 0, "paragraphs": 0, "per_term": {}}
+    doc = Document(str(path))
+    ids = _Ids(_max_existing_id(doc))
+    changed = 0
+    for par in doc.paragraphs:
+        if par.text.strip().lower().startswith(_BIB_HEADING):
+            break
+        text = paragraph_text(par._p)
+        if not text.strip():
+            continue
+        new, hits = text, 0
+        for wrong, right in pairs:
+            new, n = _sub_term(new, wrong, right)
+            if n:
+                per_term[wrong] += n
+                hits += n
+        if hits and tracked_replace_sentencewise(par._p, new, author, ids):
+            changed += 1
+    doc.save(str(path))
+    return {"substitutions": sum(per_term.values()), "paragraphs": changed,
+            "per_term": per_term}
+
+
 _TOP_HEADING = "most load-bearing sources"
 _NARRATIVE_HEADING = "narrative review"
 
