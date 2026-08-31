@@ -296,6 +296,21 @@ packages/
 figures/        the two architecture figures above, with their .dot sources
 ```
 
+Both figures rebuild from their own source — no hand-editing of the rendered
+output, so they can be regenerated whenever the pipeline changes:
+
+```bash
+cd figures
+for f in *_agentDrilldown_ra *_paperInflow_ra; do
+  dot -Tsvg "$f.dot" -o "$f.svg"
+  dot -Tpng -Gdpi=110 "$f.dot" -o "$f.png"
+done
+```
+
+Keeping them reproducible is the point: a figure that can only be updated by
+redrawing it is a figure that stops being true. Every rework arc, including the
+ones that route backwards up a column, lives in the `.dot`.
+
 ## History
 
 Four of the tools began as standalone repos (`dcaler/rabbithole`, `raconteur`,

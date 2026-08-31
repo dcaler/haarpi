@@ -165,6 +165,27 @@ spec (spec.json) from the one-pager spine
   l1_bd -> a1_corpus [style=dashed, color="#a8a29e", arrowsize=0.5];
   { rank=same; l1_rel a1_mint }
   l1_rel -> a1_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  // ── the rework arcs ────────────────────────────────────────────────────────
+  // Every gate that does not mint sends the work back somewhere, and WHERE is the whole
+  // claim of this figure: rework is scaled to the ask. These were once drawn onto the
+  // rendered .svg by hand, so they vanished on every regeneration and the figure could not
+  // be rebuilt from its own source. Routed with constraint=false and west ports so they
+  // sweep up the left of each column without disturbing the ranking -- the idiom
+  // paperInflow uses for its abstract edges. Each one restates the gate node's own routing.
+  edge [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
+        tailport=w, headport=w, fontsize=8.5];
+  l2_h -> l2_s  [label="comments\nre-open the session"];
+  l3_h -> l3_s  [label="comments\nre-open the session"];
+  l4_h -> l4_p  [label="cosmetic:\nre-run process"];
+  l4_h -> l4_s  [label="extend:\nneeds new data"];
+  l5_h2 -> l5_out [label="comments\nre-outline"];
+  l5_h3 -> l5_rev [label="cosmetic"];
+  l5_h3 -> l5_out [label="structural:\nre-outline"];
+  l5_h3 -> l5_op  [label="narrative:\nrecut"];
+  l6_h -> l6_b  [label="comments\nre-open the session"];
+  edge [color="#334155", fontcolor="#334155", constraint=true, style=solid,
+        tailport="", headport="", fontsize=9];
+
   l2_h -> l2_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l2_w a2_design a2_fig }
   l2_w -> a2_design [style=dashed, color="#a8a29e", arrowsize=0.5];
