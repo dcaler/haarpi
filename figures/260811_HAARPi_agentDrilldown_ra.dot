@@ -4,9 +4,16 @@
 digraph agentDrilldown {
   rankdir=TB; bgcolor="#ffffff";
   labelloc=t;
-  label=<<FONT POINT-SIZE="20" FACE="Helvetica-Bold"><B>Inside each agent &#8212; the process every stage runs, and who acts at each step</B></FONT><BR/><BR/><FONT POINT-SIZE="11.5" FACE="Helvetica">Amber = the Human&#8217;s step &#160;&#183;&#160; indigo = the agent working alone &#160;&#183;&#160; purple = HAARPi, the conductor.<BR/><B>Solid</B> = the work moves on &#160;&#183;&#160; <B>dashed grey</B> = the step produces this artifact &#160;&#183;&#160; <B>dashed purple</B> = where a gate sends the work when it does not mint &#160;&#183;&#160; <B>green</B> = the gate was clean.<BR/>At each gate HAARPi decomposes the unresolved comments one at a time and builds the chain their needs require; &#8220;all resolved&#8221; mints the release. rayleigh is one tool split across stages 2 &amp; 4; raconteur climbs three gate cycles.</FONT>>;
+  label=<<FONT POINT-SIZE="20" FACE="Helvetica-Bold"><B>Inside each agent &#8212; the process every stage runs, and who acts at each step</B></FONT><BR/><BR/><FONT POINT-SIZE="11.5" FACE="Helvetica">Amber = the Human&#8217;s step &#160;&#183;&#160; indigo = the agent working alone &#160;&#183;&#160; purple = HAARPi, the conductor.<BR/><B>Solid</B> = the work moves on &#160;&#183;&#160; <B>dashed grey</B> = the step produces this artifact &#160;&#183;&#160; <B>dashed purple</B> = the revision cycle: where a gate sends the work when it does not mint, and the path back &#160;&#183;&#160; <B>green</B> = the gate was clean.<BR/>At each gate HAARPi decomposes the unresolved comments one at a time and builds the chain their needs require; &#8220;all resolved&#8221; mints the release. rayleigh is one tool split across stages 2 &amp; 4; raconteur climbs three gate cycles.</FONT>>;
   node [fontname="Helvetica", fontsize=9.5];
-  edge [color="#334155", fontname="Helvetica", fontsize=9];
+  // Port discipline, stated once so every edge obeys it:
+  //   solid flow      exits SOUTH, enters NORTH  -> the spine reads straight down
+  //   dashed grey     exits EAST,  enters WEST   -> an artifact hangs horizontally off its step
+  //   dashed purple   exits WEST,  enters WEST   -> and TRAVELS west: the revision cycle runs
+  //                                                  up the left of the column it belongs to,
+  //                                                  which is why stage 1's rework column is
+  //                                                  ordered west of its own spine
+  edge [color="#334155", fontname="Helvetica", fontsize=9, tailport=s, headport=n];
   nodesep=0.6; ranksep=0.5;
 
   h1 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g1, label="1. rabbitHole surveys the literature"];
@@ -152,25 +159,33 @@ spec (spec.json) from the one-pager spine
   l1_h -> l1_rel [label="all comments\nresolved", color="#16a34a", fontcolor="#16a34a"];
   l1_r -> l1_pad [style=invis];
   l1_pad -> l1_gate [style=invis];
+  // The rework column sits WEST of the spine, so the purple arcs travel west as well as
+  // leaving and arriving west. Same-rank ordering edges decide left-to-right; group= only
+  // keeps a column straight, it does not say which side of another column it falls on.
+  { rank=same; l1_a l1_gate }
+  l1_a -> l1_gate [style=invis];
   { rank=same; l1_rev l1_pad }
   // The rework path is its own ranked column beside the main one: audit -> build -> revise.
   // Constrained, so graphviz stacks them; an unconstrained chain floats to rank 0.
   l1_mm -> l1_a [style=invis, weight=1];   // ranking only: audit sits below the map
-  l1_a -> l1_bd -> l1_rev [color="#334155", weight=10];
+  // The whole rework path is the revision cycle, so it is purple throughout: down the column
+  // vertically, then west to rejoin the spine at the map every re-draft triggers.
+  l1_a -> l1_bd -> l1_rev [color="#7c3aed", style=dashed, weight=10];
   l1_rev -> l1_pad [style=invis];
   // every re-draft ends at the map: it is a per-draft diagnostic, not a one-off
-  l1_rev -> l1_mm [color="#334155", constraint=false];
+  l1_rev -> l1_mm [color="#7c3aed", style=dashed, constraint=false,
+                   tailport=w, headport=w];
   // the rework arc, in the source rather than post-drawn onto the render
   l1_h -> l1_a [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
-                label="comments\nremain"];
+                tailport=w, headport=w, label="comments\nremain"];
   { rank=same; l1_g a1_refs }
-  l1_g -> a1_refs [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l1_g -> a1_refs [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l1_bd a1_corpus }
-  l1_bd -> a1_corpus [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l1_bd -> a1_corpus [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l1_mm a1_map }
-  l1_mm -> a1_map [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l1_mm -> a1_map [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l1_rel a1_mint }
-  l1_rel -> a1_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l1_rel -> a1_mint [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   // ── the rework arcs ────────────────────────────────────────────────────────
   // Every gate that does not mint sends the work back somewhere, and WHERE is the whole
   // claim of this figure: rework is scaled to the ask. These were once drawn onto the
@@ -179,7 +194,7 @@ spec (spec.json) from the one-pager spine
   // sweep up the left of each column without disturbing the ranking -- the idiom
   // paperInflow uses for its abstract edges. Each one restates the gate node's own routing.
   edge [color="#7c3aed", fontcolor="#7c3aed", constraint=false, style=dashed,
-        fontsize=8.5];
+        fontsize=8.5, tailport=w, headport=w];
   l2_h -> l2_s  [label="comments\nre-open the session"];
   l3_h -> l3_s  [label="comments\nre-open the session"];
   l4_h -> l4_p  [label="cosmetic:\nre-run process"];
@@ -189,35 +204,36 @@ spec (spec.json) from the one-pager spine
   l5_h3 -> l5_out [label="structural:\nre-outline"];
   l5_h3 -> l5_op  [label="narrative:\nrecut"];
   l6_h -> l6_b  [label="comments\nre-open the session"];
-  edge [color="#334155", fontcolor="#334155", constraint=true, style=solid, fontsize=9];
+  edge [color="#334155", fontcolor="#334155", constraint=true, style=solid, fontsize=9,
+        tailport=s, headport=n];
 
   l2_h -> l2_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l2_w a2_design a2_fig }
-  l2_w -> a2_design [style=dashed, color="#a8a29e", arrowsize=0.5];
-  l2_w -> a2_fig [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l2_w -> a2_design [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
+  l2_w -> a2_fig [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   a2_design -> a2_fig [style=invis];
   { rank=same; l2_rel a2_mint }
-  l2_rel -> a2_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l2_rel -> a2_mint [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   l3_test -> l3_hand [label="module clean", color="#16a34a", fontcolor="#16a34a"];
   l3_hand -> l3_gate -> l3_h;
   l3_h -> l3_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l3_s a3_tasks a3_tests }
-  l3_s -> a3_tasks [style=dashed, color="#a8a29e", arrowsize=0.5];
-  l3_s -> a3_tests [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_s -> a3_tasks [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
+  l3_s -> a3_tests [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   a3_tasks -> a3_tests [style=invis];
   { rank=same; l3_build a3_code a3_mod }
-  l3_build -> a3_code [style=dashed, color="#a8a29e", arrowsize=0.5];
-  l3_build -> a3_mod [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_build -> a3_code [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
+  l3_build -> a3_mod [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   a3_code -> a3_mod [style=invis];
   { rank=same; l3_rel a3_mint }
-  l3_rel -> a3_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_rel -> a3_mint [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   l4_h -> l4_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l4_p a4_find a4_figs }
-  l4_p -> a4_find [style=dashed, color="#a8a29e", arrowsize=0.5];
-  l4_p -> a4_figs [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l4_p -> a4_find [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
+  l4_p -> a4_figs [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   a4_find -> a4_figs [style=invis];
   { rank=same; l4_rel a4_mint }
-  l4_rel -> a4_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l4_rel -> a4_mint [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   l5_op -> l5_opg -> l5_h1;
   l5_h1 -> l5_r1 [label="clean", color="#16a34a", fontcolor="#16a34a"];
   l5_r1 -> l5_ven;
@@ -233,14 +249,14 @@ spec (spec.json) from the one-pager spine
   l5_rev -> l5_pad [style=invis, weight=100];
   l5_rev -> l5_drg [color="#334155"];
   { rank=same; l5_r1 a5_m1 }
-  l5_r1 -> a5_m1 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l5_r1 -> a5_m1 [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l5_r2 a5_m2 }
-  l5_r2 -> a5_m2 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l5_r2 -> a5_m2 [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l5_rel a5_m3 }
-  l5_rel -> a5_m3 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l5_rel -> a5_m3 [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   l6_h -> l6_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
   { rank=same; l6_b a6_spec }
-  l6_b -> a6_spec [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l6_b -> a6_spec [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
   { rank=same; l6_rel a6_mint }
-  l6_rel -> a6_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l6_rel -> a6_mint [style=dashed, color="#a8a29e", arrowsize=0.5, tailport=e, headport=w];
 }

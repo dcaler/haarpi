@@ -44,9 +44,9 @@ HAARPi acting as conductor.
 
 *(Wide diagram — open [the SVG](figures/260811_HAARPi_agentDrilldown_ra.svg) to
 read it at size. Source: [`.dot`](figures/260811_HAARPi_agentDrilldown_ra.dot).
-Solid = the work moves on; dashed grey = the step produces that artifact; dashed
-purple = where a gate sends the work when it does not mint; green = the gate was
-clean.)*
+Solid = the work moves on, always vertical; dashed grey = the step produces that
+artifact, always horizontal; dashed purple = the revision cycle, always running
+west; green = the gate was clean.)*
 
 The cycle is always the same four beats:
 
