@@ -15,8 +15,17 @@ venv/
 ._*
 @eaDir/
 
-# generated figure pool — diagram artifacts (svg/png/dot), rebuilt from source, not tracked
-/figures/
+# generated figure pool — per-project diagram artifacts, rebuilt from source, not tracked.
+# The two ARCHITECTURE figures are the exception: the README embeds them, so they ship with
+# the source they were rendered from (see the README-check SOP — a stale figure in the README
+# is worse than no figure).
+/figures/*
+!/figures/*_agentDrilldown_ra.dot
+!/figures/*_agentDrilldown_ra.png
+!/figures/*_agentDrilldown_ra.svg
+!/figures/*_paperInflow_ra.dot
+!/figures/*_paperInflow_ra.png
+!/figures/*_paperInflow_ra.svg
 
 # Word lock files
 ~$*

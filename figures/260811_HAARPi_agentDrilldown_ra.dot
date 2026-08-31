@@ -1,0 +1,220 @@
+// figure: agentDrilldown
+// caption: Inside each agent: Human, agent, HAARPi the conductor.
+// provenance: mode=conceptual, author=Claude, from=cli + raster README + rabbithole plan; arcs post-drawn to the DCR shape
+digraph agentDrilldown {
+  rankdir=TB; bgcolor="#ffffff";
+  labelloc=t;
+  label=<<FONT POINT-SIZE="20" FACE="Helvetica-Bold"><B>Inside each agent &#8212; the process every stage runs, and who acts at each step</B></FONT><BR/><BR/><FONT POINT-SIZE="11.5" FACE="Helvetica">Amber = the Human&#8217;s step &#160;&#183;&#160; indigo = the agent working alone &#160;&#183;&#160; purple = HAARPi, the conductor. At each gate HAARPi evaluates the edited draft, parses the unresolved comments, and by their severity designs &amp; queues the response; &#8220;all resolved&#8221; mints the release. rayleigh is one tool split across stages 2 &amp; 4; raconteur climbs three gate cycles.</FONT>>;
+  node [fontname="Helvetica", fontsize=9.5];
+  edge [color="#334155", fontname="Helvetica", fontsize=9];
+  nodesep=0.6; ranksep=0.5;
+
+  h1 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g1, label="1. rabbitHole surveys the literature"];
+  h2 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g2, label="2. rayleigh designs the study"];
+  h3 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g3, label="3. raster builds the code"];
+  h4 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g4, label="4. rayleigh runs the experiments"];
+  h5 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g5, label="5. raconteur writes the paper"];
+  h6 [shape=box, style=filled, fillcolor="#e2e8f0", color="#64748b", fontname="Helvetica-Bold", group=g6, label="6. razzle makes the presentation"];
+  { rank=same; h1 h2 h3 h4 h5 h6 }
+  h1 -> h2 -> h3 -> h4 -> h5 -> h6 [style=invis];
+
+  l1_b [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g1, label="Human sets the brief (a short interview):
+the question, how many sources, the
+Zotero collection  ->  litrev.yaml"];
+  l1_g [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1, label="gather  ->  proposes sources + a
+collect-list (+ refs.bib)"];
+  l1_c [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g1, label="collect: Human adds each real source to Zotero
+WITH its PDF - verifying it exists
+(guards against hallucinated citations)"];
+  l1_r [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1, label="report  ->  generates the threaded review .docx
+(the FIRST draft; later, only a redirect re-plans it)"];
+  l1_gate [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g1, label="comment: Human redlines the review
+(accept/resolve, add papers)"];
+  l1_h [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g1, label="HAARPi decomposes the markup ONE COMMENT AT A TIME\ninto what each asks for (edit / sources / section /\ningest / cite / correct / redirect), then BUILDS the\nchain those needs require:"];
+  l1_a [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1r, label="audit  ->  quarantines lexical false-friends
+(shared word, no conceptual transfer)"];
+  l1_bd [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1r, label="build  ->  embeds the audited corpus
+(the SOLE embedder)"];
+  l1_rev [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1r, label="revise  ->  answers EVERY comment in kind:
+a tracked rewrite where prose can carry it, a
+requested section drafted and spliced in at the
+comment that asked, corrections applied document-wide"];
+  l1_mm [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g1, label="mindmap  ->  the contribution map
+(per draft, banded at 5% / 25% / 50%)"];
+  l1_pad [shape=point, width=0.01, style=invis, group=g1];
+  a1_refs [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: refs.bib"];
+  a1_corpus [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: embedded corpus"];
+  a1_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: literature review -
+load-bearing sources, narrative,
+annotated bibliography"];
+  l1_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g1, label="litreview release"];
+  l2_s [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g2, label="rayleigh init: Human + Claude settle the analytical
+framework in a live session (too open-ended to default)"];
+  l2_w [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g2, label="writes DESIGN.md + a framework figure,
+then the experiment design (experiments.yaml)"];
+  l2_gate [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g2, label="Human redlines the experiment design"];
+  l2_h [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g2, label="HAARPi evaluates the edited draft, parses the\nunresolved comments, and by their SEVERITY\ndesigns & queues the response:\nany severity re-opens the design session"];
+  a2_design [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: DESIGN.md"];
+  a2_fig [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: framework figure (-> figures pool)"];
+  a2_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the preregistration (experiments.yaml)"];
+  l2_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g2, label="experiment-design release"];
+  l3_s [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g3, label="Human + Claude DESIGN & CHECK the plan (one session):
+author DESIGN.md + tasks.yaml (modules, tasks,
+contracts), FREEZE the test suite (unit tests, module
+gates, goldens), then freeze-review it - red-before-
+green, satisfiability - BEFORE any building"];
+  l3_lint [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g3, label="lint: static cross-reference
+over the frozen tests (AST checks)"];
+  l3_q [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g3, label="queue: linearize the modules
+into the trundlr build chain"];
+  l3_build [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g3, label="build: a local-LLM doer implements each task against
+its frozen unit test; a repair loop climbs an escalation
+ladder (a same-failure plateau -> Human+Claude reconcile)"];
+  l3_test [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g3, label="test (no LLM): the task's unit test, then the
+MODULE GATE; regression keeps the frozen tree green"];
+  l3_hand [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g3, label="module gate passes -> next module;
+handoff -> methods.docx (a digest)"];
+  l3_gate [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g3, label="Human redlines the methods digest"];
+  l3_h [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g3, label="HAARPi evaluates the edited draft, parses the\nunresolved comments, and by their SEVERITY\ndesigns & queues the response:\nany severity re-opens the build session"];
+  a3_tasks [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: tasks.yaml"];
+  a3_tests [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: the frozen test suite"];
+  a3_code [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: the built code"];
+  a3_mod [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: module graph (-> figures pool)"];
+  a3_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the methods digest"];
+  l3_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g3, label="methods release"];
+  l4_s [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g4, label="rayleigh plan: Human + Claude design the executable
+experiments against the built tooling (live)"];
+  l4_c [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g4, label="queue -> conduct: run each experiment's
+cells against code/"];
+  l4_p [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g4, label="process -> outputs, findings.json, data figures"];
+  l4_gate [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g4, label="Human redlines the results write-up"];
+  l4_h [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g4, label="HAARPi evaluates the write-up + the comments:\ncosmetic (presentation only) -> re-run process\n(re-reduce + re-write, NO new data);\nextend (needs NEW DATA) -> rayleigh review"];
+  a4_find [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: findings.json"];
+  a4_figs [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: data figures (-> figures pool)"];
+  a4_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the results write-up"];
+  l4_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g4, label="results release"];
+  l5_op [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="onepager  ->  the one-pager .docx
+(cycle 1: the narrative through-line)"];
+  l5_opg [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g5, label="Human redlines the one-pager"];
+  l5_h1 [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g5, label="HAARPi runs this gate: clean -> one-pager
+release + queue the outline;
+comments -> recut the through-line"];
+  l5_ven [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="venue  ->  a slate of candidate venues"];
+  l5_veng [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g5, label="Human picks the venue - and its
+format, length, submission requirements"];
+  l5_sk [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="skeleton  ->  the section headings"];
+  l5_out [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="outline  ->  the content beats
+(cycle 2: redline between the two passes)"];
+  l5_outg [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g5, label="Human redlines the outline
+(or focus: refine one section)"];
+  l5_h2 [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g5, label="HAARPi runs this gate: clean -> outline
+release + queue the draft;
+comments -> re-outline"];
+  l5_dr [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="draft  ->  the full manuscript .docx
+(cycle 3)"];
+  l5_rev [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5r, label="revise  ->  the in-place redline: tracked
+changes on the flagged paragraphs"];
+  l5_pad [shape=point, width=0.01, style=invis, group=g5];
+  l5_drg [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g5, label="comment: Human redlines the paper"];
+  l5_h3 [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g5, label="HAARPi runs this gate: clean -> paper release;
+comments -> revise (cosmetic), re-outline
+(structural), or recut (narrative)"];
+  l5_r1 [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g5, label="one-pager release"];
+  l5_r2 [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g5, label="outline release"];
+  l5_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g5, label="paper release"];
+  a5_m1 [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the one-pager .docx"];
+  a5_m2 [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the outline .docx"];
+  a5_m3 [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the manuscript .docx"];
+  l5_pk [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g5, label="package: assemble + compile
+the venue submission"];
+  l6_a [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g6, label="razzle interview: Human gives the facts a tool must
+never invent (a script): the format, the venue, date,
+presenting authors, affiliation logos, funders"];
+  l6_b [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g6, label="razzle deck: Human + Claude author the presentation
+spec (spec.json) from the one-pager spine
++ the figures + the real claims/numbers"];
+  l6_ren [shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#94a3b8", group=g6, label="render -> the branded .pptx"];
+  l6_gate [shape=box, style="rounded,filled", fillcolor="#fde68a", color="#b45309", penwidth=2, group=g6, label="Human redlines the presentation"];
+  l6_h [shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#7c3aed", penwidth=2, group=g6, label="HAARPi evaluates the edited draft, parses the\nunresolved comments, and by their SEVERITY\ndesigns & queues the response:\nany severity re-opens the presentation session"];
+  a6_spec [shape=folder, style=filled, fillcolor="#e2e8f0", color="#94a3b8", fontsize=8.5, label="Artifact: spec.json"];
+  a6_mint [shape=folder, style=filled, fillcolor="#c7d2fe", color="#4f46e5", fontsize=8.5, label="Artifact: the .pptx presentation"];
+  l6_rel [shape=doubleoctagon, style=filled, fillcolor="#c7d2fe", color="#4f46e5", penwidth=1.5, group=g6, label="presentation release"];
+
+  h1 -> l1_b -> l1_g -> l1_c -> l1_r -> l1_mm -> l1_gate -> l1_h;
+  h2 -> l2_s -> l2_w -> l2_gate -> l2_h;
+  h3 -> l3_s -> l3_lint -> l3_q -> l3_build -> l3_test;
+  h4 -> l4_s -> l4_c -> l4_p -> l4_gate -> l4_h;
+  h5 -> l5_op;
+  h6 -> l6_a -> l6_b -> l6_ren -> l6_gate -> l6_h;
+  l1_h -> l1_rel [label="all comments\nresolved", color="#16a34a", fontcolor="#16a34a"];
+  l1_r -> l1_pad [style=invis];
+  l1_pad -> l1_gate [style=invis];
+  { rank=same; l1_rev l1_pad }
+  // The rework path is its own ranked column beside the main one: audit -> build -> revise.
+  // Constrained, so graphviz stacks them; an unconstrained chain floats to rank 0.
+  l1_r -> l1_a [style=invis, weight=10];
+  l1_a -> l1_bd -> l1_rev [color="#334155", weight=10];
+  l1_rev -> l1_pad [style=invis];
+  l1_rev -> l1_gate [color="#334155", constraint=false];
+  // the rework arc, in the source rather than post-drawn onto the render
+  l1_h -> l1_a [color="#7c3aed", fontcolor="#7c3aed", constraint=false,
+                tailport=w, headport=w, label="comments\nremain"];
+  { rank=same; l1_g a1_refs }
+  l1_g -> a1_refs [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l1_bd a1_corpus }
+  l1_bd -> a1_corpus [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l1_rel a1_mint }
+  l1_rel -> a1_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l2_h -> l2_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
+  { rank=same; l2_w a2_design a2_fig }
+  l2_w -> a2_design [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l2_w -> a2_fig [style=dashed, color="#a8a29e", arrowsize=0.5];
+  a2_design -> a2_fig [style=invis];
+  { rank=same; l2_rel a2_mint }
+  l2_rel -> a2_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_test -> l3_hand [label="module clean", color="#16a34a", fontcolor="#16a34a"];
+  l3_hand -> l3_gate -> l3_h;
+  l3_h -> l3_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
+  { rank=same; l3_s a3_tasks a3_tests }
+  l3_s -> a3_tasks [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_s -> a3_tests [style=dashed, color="#a8a29e", arrowsize=0.5];
+  a3_tasks -> a3_tests [style=invis];
+  { rank=same; l3_build a3_code a3_mod }
+  l3_build -> a3_code [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l3_build -> a3_mod [style=dashed, color="#a8a29e", arrowsize=0.5];
+  a3_code -> a3_mod [style=invis];
+  { rank=same; l3_rel a3_mint }
+  l3_rel -> a3_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l4_h -> l4_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
+  { rank=same; l4_p a4_find a4_figs }
+  l4_p -> a4_find [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l4_p -> a4_figs [style=dashed, color="#a8a29e", arrowsize=0.5];
+  a4_find -> a4_figs [style=invis];
+  { rank=same; l4_rel a4_mint }
+  l4_rel -> a4_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l5_op -> l5_opg -> l5_h1;
+  l5_h1 -> l5_r1 [label="clean", color="#16a34a", fontcolor="#16a34a"];
+  l5_r1 -> l5_ven;
+  l5_ven -> l5_veng -> l5_sk -> l5_out -> l5_outg -> l5_h2;
+  l5_h2 -> l5_r2 [label="clean", color="#16a34a", fontcolor="#16a34a"];
+  l5_r2 -> l5_dr;
+  l5_dr -> l5_drg -> l5_h3;
+  l5_h3 -> l5_rel [label="clean", color="#16a34a", fontcolor="#16a34a"];
+  l5_rel -> l5_pk;
+  l5_dr -> l5_pad [style=invis];
+  l5_pad -> l5_drg [style=invis];
+  { rank=same; l5_rev l5_pad }
+  l5_rev -> l5_pad [style=invis, weight=100];
+  l5_rev -> l5_drg [color="#334155"];
+  { rank=same; l5_r1 a5_m1 }
+  l5_r1 -> a5_m1 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l5_r2 a5_m2 }
+  l5_r2 -> a5_m2 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l5_rel a5_m3 }
+  l5_rel -> a5_m3 [style=dashed, color="#a8a29e", arrowsize=0.5];
+  l6_h -> l6_rel [label="all resolved", color="#16a34a", fontcolor="#16a34a"];
+  { rank=same; l6_b a6_spec }
+  l6_b -> a6_spec [style=dashed, color="#a8a29e", arrowsize=0.5];
+  { rank=same; l6_rel a6_mint }
+  l6_rel -> a6_mint [style=dashed, color="#a8a29e", arrowsize=0.5];
+}
