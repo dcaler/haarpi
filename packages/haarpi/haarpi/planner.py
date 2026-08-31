@@ -68,15 +68,17 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "build":   Step("haarpi rabbithole build", 1.0,
                         "Embed the audited Zotero collection into the working corpus "
                         "(candidates, citekeys, ChromaDB index, per-paper notes)."),
-        "revise":  Step("haarpi rabbithole revise --no-queue", 4.0,
-                        "Re-draft the review from the expanded corpus + annotations."),
-        # 3.5h is PER NEW SECTION, measured: drafting and peer-review both run with the
-        # coordinator's chain-of-thought on (they are judgement work, unlike lint and revise),
-        # so a section costs three thinking calls. A `Step` carries one scalar and the planner
-        # cannot know how many sections a markup asks for, so this cold start assumes one and
-        # will read low for a multi-section graft until history fills in. The saving over
-        # `report` is proportional, not absolute: graft drafts only the new sections, report
-        # re-drafts every one of them.
+        # 4.0h of redline, plus ~3.5h PER SECTION the markup asks for: drafting and peer review
+        # both run with the coordinator's chain-of-thought on (they are judgement work, unlike
+        # lint and the redline itself), so a section costs three thinking calls. A `Step` carries
+        # one scalar and the planner cannot know how many sections a markup asks for, so this
+        # cold start assumes one and reads low for a multi-section pass until history fills in.
+        "revise":  Step("haarpi rabbithole revise --no-queue", 7.5,
+                        "Answer every comment in kind: a tracked rewrite for a prose comment, a "
+                        "drafted section spliced in at the comment that asked for it, and the "
+                        "cycle's term corrections applied across the document."),
+        # Still callable by hand for a one-off section; `haarpi next` no longer selects it, since
+        # a section ask that cost the set its in-place edits is the failure `revise` now avoids.
         "graft":   Step("haarpi rabbithole graft", 3.5,
                         "Draft ONLY the requested section and splice it into the reviewer's "
                         "own .docx as a tracked insertion — existing paragraphs untouched, "
