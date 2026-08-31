@@ -38,13 +38,14 @@ def test_one_sources_task_prepends_a_steered_gather():
     assert built["section_focus"] == []
 
 
-def test_a_section_routes_the_redraft_to_graft():
-    """A section ask is drafted and spliced in; only a redirect earns a whole-document `report`.
+def test_a_section_redrafts_with_revise_which_grafts_it_in():
+    """A section ask is drafted and spliced in BY `revise`, at the comment that asked for it;
+    only a redirect earns a whole-document `report`.
 
-    `graft` reads a cached corpus, so a chain that changed the corpus embeds with `build` first
-    — the same reason `revise` does."""
+    `revise` reads a cached corpus, so a chain that changed the corpus embeds with `build`
+    first."""
     built = planner.chain_from_tasks([_task("section", "supply-chain reshoring")])
-    assert built["steps"] == ["gather", "collect", "audit", "build", "graft",
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise",
                               "mindmap", "comment"]
     assert "report" not in built["steps"], "a section must not cost a whole-document re-draft"
     assert built["section_focus"] == ["supply-chain reshoring"]
@@ -68,14 +69,16 @@ def test_ingest_gets_collect_audit_and_build_before_revise():
 
 def test_elephantroom_shaped_set_steers_gather_at_every_theme():
     """Three broad new themes (two 'sources', one 'section') plus two in-place edits: the gather
-    is steered at all three queries, the redraft is `graft` (a section is present), and the two
-    edits ride along — the exact set that fell through the old whole-set classifier."""
+    is steered at all three queries, and the redraft is a single `revise` that answers all five
+    in one pass — the section grafted in at its own anchor, the edits redlined in place. The
+    exact set that fell through the old whole-set classifier, and then through the verb that
+    replaced it."""
     tasks = [_task("sources", "household distributional equity of ABM impacts"),
              _task("sources", "consumption smoothing, savings drawdown, innovation"),
              _task("section", "supply-chain reshoring and domestic production"),
              _task("edit"), _task("edit")]
     built = planner.chain_from_tasks(tasks)
-    assert built["steps"] == ["gather", "collect", "audit", "build", "graft",
+    assert built["steps"] == ["gather", "collect", "audit", "build", "revise",
                               "mindmap", "comment"]
     assert built["gather_topics"] == [
         "household distributional equity of ABM impacts",
@@ -156,7 +159,7 @@ def test_an_explicit_section_ask_is_promoted_even_when_the_model_said_sources():
     assert [t["need"] for t in tasks] == ["section"]
     assert tasks[0]["query"] == text                 # the comment's own words steer the graft
     assert planner.chain_from_tasks(tasks)["steps"] == \
-        ["gather", "collect", "audit", "build", "graft", "mindmap", "comment"]
+        ["gather", "collect", "audit", "build", "revise", "mindmap", "comment"]
 
 
 def test_an_edit_of_an_existing_section_is_not_promoted():
@@ -277,11 +280,13 @@ def test_only_a_redirect_can_cost_a_whole_document_redraft():
     assert "report" in planner.chain_from_tasks([_task("redirect", "new direction")])["steps"]
 
 
-def test_a_section_alongside_an_edit_still_only_grafts():
-    """A heavier need used to drag the whole set into `report`; the point of graft is that the
-    rework scales to the ask, not to the heaviest member of the set."""
+def test_a_section_alongside_an_edit_costs_neither_of_them():
+    """The set used to be redrafted by its heaviest need, so the lighter asks beside it were
+    silently dropped: first `report` discarded the edits AND the threads, then `graft` kept the
+    threads but still could not carry an edit. One `revise` now answers both in kind."""
     built = planner.chain_from_tasks([_task("section", "reshoring"), _task("edit")])
-    assert "graft" in built["steps"] and "report" not in built["steps"]
+    assert "revise" in built["steps"]
+    assert "report" not in built["steps"] and "graft" not in built["steps"]
 
 
 def test_a_section_ask_survives_an_adjective_and_the_prompts_own_vocabulary():

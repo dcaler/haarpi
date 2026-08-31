@@ -50,7 +50,7 @@ from .models import Candidate
 from .summarize import (
     _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check,
     locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
-    _HAVE_CHROMA, _cited_indices, _legacy_notes_by_paper, _located_filename,
+    _HAVE_CHROMA, _cited_indices, _legacy_notes_by_paper, _located_filename, Section,
 )
 
 
@@ -618,6 +618,111 @@ def _override_note(old_text: str, new_text: str) -> str:
     return " and ".join(parts) if parts else "changed grounded content"
 
 
+def _is_section_ask(text: str) -> bool:
+    """True when a comment asks for a NEW section rather than an edit to this one.
+
+    The same test the planner decomposes with, so what `haarpi next` calls a `section` task and
+    what the redline loop grafts can never drift apart.
+    """
+    try:
+        from haarpi.planner import _SECTION_ASK
+    except ImportError:
+        return False
+    return bool(_SECTION_ASK.search(text or ""))
+
+
+def _sections_from_docx(docx: Path) -> tuple[list[Section], list[int]]:
+    """The review's existing sections, read straight from the reviewed .docx.
+
+    Recovered from the document rather than from the markdown of the draft it was made from:
+    the reviewer's copy has no markdown of its own, and walking the initials chain back to find
+    one is a fragile step that fails outright once a cycle is archived. The heading and the
+    section's prose are all the planner and the placement embedding need.
+
+    Returns ``(sections, heading_paragraph_indices)``, the two aligned by index.
+    """
+    from docx import Document
+    from .docxio import is_section_heading
+    doc = Document(str(docx))
+    out: list[Section] = []
+    heads: list[int] = []
+    cur: Section | None = None
+    for idx, par in enumerate(doc.paragraphs):
+        style = par.style.name if par.style is not None else ""
+        text = par.text.strip()
+        if is_section_heading(style):
+            low = text.lower()
+            if low.startswith("annotated bibliography"):
+                break                      # the bibliography is not a section of the narrative
+            if not text or low.startswith(("narrative review", "most load-bearing sources")):
+                cur = None                 # wrappers and the coverage block are not sections
+                continue
+            cur = Section(heading=text, claim="", text="")
+            out.append(cur)
+            heads.append(idx)
+        elif cur is not None and text:
+            cur.text = f"{cur.text}\n\n{text}" if cur.text else text
+    return out, heads
+
+
+def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
+                 compact, full, citekeys: dict[int, str],
+                 outcomes: dict[str, str], grafted_at: dict[int, str]) -> list[dict]:
+    """Draft the section(s) the reviewer asked for and return them as ``insert_section`` edits.
+
+    Placement, in priority order — unchanged from the standalone verb, because the reasoning is
+    unchanged: where the reviewer wrote is a statement about where the ask belongs.
+
+      1. the paragraph the requesting comment sits on;
+      2. the nearest existing section by embedding, when the ask carried no usable anchor;
+      3. the end of the review — reported, never silent.
+    """
+    from . import graft as _graft
+    existing, head_paras = _sections_from_docx(docx)
+    asks = [" ".join(texts) for _a, texts in section_asks]
+    ids_for_ask = [[str(i) for i in a["ids"]] for a, _t in section_asks]
+    try:
+        new = _graft.draft_sections(brain, cfg, existing, asks, compact, full,
+                                    set(citekeys.values()), corpus_size=len(corpus),
+                                    tag="revise/graft")
+    except Exception as e:  # noqa: BLE001 — a failed graft must not lose the edits beside it
+        print(f"  [warn] could not draft the requested section(s) ({e})", file=sys.stderr)
+        new = []
+    if not new:
+        for ids in ids_for_ask:
+            outcomes.update({i: "section_covered" for i in ids})
+        return []
+
+    out: list[dict] = []
+    for i, sec in enumerate(new):
+        paras = [t for t in sec.text.split("\n\n") if t.strip()]
+        if not paras:
+            continue
+        if i < len(section_asks):
+            at_para = section_asks[i][0]["para"]
+            why = "the comment's own anchor"
+        else:
+            # More sections than asks: no comment owns this one, so place it by meaning.
+            at, why = _graft.choose_position(brain, existing, sec, None)
+            at_para = head_paras[at] if 0 <= at < len(head_paras) else (
+                head_paras[-1] if head_paras else 0)
+        out.append({"para": at_para, "op": "insert_section",
+                    "heading": sec.heading, "paras": paras})
+        grafted_at[at_para] = sec.heading
+        if i < len(ids_for_ask):
+            outcomes.update({j: f"grafted:{sec.heading}" for j in ids_for_ask[i]})
+        print(f"  {runlog.stamp()}Grafting {sec.heading!r} after the section at para "
+              f"{at_para} — {why}", flush=True)
+        if "NO position signal" in why:
+            print(f"  [warn] {sec.heading!r} was appended at the end — no anchor and no "
+                  "embedding signal. Check its placement.", file=sys.stderr)
+    # An ask that produced no section still owes its reviewer an answer.
+    for k, ids in enumerate(ids_for_ask):
+        if k >= len(new):
+            outcomes.update({i: "section_covered" for i in ids})
+    return out
+
+
 def _redline_revise(brain: Brain, cfg, paths, docx: Path,
                     corpus: list[Candidate], notes: list[dict],
                     citekeys: dict[int, str]) -> tuple[Path, dict]:
@@ -637,10 +742,37 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
 
     edits: list[dict] = []
     skipped: list[str] = []
-    outcomes: dict[str, str] = {}   # comment id -> "edited" | "corpus" | "skipped"
+    outcomes: dict[str, str] = {}   # comment id -> "edited" | "grafted" | "corpus" | "skipped"
+
+    # A section ask is answered in THIS pass, at the comment that asked for it. It used to route
+    # the whole annotation set to a separate whole-document verb, so the edits alongside it were
+    # silently dropped — rework was scaled to the heaviest ask in the set rather than to each ask.
+    # Nothing is written until `apply_edits`, so a graft never moves the paragraph another
+    # comment is anchored to.
+    section_asks = [(a, [cmap[i]["text"] for i in a["ids"] if i in cmap and cmap[i]["text"]])
+                    for a in anchors]
+    section_asks = [(a, texts) for a, texts in section_asks
+                    if any(_is_section_ask(t) for t in texts)]
+    grafted_at: dict[int, str] = {}      # para index -> heading, for the log
+    if section_asks:
+        edits += _graft_edits(brain, cfg, docx, section_asks, corpus, compact, full,
+                              citekeys, outcomes, grafted_at)
+    handled = {a["para"] for a, _ in section_asks}
+
     for a in anchors:
         ids = [str(i) for i in a["ids"]]
         comments = [cmap[i]["text"] for i in a["ids"] if i in cmap and cmap[i]["text"]]
+        if a["para"] in handled:
+            # A paragraph can carry a section ask AND an ordinary comment. The graft answered the
+            # section ask and recorded its outcome; anything else on the paragraph still owes its
+            # reviewer an answer, so ONLY the section-ask ids drop out here. Skipping the whole
+            # paragraph would silently lose the comment beside the ask — the failure this
+            # redesign exists to close, reintroduced one level down.
+            ids = [str(i) for i in a["ids"]
+                   if not _is_section_ask((cmap.get(i) or {}).get("text", ""))]
+            comments = [t for t in comments if not _is_section_ask(t)]
+            if not ids or not comments:
+                continue
         if not comments or not a["text"].strip():
             skipped.append(f"para {a['para']} (no text or no comment body)")
             outcomes.update({i: "skipped" for i in ids})
@@ -739,6 +871,21 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         print(f"  [warn] bibliography regeneration failed ({e}); "
               f"keeping the carried-over bibliography.", file=sys.stderr)
 
+    # The load-bearing block is only true of the draft it was computed from, and this pass has
+    # just changed which sources carry the argument — a redline adds citations, a graft adds
+    # whole sections. The full-render path has always recomputed it; the redline path did not,
+    # so a reviewed document kept a ranking several cycles old or, if the block postdated the
+    # draft being reviewed, never grew one at all.
+    try:
+        from .summarize import top_sources_block
+        narrative = redline.accepted_body_text(out_docx)
+        print(f"  {runlog.stamp()}Re-ranking the load-bearing sources...", flush=True)
+        block = top_sources_block(brain, cfg, narrative, corpus, citekeys)
+        summary.update(redline.replace_top_sources(out_docx, block))
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not refresh the load-bearing sources block ({e}); "
+              f"the document keeps the one it had.", file=sys.stderr)
+
     return out_docx, summary
 
 
@@ -823,6 +970,18 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
         if outcome == "edited":
             replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
                             "address this comment.")
+        elif outcome.startswith("grafted:"):
+            heading = outcome.split(":", 1)[1]
+            replies[cid] = (f"rabbitHole: drafted a new section, \u201c{heading}\u201d, and "
+                            "inserted it as a tracked change at the end of the section this "
+                            "comment sits in — where you left the note is where the ask "
+                            "belongs. Every other paragraph is untouched; reject the insertion "
+                            "to drop it, or move it if it reads better elsewhere.")
+        elif outcome == "section_covered":
+            replies[cid] = ("rabbitHole: read this as a request for a new section, but the "
+                            "review already covers that ground in an existing section, so "
+                            "nothing was added. If you want it separated out regardless, say "
+                            "which existing section it should be split from.")
         elif outcome.startswith("cited_section"):
             replies[cid] = ("rabbitHole: you left this on a section heading and named sources "
                             "already in the corpus, so I cited them in this section's first body "

@@ -592,6 +592,52 @@ def tracked_heading_before(p_el, text: str, author: str, ids: _Ids | None = None
     return new_p
 
 
+def _styled_p(text: str, style: str, author: str, ids: _Ids):
+    """A brand-new paragraph, wholly a tracked insertion, carrying EXACTLY ``style``.
+
+    Deliberately not built on ``tracked_insert_after``: that clones the reference paragraph's
+    properties, which is right for splitting a paragraph and wrong for building a section, where
+    the reference is the heading. Cloning there made every body paragraph a Heading2 and then fed
+    each one forward as the next reference, so a whole grafted section rendered as headings.
+    """
+    new_p = OxmlElement("w:p")
+    ppr = OxmlElement("w:pPr")
+    pstyle = OxmlElement("w:pStyle")
+    pstyle.set(qn("w:val"), style)
+    ppr.append(pstyle)
+    new_p.append(ppr)
+    new_p.append(_ins(text, author, ids.next()))
+    return new_p
+
+
+def tracked_insert_section(heading: str, paras: list[str], author: str,
+                           ids: _Ids | None = None, before_el=None, after_el=None,
+                           heading_style: str = "Heading2",
+                           first_body_style: str = "FirstParagraph",
+                           body_style: str = "BodyText") -> list:
+    """Insert a whole section — heading plus body paragraphs — at ``before_el`` or ``after_el``.
+
+    Every paragraph's style is stated outright rather than inherited from its neighbour, and the
+    first body paragraph takes the document's post-heading style the way pandoc's own output
+    does, so a grafted section is typographically indistinguishable from a drafted one.
+
+    Returns the inserted paragraph elements in document order, heading first.
+    """
+    if (before_el is None) == (after_el is None):
+        raise ValueError("tracked_insert_section needs exactly one of before_el / after_el")
+    ids = ids or _Ids(1000)
+    out = [_styled_p(heading, heading_style, author, ids)]
+    for i, text in enumerate(t.strip() for t in paras if t and t.strip()):
+        out.append(_styled_p(text, first_body_style if i == 0 else body_style, author, ids))
+    if before_el is not None:
+        for el in out:
+            before_el.addprevious(el)
+    else:
+        for el in reversed(out):
+            after_el.addnext(el)
+    return out
+
+
 # ── comment reading / anchoring ───────────────────────────────────────────────
 
 def comments_by_id(path: Path) -> dict[str, dict]:

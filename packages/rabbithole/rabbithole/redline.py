@@ -253,6 +253,118 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
     return {"bib_entries": n_entries, "had_existing_section": bib_idx is not None}
 
 
+_TOP_HEADING = "most load-bearing sources"
+_NARRATIVE_HEADING = "narrative review"
+
+
+def replace_top_sources(path: Path, block_md: str) -> dict:
+    """Rewrite the load-bearing-sources block that opens the review, inserting it if absent.
+
+    The block ranks the sources the review rests on most, and it is only ever true of the draft
+    it was computed from — a redline that adds citations, and a graft that adds whole sections,
+    both change which sources carry the argument. Every re-draft verb must therefore recompute
+    it, which is why this exists beside the bibliography regeneration rather than only in the
+    full-render path: the redline path used to skip it, so a reviewed document silently kept the
+    ranking of a draft several cycles old, or never grew one at all.
+
+    Like the bibliography, this is a generated artifact rebuilt clean rather than redlined —
+    tracked changes across a ranked list are noise the reviewer cannot act on.
+    """
+    block_md = _xml_safe(block_md or "")
+    doc = Document(str(path))
+    paras = doc.paragraphs
+
+    def _heading_at(i):
+        st = paras[i].style.name if paras[i].style is not None else ""
+        return is_heading_style(st)
+
+    start = end = None
+    for i, par in enumerate(paras):
+        if par.text.strip().lower().startswith(_TOP_HEADING) and _heading_at(i):
+            start = i
+            break
+    if start is not None:
+        end = len(paras)
+        for j in range(start + 1, len(paras)):
+            if _heading_at(j):
+                end = j
+                break
+
+    # Where a fresh block goes: immediately before the narrative, which is what it is a guide to.
+    anchor_idx = None
+    for i, par in enumerate(paras):
+        if _heading_at(i) and par.text.strip().lower().startswith(_NARRATIVE_HEADING):
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        for i, par in enumerate(paras):
+            if _heading_at(i) and i > 0:
+                anchor_idx = i
+                break
+
+    heading_style = paras[start].style if start is not None else (
+        paras[anchor_idx].style if anchor_idx is not None else None)
+    # Prefer the document's own body style; fall back to whatever the prose beside the block
+    # uses, which on a pandoc render is the post-heading style rather than a running-text one.
+    body_style = None
+    try:
+        body_style = doc.styles["Body Text"]
+    except KeyError:
+        for i in range(((end if start is not None else anchor_idx) or 0), len(paras)):
+            if not _heading_at(i) and paras[i].text.strip():
+                body_style = paras[i].style
+                break
+
+    if start is not None:
+        for par in list(paras[start:end]):
+            par._element.getparent().remove(par._element)
+    if not block_md.strip():
+        doc.save(str(path))
+        return {"top_sources": 0, "had_existing_block": start is not None}
+
+    # Re-resolve the anchor: the deletion above invalidates the earlier snapshot's indices.
+    before_el = None
+    for par in doc.paragraphs:
+        st = par.style.name if par.style is not None else ""
+        if is_heading_style(st) and par.text.strip().lower().startswith(_NARRATIVE_HEADING):
+            before_el = par._element
+            break
+    if before_el is None:
+        for i, par in enumerate(doc.paragraphs):
+            st = par.style.name if par.style is not None else ""
+            if is_heading_style(st) and i > 0:
+                before_el = par._element
+                break
+    if before_el is None:
+        return {"top_sources": 0, "had_existing_block": start is not None,
+                "error": "no narrative heading to insert before"}
+
+    n = 0
+    for line in block_md.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            par = doc.add_paragraph()
+            if heading_style is not None:
+                par.style = heading_style
+            par.add_run(_strip_md(line[3:]))
+        elif line.startswith("- "):
+            par = doc.add_paragraph()
+            if body_style is not None:
+                par.style = body_style
+            par.add_run("\u2022  " + _strip_md(line[2:]))
+            n += 1
+        else:
+            par = doc.add_paragraph()
+            if body_style is not None:
+                par.style = body_style
+            par.add_run(_strip_md(line)).italic = True
+        before_el.addprevious(par._element)
+    doc.save(str(path))
+    return {"top_sources": n, "had_existing_block": start is not None}
+
+
 # ── reply comments ───────────────────────────────────────────────────────────────
 # rabbitHole's threaded replies are written by the shared writer, haarpi.redline.add_replies
 # (called from revise._reply_to_comments). It shadows each parent comment's exact anchor and
@@ -265,6 +377,25 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
 
 # ── orchestration ──────────────────────────────────────────────────────────────
 
+def _next_heading_element(paras, idx: int):
+    """The heading that opens the next section after ``idx`` — the element a section grafted
+    into ``idx``'s section is inserted before.
+
+    Insertion is anchored to the FOLLOWING heading rather than to a computed offset, so several
+    sections grafted in one pass stack in call order ahead of the same boundary instead of
+    interleaving with each other's paragraphs. Returns None when ``idx`` is in the last section.
+    """
+    from .docxio import is_section_heading
+    for j in range(idx + 1, len(paras)):
+        style = paras[j].style.name if paras[j].style is not None else ""
+        # H2 only — the level a litreview SECTION uses. `is_heading_style` is also true of the
+        # document title and of the bibliography's H3 sub-headings, neither of which bounds a
+        # section, and stopping at one of those would graft into the middle of the bibliography.
+        if is_section_heading(style):
+            return paras[j]._p
+    return None
+
+
 def apply_edits(src: Path, out: Path, edits: list[dict], author: str = "rabbitHole") -> dict:
     """Apply paragraph edits to a copy of ``src`` and write ``out``.
 
@@ -274,15 +405,29 @@ def apply_edits(src: Path, out: Path, edits: list[dict], author: str = "rabbitHo
     doc = Document(str(src))
     ids = _Ids(_max_existing_id(doc))
     paras = doc.paragraphs  # snapshot: holds the original <w:p> elements by index
-    applied = {"replace": 0, "insert_after": 0, "skipped": 0}
-    # Replaces first (they don't change paragraph count), inserts after — and because we
+    applied = {"replace": 0, "insert_after": 0, "insert_section": 0, "skipped": 0}
+    # Replaces first (they don't change paragraph count), then insertions — and because we
     # index into the snapshot's element objects (not a re-read), later inserts never
-    # invalidate earlier indices.
-    for e in sorted(edits, key=lambda e: (e["op"] == "insert_after", e["para"])):
+    # invalidate earlier indices. That is what lets a single pass mix in-place edits with
+    # whole grafted sections: nothing moves until every edit has been decided.
+    rank = {"replace": 0, "insert_after": 1, "insert_section": 2}
+    for e in sorted(edits, key=lambda e: (rank.get(e["op"], 0), e["para"])):
         p_el = paras[e["para"]]._p
         if e["op"] == "insert_after":
             tracked_insert_after(p_el, e["text"], author, ids)
             applied["insert_after"] += 1
+        elif e["op"] == "insert_section":
+            before = _next_heading_element(paras, e["para"])
+            if before is not None:
+                _engine.tracked_insert_section(e["heading"], e["paras"], author, ids,
+                                               before_el=before)
+            elif paras:
+                _engine.tracked_insert_section(e["heading"], e["paras"], author, ids,
+                                               after_el=paras[-1]._p)
+            else:
+                applied["skipped"] += 1
+                continue
+            applied["insert_section"] += 1
         else:
             ok = tracked_replace_sentencewise(p_el, e["text"], author, ids)
             applied["replace" if ok else "skipped"] += 1

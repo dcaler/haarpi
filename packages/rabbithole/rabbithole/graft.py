@@ -92,6 +92,43 @@ def _plan_new_sections(brain: Brain, cfg, existing: list[Section], asks: list[st
     return out[:max_new]
 
 
+def draft_sections(brain: Brain, cfg, existing: list[Section], asks: list[str],
+                   compact, full, corpus_keys: set[str], corpus_size: int = 0,
+                   max_new: int = 3, tag: str = "graft") -> list[Section]:
+    """Plan, evidence, draft and polish the section(s) a reviewer asked for.
+
+    Pure drafting: nothing here touches a .docx. Split out of ``run`` so the same work can be
+    driven one comment at a time from the redline loop, where a section ask is answered in the
+    same pass as the edits around it instead of costing the set a separate whole-document verb.
+    """
+    print(f"  {runlog.stamp()}[{tag}] planning the new section(s)...", flush=True)
+    new = _plan_new_sections(brain, cfg, existing, asks, max_new=max_new)
+    if not new:
+        return []
+    print(f"  {runlog.stamp()}[{tag}] planned {len(new)}: "
+          f"{', '.join(repr(s.heading) for s in new)}", flush=True)
+    # Shortlist over the new sections ONLY; the existing ones keep the evidence they have.
+    print(f"  {runlog.stamp()}[{tag}] shortlisting evidence over {corpus_size} sources...",
+          flush=True)
+    _shortlist(brain, new, compact, full)
+    for i, sec in enumerate(new):
+        # Timestamp the START of each expensive call, not just its end: a start line with no
+        # successor is what makes a stall visible. Drafting and peer review run with the
+        # coordinator's chain-of-thought ON (they are judgement work), so each section is three
+        # slow calls and silence between them is normal, not a hang.
+        t_sec = time.time()
+        print(f"  {runlog.stamp()}[{tag}] §{i + 1}/{len(new)} drafting {sec.heading!r} "
+              f"({len(sec.candidates)} candidate sources)...", flush=True)
+        sec.text = _draft_section(brain, cfg, new, i, full, SYNTH_SYS)
+        print(f"  {runlog.stamp()}[{tag}] §{i + 1} drafted {len(sec.text.split())}w in "
+              f"{runlog.fmt_dt(time.time() - t_sec)}; polishing...", flush=True)
+        t_pol = time.time()
+        sec.text = _polish_section(brain, cfg, new, i, full, SYNTH_SYS, corpus_keys)
+        print(f"  {runlog.stamp()}[{tag}] §{i + 1} polished to {len(sec.text.split())}w in "
+              f"{runlog.fmt_dt(time.time() - t_pol)}", flush=True)
+    return new
+
+
 def choose_position(brain: Brain, existing: list[Section], new: Section,
                     anchor: int | None) -> tuple[int, str]:
     """Where the new section goes: ``(index_to_insert_after, why)``.
@@ -148,33 +185,15 @@ def _insert_section(docx_path: Path, after_index: int, sec: Section, author: str
     if not paras:
         return False
     if anchor_el is not None:
-        head_el = hredline.tracked_heading_before(anchor_el, sec.heading, author, ids)
-        prev = head_el
-        for para in paras:
-            prev = hredline.tracked_insert_after(prev, para.strip(), author, ids)
+        hredline.tracked_insert_section(sec.heading, paras, author, ids, before_el=anchor_el)
     else:
         # No following heading: append after the document's last paragraph.
         last = doc.paragraphs[-1]._p if doc.paragraphs else None
         if last is None:
             return False
-        prev = hredline.tracked_insert_after(last, sec.heading, author, ids)
-        _style_as_heading(prev)
-        for para in paras:
-            prev = hredline.tracked_insert_after(prev, para.strip(), author, ids)
+        hredline.tracked_insert_section(sec.heading, paras, author, ids, after_el=last)
     doc.save(str(docx_path))
     return True
-
-
-def _style_as_heading(p_el, style: str = "Heading2") -> None:
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    ppr = p_el.find(qn("w:pPr"))
-    if ppr is None:
-        ppr = OxmlElement("w:pPr")
-        p_el.insert(0, ppr)
-    pstyle = OxmlElement("w:pStyle")
-    pstyle.set(qn("w:val"), style)
-    ppr.insert(0, pstyle)
 
 
 def _base_markdown(docx: Path, paths) -> Path | None:
@@ -254,39 +273,20 @@ def run(directory: str = ".", brain_override: str | None = None,
           f"({'output/old' if md.parent.name == 'old' else 'output'})", flush=True)
     print(f"  {runlog.stamp()}[graft] {len(existing)} existing section(s); "
           f"{len(comments)} comment(s), {len(asks)} section ask(s)", flush=True)
-    print(f"  {runlog.stamp()}[graft] planning the new section(s)...", flush=True)
-    new = _plan_new_sections(brain, cfg, existing, [a for a, _ in asks])
+    new = draft_sections(brain, cfg, existing, [a for a, _ in asks], compact, full,
+                         corpus_keys, corpus_size=len(corpus))
     if not new:
         print("[graft] the ask is already covered by an existing section — nothing added.",
               file=sys.stderr)
         return 1
 
-    print(f"  {runlog.stamp()}[graft] planned {len(new)}: "
-          f"{', '.join(repr(s.heading) for s in new)}", flush=True)
-    # Shortlist over the new sections ONLY; the existing ones keep the evidence they have.
-    print(f"  {runlog.stamp()}[graft] shortlisting evidence over {len(corpus)} sources...",
-          flush=True)
-    _shortlist(brain, new, compact, full)
     out_docx = paths.output / f"{docx.stem}_ra.docx"
     shutil.copyfile(docx, out_docx)
 
     placed: list[tuple[Section, int, str]] = []
     for i, sec in enumerate(new):
         anchor = asks[i][1] if i < len(asks) else None
-        # Timestamp the START of each expensive call, not just its end: a start line with no
-        # successor is what makes a stall visible. Drafting and peer review run with the
-        # coordinator's chain-of-thought ON (they are judgement work), so each section is three
-        # slow calls — roughly 3.5h — and silence between them is normal, not a hang.
         t_sec = time.time()
-        print(f"  {runlog.stamp()}[graft] §{i + 1}/{len(new)} drafting {sec.heading!r} "
-              f"({len(sec.candidates)} candidate sources)...", flush=True)
-        sec.text = _draft_section(brain, cfg, new, i, full, SYNTH_SYS)
-        print(f"  {runlog.stamp()}[graft] §{i + 1} drafted {len(sec.text.split())}w in "
-              f"{runlog.fmt_dt(time.time() - t_sec)}; polishing...", flush=True)
-        t_pol = time.time()
-        sec.text = _polish_section(brain, cfg, new, i, full, SYNTH_SYS, corpus_keys)
-        print(f"  {runlog.stamp()}[graft] §{i + 1} polished to {len(sec.text.split())}w in "
-              f"{runlog.fmt_dt(time.time() - t_pol)}", flush=True)
         at, why = choose_position(brain, existing, sec, anchor)
         after = repr(existing[at].heading) if 0 <= at < len(existing) else "the top"
         print(f"  {runlog.stamp()}[graft] §{i + 1} placing after {after} — {why}", flush=True)

@@ -59,10 +59,10 @@ in dependency order:
 - a **`cite`** task (papers already in Zotero) → a lone **`build`** before revise, with no
   gather/collect (nothing to fetch) and no audit (deference forbids quarantining sources the
   reviewer named);
-- the redraft verb is **`graft`** if any `section` task exists, **`report`** only for a
-  `redirect`, else **`revise`**. `report` re-plans the review's sections from the corpus *and
-  embeds inline*, so a report chain never gets a separate
-  `build`), otherwise **`revise`** (in-place per-comment edits);
+- the redraft verb is **`report`** only for a `redirect`, else **`revise`**. `report` re-plans
+  the review's sections from the corpus *and embeds inline*, so a report chain never gets a
+  separate `build`. `revise` answers the comments one at a time and matches the response to the
+  ask — see **The redraft is a to-do list** below;
 - a `redirect` task also **rewrites the brief** before gather;
 - a `correct` task adds **no step at all**. A reviewer correcting a name is saying the project
   has a fact wrong, and the fix is one deterministic substitution — applied by the planner, before
@@ -92,14 +92,53 @@ unembedded_corpus` pins.
 - **`gather`** ← `gather_topics` = the `query` of every `sources`/`section` task. The specific
   comments that need sources deterministically drive and steer the gather — not an LLM's
   whole-set guess. (This is the elephantRoom fix, generalized to all comment types.)
-- **`graft`** ← the `section` queries as focus additions, and the requesting comment's own
-  anchor as the insertion position.
 - **`report`** ← the `redirect` query as a focus addition (its only channel from the comments,
   since `report` does not read the docx).
-- **`revise`** ← the docx itself, for the reviser's own per-comment routing (unchanged).
+- **`revise`** ← the docx itself. It needs no task payload: the comments are ON the document, so
+  the loop re-derives each ask from the comment it is answering, with the same `_SECTION_ASK`
+  test the decomposition used. That is deliberate — a payload could disagree with the document,
+  and the document is what the reviewer wrote.
 - **`redirect`** ← the rewritten brief.
 
-## Known limitation (preserved, made explicit)
+## The redraft is a to-do list (2026-08-31)
+
+`revise` walks the reviewer's comments and answers **each one in kind**, in a single pass:
+
+| the comment asks for | it is answered by |
+|---|---|
+| a prose change (`edit`) | a tracked, sentence-level rewrite of the paragraph it sits on |
+| a new section (`section`) | a drafted section spliced in at the end of the section the comment sits in |
+| named papers already in Zotero (`cite`) | those citekeys worked into the anchored paragraph |
+| a wrong fact (`correct`) | a deterministic substitution, applied before the chain is queued |
+| something prose cannot satisfy | no edit, and a reply naming the real reason |
+
+**Why this replaced a per-set verb.** Rework was twice scaled to the HEAVIEST need in a set
+rather than to each ask. First `report` won, and it regenerates the document from the corpus
+without reading the redline: the edits beside a section ask could not be applied and every
+comment thread was discarded. Then `graft` won, which fixed the threads and the blast radius but
+still could not carry an in-place edit — and, having no reply path of its own, dropped the
+comments it did not act on **in silence**. The elephantRoom cycle of 2026-08-25 is the record:
+five comments in, three sections added, two corrections silently no-ops, zero replies. A no-op
+with no reply is indistinguishable from success from the reviewer's side, which is the failure
+mode this design exists to make impossible.
+
+**Nothing is written until every edit is decided.** The loop collects edits against a snapshot of
+the original paragraph elements and `apply_edits` applies them in one pass, so a grafted section
+can never move the paragraph another comment is anchored to. Sections anchor to the **following
+H2**, so several grafted in one pass stack in call order ahead of the same boundary instead of
+interleaving with each other's paragraphs.
+
+**Every pass ends with the document-level finish**, once: the annotated bibliography is
+regenerated against the post-edit narrative, the load-bearing block is re-ranked (it is only ever
+true of the draft it was computed from, and both an edit and a graft change which sources carry
+the argument), and **one reply is written per comment** from its recorded outcome. Replies only —
+accepting and resolving stay human.
+
+**What still dominates a set:** a `redirect`. It rewrites the brief, which invalidates the premise
+of every other comment in the set, so cascading to `report` there is the correct answer rather
+than a limitation.
+
+## Superseded limitation (kept for the record)
 
 ### Why a section no longer costs a re-draft
 
@@ -118,10 +157,12 @@ wrote is a statement about where the ask belongs); else the nearest existing sec
 embedding; else the end of the review, **reported to the human**, never silent.
 
 `report` regenerates the review from the corpus and does not read the redline, so a cycle that
-adds a section cannot also carry in-place sentence edits — **section-add dominates a cycle.**
-This is current behaviour; the decomposition surfaces it honestly (a `section` task in the set
-routes the redraft to `report`) rather than hiding it. Handling mixed section+edit in one pass is
-out of scope here.
+adds a section could not also carry in-place sentence edits — **section-add dominated a cycle.**
+
+*Resolved 2026-08-31.* `graft` is no longer a redraft verb competing with `revise`; its drafting
+is a step inside the redline loop, called at the comment that asked for the section. A mixed
+section+edit set now costs neither of its members. `rabbithole graft` remains as a standalone CLI
+verb for driving one by hand; `haarpi next` never selects it.
 
 ## Consolidation — `haarpi next` is the sole litreview planner (2026-08-14)
 

@@ -156,7 +156,7 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     # builds — new sources are audited then embedded (`build`) before a `revise` re-draft.
     "litreview": {
         "cosmetic":    ["revise", "comment"],
-        "gap_fill":    ["gather", "collect", "audit", "build", "graft", "comment"],
+        "gap_fill":    ["gather", "collect", "audit", "build", "revise", "comment"],
         "redirection": ["gather", "collect", "audit", "build", "report", "comment"],
     },
     "paper": {
@@ -1003,10 +1003,12 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
       * ``cite`` names papers the reviewer already put in Zotero: no fetch, no audit (deference
         forbids quarantining sources the reviewer named) — only a ``build`` to embed them.
 
-    The redraft verb is ``report`` when a section/redirect is in play (it re-plans the review's
-    sections AND embeds inline, so it needs no separate ``build``) else ``revise``. ``gather_topics``
-    and ``section_focus`` are the exact queries of the tasks that need them — the specific
-    comments deterministically steer the gather.
+    The redraft verb is ``report`` ONLY for a ``redirect`` (it re-plans every section and embeds
+    inline, so it needs no separate ``build``); every other set redrafts with ``revise``, which
+    walks the comments and answers each one in kind — a sentence rewrite for a prose comment, a
+    drafted section spliced in at the anchor for a ``section`` ask. ``gather_topics`` and
+    ``section_focus`` are the exact queries of the tasks that need them — the specific comments
+    deterministically steer the gather.
 
     ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
@@ -1019,7 +1021,6 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
     corrections = [{"wrong": t["wrong"], "right": t["right"]} for t in tasks
                    if t["need"] == "correct" and t.get("wrong") and t.get("right")]
     needs_sources = bool(needs & {"sources", "section", "redirect"})
-    needs_graft = bool(needs & {"section"})
     needs_redirect = bool(needs & {"redirect"})
     needs_report = needs_redirect
 
@@ -1040,17 +1041,19 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
     if "collect" in steps:
         steps.append("audit")
     # `report` regenerates every section, so it is reachable ONLY from a redirect — a genuine
-    # change of direction, where a second full read is the honest price. A `section` ask gets
-    # `graft`, which drafts the new strand and leaves the rest of the document alone.
-    redraft = ("report" if needs_redirect
-               else "graft" if needs_graft else "revise")
+    # change of direction, where a second full read is the honest price.
+    #
+    # Everything else redrafts with `revise`, which answers the comments one at a time and
+    # matches the response to the ask: a prose comment gets a tracked sentence rewrite, a
+    # section ask gets a drafted section spliced in at the comment that asked for it. The verb
+    # used to be chosen by the HEAVIEST need in the set, so a single section ask sent the whole
+    # annotation set to a verb that could not carry in-place edits and the edits beside it were
+    # dropped without a word. Rework is now scaled to each ask rather than to the set.
+    redraft = "report" if needs_redirect else "revise"
     # `revise` loads a cached corpus, so a corpus that CHANGED (collect present) or papers the
     # reviewer added straight to Zotero for citing (`cite`) must be EMBEDDED first: `build` runs
     # immediately before revise. A `report` re-draft embeds inline, so it never gets a build.
-    # `revise` and `graft` both load a cached corpus, so a corpus that CHANGED (collect present)
-    # or papers the reviewer added straight to Zotero for citing (`cite`) must be EMBEDDED first.
-    # A `report` re-draft embeds inline, so it never gets a build.
-    if redraft in ("revise", "graft") and ("collect" in steps or "cite" in needs):
+    if redraft == "revise" and ("collect" in steps or "cite" in needs):
         steps.append("build")
     # A chain whose ONLY work is a correction needs no re-draft: the substitution is
     # deterministic and total, and a reviser adds nothing but the chance of missing an
