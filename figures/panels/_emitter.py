@@ -280,12 +280,18 @@ KIND = {"prose":  (INK,    None,  1.5),
         "digest": ("#94a3b8", "2,3", 1.2)}
 
 
-def render_flow(out_path, *, sources, sections, edges, digests=(), structure=(), title=""):
+def render_flow(out_path, *, sources, sections, edges, digests=(), structure=(), title="",
+                enclosure=""):
     """`edges` are (source_key, section_key, kind, label); `digests` are (section, section)
-    pairs routed up the EAST side, for sections summarised into another."""
+    pairs routed up the EAST side, for sections summarised into another.
+
+    `enclosure` draws a folder around the whole section column and labels it: the sections are
+    not free-standing boxes, they are the inside of ONE artifact, and everything on the left
+    feeds into that artifact rather than into eight separate ones."""
     sx, gx = MARGIN, MARGIN + FLOW_W_SRC
     secx = gx + FLOW_GUT
-    width = secx + FLOW_W_SEC + 150            # room for the east-side digest lanes
+    ENC = 16 if enclosure else 0               # padding between the folder and its sections
+    width = secx + FLOW_W_SEC + ENC + 150      # room for the east-side digest lanes
     head_h = 62 if title else MARGIN
 
     def stack(items, w, fs, x, y0):
@@ -317,6 +323,21 @@ def render_flow(out_path, *, sources, sections, edges, digests=(), structure=(),
                  f'font-family="Helvetica,Arial,sans-serif" font-size="19" font-weight="bold" '
                  f'fill="#0f172a">{esc(title)}</text>')
 
+    # the enclosing folder, drawn BEFORE the sections so they sit on top of it
+    if enclosure:
+        first, last = next(iter(C_.values())), list(C_.values())[-1]
+        fx, fw = secx - ENC, FLOW_W_SEC + 2 * ENC
+        fy = first["y"] - ENC - 16
+        fh = last["y"] + last["h"] + ENC - fy
+        tab = min(150, fw * 0.42)
+        S.append(f'<path d="M{fx:.1f},{fy+fh:.1f} L{fx:.1f},{fy:.1f} L{fx+tab:.1f},{fy:.1f} '
+                 f'L{fx+tab+9:.1f},{fy+13:.1f} L{fx+fw:.1f},{fy+13:.1f} '
+                 f'L{fx+fw:.1f},{fy+fh:.1f} Z" fill="#f8fafc" stroke="#94a3b8" '
+                 f'stroke-width="1.4" stroke-linejoin="round"/>')
+        S.append(f'<text x="{fx+9:.1f}" y="{fy+10:.1f}" '
+                 f'font-family="Helvetica,Arial,sans-serif" font-size="8.6" '
+                 f'font-weight="bold" fill="#475569">{esc(enclosure)}</text>')
+
     # lanes: ordered by target then source, so the bundle fans without crossing itself
     order = sorted(range(len(edges)),
                    key=lambda i: (list(C_).index(edges[i][1]), list(S_).index(edges[i][0])))
@@ -342,7 +363,7 @@ def render_flow(out_path, *, sources, sections, edges, digests=(), structure=(),
     for j, (a, b) in enumerate(digests):
         A, B = C_[a], C_[b]
         col, dash, w = KIND["digest"]
-        lane = secx + FLOW_W_SEC + 16 + j * 15
+        lane = secx + FLOW_W_SEC + ENC + 16 + j * 15
         S.append(path(f"M{A['x']+A['w']:.1f},{A['y']+A['h']/2:.1f} H{lane:.1f} "
                       f"V{B['y']+B['h']/2:.1f} H{B['x']+B['w']+ARROW*1.8:.1f}", col,
                       dash=dash, w=w))

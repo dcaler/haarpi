@@ -57,4 +57,5 @@ DIGESTS = [("p_int", "p_abs"), ("p_meth", "p_abs"), ("p_res", "p_abs"),
            ("p_dis", "p_abs"), ("p_con", "p_abs")]
 STRUCTURE = [("s_one", "s_skel", "the through-line"),
              ("s_skel", "s_out", "the approved structure")]
+ENCLOSURE = "the manuscript .docx"   # short enough to sit in the folder tab
 TITLE = "Information-flow map — what each release feeds in the paper"

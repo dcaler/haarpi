@@ -34,7 +34,8 @@ def main() -> int:
     import paperinflow as pf
     from _emitter import render_flow
     render_flow(str(FIGS / "paperInflow.svg"), sources=pf.SOURCES, sections=pf.SECTIONS,
-                edges=pf.EDGES, digests=pf.DIGESTS, structure=pf.STRUCTURE, title=pf.TITLE)
+                edges=pf.EDGES, digests=pf.DIGESTS, structure=pf.STRUCTURE, title=pf.TITLE,
+                enclosure=pf.ENCLOSURE)
     cairosvg_png(FIGS / "paperInflow.svg", FIGS / "paperInflow.png", 2600)
 
     from _stitch import stitch
