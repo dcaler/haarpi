@@ -20,9 +20,11 @@ venv/
 # the source they were rendered from (see the README-check SOP — a stale figure in the README
 # is worse than no figure).
 /figures/*
-!/figures/*_agentDrilldown_ra.dot
-!/figures/*_agentDrilldown_ra.png
-!/figures/*_agentDrilldown_ra.svg
+!/figures/agentDrilldown.svg
+!/figures/agentDrilldown.png
+!/figures/panels/
+/figures/panels/out/
+/figures/panels/__pycache__/
 !/figures/*_paperInflow_ra.dot
 !/figures/*_paperInflow_ra.png
 !/figures/*_paperInflow_ra.svg

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Keep the README's figures true to the code, at the moment the code changes.
+#
+# The drill-down is DERIVED: its panels declare which planner.STAGE_STEPS they depict, and
+# test_figure_drift.py fails when the two disagree. This hook runs that check and rebuilds
+# the figure whenever anything under packages/ or figures/panels/ is staged — so a commit
+# that changes a verb cannot also leave the picture of it stale.
+#
+# Install once:  git config core.hooksPath .githooks
+set -euo pipefail
+staged=$(git diff --cached --name-only)
+echo "$staged" | grep -qE '^(packages/|figures/panels/)' || exit 0
+
+PY=${HAARPI_PY:-$HOME/.venvs/haarpi/bin/python}
+[ -x "$PY" ] || { echo "pre-commit: no interpreter at $PY (set HAARPI_PY) — skipping"; exit 0; }
+
+echo "pre-commit: checking the figures against the code…"
+"$PY" -m pytest packages/haarpi/tests/test_figure_drift.py -q || {
+    echo
+    echo "pre-commit: the figure and the registry disagree. Update figures/panels/,"
+    echo "            or declare the omission in that stage's OMITS with a reason."
+    exit 1
+}
+"$PY" figures/panels/build.py >/dev/null
+if ! git diff --quiet -- figures/agentDrilldown.svg figures/agentDrilldown.png; then
+    git add figures/agentDrilldown.svg figures/agentDrilldown.png
+    echo "pre-commit: figure rebuilt and staged."
+fi

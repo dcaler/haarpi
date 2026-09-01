@@ -40,13 +40,12 @@ Every stage runs the same loop, and the figure below is that loop drawn out for
 all six. Amber is the human's step, indigo is the agent working alone, purple is
 HAARPi acting as conductor.
 
-![Inside each agent — the process every stage runs, and who acts at each step](figures/260811_HAARPi_agentDrilldown_ra.png)
+![Inside each agent — the process every stage runs, and who acts at each step](figures/agentDrilldown.png)
 
-*(Wide diagram — open [the SVG](figures/260811_HAARPi_agentDrilldown_ra.svg) to
-read it at size. Source: [`.dot`](figures/260811_HAARPi_agentDrilldown_ra.dot).
-Solid = the work moves on, always vertical; dashed grey = the step produces that
-artifact, always horizontal; dashed purple = the revision cycle, always running
-west; green = the gate was clean.)*
+*(Wide diagram — open [the SVG](figures/agentDrilldown.svg) to read it at size. Amber is the
+human's step, indigo the agent working alone, purple HAARPi as conductor, green a clean gate.
+Solid = the work moves on; dashed grey = the step produces that artifact; dashed purple = the
+revision cycle.)*
 
 The cycle is always the same four beats:
 
@@ -299,20 +298,38 @@ packages/
 figures/        the two architecture figures above, with their .dot sources
 ```
 
-Both figures rebuild from their own source — no hand-editing of the rendered
-output, so they can be regenerated whenever the pipeline changes:
+### Keeping the figures true
+
+The drill-down is **derived, not drawn**. Each stage is a panel under
+`figures/panels/`, laid out arithmetically and emitted as SVG — three fixed columns, one row
+per step — then the six are stitched into one figure. Rebuild the whole thing with:
 
 ```bash
-cd figures
-for f in *_agentDrilldown_ra *_paperInflow_ra; do
-  dot -Tsvg "$f.dot" -o "$f.svg"
-  dot -Tpng -Gdpi=110 "$f.dot" -o "$f.png"
-done
+python figures/panels/build.py
 ```
 
-Keeping them reproducible is the point: a figure that can only be updated by
-redrawing it is a figure that stops being true. Every rework arc, including the
-ones that route backwards up a column, lives in the `.dot`.
+That much is only reproducibility. The part that matters is that a panel **declares which
+registry steps it depicts**, and `test_figure_drift.py` checks that claim against
+`planner.STAGE_STEPS` and `STAGE_TIERS` on every run:
+
+- a verb added to the registry and not drawn fails the suite
+- a verb the figure shows that the registry no longer has fails the suite
+- a step drawn amber whose `Step.command` is no longer `None` fails the suite
+- a figure the README embeds that isn't in the repo fails the suite
+
+A deliberate omission is allowed, but it has to be written down: `graft` is absent from the
+literature-review panel because nothing calls `graft.run()` any more, and that reason lives in
+the panel's `OMITS`, where the next person will look.
+
+Install the hook that runs this at commit time, so a change to a verb cannot also leave the
+picture of it stale:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+What no test can check is whether a *sentence* is still true. That surface is deliberately
+small — the prose, not the structure — and it stays a human's to read.
 
 ## History
 
