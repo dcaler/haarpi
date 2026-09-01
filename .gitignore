@@ -25,9 +25,9 @@ venv/
 !/figures/panels/
 /figures/panels/out/
 /figures/panels/__pycache__/
-!/figures/*_paperInflow_ra.dot
-!/figures/*_paperInflow_ra.png
-!/figures/*_paperInflow_ra.svg
+!/figures/paperInflow.dot
+!/figures/paperInflow.png
+!/figures/paperInflow.svg
 
 # Word lock files
 ~$*

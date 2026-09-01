@@ -210,10 +210,10 @@ one-pager. `package` assembles and compiles the venue submission.
 
 Which release feeds which section is the second figure:
 
-![Information-flow map — what each release feeds in the paper](figures/260811_HAARPi_paperInflow_ra.png)
+![Information-flow map — what each release feeds in the paper](figures/paperInflow.png)
 
-*(Source: [`.dot`](figures/260811_HAARPi_paperInflow_ra.dot) ·
-[SVG](figures/260811_HAARPi_paperInflow_ra.svg). Solid = the section's prose is
+*(Source: [`.dot`](figures/paperInflow.dot) ·
+[SVG](figures/paperInflow.svg). Solid = the section's prose is
 written from this source; dashed = it supplies an asset placed there; dotted =
 summarised into the abstract, which is written last.)*
 
@@ -330,6 +330,13 @@ git config core.hooksPath .githooks
 
 What no test can check is whether a *sentence* is still true. That surface is deliberately
 small — the prose, not the structure — and it stays a human's to read.
+
+**The information-flow map is not yet covered by any of this.** It is still a hand-written
+graphviz source, rebuilt with `dot -Tsvg figures/paperInflow.dot -o figures/paperInflow.svg`
+(and `-Tpng -Gdpi=110` for the raster). It describes the paper stage's inputs rather than the
+step registry, so there is nothing mechanical to check it against — which means it is exactly
+as reliable as the last person to read it. Porting it onto the panel emitter would bring it
+under the same drift check.
 
 ## History
 
