@@ -13,6 +13,11 @@ OUT, FIGS = HERE / "out", HERE.parent
 STAGES = sorted(p.stem for p in HERE.glob("stage[0-9]_*.py"))
 
 
+def cairosvg_png(src: Path, dst: Path, width: int) -> None:
+    import cairosvg
+    cairosvg.svg2png(url=str(src), write_to=str(dst), output_width=width)
+
+
 def main() -> int:
     sys.path.insert(0, str(HERE))
     from _emitter import render
@@ -25,12 +30,17 @@ def main() -> int:
                    arts=mod.ARTS, makes=mod.MAKES, band=mod.BAND, **getattr(mod, "OPTS", {}))
         svgs.append(str(target))
 
+    # the flow map: a different shape, same visual language, same build
+    import paperinflow as pf
+    from _emitter import render_flow
+    render_flow(str(FIGS / "paperInflow.svg"), sources=pf.SOURCES, sections=pf.SECTIONS,
+                edges=pf.EDGES, digests=pf.DIGESTS, structure=pf.STRUCTURE, title=pf.TITLE)
+    cairosvg_png(FIGS / "paperInflow.svg", FIGS / "paperInflow.png", 2600)
+
     from _stitch import stitch
     combined = FIGS / "agentDrilldown.svg"
     stitch(svgs, combined)
-    import cairosvg
-    cairosvg.svg2png(url=str(combined), write_to=str(FIGS / "agentDrilldown.png"),
-                     output_width=5400)
+    cairosvg_png(combined, FIGS / "agentDrilldown.png", 5400)
     print(f"  {FIGS / 'agentDrilldown.png'}")
     return 0
 

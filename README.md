@@ -212,7 +212,7 @@ Which release feeds which section is the second figure:
 
 ![Information-flow map — what each release feeds in the paper](figures/paperInflow.png)
 
-*(Source: [`.dot`](figures/paperInflow.dot) ·
+*(Source: [`paperinflow.py`](figures/panels/paperinflow.py) ·
 [SVG](figures/paperInflow.svg). Solid = the section's prose is
 written from this source; dashed = it supplies an asset placed there; dotted =
 summarised into the abstract, which is written last.)*
@@ -331,12 +331,16 @@ git config core.hooksPath .githooks
 What no test can check is whether a *sentence* is still true. That surface is deliberately
 small — the prose, not the structure — and it stays a human's to read.
 
-**The information-flow map is not yet covered by any of this.** It is still a hand-written
-graphviz source, rebuilt with `dot -Tsvg figures/paperInflow.dot -o figures/paperInflow.svg`
-(and `-Tpng -Gdpi=110` for the raster). It describes the paper stage's inputs rather than the
-step registry, so there is nothing mechanical to check it against — which means it is exactly
-as reliable as the last person to read it. Porting it onto the panel emitter would bring it
-under the same drift check.
+**The information-flow map is covered too.** It is a different shape — bipartite, not a grid —
+so it has its own layout function sharing the same primitives and visual language, and the same
+`build.py` emits it. Its claim is narrower but just as checkable: the paper stage declares which
+stages it may read, and the map must show a source for each of them and none it may not.
+
+That check earned its keep immediately. The hand-drawn version showed the **preregistration**
+feeding Methods and Discussion — and it does not. `raconteur.context` loads the literature
+review, the methods writeup and the results digest, and nothing else, which is exactly what
+`project.DEFAULT_STAGES["paper"]["inputs"]` declares. The figure had been asserting a data flow
+that the code has never had.
 
 ## History
 

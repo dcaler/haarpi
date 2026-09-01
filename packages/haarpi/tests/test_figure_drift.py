@@ -94,3 +94,47 @@ def test_the_readme_embeds_a_figure_that_exists():
     import re
     for rel in re.findall(r"!\[[^\]]*\]\((figures/[^)]+)\)", readme):
         assert (root / rel).is_file(), f"README embeds {rel}, which is not in the repo"
+
+
+# ── the information-flow map ─────────────────────────────────────────────────
+# Its claim is narrower than a stage panel's but just as checkable: the paper stage declares
+# which stages it may read, and the map must show a source for each of them.
+
+def _flow():
+    sys.path.insert(0, str(PANELS))
+    return importlib.import_module("paperinflow")
+
+
+def test_every_declared_input_to_the_paper_appears_as_a_source():
+    from haarpi import project
+    pf = _flow()
+    declared = set(project.DEFAULT_STAGES["paper"]["inputs"])
+    shown = {s for s in pf.FROM_STAGE.values() if s}
+    missing = declared - shown
+    assert not missing, (
+        f"project.DEFAULT_STAGES['paper']['inputs'] has {sorted(missing)} with no source in the "
+        f"flow map — the paper reads it, and the figure says it does not.")
+
+
+def test_the_flow_map_shows_no_stage_the_paper_cannot_read():
+    from haarpi import project
+    pf = _flow()
+    allowed = set(project.DEFAULT_STAGES["paper"]["inputs"]) | {"paper"}   # its own upstream rungs
+    stray = {s for s in pf.FROM_STAGE.values() if s} - allowed
+    assert not stray, (
+        f"the flow map sources {sorted(stray)}, which the paper stage does not declare as "
+        f"an input.")
+
+
+def test_every_flow_edge_joins_boxes_that_exist():
+    pf = _flow()
+    for a, b, kind, _label in pf.EDGES:
+        assert a in pf.SOURCES, f"edge from {a!r}, which is not a source"
+        assert b in pf.SECTIONS, f"edge into {b!r}, which is not a section"
+        assert kind in ("prose", "asset"), f"unknown edge kind {kind!r}"
+    for a, b in pf.DIGESTS:
+        assert a in pf.SECTIONS and b in pf.SECTIONS
+    for a, b, _l in pf.STRUCTURE:
+        assert a in pf.SOURCES and b in pf.SOURCES
+    assert set(pf.FROM_STAGE) == set(pf.SOURCES), (
+        "every source must say which stage's release it is (None for a component)")

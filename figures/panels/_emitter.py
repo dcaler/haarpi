@@ -266,3 +266,106 @@ def render(out_path, *, rows_spec, spine, lane, arts, makes, band, gate_key="gat
     Path(out_path).with_suffix(".anchors.json").write_text(json.dumps(anchors), encoding="utf-8")
     print(f"{out_path}  {WIDTH:.0f}x{height:.0f}pt  ({len(rows)} rows)")
     return anchors
+
+
+# ── the information-flow map ──────────────────────────────────────────────────
+# A different SHAPE from a stage panel — bipartite, not a grid — so it gets its own layout,
+# sharing the primitives and the visual language above. Sources on the left, the manuscript's
+# sections on the right, one lane per edge in the gutter between, and exit/entry points
+# staggered within a box so several edges off one source never overlap.
+
+FLOW_W_SRC, FLOW_W_SEC, FLOW_GUT = 250, 190, 360
+KIND = {"prose":  (INK,    None,  1.5),
+        "asset":  (GREY,   "5,4", 1.3),
+        "digest": ("#94a3b8", "2,3", 1.2)}
+
+
+def render_flow(out_path, *, sources, sections, edges, digests=(), structure=(), title=""):
+    """`edges` are (source_key, section_key, kind, label); `digests` are (section, section)
+    pairs routed up the EAST side, for sections summarised into another."""
+    sx, gx = MARGIN, MARGIN + FLOW_W_SRC
+    secx = gx + FLOW_GUT
+    width = secx + FLOW_W_SEC + 150            # room for the east-side digest lanes
+    head_h = 62 if title else MARGIN
+
+    def stack(items, w, fs, x, y0):
+        out, y = {}, y0
+        for k, (lines, style) in items.items():
+            ls = wrap(lines, w, fs)
+            h = len(ls) * LH + 2 * PAD_Y
+            out[k] = {"x": x, "y": y, "w": w, "h": h, "lines": ls, "style": style}
+            y += h + 16
+        return out, y
+
+    S_, y1 = stack(sources, FLOW_W_SRC, 8.8, sx, head_h + 26)
+    C_, y2 = stack(sections, FLOW_W_SEC, 9.5, secx, head_h + 26)
+    height = max(y1, y2) + MARGIN
+
+    def port(box, n, i):
+        """Spread n connections evenly down a box's face, so they never share a point."""
+        return box["y"] + box["h"] * (i + 1) / (n + 1)
+
+    outs, ins = {}, {}
+    for a, b, *_ in edges:
+        outs.setdefault(a, []).append(b); ins.setdefault(b, []).append(a)
+
+    S = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}pt" '
+         f'height="{height:.0f}pt" viewBox="0 0 {width:.0f} {height:.0f}">',
+         '<rect width="100%" height="100%" fill="#ffffff"/>']
+    if title:
+        S.append(f'<text x="{width/2:.0f}" y="34" text-anchor="middle" '
+                 f'font-family="Helvetica,Arial,sans-serif" font-size="19" font-weight="bold" '
+                 f'fill="#0f172a">{esc(title)}</text>')
+
+    # lanes: ordered by target then source, so the bundle fans without crossing itself
+    order = sorted(range(len(edges)),
+                   key=lambda i: (list(C_).index(edges[i][1]), list(S_).index(edges[i][0])))
+    for slot, i in enumerate(order):
+        a, b, kind, label = edges[i]
+        col, dash, w = KIND[kind]
+        A, B = S_[a], C_[b]
+        y0 = port(A, len(outs[a]), outs[a].index(b))
+        y1_ = port(B, len(ins[b]), ins[b].index(a))
+        lane = gx + 26 + (FLOW_GUT - 52) * (slot + 0.5) / len(edges)
+        S.append(path(f"M{A['x']+A['w']:.1f},{y0:.1f} H{lane:.1f} V{y1_:.1f} "
+                      f"H{B['x']-ARROW*1.8:.1f}", col, dash=dash, w=w))
+        S.append(head(B["x"], y1_, "right") + "</g>")
+        if label:
+            # anchored at the edge's own EXIT point, not the lane midpoint: exits are already
+            # staggered down each source's face, so the labels inherit that separation. Placing
+            # them all at mid-lane put thirteen of them on top of each other.
+            S.append(f'<text x="{A["x"]+A["w"]+7:.1f}" y="{y0-3:.1f}" '
+                     f'font-family="Helvetica,Arial,sans-serif" font-size="8" '
+                     f'fill="{col}">{esc(label)}</text>')
+
+    # sections summarised into another section, routed up the EAST side
+    for j, (a, b) in enumerate(digests):
+        A, B = C_[a], C_[b]
+        col, dash, w = KIND["digest"]
+        lane = secx + FLOW_W_SEC + 16 + j * 15
+        S.append(path(f"M{A['x']+A['w']:.1f},{A['y']+A['h']/2:.1f} H{lane:.1f} "
+                      f"V{B['y']+B['h']/2:.1f} H{B['x']+B['w']+ARROW*1.8:.1f}", col,
+                      dash=dash, w=w))
+        S.append(head(B["x"] + B["w"], B["y"] + B["h"] / 2, "left") + "</g>")
+
+    # the structure chain among the sources themselves
+    for a, b, label in structure:
+        A, B = S_[a], S_[b]
+        S.append(path(f"M{A['x']+A['w']/2:.1f},{A['y']+A['h']:.1f} "
+                      f"V{B['y']-ARROW*1.8:.1f}", INK, w=1.5))
+        S.append(head(A["x"] + A["w"] / 2, B["y"], "down") + "</g>")
+        S.append(f'<text x="{A["x"]+A["w"]/2+6:.1f}" y="{(A["y"]+A["h"]+B["y"])/2+3:.1f}" '
+                 f'font-family="Helvetica,Arial,sans-serif" font-size="8" '
+                 f'fill="{INK}">{esc(label)}</text>')
+
+    for box in list(S_.values()):
+        S.append(mint_folder(box["x"], box["y"], box["w"], box["h"])
+                 if box["style"] == "mint" else folder(box["x"], box["y"], box["w"], box["h"]))
+        S.append(text(box["x"] + box["w"] / 2, box["y"] + 4, box["lines"], fs=8.8))
+    for box in C_.values():
+        S.append(rrect(box["x"], box["y"], box["w"], box["h"], box["style"]))
+        S.append(text(box["x"] + box["w"] / 2, box["y"], box["lines"]))
+
+    S.append("</svg>")
+    Path(out_path).write_text("\n".join(S), encoding="utf-8")
+    print(f"{out_path}  {width:.0f}x{height:.0f}pt  ({len(edges)} flows)")

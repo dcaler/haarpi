@@ -25,7 +25,6 @@ venv/
 !/figures/panels/
 /figures/panels/out/
 /figures/panels/__pycache__/
-!/figures/paperInflow.dot
 !/figures/paperInflow.png
 !/figures/paperInflow.svg
 
