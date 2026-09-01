@@ -138,3 +138,60 @@ def test_every_flow_edge_joins_boxes_that_exist():
         assert a in pf.SOURCES and b in pf.SOURCES
     assert set(pf.FROM_STAGE) == set(pf.SOURCES), (
         "every source must say which stage's release it is (None for a component)")
+
+
+# ── the README ───────────────────────────────────────────────────────────────
+# The prose is a human's to keep true, but the LISTS in it are mechanical: a verb table that
+# omits a verb, or names one that no longer exists, is exactly the drift that put "writes
+# refs.bib" against `gather` for months. gather writes the collect-list; `report` writes
+# refs.bib.
+
+_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _readme() -> str:
+    return (_ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def _cli_verbs(tool: str) -> set[str]:
+    import re
+    src = (_ROOT / "packages" / tool / tool / "cli.py").read_text(encoding="utf-8")
+    # add_parser calls wrap across lines, so match with DOTALL rather than per line
+    return set(re.findall(r'add_parser\(\s*"([a-z][a-z-]*)"', src, re.S))
+
+
+def test_the_readme_verb_table_matches_rabbitholes_cli():
+    import re
+    table = set(re.findall(r"^\| `([a-z]+)` \|", _readme(), re.M))
+    verbs = _cli_verbs("rabbithole")
+    human_only = {"collect"}          # a step with no command: the human does it
+    missing = verbs - table
+    assert not missing, (
+        f"README's verb table omits {sorted(missing)}, which rabbitHole's CLI offers.")
+    invented = table - verbs - human_only
+    assert not invented, (
+        f"README's verb table lists {sorted(invented)}, which the CLI does not offer.")
+
+
+def test_the_readme_names_the_real_decomposition_vocabulary():
+    """The seven needs are the pipeline's actual routing vocabulary; a README that lists a
+    stale set teaches the wrong model of how rework is decided."""
+    readme = _readme()
+    for need in planner._LITREVIEW_NEEDS:
+        assert f"`{need}`" in readme, f"README never mentions the `{need}` need"
+
+
+def test_the_readme_lists_the_umbrella_cli_as_it_is():
+    """List against list: the README's own CLI line versus the CLI's usage text. A verb added
+    to `haarpi` and not to that line leaves the README teaching a smaller tool than exists."""
+    import re
+    usage = __import__("haarpi.cli", fromlist=["_USAGE"])._USAGE
+    real = set(re.findall(r"^  haarpi ([a-z]+)", usage, re.M)) - {"rabbithole"}
+    # the backtick span wraps across lines in the README, so read it with DOTALL rather
+    # than line by line -- a per-line parser silently loses whatever follows the break
+    span = re.search(r"`haarpi init(.*?)`", _readme(), re.S).group(1)
+    listed = {w for w in re.findall(r"[a-z]+", span)} | {"init"}
+    missing = real - listed
+    assert not missing, f"README's CLI line omits {sorted(missing)}"
+    stray = listed - real
+    assert not stray, f"README's CLI line names {sorted(stray)}, which `haarpi` does not offer"

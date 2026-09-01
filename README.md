@@ -137,23 +137,25 @@ exceed them when the work asks for it.
 | verb | does |
 |---|---|
 | `init` | the brief interview → `litrev.yaml` |
-| `gather` | proposes sources and a collect-list; writes `refs.bib` |
+| `gather` | searches, ranks and curates candidates into the collect-list |
 | `collect` | *(human)* adds each real source to Zotero **with its PDF** |
 | `ingest` | pulls reviewer-supplied references into the corpus |
 | `audit` | quarantines lexical false-friends by word sense — reversibly |
 | `build` | embeds the audited corpus (candidates, citekeys, ChromaDB, notes) |
-| `report` | generates the first review, and re-plans it on a `redirect` |
+| `report` | generates the first review — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
 | `revise` | answers every comment in kind (see the table above) |
-| `graft` | drafts one section by hand; `haarpi next` no longer selects it |
+| `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block on an existing draft |
 | `mindmap` | regenerates the contribution map beside each new draft |
 | `style` | trains an author-voice profile from the author's own publications |
 
-Two invariants worth knowing. **`build` is the sole embedder** — `revise` reads a
-cached corpus and never embeds, so every chain that changes the corpus carries a
-`build` before the re-draft. And **`collect` is a human step on purpose**: a
-person confirming each source exists, with its PDF, is what guards the corpus
-against hallucinated citations.
+Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
+`revise` reads a cached corpus and never embeds, so every rework chain that changes the
+corpus carries a `build` before it. `report` is not an exception so much as outside the
+rule: it calls the same builder inline, which is why the opening chain has no `build`
+step and still produces an embedded corpus. And **`collect` is a human step on purpose**:
+a person confirming each source exists, with its PDF, is what guards the corpus against
+hallucinated citations.
 
 The `audit` verb quarantines by *word sense*, not by domain — a paper that
 shares a term with the topic but transfers no concept is moved to a Zotero
@@ -162,11 +164,14 @@ throw away exactly the cross-disciplinary work the review exists to find.
 
 ### 2 · Experiment design — rayleigh
 
-A live session settles the analytical framework — too open-ended to default —
-and writes `DESIGN.md`, a framework figure, and the experiment design
-(`experiments.yaml`). The human redlines the design; any severity of comment
-re-opens the session rather than patching the document, because a design is a
-set of decisions, not prose.
+A live session settles the analytical framework — too open-ended to default — and
+writes `designdocs/PLANNING.md`, `EXPERIMENTS.md`, a `PRIORS.md` index of the project's
+earlier `ra*` artifacts, a framework schematic into the figure pool, and the prereg
+`.docx` the gate reads. It **specifies only**: the executable `experiments.yaml` is
+authored later, by `rayleigh plan` in the experiments stage, against the code raster
+actually built. The human redlines the design; any severity of comment re-opens the
+session rather than patching the document, because a design is a set of decisions, not
+prose.
 
 This stage is **preregistration**: it is released before the code that satisfies
 it exists.
@@ -187,10 +192,12 @@ silent.
 
 Runs each preregistered experiment's cells against the built code, processes
 outputs into `findings.json` and data figures, and writes the results up. At the
-gate, a **cosmetic** comment (presentation only) re-runs the process step with
-no new data; a comment that needs new data goes back to design review. The line
-between them is whether answering it requires observations that do not exist
-yet.
+gate, a **cosmetic** comment (presentation only) re-runs `process`: no new data, so
+nothing is re-run — the analysis script and the tidy table are durable, and the report is
+assembled again around them. A comment needing cells, seeds or experiments that do not
+exist yet is an **extend**, and goes to `rayleigh review`, an attended session that
+decides which layer diverged and queues its own follow-on chain. The line between the two
+is whether answering it requires observations that do not exist yet.
 
 ### 5 · Paper — raconteur
 
@@ -204,9 +211,13 @@ released before the next begins.
   skeleton.
 - **draft** — the full manuscript, written from the releases upstream.
 
-At the paper gate, comments route by kind: a prose comment gets a `revise`
-redline, a structural one re-outlines, and a narrative one re-cuts the
-one-pager. `package` assembles and compiles the venue submission.
+At every rung the same four routes apply, and only where they re-enter differs: a prose
+comment is answered in place on that rung, a structural one re-runs `outline` (or, on the
+skeleton rung, phase one), a narrative one always re-cuts the one-pager however far down
+the ladder it was raised, and an **upstream_literature** comment escalates out of the
+stage entirely — back to gather, collect, report and comment in the literature review,
+because the claim it doubts is not in the corpus yet. `package` assembles and compiles
+the venue submission.
 
 Which release feeds which section is the second figure:
 
@@ -316,6 +327,9 @@ registry steps it depicts**, and `test_figure_drift.py` checks that claim agains
 - a verb the figure shows that the registry no longer has fails the suite
 - a step drawn amber whose `Step.command` is no longer `None` fails the suite
 - a figure the README embeds that isn't in the repo fails the suite
+- a verb in a tool's CLI that this README's table omits fails the suite, and vice versa
+- a need in the decomposition vocabulary this README never mentions fails the suite
+- a `haarpi` verb missing from the CLI line above fails the suite
 
 A deliberate omission is allowed, but it has to be written down: `graft` is absent from the
 literature-review panel because nothing calls `graft.run()` any more, and that reason lives in

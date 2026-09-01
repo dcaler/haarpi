@@ -59,7 +59,9 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "ingest":  Step("haarpi rabbithole ingest", 0.5,
                         "Pull reviewer-supplied references into the corpus."),
         "gather":  Step("haarpi rabbithole gather", 1.3,
-                        "Discover & curate new sources into the Zotero collection."),
+                        "Search, rank and curate candidate sources into the collect-list. "
+                        "The HUMAN adds them to Zotero at `collect`; gather puts nothing "
+                        "there itself."),
         "collect": Step(None, 0.25,
                         "Download the new PDFs and add them to the Zotero collection."),
         "audit":   Step("haarpi rabbithole audit", 0.5,
@@ -67,7 +69,9 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "conceptual transfer) from the finalised corpus (reversible)."),
         "build":   Step("haarpi rabbithole build", 1.0,
                         "Embed the audited Zotero collection into the working corpus "
-                        "(candidates, citekeys, ChromaDB index, per-paper notes)."),
+                        "(candidates, citekeys, ChromaDB index, per-paper notes). Needed "
+                        "before a `revise` re-draft, which reads a cached corpus and never "
+                        "embeds; `report` calls the same builder inline and needs no step."),
         # 4.0h of redline, plus ~3.5h PER SECTION the markup asks for: drafting and peer review
         # both run with the coordinator's chain-of-thought on (they are judgement work, unlike
         # lint and the redline itself), so a section costs three thinking calls. A `Step` carries
@@ -77,8 +81,10 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "Answer every comment in kind: a tracked rewrite for a prose comment, a "
                         "drafted section spliced in at the comment that asked for it, and the "
                         "cycle's term corrections applied across the document."),
-        # Still callable by hand for a one-off section; `haarpi next` no longer selects it, since
-        # a section ask that cost the set its in-place edits is the failure `revise` now avoids.
+        # VESTIGIAL: nothing calls this. `haarpi next` stopped selecting it when `revise`
+        # absorbed section-grafting, and the only remaining caller of graft.run() is cli.py.
+        # The live code is graft.draft_sections/choose_position, which revise imports. Kept as
+        # an entry point rather than deleted, but do not describe it as a route anything takes.
         "graft":   Step("haarpi rabbithole graft", 3.5,
                         "Draft ONLY the requested section and splice it into the reviewer's "
                         "own .docx as a tracked insertion — existing paragraphs untouched, "
@@ -124,9 +130,11 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     # session ends by re-rendering the prereg for the author to annotate again.
     "design": {
         "design_session": Step(None, 1.0,
-                               "Re-open the preregistration design session: run "
-                               "`haarpi rayleigh init` to address the annotations, revise "
-                               "experiments.yaml, and re-render the prereg docx."),
+                               "Re-open the design session: run `haarpi rayleigh init` to "
+                               "address the annotations and re-render the prereg docx. The "
+                               "EXECUTABLE experiments.yaml is not written here — "
+                               "`rayleigh plan` authors it in the experiments stage, against "
+                               "the code raster built."),
     },
     # The BUILD stage. raster's `handoff` renders the methods digest to a docx the gate mints;
     # rework re-opens the attended build session (raster re-plans/re-builds and re-emits the
