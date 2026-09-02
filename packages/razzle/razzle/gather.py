@@ -3,7 +3,8 @@
  - narrative: raconteur's one-pager (the talk's spine) — the gate-minted release, else the newest draft;
  - figures: the shared figure pool (haarpi.figure), by id + caption;
  - claims: rayleigh's findings.json — each experiment's observed `finding` (the real numbers, verbatim);
- - logos: the author affiliations + project funders, resolved to logo files via the neutral registries.
+ - logos: the author affiliations + project funders, resolved to logo files via the neutral registries;
+ - byline: every author, in authorship order — with ONE contact address, the presenter's.
 
 Everything is best-effort: an absent one-pager / findings / manifest yields "" or [], never a crash.
 """
@@ -114,22 +115,51 @@ def logos(root: Path, fmt: str | None = None) -> list[Path]:
     return assets.logos_for(affiliations=affs, funders=funders)
 
 
-def byline(root: Path, fmt: str | None = None) -> str:
-    """The presenting authors as a comma list (the title-slide subtitle) — the deck config's chosen
-    authors, else all manifest authors. A deterministic fact, never the LLM's to write."""
+def byline(root: Path) -> str:
+    """EVERY author, in authorship order — the title-slide subtitle. Authorship is a fact about the
+    work, not about who happens to be at the podium, so the byline is NOT scoped to the deck config's
+    presenting authors: a co-author is credited whether or not they travel. This matches the logo
+    question, which already offers every co-author's affiliation for the same reason. A deterministic
+    fact, never the LLM's to write."""
     try:
         m = _hproject.load_manifest(root)
     except Exception:
         return ""
-    names = deck_config(root, fmt).get("authors") or [
-        a.get("name") for a in getattr(m, "authors", []) or [] if isinstance(a, dict) and a.get("name")]
-    return ", ".join(n for n in names if n)
+    return ", ".join(a["name"] for a in _hproject.authors(m) if a.get("name"))
 
 
-def apply_byline(spec: list[dict], line: str) -> list[dict]:
-    """Stamp the presenting authors onto the title slide's subtitle (facts over the LLM's guess)."""
-    if line and spec and spec[0].get("role") == "title":
-        spec[0]["subtitle"] = line
+def presenter(root: Path, fmt: str | None = None) -> dict:
+    """The ONE author at the podium — the deck config's first presenting author, else the
+    corresponding author, else the first author. Whoever it is owns the contact address on the
+    title slide."""
+    try:
+        m = _hproject.load_manifest(root)
+    except Exception:
+        return {}
+    people = _hproject.authors(m)
+    by_name = {a.get("name"): a for a in people}
+    for n in deck_config(root, fmt).get("authors") or []:
+        if n in by_name:
+            return by_name[n]
+    corr = _hproject.corresponding_authors(m)
+    return corr[0] if corr else (people[0] if people else {})
+
+
+def presenter_email(root: Path, fmt: str | None = None) -> str:
+    """The single contact address for the deck: the presenting author's. One email, not one per
+    author — it is a contact address for this talk, not a credential every co-author wants printed
+    (the same doctrine haarpi.project.authors_block applies to a manuscript, resolved to the podium
+    rather than to correspondence)."""
+    return presenter(root, fmt).get("email", "")
+
+
+def apply_byline(spec: list[dict], line: str, email: str = "") -> list[dict]:
+    """Stamp the author list — and the one contact address — onto the title slide (facts over the
+    LLM's guess). Layout 0 offers a title and a subtitle and nothing else, so the two share the
+    subtitle as separate paragraphs: authors, then the presenter's email beneath them."""
+    if not (spec and spec[0].get("role") == "title" and line):
+        return spec
+    spec[0]["subtitle"] = [line, email] if email else line
     return spec
 
 
@@ -142,5 +172,6 @@ def bundle(root: Path, fmt: str | None = None) -> dict:
     return {"short_title": short, "narrative": narrative(root, short),
             "manuscript": manuscript(root, short, venue),
             "figures": figures(root, short), "claims": claims(root),
-            "logos": logos(root, fmt), "byline": byline(root, fmt),
+            "logos": logos(root, fmt), "byline": byline(root),
+            "email": presenter_email(root, fmt),
             "venue": cfg.get("venue", ""), "date": cfg.get("date", "")}

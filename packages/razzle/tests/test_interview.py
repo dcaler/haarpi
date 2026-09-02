@@ -69,7 +69,8 @@ def test_interview_offers_every_authors_affiliation_logo_not_just_the_presenter(
     assert out["decks"]["shorttalk"]["affiliations"] == ["UC Berkeley", "Cambridge"]   # both offered + taken
 
 
-def test_gather_scopes_byline_and_logos_to_the_deck(tmp_path, monkeypatch):
+def _byline_project(tmp_path, monkeypatch):
+    """Ada presents; Bo does not. Both are authors. Both have an email."""
     home = tmp_path / "razzle_home"
     (home / "logos").mkdir(parents=True)
     (home / "logos" / "ucb.png").write_bytes(b"x")
@@ -78,19 +79,49 @@ def test_gather_scopes_byline_and_logos_to_the_deck(tmp_path, monkeypatch):
 
     m = project.Manifest(
         name="demo", short_title="demo", brief="x",
-        authors=[{"name": "Ada", "affiliations": ["UC Berkeley"]},
-                 {"name": "Bo", "affiliations": ["Cambridge"]}],
+        authors=[{"name": "Ada", "affiliations": ["UC Berkeley"], "email": "ada@ucb.edu"},
+                 {"name": "Bo", "affiliations": ["Cambridge"], "email": "bo@cam.ac.uk"}],
         decks={"shorttalk": {"venue": "ISMIR", "date": "2026-11-01",
                              "authors": ["Ada"], "affiliations": ["UC Berkeley"], "funders": []}})
     project.save_manifest(m, tmp_path)
+    return tmp_path
 
-    # byline is the deck's chosen presenter, not all authors
-    assert gather.byline(tmp_path, "shorttalk") == "Ada"
+
+def test_gather_scopes_logos_to_the_deck_but_never_the_byline(tmp_path, monkeypatch):
+    """The deck config scopes the LOGOS. It must not scope the BYLINE: authorship is a fact about
+    the work, so a co-author who is not travelling is still credited on the title slide."""
+    root = _byline_project(tmp_path, monkeypatch)
+
+    assert gather.byline(root) == "Ada, Bo"               # every author, in authorship order
     # logos are the deck's chosen affiliation (UC Berkeley has a registered logo; Cambridge excluded)
-    logos = gather.logos(tmp_path, "shorttalk")
-    assert [p.name for p in logos] == ["ucb.png"]
-    b = gather.bundle(tmp_path, "shorttalk")
-    assert b["venue"] == "ISMIR" and b["byline"] == "Ada"
+    assert [p.name for p in gather.logos(root, "shorttalk")] == ["ucb.png"]
+    b = gather.bundle(root, "shorttalk")
+    assert b["venue"] == "ISMIR" and b["byline"] == "Ada, Bo"
+
+
+def test_the_contact_address_is_the_presenters_alone(tmp_path, monkeypatch):
+    """Exactly ONE email reaches the title slide, and it belongs to whoever is at the podium — a
+    contact address for this talk, not a credential printed for every co-author."""
+    root = _byline_project(tmp_path, monkeypatch)
+
+    assert gather.presenter(root, "shorttalk")["name"] == "Ada"
+    assert gather.presenter_email(root, "shorttalk") == "ada@ucb.edu"
+    assert gather.bundle(root, "shorttalk")["email"] == "ada@ucb.edu"
+    assert "bo@cam.ac.uk" not in gather.bundle(root, "shorttalk")["byline"]
+
+
+def test_presenter_falls_back_to_the_corresponding_author(tmp_path, monkeypatch):
+    """No deck config for the format — the contact address is the corresponding author's, not
+    simply the first author's."""
+    monkeypatch.setenv("RAZZLE_HOME", str(tmp_path / "empty"))
+    m = project.Manifest(
+        name="demo", short_title="demo", brief="x",
+        authors=[{"name": "Ada", "email": "ada@ucb.edu"},
+                 {"name": "Bo", "email": "bo@cam.ac.uk", "corresponding": True}])
+    project.save_manifest(m, tmp_path)
+
+    assert gather.byline(tmp_path) == "Ada, Bo"
+    assert gather.presenter_email(tmp_path, "shorttalk") == "bo@cam.ac.uk"
 
 
 def test_apply_byline_stamps_the_title_slide():
@@ -98,6 +129,14 @@ def test_apply_byline_stamps_the_title_slide():
     gather.apply_byline(spec, "Ada, Bo")
     assert spec[0]["subtitle"] == "Ada, Bo"
     assert "subtitle" not in spec[1]                       # only the title slide is stamped
+
+
+def test_apply_byline_puts_the_email_under_the_authors():
+    """Layout 0 has a title and a subtitle and nothing else, so the contact address rides in the
+    subtitle as a second paragraph — never appended to the author list itself."""
+    spec = [{"role": "title", "title": "T", "subtitle": "was"}]
+    gather.apply_byline(spec, "Ada, Bo", "ada@ucb.edu")
+    assert spec[0]["subtitle"] == ["Ada, Bo", "ada@ucb.edu"]
 
 
 def test_interview_never_touches_trundlr(tmp_path, monkeypatch):

@@ -63,7 +63,8 @@ def run_render(args) -> int:
         return 1
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     short = gather.short_title(root)
-    gather.apply_byline(spec, gather.byline(root, fmt))   # presenting authors are a fact, not the LLM's
+    # every author is credited; one contact address, the presenter's — facts, not the LLM's
+    gather.apply_byline(spec, gather.byline(root), gather.presenter_email(root, fmt))
     # The `_ra` chain draft — the author reviews it in place; `haarpi next` mints it (the format is
     # carried by the folder, so the filename infix is just `deck`).
     out = root / "slides" / fmt / _naming.major_name(short, "pptx", infix="deck")

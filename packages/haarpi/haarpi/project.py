@@ -94,8 +94,9 @@ class Manifest:
     # Per-format deck configuration, keyed by format name — written by `razzle interview` (a pure-
     # python, no-LLM session). Each entry: {venue, date, authors:[names], affiliations:[names],
     # funders:[names]} — the deterministic facts a deck needs (who presents where and when, which
-    # affiliation/funder logos). razzle's gather reads decks[fmt] to scope the logos and byline;
-    # absent → it falls back to all authors/funders. A fact the tools never invent.
+    # affiliation/funder logos). razzle's gather reads decks[fmt] to scope the LOGOS, and to pick the
+    # one presenting author whose email is the deck's contact address; the byline itself is every
+    # author, since authorship does not depend on who travels. A fact the tools never invent.
     decks: dict = field(default_factory=dict)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
