@@ -259,14 +259,15 @@ def test_the_mark_is_collected_before_the_deletion_sweep(tmp_path):
 
 
 def test_no_queue_is_decided_once_for_every_branch():
-    """run_next queues in three places — the rung, the stage advance, and rework. A flag
-    that silenced one while another still fired would be worse than no flag: you would mint
-    a skeleton believing nothing was queued and find a rework chain waiting."""
+    """run_next queues in four places — the deck's per-format chains, the rung, the stage
+    advance, and rework. A flag that silenced one while another still fired would be worse than
+    no flag: you would mint a skeleton believing nothing was queued and find a rework chain
+    waiting."""
     import inspect
     from haarpi import planner
     src = inspect.getsource(planner.run_next)
     assert "queueing = bool(m.trundlr_project_id) and not no_queue" in src
-    assert src.count("if queueing:") == 2
+    assert src.count("if queueing:") == 3
     assert "if not queueing:" in src
     assert "if m.trundlr_project_id:" not in src, "no branch may decide for itself"
 

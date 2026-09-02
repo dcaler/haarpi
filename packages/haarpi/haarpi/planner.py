@@ -150,10 +150,14 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     # the attended deck session (razzle re-authors the spec addressing the comments, re-renders).
     # Same one-tier shape as design/build.
     "deck": {
-        # Unattended: the interview settled every fact a tool must not invent, and the re-rendered
-        # .pptx meets the human again at the redline gate — so there is no decision inside the
+        # Unattended, all three: the interview settled every fact a tool must not invent, and the
+        # rendered .pptx meets the human at the redline gate — so there is no decision inside an
         # authoring pass for anyone to sit through. GPU, because it is a local-model call like
         # every other working loop in the pipeline.
+        "author":  Step("haarpi razzle deck", 1.5,
+                        "Author the deck spec from the one-pager's spine plus the real figures "
+                        "and numbers, and render it to the branded .pptx.", resource="gpu"),
+        "comment": Step(None, 0.25, "Review the rendered deck and annotate it."),
         "deck_session": Step("haarpi razzle deck", 1.0,
                              "Re-author the deck spec to address the PowerPoint comments and "
                              "re-render the .pptx.", resource="gpu"),
@@ -1583,30 +1587,57 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
     The interview is genuinely interactive — it asks which formats, and per format the venue, date,
     presenters, logos and funders, none of which a tool may invent — so it stays the human's.
 
-    The authoring that follows is not. Every decision it needs was settled by the interview, and
-    what it produces meets the human again at the redline gate, so nobody needs to sit through it.
-    It is queued as ONE task depending on the interview, and fans out over the configured formats
-    when it RUNS: haarpi still does not create a task per format, because at the moment the board
-    is written the interview has not been held and the formats do not exist yet.
-
-    It runs on the GPU, because it is a local-model call — gather, compose on the pipeline's own
-    coordinator, render — like every other working loop here. No session, so nothing to sit at.
+    The authoring that follows is not, and it cannot be queued here: the formats are the
+    interview's to choose, so at the moment this writes the board they do not exist. So the
+    interview is followed by `haarpi next` — the same way every other chain in the pipeline ends
+    — and THAT queues one authoring chain per format, by which time the config is on disk.
     """
     interview = client.create_task(
         "razzle deck: configure", m.trundlr_project_id,
         description="Configure this project's deck(s): run `haarpi razzle interview` — a pure-python "
                     "(no-LLM) session that captures the presentation format(s) and, per format, the "
                     "venue, date, presenting authors, affiliation logos, and funders. It writes the "
-                    "config; the authoring task behind this one reads it and runs unattended.",
+                    "config; the `haarpi next` behind this one reads it and queues a deck per format.",
         resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
     client.create_task(
-        "razzle deck: author", m.trundlr_project_id,
-        command="haarpi razzle deck --all-formats",
+        _title("deck", "next", "", 1), m.trundlr_project_id,
+        command="haarpi next",
         depends_on_id=(interview or {}).get("id"),
-        description="Author a deck for every format the interview configured, and render each to "
-                    "the branded .pptx. Unattended — the facts were settled in the interview and "
-                    "the rendered deck meets you at the gate.",
-        resource_id=_resource_id(tr_cfg, "gpu"), duration=1.5)
+        description="Read the deck config the interview just wrote and queue one authoring chain "
+                    "per format.",
+        resource_id=_resource_id(tr_cfg, "runner"), duration=0.1)
+
+
+def _queue_deck_formats(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
+    """One authoring chain per configured deck format — author -> comment -> `haarpi next`.
+
+    This is the deck's answer to a problem no other stage has: WHICH deliverables exist is itself
+    a human choice, made in the interview, so the stage cannot queue its own work when it opens.
+    The interview is followed by `haarpi next`, and this runs there — by which time
+    `deck_formats` is on disk and each format can have a chain of its own, with its own title,
+    its own duration history, and its own pass through the gate.
+
+    Idempotent, and deliberately so: `haarpi next` runs at the end of every chain in the project,
+    so this is reached constantly. A format is skipped once its chain has been queued (recorded in
+    the plan log) or once a deck for it already exists.
+    """
+    if not m.trundlr_project_id or "deck" not in (m.stages or {}):
+        return []
+    if not project.list_plans(root):                       # stage never opened
+        return []
+    opened = {e.get("stage") for e in project.list_plans(root) if e.get("type") == "opened"}
+    if "deck" not in opened:
+        return []
+    already = {e.get("format") for e in project.list_plans(root) if e.get("type") == "deck_queued"}
+    queued: list[str] = []
+    for fmt in (m.deck_formats or []):
+        if fmt in already or (root / "slides" / fmt / "spec.json").is_file():
+            continue
+        queue_chain(client, m.trundlr_project_id, "deck", ["author", "comment"], tr_cfg,
+                    description=f"Deck configured for {fmt}: author it.", venue=fmt)
+        project.record_plan(root, {"type": "deck_queued", "format": fmt})
+        queued.append(fmt)
+    return queued
 
 
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
@@ -1694,6 +1725,18 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # skipped the rung queue while rework still fired would be worse than no flag at all.
     queueing = bool(m.trundlr_project_id) and not no_queue
     skipped = " ; queueing skipped (--no-queue)" if m.trundlr_project_id and no_queue else ""
+
+    # The deck's formats are chosen in the interview, so its work cannot be queued when the stage
+    # opens. This runs BEFORE the markup search on purpose: the interview leaves no markup behind,
+    # and if another stage happened to have a finished file this would otherwise never be reached.
+    if queueing:
+        try:
+            _deck_queued = _queue_deck_formats(
+                root, m, trundlr.TrundlrClient(tr_cfg.get("url", "")), tr_cfg)
+            if _deck_queued:
+                print(f"haarpi next: queued a deck chain for {', '.join(_deck_queued)}")
+        except trundlr.TrundlrError as e:
+            print(f"  [trundlr] deck queueing skipped: {e}")
 
     if file is not None:
         found = (stage or "litreview", Path(file))

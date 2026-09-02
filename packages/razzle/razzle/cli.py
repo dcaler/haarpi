@@ -126,30 +126,8 @@ def _author_headless(args, root: Path, fmt: str, prompt: str) -> int:
     return run_render(argparse.Namespace(dir=str(root), format=fmt, master=args.master))
 
 
-def _configured_formats(root: Path) -> list[str]:
-    """The formats `razzle interview` wrote to the manifest. Read at RUN time, not queue time:
-    the authoring task is queued when the deck stage opens, before the interview has been held,
-    so the formats simply are not known yet when the board is written."""
-    try:
-        from haarpi import project as _hp
-        return [f for f in (_hp.load_manifest(root).deck_formats or []) if f in formats.FORMATS]
-    except Exception:
-        return []
-
-
 def run_deck(args) -> int:
     root = Path(args.dir).resolve() if args.dir else Path.cwd()
-    if getattr(args, "all_formats", False):
-        chosen = _configured_formats(root)
-        if not chosen:
-            print("razzle deck: no deck formats configured — run `haarpi razzle interview` first",
-                  file=sys.stderr)
-            return 1
-        rc = 0
-        for fmt in chosen:
-            args.format, args.all_formats = fmt, False
-            rc = _author_one(args, root, fmt) or rc
-        return rc
     return _author_one(args, root, args.format)
 
 
@@ -249,8 +227,6 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--headless", action="store_true",
                            help="with --claude: author unattended (`claude -p`) rather than "
                                 "opening a session")
-            p.add_argument("--all-formats", action="store_true",
-                           help="author every format the interview configured (read at run time)")
     iv = sub.add_parser("interview", help="pure-python interview: configure the deck(s) (writes config only)")
     iv.add_argument("--dir", help="project root (default: cwd)")
     return ap

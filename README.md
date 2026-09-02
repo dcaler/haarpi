@@ -231,14 +231,17 @@ summarised into the abstract, which is written last.)*
 ### 6 · Deck — razzle
 
 An interview captures the facts a tool must never invent — format, venue, date,
-who is presenting, affiliation logos, funders. It is the human's, and it is the
-only part of the stage that is: behind it, one queued task authors a deck for
-every configured format from the one-pager's spine plus the real figures and
-numbers, and renders each to a branded `.pptx`. It runs on the local
-coordinator like every other working loop — gather, compose, render, in one
-process, with no session to sit at. That task is queued when the stage opens
-and reads the formats when it *runs* — at the moment the board is written the
-interview has not been held, so the formats do not exist yet. Deck masters, logos and any master-format
+who is presenting, affiliation logos, funders. **Which** deliverables exist is
+itself that choice, so the deck is the one stage that cannot queue its own work
+when it opens: the interview is followed by `haarpi next` — the way every other
+chain in the pipeline ends — and that queues one authoring chain per format,
+by which time the config is on disk. Each format then gets its own title, its
+own duration history, and its own pass through the gate.
+
+Authoring runs on the local coordinator like every other working loop: gather,
+compose, render, in one process, with no session to sit at. The spec is
+normalised on the way into the render, so the slide budgets hold whoever wrote
+it. Deck masters, logos and any master-format
 descriptor live outside the repo in `~/.config/haarpi/razzle/` and are never
 committed.
 

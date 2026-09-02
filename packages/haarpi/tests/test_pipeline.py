@@ -496,34 +496,52 @@ def _human_client(tr):
     return trundlr.TrundlrClient(f"http://127.0.0.1:{tr.server_address[1]}")
 
 
-def test_deck_opens_a_human_interview_then_an_unattended_authoring_task(proj, servers):
-    """The interview is genuinely interactive and stays the human's. The authoring behind it is
-    not — every fact it needs was settled in the interview — so it is a runner task.
-
-    Still no task PER FORMAT: at the moment the board is written the interview has not been held,
-    so the formats do not exist yet. The one authoring task fans out when it runs.
-    """
+def test_deck_opens_with_the_interview_and_a_next_behind_it(proj, servers):
+    """WHICH deck deliverables exist is itself a human choice, made in the interview — so the
+    stage cannot queue its own authoring when it opens. It opens the way every other chain in
+    the pipeline ends: with `haarpi next`, which reads the config the interview wrote."""
     tr, _ = servers
-    cfg = {"human_resource": 1, "gpu_resource": 2}
+    cfg = {"human_resource": 1, "gpu_resource": 2, "runner_resource": 2}
     for fmts in ([], ["shorttalk", "longtalk"]):
         m = project.load_manifest(proj)
         m.deck_formats = fmts
         before = len(tr.tasks)
         planner._open_deck(_human_client(tr), m, cfg)
         new = tr.tasks[before:]
-        assert len(new) == 2                                    # two, regardless of how many formats
+        assert len(new) == 2                          # never a task per format: none are known yet
 
-        configure, author = new
+        configure, nxt = new
         assert "configure" in configure["title"]
         assert "razzle interview" in configure["description"]   # the pure-python interview
         assert "command" not in configure                       # attended: the human runs it
         assert configure["resource_ids"] == [1]
 
-        assert "author" in author["title"]
-        assert author["command"] == "haarpi razzle deck --all-formats"
-        assert author["depends_on_id"] == configure["id"]       # cannot run before the config exists
-        # the GPU: authoring is a local-model call, like every other working loop here
-        assert author["resource_ids"] == [2]
+        assert nxt["command"] == "haarpi next"
+        assert nxt["depends_on_id"] == configure["id"]          # cannot read a config not yet written
+
+
+def test_next_queues_one_deck_chain_per_configured_format(proj, servers, monkeypatch):
+    """That `haarpi next` is where the per-format work appears — one chain each, so every format
+    gets its own title, its own duration history, and its own pass through the gate."""
+    tr, _ = servers
+    cfg = {"human_resource": 1, "gpu_resource": 2, "runner_resource": 2}
+    m = project.load_manifest(proj)
+    m.deck_formats = ["shorttalk", "longtalk"]
+    project.record_plan(proj, {"type": "opened", "stage": "deck"})
+
+    client = _human_client(tr)
+    assert planner._queue_deck_formats(proj, m, client, cfg) == ["shorttalk", "longtalk"]
+    titles = [t["title"] for t in tr.tasks]
+    for fmt in ("shorttalk", "longtalk"):
+        assert any("author" in t and fmt in t for t in titles)
+        assert any("comment" in t and fmt in t for t in titles)
+    # the authoring command is told which deliverable it is writing
+    authored = [t for t in tr.tasks if "author" in t["title"]]
+    assert {t["command"] for t in authored} == {
+        "haarpi razzle deck --format shorttalk", "haarpi razzle deck --format longtalk"}
+
+    # idempotent: `haarpi next` runs at the end of every chain, so this is reached constantly
+    assert planner._queue_deck_formats(proj, m, client, cfg) == []
 
 
 def test_a_deck_rework_is_told_which_format_it_is_re_authoring(proj):
