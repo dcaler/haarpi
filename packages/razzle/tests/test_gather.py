@@ -75,3 +75,28 @@ def test_build_deck_rejects_an_unknown_format(tmp_path):
     _fixture_project(tmp_path)
     with pytest.raises(ValueError):
         deck.build_deck(tmp_path, "keynote", _Brain())
+
+
+def test_the_deck_lives_under_its_venue_not_its_format(tmp_path):
+    """`slides/CSS2026/`, the way a manuscript lives in `paper/css2026/`. The venue is what the
+    deck is FOR and what anyone browses by; the format is a property of the talk."""
+    from haarpi import project
+    from razzle import gather
+    m = project.Manifest(name="d", short_title="demo", brief="x",
+                         deck_formats=["longtalk"],
+                         decks={"longtalk": {"venue": "CSS2026", "date": "31 Oct"}})
+    project.save_manifest(m, tmp_path)
+
+    assert gather.deck_dir(tmp_path, "longtalk") == tmp_path / "slides" / "CSS2026"
+    assert gather.format_for_venue(tmp_path, "CSS2026") == "longtalk"
+    assert gather.format_for_venue(tmp_path, "  css2026 ") == "longtalk"   # case/whitespace
+    assert gather.format_for_venue(tmp_path, "NeurIPS") == ""
+
+
+def test_a_deck_with_no_venue_yet_still_lands_somewhere(tmp_path):
+    """A deck can be authored before the interview has named a venue — it must not land in
+    `slides/` itself, where it would collide with every other deck."""
+    from haarpi import project
+    from razzle import gather
+    project.save_manifest(project.Manifest(name="d", short_title="demo", brief="x"), tmp_path)
+    assert gather.deck_dir(tmp_path, "poster") == tmp_path / "slides" / "poster"

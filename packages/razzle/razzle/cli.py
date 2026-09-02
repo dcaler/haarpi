@@ -57,7 +57,7 @@ def _figures_for(root: Path, short: str, spec: list[dict]) -> dict[str, str]:
 def run_render(args) -> int:
     root = Path(args.dir).resolve() if args.dir else Path.cwd()
     fmt = args.format
-    spec_path = root / "slides" / fmt / "spec.json"
+    spec_path = gather.deck_dir(root, fmt) / "spec.json"
     if not spec_path.is_file():
         print(f"razzle render: no {spec_path.relative_to(root)} — run `razzle deck --format {fmt}` first",
               file=sys.stderr)
@@ -79,7 +79,7 @@ def run_render(args) -> int:
     gather.apply_byline(spec, gather.byline(root), gather.presenter_email(root, fmt))
     # The `_ra` chain draft — the author reviews it in place; `haarpi next` mints it (the format is
     # carried by the folder, so the filename infix is just `deck`).
-    out = root / "slides" / fmt / _naming.major_name(short, "pptx", infix="deck")
+    out = gather.deck_dir(root, fmt) / _naming.major_name(short, "pptx", infix="deck")
     render.render_deck(spec, desc["master_path"], desc, out,
                        figures=_figures_for(root, short, spec),
                        logos=gather.logo_entries(root, fmt),
@@ -107,7 +107,7 @@ def _author_headless(args, root: Path, fmt: str, prompt: str) -> int:
       reports success without a deliverable is worse than one that fails: the board chains a
       review of something that was never written.
     """
-    spec_path = root / "slides" / fmt / "spec.json"
+    spec_path = gather.deck_dir(root, fmt) / "spec.json"
     started = time.time()
     print(f"[razzle deck] authoring {fmt} headlessly in {root} …")
     rc = subprocess.run(
@@ -176,11 +176,12 @@ def _author_one(args, root: Path, fmt: str) -> int:
     print(f"razzle deck — {fmt}" + (f" (~{mins} min, ~{budget} slides)" if mins else " (poster)"))
     print(f"  gathered: narrative {len(b['narrative'])} chars · {len(b['figures'])} figure(s) · "
           f"claims {'yes' if b['claims'] else 'none'} · {len(b['logos'])} logo(s)")
-    (root / "slides" / fmt).mkdir(parents=True, exist_ok=True)
+    gather.deck_dir(root, fmt).mkdir(parents=True, exist_ok=True)
     # --no-launch means "gather and stop", and it has to be honoured BEFORE any brain is reached:
     # it is the inspection path, and it is what lets the tests exercise gathering without a model.
     if getattr(args, "no_launch", False):
-        print(f"  Author slides/{fmt}/spec.json (the deck spec), then `haarpi razzle render --format {fmt}`.")
+        print(f"  Author {gather.deck_dir(root, fmt).relative_to(root)}/spec.json, "
+              f"then `haarpi razzle render --format {fmt}`.")
         return 0
     if not getattr(args, "claude", False):
         return _author_offline(args, root, fmt, b)
@@ -192,7 +193,8 @@ def _author_one(args, root: Path, fmt: str) -> int:
         print("razzle deck: --headless needs `claude` on PATH and there is none", file=sys.stderr)
         return 1
     if not have_claude:
-        print(f"  Author slides/{fmt}/spec.json (the deck spec), then `haarpi razzle render --format {fmt}`.")
+        print(f"  Author {gather.deck_dir(root, fmt).relative_to(root)}/spec.json, "
+              f"then `haarpi razzle render --format {fmt}`.")
         return 0
     prompt = DECK_PROMPT.format(fmt=fmt, mins=mins or 0, budget=budget)
     if getattr(args, "headless", False):
@@ -217,6 +219,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--dir", help="project root (default: cwd)")
         p.add_argument("--format", default="longtalk",
                        help="presentation format: " + ", ".join(sorted(formats.FORMATS)))
+        p.add_argument("--venue", default="",
+                       help="the venue this deck is for — resolves to whichever configured "
+                            "format targets it (what the queued commands use)")
         p.add_argument("--master", default="default", help="house master name (neutral)")
         if name == "deck":
             p.add_argument("--no-launch", action="store_true",
@@ -232,11 +237,30 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _resolve_venue(args) -> int:
+    """`--venue` names the deck; razzle authors a FORMAT. Turn one into the other, once, here —
+    so every path below deals only in formats and the board can stay venue-scoped."""
+    venue = (getattr(args, "venue", "") or "").strip()
+    if not venue:
+        return 0
+    root = Path(args.dir).resolve() if args.dir else Path.cwd()
+    fmt = gather.format_for_venue(root, venue)
+    if not fmt:
+        print(f"razzle: no configured deck targets venue {venue!r} — "
+              "run `haarpi razzle interview` first", file=sys.stderr)
+        return 1
+    args.format = fmt
+    return 0
+
+
 def main(argv=None) -> int:
     runlog.stamp_output()
     args = build_parser().parse_args(argv)
     if args.cmd == "interview":
         return run_interview(args)
+    rc = _resolve_venue(args)
+    if rc:
+        return rc
     return run_deck(args) if args.cmd == "deck" else run_render(args)
 
 

@@ -1,8 +1,9 @@
 """razzle.deck — the orchestrator: gather a project's inputs → compose the deck spec → render the
 branded .pptx, sized to a presentation format. One call from a project root to a deck.
 
-The output lands in `slides/{fmt}/{date}_{short}_deck_ra.pptx` — a per-format deliverable (the format
-is razzle's venue-analogue, carried by the FOLDER, so the filename infix is just `deck`). The `_ra`
+The output lands in `slides/{venue}/{date}_{short}_deck_ra.pptx`. The folder is the VENUE — that is
+what a deck is browsed by, and the format is a property of the talk rather than a way to find it —
+so the filename infix stays `deck` (the stage's infix is what `latest_release` filters on). The `_ra`
 draft is a first-class revision-chain artifact: the author reviews it IN PLACE with PowerPoint
 comments, and `haarpi next` mints it to the token-free `{date}_{short}_deck.pptx`. Figures are exported
 to PNG on demand from the pool; logos come from the neutral registries. Best-effort: a missing
@@ -36,7 +37,7 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
     # not the LLM's to guess
     gather.apply_byline(spec, b["byline"], b["email"])
 
-    slides_dir = root / "slides" / fmt
+    slides_dir = gather.deck_dir(root, fmt)
     slides_dir.mkdir(parents=True, exist_ok=True)
     # the durable artifact: the spec (editable, re-renderable)
     (slides_dir / "spec.json").write_text(json.dumps(spec, indent=2), encoding="utf-8")

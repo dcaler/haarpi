@@ -520,37 +520,39 @@ def test_deck_opens_with_the_interview_and_a_next_behind_it(proj, servers):
         assert nxt["depends_on_id"] == configure["id"]          # cannot read a config not yet written
 
 
-def test_next_queues_one_deck_chain_per_configured_format(proj, servers, monkeypatch):
-    """That `haarpi next` is where the per-format work appears — one chain each, so every format
-    gets its own title, its own duration history, and its own pass through the gate."""
+def test_next_queues_one_deck_chain_per_configured_format(proj, servers):
+    """That `haarpi next` is where the per-format work appears — one chain each, NAMED BY VENUE,
+    so every deck gets its own title, its own duration history, and its own pass through the
+    gate. The venue is what a deck is for; the format is a property of the talk."""
     tr, _ = servers
     cfg = {"human_resource": 1, "gpu_resource": 2, "runner_resource": 2}
     m = project.load_manifest(proj)
     m.deck_formats = ["shorttalk", "longtalk"]
+    m.decks = {"shorttalk": {"venue": "ISMIR"}, "longtalk": {"venue": "CSS2026"}}
     project.record_plan(proj, {"type": "opened", "stage": "deck"})
 
     client = _human_client(tr)
-    assert planner._queue_deck_formats(proj, m, client, cfg) == ["shorttalk", "longtalk"]
+    assert planner._queue_deck_formats(proj, m, client, cfg) == ["ISMIR", "CSS2026"]
     titles = [t["title"] for t in tr.tasks]
-    for fmt in ("shorttalk", "longtalk"):
-        assert any("author" in t and fmt in t for t in titles)
-        assert any("comment" in t and fmt in t for t in titles)
-    # the authoring command is told which deliverable it is writing
+    for venue in ("ISMIR", "CSS2026"):
+        assert any("author" in t and venue in t for t in titles)
+        assert any("comment" in t and venue in t for t in titles)
+    # the authoring command is told which deck it is writing, by venue
     authored = [t for t in tr.tasks if "author" in t["title"]]
     assert {t["command"] for t in authored} == {
-        "haarpi razzle deck --format shorttalk", "haarpi razzle deck --format longtalk"}
+        "haarpi razzle deck --venue ISMIR", "haarpi razzle deck --venue CSS2026"}
 
     # idempotent: `haarpi next` runs at the end of every chain, so this is reached constantly
     assert planner._queue_deck_formats(proj, m, client, cfg) == []
 
 
-def test_a_deck_rework_is_told_which_format_it_is_re_authoring(proj):
-    """slides/<fmt>/ is the deck's venue-analogue. A rework that is not told the format would
-    re-author whichever deliverable `--format` defaults to."""
+def test_a_deck_rework_is_told_which_deck_it_is_re_authoring(proj):
+    """A deck lives in slides/<venue>/, like a manuscript lives in paper/<venue>/. A rework not
+    told the venue would re-author whichever deck `--format` happens to default to."""
     step = planner.STAGE_STEPS["deck"]["deck_session"]
     assert not step.human and step.resource == "gpu"
-    assert planner._venued(step.command, "longtalk").endswith("--format longtalk")
-    # raconteur keeps its own flag
+    assert planner._venued(step.command, "CSS2026").endswith("--venue CSS2026")
+    # the same flag the manuscript verbs take — one venue vocabulary across the pipeline
     assert planner._venued("haarpi raconteur draft", "jasss").endswith("--venue jasss")
 
 

@@ -231,10 +231,11 @@ def stage_search_dirs(root: Path, m: Manifest, stage: str) -> list[Path]:
     base = m.stage_dir(root, stage)
     if not base.is_dir():
         return []
-    # Only the paper stage nests: raconteur gives each deliverable a folder. `code/` and
-    # `results/` are a source repo and a data tree — walking them took long enough to look
-    # like a hang, and there is nothing down there a naming chain would match anyway.
-    if m.stages[stage].get("tool") != "raconteur":
+    # The paper and the deck nest: raconteur gives each deliverable a folder, and razzle gives
+    # each deck one per VENUE. `code/` and `results/` are a source repo and a data tree — walking
+    # them took long enough to look like a hang, and there is nothing down there a naming chain
+    # would match anyway.
+    if m.stages[stage].get("tool") not in ("raconteur", "razzle"):
         return [d for d in (base, base / "output") if d.is_dir()]
     out = live_dirs(base)
     seen, uniq = set(), []

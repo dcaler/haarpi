@@ -688,13 +688,11 @@ def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
 
 # ── queueing ─────────────────────────────────────────────────────────────────
 
-# A verb that writes for one venue gets told which. razzle's venue-analogue is the presentation
-# FORMAT (see razzle.formats), and it names the flag differently — so the flag travels with the
-# pattern rather than being assumed to be `--venue`.
-_VENUE_FLAGS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"raconteur (outline|draft|paper|package)\b"), "--venue"),
-    (re.compile(r"razzle deck\b"), "--format"),
-)
+# A verb that writes for one venue gets told which — raconteur for a manuscript, razzle for the
+# deck that presents it. A deck lives in `slides/<venue>/` for the same reason a manuscript lives
+# in `paper/<venue>/`: the venue is what the work is FOR, and the presentation format is a property
+# of the talk rather than a way to find it.
+_VENUE_AWARE = re.compile(r"(raconteur (outline|draft|paper|package)|razzle deck)\b")
 
 
 def _venued(command: str | None, venue: str) -> str | None:
@@ -704,12 +702,9 @@ def _venued(command: str | None, venue: str) -> str | None:
     back off the trundlr board a month later, `haarpi raconteur draft --venue jasss` says
     which paper it wrote, and a bare `draft` would not.
     """
-    if not command or not venue:
+    if not command or not venue or not _VENUE_AWARE.search(command):
         return command
-    for pattern, flag in _VENUE_FLAGS:
-        if pattern.search(command):
-            return f"{command} {flag} {venue}"
-    return command
+    return f"{command} --venue {venue}"
 
 
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
@@ -1631,12 +1626,17 @@ def _queue_deck_formats(root: Path, m: project.Manifest, client, tr_cfg: dict) -
     already = {e.get("format") for e in project.list_plans(root) if e.get("type") == "deck_queued"}
     queued: list[str] = []
     for fmt in (m.deck_formats or []):
-        if fmt in already or (root / "slides" / fmt / "spec.json").is_file():
+        if fmt in already:
             continue
+        # the chain is NAMED by the venue — that is what the deck is for, and what its folder is
+        venue = str(((m.decks or {}).get(fmt) or {}).get("venue") or "").strip()
+        if (root / "slides" / (venue or fmt) / "spec.json").is_file():
+            continue                                        # already authored
         queue_chain(client, m.trundlr_project_id, "deck", ["author", "comment"], tr_cfg,
-                    description=f"Deck configured for {fmt}: author it.", venue=fmt)
-        project.record_plan(root, {"type": "deck_queued", "format": fmt})
-        queued.append(fmt)
+                    description=f"Deck configured for {venue or fmt} ({fmt}): author it.",
+                    venue=venue or fmt)
+        project.record_plan(root, {"type": "deck_queued", "format": fmt, "venue": venue})
+        queued.append(venue or fmt)
     return queued
 
 
@@ -1756,8 +1756,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:
     # the run named neither the file it gated nor its place on the ladder.
     deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
-    # The deck is laid out one folder per format (slides/<fmt>/), so the markup's parent NAMES the
-    # format — which is what a deck rework has to be told, or it re-authors the wrong deliverable.
+    # A deck lives in slides/<venue>/, so the markup's parent NAMES the venue — which is what a
+    # deck rework has to be told, or it re-authors the wrong deliverable.
     venue = (naming.venue_of(markup, m.short_title) if stage == "paper"
              else markup.parent.name if stage == "deck" else "")
     check = redline.gate_check(markup)

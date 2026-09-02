@@ -86,6 +86,32 @@ def claims(root: Path, results_dir: str = "results") -> str:
     return "\n".join(out)
 
 
+def deck_dir(root: Path, fmt: str | None) -> Path:
+    """Where this deck lives: `slides/<venue>/`.
+
+    The VENUE is what a deck is browsed by — "which talk is the CSS2026 one" is the question
+    anyone actually asks; the format is a property of that talk, not a way to find it. Falls back
+    to the format when no venue is configured, so a deck authored before the interview has named
+    one still lands somewhere sensible instead of in `slides/`.
+    """
+    cfg = deck_config(root, fmt)
+    return root / "slides" / (str(cfg.get("venue") or "").strip() or (fmt or "deck"))
+
+
+def format_for_venue(root: Path, venue: str) -> str:
+    """Which configured format targets `venue`. The board and the queued commands are
+    venue-scoped, but razzle still authors ONE format, so the two have to meet somewhere."""
+    try:
+        m = _hproject.load_manifest(root)
+    except Exception:
+        return ""
+    want = " ".join(str(venue).split()).casefold()
+    for fmt, cfg in (getattr(m, "decks", {}) or {}).items():
+        if " ".join(str(cfg.get("venue", "")).split()).casefold() == want:
+            return fmt
+    return ""
+
+
 def deck_config(root: Path, fmt: str | None) -> dict:
     """The per-format deck config `razzle interview` wrote (`manifest.decks[fmt]`), or {}."""
     if not fmt:

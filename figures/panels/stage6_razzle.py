@@ -49,7 +49,7 @@ LANE = {
 }
 ARTS = {
  "a_cfg":  ["deck_formats + decks", "(written to the manifest)"],
- "a_spec": ["slides/{fmt}/spec.json", "(the durable artifact)"],
+ "a_spec": ["slides/{venue}/spec.json", "(the durable artifact)"],
  "a_pptx": ["the branded .pptx"],
  "a_mint": ["the minted deck,", "one per format"],
 }

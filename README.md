@@ -28,7 +28,7 @@ rabbitHole; the interactive design sessions in raster and rayleigh; razzle's
 | model building | [raster](packages/raster) | `code/` | a built, tested code repo |
 | experiments | [rayleigh](packages/rayleigh) | `results/` | preregistered findings + write-up |
 | paper | [raconteur](packages/raconteur) | `paper/` | the manuscript, revision by revision |
-| deck | [razzle](packages/razzle) | `slides/` | venue-specific presentation decks |
+| deck | [razzle](packages/razzle) | `slides/<venue>/` | venue-specific presentation decks |
 
 The experiment **design** (preregistration) is committed *before* any code is
 built — you fix the experiments, then build to satisfy them, never the reverse
@@ -238,8 +238,11 @@ chain in the pipeline ends — and that queues one authoring chain per format,
 by which time the config is on disk. Each format then gets its own title, its
 own duration history, and its own pass through the gate.
 
-Authoring runs on the local coordinator like every other working loop: gather,
-compose, render, in one process, with no session to sit at. The spec is
+A deck lives in `slides/<venue>/`, the way a manuscript lives in
+`paper/<venue>/` — the venue is what the work is *for*, and the presentation
+format is a property of the talk rather than a way to find it. Authoring runs
+on the local coordinator like every other working loop: gather, compose,
+render, in one process, with no session to sit at. The spec is
 normalised on the way into the render, so the slide budgets hold whoever wrote
 it. Deck masters, logos and any master-format
 descriptor live outside the repo in `~/.config/haarpi/razzle/` and are never
