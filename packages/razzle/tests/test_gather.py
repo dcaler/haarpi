@@ -52,6 +52,8 @@ class _Brain:
         # a grounded reply that references the real figure id + a claim
         return json.dumps({"slides": [
             {"role": "title", "title": "Friction ≠ price", "subtitle": "authors"},
+            # `caption` and `notes` are both dropped: the slot is citations-only and a deck has
+            # no speaker notes — the fixture keeps emitting them so the drop stays pinned
             {"role": "figure", "title": "The pipeline", "figure": "stageLadder",
              "caption": "", "notes": "the ladder"},
             {"role": "content", "title": "Result", "bullets": ["yes — 0.42"]}]})

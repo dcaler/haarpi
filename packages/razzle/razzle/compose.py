@@ -5,6 +5,13 @@ STRUCTURE (which slides, what each says, which figure it shows) as JSON, grounde
 the real claims — never inventing a number. The output is parsed, validated, and NORMALISED (a valid
 role per slide, a title slide leading, figure refs that actually exist); a bad parse degrades to a
 minimal title-only deck rather than crashing. The result is exactly what `render_deck` consumes.
+
+WHAT A SLIDE IS HERE. A slide is a projected image with a claim over it — not a document. The budgets
+below are hard because the failure they prevent is the only failure that matters in practice: prose
+migrating onto the screen, where the audience reads it instead of listening. So the title carries the
+slide's CLAIM (not its topic), bullets are fragments and there are at most three, and a slide that can
+show something shows it. There are NO speaker notes: notes are where the essay goes when the slide
+refuses it, and their absence is the point — what will not fit is spoken, not written.
 """
 
 from __future__ import annotations
@@ -14,11 +21,19 @@ import re
 
 from razzle import formats as _formats
 
-_ROLES = {"title", "figure", "content"}
+# `split` is text and a figure side by side — the workhorse, because it lets a slide make its
+# point AND show the evidence for it instead of alternating between the two.
+_ROLES = {"title", "figure", "split", "content"}
+MAX_BULLETS = 3          # per slide; more than this is a document, not a slide
+MAX_BULLET_WORDS = 9     # a fragment, not a sentence
+MAX_TITLE_WORDS = 9      # the claim, stated once
 
 _SYS = ("You turn a finished paper into a conference slide deck. You output JSON only — never prose. "
         "The narrative is the talk's spine: re-present it, don't re-argue. Ground every slide in the "
-        "narrative and the claims, and never state a number that is not in the claims.")
+        "narrative and the claims, and never state a number that is not in the claims. "
+        "You are writing SLIDES, not a handout: the speaker says the sentences, the slide shows the "
+        "claim and the evidence. Text on a slide competes with the speaker for the room's attention, "
+        "so every word has to earn its place.")
 
 _PROMPT = """Turn this paper into a slide deck: a {fmt}{mins}, at most {max_slides} slides.
 
@@ -39,13 +54,39 @@ KEY CLAIMS / NUMBERS (use verbatim; invent nothing):
 Output ONLY JSON:
 {{"slides": [
   {{"role": "title",   "title": "...", "subtitle": "..."}},
-  {{"role": "figure",  "title": "...", "figure": "<id>", "citation": "...", "notes": "..."}},
-  {{"role": "content", "title": "...", "bullets": ["...", "..."], "notes": "..."}}
+  {{"role": "figure",  "title": "...", "figure": "<id>", "citation": "..."}},
+  {{"role": "split",   "title": "...", "bullets": ["...", "..."], "figure": "<id>", "citation": "..."}},
+  {{"role": "content", "title": "...", "bullets": ["...", "..."]}}
 ]}}
-Rules: open with ONE title slide; one idea per slide; terse bullets; the detail goes in `notes`
-(speaker notes); a figure slide names an EXISTING figure id; never a number not in the claims.
-A figure slide's MESSAGE is its `title` — write no prose caption; `citation` is a bare source
-reference only (e.g. "[Kramers 1940]") or omit it."""
+
+HOW TO BUILD IT — these are budgets, not suggestions. A slide that breaks them is a worse slide.
+
+TITLE — at most {max_title_words} words, and it states the slide's CLAIM, not its topic.
+  "Three regimes: freeze, settle, churn"          <- a claim; the audience learns something
+  "Results of the parameter sweep"                <- a topic; says nothing, wastes the line
+  Write it as the sentence you would say out loud if you could only say one.
+
+BULLETS — at most {max_bullets} per slide, at most {max_bullet_words} words each, and NO slide is
+required to have any. Fragments, not sentences: strip "we find that", "this shows", articles,
+and every clause that only sets up the next one. If a point needs a sentence to survive, it is
+something you SAY while the slide shows the evidence — do not write it down.
+  "Churn never stops"                             <- keep
+  "The simulation shows that churn never stops, which means stillness is not recovery"  <- speak it
+
+SHOW, DON'T LIST — prefer `split` (a point beside its figure) and `figure` (the figure IS the
+slide) over `content`. Use `content` only where there is genuinely nothing to show: a definition,
+a contribution list, the closing claim. Every figure in AVAILABLE FIGURES must appear on at least
+one slide, and a figure may be shown more than once when the talk returns to it to make a new
+point — that is a normal move in a talk, not repetition.
+
+ARC — open with ONE title slide, then motivation -> question -> approach -> results -> takeaway,
+following the spine. One idea per slide. Never a number that is not in the claims.
+
+CITATION — a bare source reference only ("[Kramers 1940]"), or omit it. Never a prose caption:
+a figure slide's message is its title.
+
+There are NO speaker notes. Do not emit a `notes` field. What does not fit on the slide is what
+the speaker says; it is not written down anywhere."""
 
 
 def _parse(reply: str) -> dict:
@@ -59,22 +100,36 @@ def _parse(reply: str) -> dict:
 
 
 def _normalise(slides, figure_ids: set[str]) -> list[dict]:
+    """Coerce the model's JSON into what `render_deck` consumes.
+
+    The bullet BUDGET is enforced here; bullet WORDING is not. Dropping a fourth bullet loses a
+    point the author can put back, and the slide is still a slide. Truncating a bullet to nine
+    words produces a fragment that means something else — an enforcement worse than the problem.
+    So counts are hard here and length is the prompt's job.
+
+    `notes` is dropped wherever it appears: a deck has no speaker notes, and a model that emits
+    them anyway must not have them reach the render.
+    """
     out: list[dict] = []
     for s in slides or []:
         if not isinstance(s, dict):
             continue
         role = s.get("role") if s.get("role") in _ROLES else "content"
         slide = {"role": role, "title": str(s.get("title", "")).strip()}
-        for k in ("subtitle", "citation", "notes"):
+        for k in ("subtitle", "citation"):
             if s.get(k):
                 slide[k] = str(s[k]).strip()
         if s.get("bullets"):
-            slide["body"] = [str(b).strip() for b in s["bullets"] if str(b).strip()]
-        if role == "figure":
+            body = [str(b).strip() for b in s["bullets"] if str(b).strip()]
+            if body:
+                slide["body"] = body[:MAX_BULLETS]
+        if role in ("figure", "split"):
             if s.get("figure") in figure_ids:
                 slide["figure"] = s["figure"]
             else:
-                slide["role"] = "content"          # a figure we don't have → a plain slide
+                # a figure we don't have: `split` keeps its bullets and becomes a plain slide;
+                # a bare `figure` slide has nothing left but its title, which is still a claim
+                slide["role"] = "content"
         out.append(slide)
     if not out or out[0]["role"] != "title":       # a talk always opens on a title slide
         out.insert(0, {"role": "title", "title": (out[0]["title"] if out else "Untitled talk")})
@@ -94,6 +149,8 @@ def compose(brain, narrative: str, figures: list[dict], claims: str = "", *,
     ids = {f["id"] for f in (figures or [])}
     reply = brain.coordinator(
         _PROMPT.format(fmt=fmt, mins=(f" (~{mins} minutes)" if mins else ""), max_slides=budget,
+                       max_bullets=MAX_BULLETS, max_bullet_words=MAX_BULLET_WORDS,
+                       max_title_words=MAX_TITLE_WORDS,
                        narrative=(narrative or "")[:6000],
                        manuscript=(manuscript or "(not available — compose from the spine)")[:9000],
                        figures=fig_lines, claims=(claims or "(none provided)")[:4000]), _SYS)

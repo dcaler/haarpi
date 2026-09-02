@@ -30,8 +30,11 @@ DECK_PROMPT = (
     "read them: the one-pager is the talk's SPINE (re-present it, do not re-argue), the figure pool "
     "(reference figures by id), and the real claims/numbers (use verbatim; never invent one). Write "
     "the deck spec to slides/{fmt}/spec.json — a JSON list of slides, each {{role: title|figure|"
-    "content, title, subtitle?, bullets?, figure?<id>, citation?, notes?}}: open on a title slide, "
-    "one idea per slide, terse bullets, detail in speaker notes. A figure slide's MESSAGE is its "
+    "split|content, title, subtitle?, bullets?, figure?<id>, citation?}}: open on a title slide, one "
+    "idea per slide. A title is the slide's CLAIM in <=9 words, not its topic. At most 3 bullets, "
+    "<=9 words each, fragments not sentences. Prefer `split` (a point beside its figure) and "
+    "`figure` over `content`, and use every figure at least once — a slide that can show something "
+    "shows it. NO speaker notes: what does not fit is spoken. A figure slide's MESSAGE is its "
     "title (no prose caption); `citation` is a bare source ref only. Then run `razzle render --format "
     "{fmt}` to produce the .pptx, and tell me to review/polish it. Start by reading the one-pager."
 )

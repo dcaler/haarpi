@@ -8,8 +8,11 @@ durable artifact, the `.pptx` the output the author polishes.
 
 A deck spec is a list of slides:
     {"role": "title", "title": "...", "subtitle": "..."}
-    {"role": "figure", "title": "...", "figure": <figure-id>, "citation": "...", "notes": "..."}
-    {"role": "content", "title": "...", "body": ["bullet", "bullet"], "notes": "..."}
+    {"role": "figure", "title": "...", "figure": <figure-id>, "citation": "..."}
+    {"role": "split",   "title": "...", "body": [...], "figure": <figure-id>, "citation": "..."}
+    {"role": "content", "title": "...", "body": ["bullet", "bullet"]}
+
+A deck carries no speaker notes — what does not fit on the slide is spoken, not written.
 """
 
 from __future__ import annotations
@@ -96,7 +99,5 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
                 _place_picture(s, phs[idx], Path(logos[i]))
                 filled.add(idx)
         _strip_unused(s, filled)      # drop the empty master placeholders this slide didn't use
-        if slide.get("notes"):
-            s.notes_slide.notes_text_frame.text = str(slide["notes"])
     prs.save(str(out_path))
     return out_path
