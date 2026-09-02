@@ -99,7 +99,7 @@ def _parse(reply: str) -> dict:
         return {}
 
 
-def _normalise(slides, figure_ids: set[str]) -> list[dict]:
+def normalise(slides, figure_ids: set[str]) -> list[dict]:
     """Coerce the model's JSON into what `render_deck` consumes.
 
     The bullet BUDGET is enforced here; bullet WORDING is not. Dropping a fourth bullet loses a
@@ -119,8 +119,12 @@ def _normalise(slides, figure_ids: set[str]) -> list[dict]:
         for k in ("subtitle", "citation"):
             if s.get(k):
                 slide[k] = str(s[k]).strip()
-        if s.get("bullets"):
-            body = [str(b).strip() for b in s["bullets"] if str(b).strip()]
+        # `bullets` is what the prompt asks a model for; `body` is what the renderer reads and
+        # what a hand-authored spec.json already contains. Accept either — reading only `bullets`
+        # would silently strip every bullet out of a spec written the other way.
+        bullets = s.get("bullets") or s.get("body")
+        if bullets:
+            body = [str(b).strip() for b in bullets if str(b).strip()]
             if body:
                 slide["body"] = body[:MAX_BULLETS]
         if role in ("figure", "split"):
@@ -154,4 +158,4 @@ def compose(brain, narrative: str, figures: list[dict], claims: str = "", *,
                        narrative=(narrative or "")[:6000],
                        manuscript=(manuscript or "(not available — compose from the spine)")[:9000],
                        figures=fig_lines, claims=(claims or "(none provided)")[:4000]), _SYS)
-    return _normalise(_parse(reply).get("slides", []), ids)[:budget]
+    return normalise(_parse(reply).get("slides", []), ids)[:budget]

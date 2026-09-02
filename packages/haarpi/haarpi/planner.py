@@ -152,11 +152,11 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     "deck": {
         # Unattended: the interview settled every fact a tool must not invent, and the re-rendered
         # .pptx meets the human again at the redline gate — so there is no decision inside the
-        # authoring pass for anyone to sit through. It runs on the CPU runner rather than the
-        # `claude` resource because that resource has no runner polling it; nothing would execute.
-        "deck_session": Step("haarpi razzle deck --headless", 1.0,
+        # authoring pass for anyone to sit through. GPU, because it is a local-model call like
+        # every other working loop in the pipeline.
+        "deck_session": Step("haarpi razzle deck", 1.0,
                              "Re-author the deck spec to address the PowerPoint comments and "
-                             "re-render the .pptx.", resource="cpu"),
+                             "re-render the .pptx.", resource="gpu"),
     },
 }
 
@@ -1589,9 +1589,8 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
     when it RUNS: haarpi still does not create a task per format, because at the moment the board
     is written the interview has not been held and the formats do not exist yet.
 
-    It runs on the CPU runner. The `claude` resource would describe the work better, but nothing
-    polls that resource, so a task filed there would never execute — the lane has to be one with a
-    runner behind it.
+    It runs on the GPU, because it is a local-model call — gather, compose on the pipeline's own
+    coordinator, render — like every other working loop here. No session, so nothing to sit at.
     """
     interview = client.create_task(
         "razzle deck: configure", m.trundlr_project_id,
@@ -1602,12 +1601,12 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
         resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
     client.create_task(
         "razzle deck: author", m.trundlr_project_id,
-        command="haarpi razzle deck --all-formats --headless",
+        command="haarpi razzle deck --all-formats",
         depends_on_id=(interview or {}).get("id"),
         description="Author a deck for every format the interview configured, and render each to "
                     "the branded .pptx. Unattended — the facts were settled in the interview and "
                     "the rendered deck meets you at the gate.",
-        resource_id=_resource_id(tr_cfg, "cpu"), duration=1.5)
+        resource_id=_resource_id(tr_cfg, "gpu"), duration=1.5)
 
 
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:

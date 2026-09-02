@@ -117,3 +117,12 @@ def test_compose_sizes_the_deck_to_the_format():
     assert len(compose.compose(_Brain(reply), "n", [], fmt="shorttalk")) == 11
     assert len(compose.compose(_Brain(reply), "n", [], fmt="longtalk")) == 18
     assert len(compose.compose(_Brain(reply), "n", [], fmt="lecture")) == 45
+
+
+def test_normalise_accepts_a_hand_authored_spec_that_uses_body():
+    """`razzle render` normalises a spec a SESSION wrote, and those use `body` — the key the
+    renderer reads. Reading only `bullets` would have stripped every bullet out of the deck."""
+    slides = compose.normalise([{"role": "content", "title": "T",
+                                 "body": ["a", "b", "c", "d"], "notes": "an essay"}], set())
+    assert slides[1]["body"] == ["a", "b", "c"][:compose.MAX_BULLETS]
+    assert "notes" not in slides[1]

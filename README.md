@@ -12,19 +12,12 @@ marks up, and no stage advances until they do. The pipeline's job is to make
 that markup cheap to act on — not to remove the person from the loop.
 
 **Offline-first is a defining goal, not a feature.** The pipeline's working
-loops — gathering, synthesis, building, experiments, drafting, revision — run
-on local models via Ollama, on your own hardware; a research project never
-needs to leave the machine. Cloud models are deviations, never shared
-plumbing: an A/B coordinator swap in rabbitHole, and the interactive design
-sessions in raster and rayleigh, are human-invoked every time.
-
-The one cloud call that runs unattended is deck authoring, and it is queued
-deliberately. The interview in front of it settles every fact a tool must not
-invent, and the rendered `.pptx` meets a human at the redline gate, so there is
-no decision left inside the pass for anyone to sit through — the session was
-"interactive" in name only. It runs on the CPU runner: the board has a `claude`
-resource that describes the work better, but nothing polls it, so a task filed
-there would never execute.
+loops — gathering, synthesis, building, experiments, drafting, revision, and
+deck authoring — run on local models via Ollama, on your own hardware; a
+research project never needs to leave the machine. Cloud models appear only as
+explicitly-optional, human-invoked deviations (an A/B coordinator swap in
+rabbitHole; the interactive design sessions in raster and rayleigh; razzle's
+`deck --claude`), never as shared plumbing and never on an automated path.
 
 ## The pipeline
 
@@ -241,9 +234,11 @@ An interview captures the facts a tool must never invent — format, venue, date
 who is presenting, affiliation logos, funders. It is the human's, and it is the
 only part of the stage that is: behind it, one queued task authors a deck for
 every configured format from the one-pager's spine plus the real figures and
-numbers, and renders each to a branded `.pptx`. That task is queued when the
-stage opens and reads the formats when it *runs* — at the moment the board is
-written the interview has not been held, so the formats do not exist yet. Deck masters, logos and any master-format
+numbers, and renders each to a branded `.pptx`. It runs on the local
+coordinator like every other working loop — gather, compose, render, in one
+process, with no session to sit at. That task is queued when the stage opens
+and reads the formats when it *runs* — at the moment the board is written the
+interview has not been held, so the formats do not exist yet. Deck masters, logos and any master-format
 descriptor live outside the repo in `~/.config/haarpi/razzle/` and are never
 committed.
 

@@ -504,7 +504,7 @@ def test_deck_opens_a_human_interview_then_an_unattended_authoring_task(proj, se
     so the formats do not exist yet. The one authoring task fans out when it runs.
     """
     tr, _ = servers
-    cfg = {"human_resource": 1, "cpu_resource": 3}
+    cfg = {"human_resource": 1, "gpu_resource": 2}
     for fmts in ([], ["shorttalk", "longtalk"]):
         m = project.load_manifest(proj)
         m.deck_formats = fmts
@@ -520,18 +520,17 @@ def test_deck_opens_a_human_interview_then_an_unattended_authoring_task(proj, se
         assert configure["resource_ids"] == [1]
 
         assert "author" in author["title"]
-        assert author["command"] == "haarpi razzle deck --all-formats --headless"
+        assert author["command"] == "haarpi razzle deck --all-formats"
         assert author["depends_on_id"] == configure["id"]       # cannot run before the config exists
-        # the CPU runner, not the `claude` resource — nothing polls that one, so a task filed
-        # there would sit forever
-        assert author["resource_ids"] == [3]
+        # the GPU: authoring is a local-model call, like every other working loop here
+        assert author["resource_ids"] == [2]
 
 
 def test_a_deck_rework_is_told_which_format_it_is_re_authoring(proj):
     """slides/<fmt>/ is the deck's venue-analogue. A rework that is not told the format would
     re-author whichever deliverable `--format` defaults to."""
     step = planner.STAGE_STEPS["deck"]["deck_session"]
-    assert not step.human and step.resource == "cpu"
+    assert not step.human and step.resource == "gpu"
     assert planner._venued(step.command, "longtalk").endswith("--format longtalk")
     # raconteur keeps its own flag
     assert planner._venued("haarpi raconteur draft", "jasss").endswith("--venue jasss")

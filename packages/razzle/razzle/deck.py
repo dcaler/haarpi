@@ -21,11 +21,15 @@ from razzle import assets, compose, formats, gather, render
 
 
 def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
-               out: Path | None = None) -> dict:
-    """Gather → compose → render a deck for `fmt`. Returns {spec, pptx} (pptx None if no master)."""
+               out: Path | None = None, bundle: dict | None = None) -> dict:
+    """Gather → compose → render a deck for `fmt`. Returns {spec, pptx} (pptx None if no master).
+
+    `bundle` lets a caller that has already gathered (the CLI reports what it found before
+    authoring) hand it in rather than have the manuscript read a second time.
+    """
     if fmt not in formats.FORMATS:
         raise ValueError(f"unknown format {fmt!r} — one of {sorted(formats.FORMATS)}")
-    b = gather.bundle(root, fmt)
+    b = bundle if bundle is not None else gather.bundle(root, fmt)
     spec = compose.compose(brain, b["narrative"], b["figures"], b["claims"],
                            manuscript=b.get("manuscript", ""), fmt=fmt)
     # every author is credited; exactly one contact address, the presenter's — both facts,
