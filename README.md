@@ -231,11 +231,24 @@ summarised into the abstract, which is written last.)*
 ### 6 · Deck — razzle
 
 An interview captures the facts a tool must never invent — format, venue, date,
-presenting authors, affiliation logos, funders — and a session authors the
+who is presenting, affiliation logos, funders — and a session authors the
 presentation spec from the one-pager's spine plus the real figures and numbers.
 Rendering produces a branded `.pptx`. Deck masters, logos and any master-format
 descriptor live outside the repo in `~/.config/haarpi/razzle/` and are never
 committed.
+
+A slide here is a projected image with a claim over it, not a document, and the
+budgets are enforced rather than suggested: a title is the slide's claim in nine
+words or fewer, a slide carries at most three bullets of at most nine words, and
+there are **no speaker notes** — what will not fit is spoken, not written down.
+Slides come in four roles, and `split` (a point beside its figure) is the
+workhorse, because a deck goes text-heavy when a slide can show evidence *or*
+make a point but never both. Every author is credited on the title slide;
+exactly one contact address appears, the presenter's.
+
+The deck's running text — venue and date, the footer, the contact — is
+deck-level, so it never enters the spec: the composer cannot invent a venue it
+was never shown.
 
 ## The shared core
 

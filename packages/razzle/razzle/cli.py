@@ -72,7 +72,9 @@ def run_render(args) -> int:
     # carried by the folder, so the filename infix is just `deck`).
     out = root / "slides" / fmt / _naming.major_name(short, "pptx", infix="deck")
     render.render_deck(spec, desc["master_path"], desc, out,
-                       figures=_figures_for(root, short, spec), logos=gather.logos(root, fmt))
+                       figures=_figures_for(root, short, spec),
+                       logos=gather.logo_entries(root, fmt),
+                       furniture=gather.furniture(root, fmt, spec))
     print(f"razzle render: wrote {out.relative_to(root)}  ({len(spec)} slides)")
     return 0
 

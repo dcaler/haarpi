@@ -115,6 +115,41 @@ def logos(root: Path, fmt: str | None = None) -> list[Path]:
     return assets.logos_for(affiliations=affs, funders=funders)
 
 
+def logo_entries(root: Path, fmt: str | None = None) -> list[dict]:
+    """[{name, logo}] for the deck's affiliations + funders — the name is kept so a mark with no
+    registered logo can be set in text instead of vanishing."""
+    try:
+        m = _hproject.load_manifest(root)
+    except Exception:
+        return []
+    cfg = deck_config(root, fmt)
+    if cfg:
+        return assets.logo_entries(affiliations=cfg.get("affiliations", []),
+                                   funders=cfg.get("funders", []))
+    affs: list[str] = []
+    for a in getattr(m, "authors", []) or []:
+        if isinstance(a, dict):
+            affs += a.get("affiliations", []) or []
+    funders = [f.get("name") for f in getattr(m, "funders", []) or [] if isinstance(f, dict) and f.get("name")]
+    return assets.logo_entries(affiliations=affs, funders=funders)
+
+
+def furniture(root: Path, fmt: str | None, spec: list[dict] | None = None) -> dict:
+    """The deck-level RUNNING TEXT: the venue/date line on the title slide, and the footer +
+    contact address that repeat on every slide after it.
+
+    None of this is per-slide, so none of it belongs in the spec: these are facts from the deck
+    config, and keeping them out of the composer's hands is what stops a model inventing a venue.
+    The footer follows the house convention of `venue | talk title`.
+    """
+    cfg = deck_config(root, fmt)
+    venue, date = str(cfg.get("venue", "")), str(cfg.get("date", ""))
+    talk = (spec[0].get("title", "") if spec else "") or short_title(root)
+    return {"venue": " · ".join(x for x in (venue, date) if x),
+            "footer": " | ".join(x for x in (venue, talk) if x),
+            "contact": presenter_email(root, fmt)}
+
+
 def byline(root: Path) -> str:
     """EVERY author, in authorship order — the title-slide subtitle. Authorship is a fact about the
     work, not about who happens to be at the podium, so the byline is NOT scoped to the deck config's
@@ -172,6 +207,6 @@ def bundle(root: Path, fmt: str | None = None) -> dict:
     return {"short_title": short, "narrative": narrative(root, short),
             "manuscript": manuscript(root, short, venue),
             "figures": figures(root, short), "claims": claims(root),
-            "logos": logos(root, fmt), "byline": byline(root),
+            "logos": logo_entries(root, fmt), "byline": byline(root),
             "email": presenter_email(root, fmt),
             "venue": cfg.get("venue", ""), "date": cfg.get("date", "")}

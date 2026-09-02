@@ -3,17 +3,28 @@
 # template, not tied to any real deck.
 #
 # `master` names the .pptx beside this descriptor; `roles` map razzle's slide roles to the master's
-# layouts (by index) and their placeholders (by idx): `text` fills text placeholders, `picture`
-# places a figure, `logos` lists placeholder boxes for affiliation/funder logos.
-master: master.pptx
-size: "16:9"
+# layouts (by index) and their placeholders (by idx):
+#   text        fills text placeholders. A slot takes the SLIDE's value if it has one, else the
+#               deck-level `furniture` — which is how `venue`, `footer` and `contact` (the same on
+#               every slide, and never the composer's to invent) reach the master's running strips.
+#   picture     places a figure.
+#   logos       one placeholder box per logo — only for a master that HAS logo placeholders.
+#   logo_strip  a row of logos laid out at an explicit box (inches), fitted to its height and
+#               centred. Use this when the count is not known ahead of time: it is the only one of
+#               the two that can show more than one mark, and an affiliation with no registered
+#               logo is set as TEXT in the same row rather than dropped.
 #
-# WATCH THE INDICES: a placeholder's idx is per-LAYOUT. In this example idx13 is the caption strip
-# on layout 1 but the right-hand FIGURE box on layout 2. Copying a role between layouts without
-# re-reading the master is how citation text ends up inside the figure area.
+# WATCH THE INDICES: a placeholder's idx is per-LAYOUT. Here idx13 is the caption strip on layout 1
+# but the right-hand FIGURE box on layout 2. Copying a role between layouts without re-reading the
+# master is how citation text ends up inside the figure area.
+master: master.pptx
+size: "16:9"                     # informational: the master's own dimensions are what render uses
 roles:
-  title:   {layout: 0, text: {title: 0, subtitle: 1}, logos: [14]}
-  figure:  {layout: 1, text: {title: 0, citation: 13}, picture: {figure: 1}}   # citation slot = source ref only
-  content: {layout: 1, text: {title: 0, body: 1}}
+  title:   {layout: 0, text: {title: 0, subtitle: 1, venue: 14},
+            logo_strip: {left: 0.66, top: 5.95, width: 12.67, height: 0.70, gap: 0.30}}
+  figure:  {layout: 1, text: {title: 0, citation: 13, footer: 14, contact: 15},
+            picture: {figure: 1}}                            # citation slot = source ref only
+  content: {layout: 1, text: {title: 0, body: 1, footer: 14, contact: 15}}
   # a point BESIDE its evidence — bullets left, figure right. The workhorse of a results section.
-  split:   {layout: 2, text: {title: 0, body: 1, citation: 14}, picture: {figure: 13}}
+  split:   {layout: 2, text: {title: 0, body: 1, citation: 14, footer: 15, contact: 16},
+            picture: {figure: 13}}

@@ -51,5 +51,6 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
                 fig_paths[fid] = str(png)
 
     out = out or (slides_dir / _naming.major_name(b["short_title"], "pptx", infix="deck"))
-    render.render_deck(spec, desc["master_path"], desc, out, figures=fig_paths, logos=b["logos"])
+    render.render_deck(spec, desc["master_path"], desc, out, figures=fig_paths, logos=b["logos"],
+                       furniture=gather.furniture(root, fmt, spec))
     return {"spec": spec, "pptx": out}
