@@ -150,9 +150,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     # the attended deck session (razzle re-authors the spec addressing the comments, re-renders).
     # Same one-tier shape as design/build.
     "deck": {
-        "deck_session": Step(None, 1.0,
-                             "Re-open the deck session: run `haarpi razzle deck` to address the "
-                             "PowerPoint comments, revise the spec, and re-render the .pptx."),
+        # Unattended: the interview settled every fact a tool must not invent, and the re-rendered
+        # .pptx meets the human again at the redline gate — so there is no decision inside the
+        # authoring pass for anyone to sit through. It runs on the CPU runner rather than the
+        # `claude` resource because that resource has no runner polling it; nothing would execute.
+        "deck_session": Step("haarpi razzle deck --headless", 1.0,
+                             "Re-author the deck spec to address the PowerPoint comments and "
+                             "re-render the .pptx.", resource="cpu"),
     },
 }
 
@@ -680,7 +684,13 @@ def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
 
 # ── queueing ─────────────────────────────────────────────────────────────────
 
-_VENUE_AWARE = re.compile(r"raconteur (outline|draft|paper|package)\b")
+# A verb that writes for one venue gets told which. razzle's venue-analogue is the presentation
+# FORMAT (see razzle.formats), and it names the flag differently — so the flag travels with the
+# pattern rather than being assumed to be `--venue`.
+_VENUE_FLAGS: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"raconteur (outline|draft|paper|package)\b"), "--venue"),
+    (re.compile(r"razzle deck\b"), "--format"),
+)
 
 
 def _venued(command: str | None, venue: str) -> str | None:
@@ -690,9 +700,12 @@ def _venued(command: str | None, venue: str) -> str | None:
     back off the trundlr board a month later, `haarpi raconteur draft --venue jasss` says
     which paper it wrote, and a bare `draft` would not.
     """
-    if not command or not venue or not _VENUE_AWARE.search(command):
+    if not command or not venue:
         return command
-    return f"{command} --venue {venue}"
+    for pattern, flag in _VENUE_FLAGS:
+        if pattern.search(command):
+            return f"{command} {flag} {venue}"
+    return command
 
 
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
@@ -1565,18 +1578,36 @@ _OPENING: dict[str, tuple[str, str, str]] = {
 
 
 def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
-    """Open the deck stage with ONE human task, exactly like `rayleigh design session`: run
-    `haarpi razzle interview`. The interview (pure-python, no LLM) captures the deck facts and then
-    prints the per-format authoring commands to run — haarpi does not create a task per format. The
-    deck stage is tracked by its DELIVERABLE (the `_ra.pptx` that enters the gate), not by bookkeeping
-    tasks for a fork haarpi cannot see, so the board stays the same shape as every other stage."""
-    client.create_task(
+    """Open the deck stage with TWO tasks: the human interview, then the unattended authoring.
+
+    The interview is genuinely interactive — it asks which formats, and per format the venue, date,
+    presenters, logos and funders, none of which a tool may invent — so it stays the human's.
+
+    The authoring that follows is not. Every decision it needs was settled by the interview, and
+    what it produces meets the human again at the redline gate, so nobody needs to sit through it.
+    It is queued as ONE task depending on the interview, and fans out over the configured formats
+    when it RUNS: haarpi still does not create a task per format, because at the moment the board
+    is written the interview has not been held and the formats do not exist yet.
+
+    It runs on the CPU runner. The `claude` resource would describe the work better, but nothing
+    polls that resource, so a task filed there would never execute — the lane has to be one with a
+    runner behind it.
+    """
+    interview = client.create_task(
         "razzle deck: configure", m.trundlr_project_id,
         description="Configure this project's deck(s): run `haarpi razzle interview` — a pure-python "
                     "(no-LLM) session that captures the presentation format(s) and, per format, the "
                     "venue, date, presenting authors, affiliation logos, and funders. It writes the "
-                    "config and prints the `haarpi razzle deck --format <fmt>` command to author each.",
+                    "config; the authoring task behind this one reads it and runs unattended.",
         resource_id=_resource_id(tr_cfg, "human"), duration=0.5)
+    client.create_task(
+        "razzle deck: author", m.trundlr_project_id,
+        command="haarpi razzle deck --all-formats --headless",
+        depends_on_id=(interview or {}).get("id"),
+        description="Author a deck for every format the interview configured, and render each to "
+                    "the branded .pptx. Unattended — the facts were settled in the interview and "
+                    "the rendered deck meets you at the gate.",
+        resource_id=_resource_id(tr_cfg, "cpu"), duration=1.5)
 
 
 def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
@@ -1683,7 +1714,10 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:
     # the run named neither the file it gated nor its place on the ladder.
     deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
-    venue = naming.venue_of(markup, m.short_title) if stage == "paper" else ""
+    # The deck is laid out one folder per format (slides/<fmt>/), so the markup's parent NAMES the
+    # format — which is what a deck rework has to be told, or it re-authors the wrong deliverable.
+    venue = (naming.venue_of(markup, m.short_title) if stage == "paper"
+             else markup.parent.name if stage == "deck" else "")
     check = redline.gate_check(markup)
     rung = _DELIVERABLE_LABEL.get(deliverable, deliverable) if stage == "paper" else stage
     print(f"haarpi next: {stage}" + (f" · {venue}" if venue else "")

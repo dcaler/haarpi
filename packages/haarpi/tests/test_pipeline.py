@@ -496,21 +496,45 @@ def _human_client(tr):
     return trundlr.TrundlrClient(f"http://127.0.0.1:{tr.server_address[1]}")
 
 
-def test_deck_opens_one_configure_task_pointing_at_the_interview(proj, servers):
-    """The deck stage opens with ONE human task (like `rayleigh design session`): run the interview.
-    haarpi never creates a task per format — the deck is tracked by its deliverable, not bookkeeping
-    tasks for a fork it cannot see. Holds whether or not formats are already chosen."""
+def test_deck_opens_a_human_interview_then_an_unattended_authoring_task(proj, servers):
+    """The interview is genuinely interactive and stays the human's. The authoring behind it is
+    not — every fact it needs was settled in the interview — so it is a runner task.
+
+    Still no task PER FORMAT: at the moment the board is written the interview has not been held,
+    so the formats do not exist yet. The one authoring task fans out when it runs.
+    """
     tr, _ = servers
+    cfg = {"human_resource": 1, "cpu_resource": 3}
     for fmts in ([], ["shorttalk", "longtalk"]):
         m = project.load_manifest(proj)
         m.deck_formats = fmts
         before = len(tr.tasks)
-        planner._open_deck(_human_client(tr), m, {"human_resource": 1})
+        planner._open_deck(_human_client(tr), m, cfg)
         new = tr.tasks[before:]
-        assert len(new) == 1                                    # exactly one, regardless of formats
-        assert "configure" in new[0]["title"]
-        assert "razzle interview" in new[0]["description"]      # points at the pure-python interview
-        assert "command" not in new[0]                          # attended (human), not a runner task
+        assert len(new) == 2                                    # two, regardless of how many formats
+
+        configure, author = new
+        assert "configure" in configure["title"]
+        assert "razzle interview" in configure["description"]   # the pure-python interview
+        assert "command" not in configure                       # attended: the human runs it
+        assert configure["resource_ids"] == [1]
+
+        assert "author" in author["title"]
+        assert author["command"] == "haarpi razzle deck --all-formats --headless"
+        assert author["depends_on_id"] == configure["id"]       # cannot run before the config exists
+        # the CPU runner, not the `claude` resource — nothing polls that one, so a task filed
+        # there would sit forever
+        assert author["resource_ids"] == [3]
+
+
+def test_a_deck_rework_is_told_which_format_it_is_re_authoring(proj):
+    """slides/<fmt>/ is the deck's venue-analogue. A rework that is not told the format would
+    re-author whichever deliverable `--format` defaults to."""
+    step = planner.STAGE_STEPS["deck"]["deck_session"]
+    assert not step.human and step.resource == "cpu"
+    assert planner._venued(step.command, "longtalk").endswith("--format longtalk")
+    # raconteur keeps its own flag
+    assert planner._venued("haarpi raconteur draft", "jasss").endswith("--venue jasss")
 
 
 def test_submission_assembled_recognises_built_submissions():
