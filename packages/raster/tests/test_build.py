@@ -1192,7 +1192,9 @@ def test_resolve_project_id_finds_then_creates(monkeypatch):
     monkeypatch.setattr(trundlr, "_api", fake_api)
     assert trundlr.resolve_project_id("http://x", "existing") == (7, False)   # matched, no create
     assert trundlr.resolve_project_id("http://x", "brandnew", folder="/r") == (42, True)
-    assert posted == [{"name": "brandnew", "priority": 1, "folder": "/r"}]
+    # priority follows trundlr's own default band, not a number pinned here
+    assert posted == [{"name": "brandnew", "priority": trundlr.PRIORITY_DEFAULT,
+                       "folder": "/r"}]
     assert trundlr.resolve_project_id("http://x", "missing", create=False) == (None, False)
 
 
