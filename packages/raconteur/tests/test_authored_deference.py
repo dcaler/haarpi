@@ -12,7 +12,7 @@ import json
 from raconteur import guards
 from raconteur import redline_revise as rr
 
-from test_revise_adversary import ScriptedBrain, _call
+from packages.raconteur.tests.test_revise_adversary import ScriptedBrain, _call
 
 AUTHORED = {"⟦a:1⟧": "The author typed this sentence by hand."}
 PARA = "Grounded claim [@smith2020]. ⟦a:1⟧ Third stays."

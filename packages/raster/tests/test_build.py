@@ -3,11 +3,8 @@ pytest helpers, queue linearization, and build/test dry-runs — all offline (no
 Ollama, no trundlr, no git)."""
 
 import sys
-from pathlib import Path
 
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raster import execlib
 from raster.build import resolve_rung, rung_index, start_index

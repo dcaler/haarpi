@@ -1,12 +1,7 @@
 """Scaffolding smoke test — `raster init` builds the expected tree, non-interactively,
 with no git/remote/trundlr side effects."""
 
-import sys
-from pathlib import Path
-
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raster.cli import build_parser, main
 from raster.init import project_name_from_dir, run_init, slugify, render

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from haarpi import planner, project, trundlr
-from test_release_gate import _make_markup
+from packages.haarpi.tests.test_release_gate import _make_markup
 
 
 class FakeTrundlr(BaseHTTPRequestHandler):

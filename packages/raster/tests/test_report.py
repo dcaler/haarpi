@@ -2,12 +2,9 @@
 the command is mechanical (no LLM), so these fabricate a project tree and assert the
 digest faithfully lifts the aim/contracts/goldens and lands in the ra* revision chain."""
 
-import sys
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raster.config import Config
 from raster.report import (build_report, default_report_path, design_sections,

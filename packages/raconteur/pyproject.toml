@@ -25,8 +25,5 @@ raconteur = "raconteur.cli:main"
 [tool.setuptools.packages.find]
 include = ["raconteur*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.uv.sources]
 haarpi = { workspace = true }

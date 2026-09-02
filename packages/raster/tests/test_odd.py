@@ -9,11 +9,7 @@ touch — the evidence gathered mechanically out of the built tree, and the gate
 the whole thing away from projects that are not agent-based models.
 """
 
-import sys
 import textwrap
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raster import odd
 from raster.config import Config

@@ -2,3 +2,21 @@
 # Virtual workspace root: the installable packages live under packages/.
 [tool.uv.workspace]
 members = ["packages/*"]
+
+# One `pytest packages/` run has to collect six packages that each legitimately
+# own a test_cli.py, a test_figures.py, and so on. The default "prepend" import
+# mode names a module by its basename, so the second test_cli.py to be collected
+# collides with the first and the run dies at collection. importlib + namespace
+# packages names each module for its full path instead — packages.raster.tests.
+# test_figures — which is unique by construction, and which also keeps a bare
+# `import test_revise_adversary` from silently resolving to another package's
+# file of that name.
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+consider_namespace_packages = true
+# rootdir on the path, so the two test modules that share a helper can name it
+# absolutely (packages.raconteur.tests.test_revise_adversary). A relative import
+# would resolve only when the parent package happens to be established first,
+# which depends on which subset of the tree is being collected.
+pythonpath = ["."]
+testpaths = ["packages"]
