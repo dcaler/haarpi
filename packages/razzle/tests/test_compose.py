@@ -29,10 +29,48 @@ def test_compose_normalises_a_deck_spec():
                              [{"id": "ladder", "caption": "the ladder"}])
     assert slides[0]["role"] == "title"
     assert slides[1]["role"] == "figure" and slides[1]["figure"] == "ladder"
-    assert slides[1]["citation"] == "[Ref 1]" and "caption" not in slides[1]   # citations-only slot
+    # the citation is DROPPED: `ladder` is our own figure, and the descriptor renders a citation in
+    # the caption strip under it, where a literature reference reads as "this figure is theirs"
+    assert "citation" not in slides[1] and "caption" not in slides[1]
     assert slides[2]["body"] == ["a", "b"]
     assert slides[3]["role"] == "content" and "figure" not in slides[3]   # missing → demoted
     assert all("notes" not in s for s in slides)          # a deck carries no speaker notes
+
+
+def test_a_citation_beside_our_own_figure_is_dropped_but_survives_without_one():
+    """Every id in the figure pool is THIS paper's work, so a citation on a slide showing one
+    misattributes the authors' own result — a live deck shipped `[Schelling 1971]` under our own
+    parameter sweep. A slide with no figure may still cite a source."""
+    reply = json.dumps({"slides": [
+        {"role": "split", "title": "Ours", "figure": "ladder", "bullets": ["a"],
+         "citation": "[Schelling 1971]"},
+        {"role": "content", "title": "Theirs", "bullets": ["b"], "citation": "[Schelling 1971]"}]})
+    slides = compose.compose(_Brain(reply), "n", [{"id": "ladder", "caption": "c"}])
+    assert "citation" not in slides[1]                    # shows our figure
+    assert slides[2]["citation"] == "[Schelling 1971]"     # shows nothing of ours
+
+
+def test_a_bullet_that_only_repeats_the_title_is_dropped():
+    """The title already carries the claim. A bullet whose words are a SUBSET of it spends a line
+    saying nothing; one that adds a word survives."""
+    reply = json.dumps({"slides": [{
+        "role": "content", "title": "Tolerance manipulation enables harmonic modulation",
+        "bullets": ["Tolerance manipulation enables modulation",     # subset — an echo
+                    "Neighbor radii control harmonic motion"]}]})    # adds words — kept
+    slides = compose.compose(_Brain(reply), "n", [])
+    assert slides[1]["body"] == ["Neighbor radii control harmonic motion"]
+
+
+def test_an_illustration_brief_survives_only_where_there_is_nothing_to_show():
+    """A `content` slide may brief the picture it wants. A slide that already shows a figure has
+    no use for one, and the brief would just clutter the notes pane."""
+    reply = json.dumps({"slides": [
+        {"role": "content", "title": "T", "bullets": ["a"], "illustration": "a piano roll"},
+        {"role": "split", "title": "U", "figure": "ladder", "bullets": ["b"],
+         "illustration": "a piano roll"}]})
+    slides = compose.compose(_Brain(reply), "n", [{"id": "ladder", "caption": "c"}])
+    assert slides[1]["illustration"] == "a piano roll"
+    assert "illustration" not in slides[2]
 
 
 def test_notes_never_survive_normalisation():

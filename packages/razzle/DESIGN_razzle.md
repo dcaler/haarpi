@@ -58,9 +58,10 @@ deck always draws on the latest paper.
 3. **The master slide set** — a branded `.pptx` template with named layouts and logo placeholders
    (below). razzle fills it; it does not design slides from scratch.
 4. **Authors + affiliations (+ logos)** — from the manifest's `authors` (name, affiliations) resolved
-   against a shared **affiliation→logo registry**. Builds the title slide and the byline.
+   against a shared **affiliation→logo registry**. Builds the byline on the title slide; the marks
+   themselves go on the acknowledgements slide (the title slide carries no logos).
 5. **Funders (+ logos)** — a per-project `funders` list resolved against a shared **funder→logo
-   registry**. Builds the acknowledgements/funding slide and any title-slide funder strip.
+   registry**. Builds the acknowledgements slide, alongside the affiliation marks.
 
 ## The three asset registries
 
@@ -72,8 +73,9 @@ shared, git-ignored** territory (the same PII-boundary pattern as the style prof
    `<name>.layouts.yaml` descriptor that tells razzle the master's vocabulary: which master layout
    plays each **role** (title, section divider, content, figure-full, figure+caption, two-column,
    acknowledgements, closing) and the **named placeholders** for text, the picture area, and the
-   **logo slots** (author-affiliation logos on the title; funder logos on the ack/title). razzle maps
-   its slide spec onto these roles; the master owns the look.
+   **logo slots** — a `logo_strip` box on the acknowledgements role, which is where every
+   affiliation and funder mark goes. razzle maps its slide spec onto these roles; the master owns
+   the look.
 2. **Affiliation → logo registry** — `~/.config/haarpi/razzle/affiliations.yaml`: affiliation name →
    `{logo: path, display_name?}`. Reused everywhere; a project just names affiliations on its authors.
 3. **Funder → logo registry** — `~/.config/haarpi/razzle/funders.yaml`: funder name →

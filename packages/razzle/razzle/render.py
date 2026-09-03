@@ -12,7 +12,11 @@ A deck spec is a list of slides:
     {"role": "split",   "title": "...", "body": [...], "figure": <figure-id>, "citation": "..."}
     {"role": "content", "title": "...", "body": ["bullet", "bullet"]}
 
-A deck carries no speaker notes — what does not fit on the slide is spoken, not written.
+A deck carries no SPEAKER notes — what does not fit on the slide is spoken, not written. The notes
+pane is used for one other thing entirely: a slide with no figure may carry an `illustration`, a one
+line brief for a picture that does not exist yet. That is a production TODO addressed to whoever
+builds the artwork, not a script addressed to the speaker, which is why it may live there when a
+sentence may not.
 """
 
 from __future__ import annotations
@@ -23,6 +27,14 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
+
+# The running strips (footer/contact/venue) are ONE line in a fixed box, so they are the one place
+# text can overflow silently — the box does not grow and PowerPoint does not wrap what cannot wrap.
+# A long contact address is the standing example: 44 characters into a 3" strip runs off the slide.
+_RUNNING_SLOTS = {"footer", "contact", "venue"}
+_RUNNING_PT = 12.0        # the largest we assume the master sets these at
+_MIN_RUNNING_PT = 8.0     # below this it is not a contact address, it is a smudge
+_ADVANCE = 0.5            # mean glyph advance as a fraction of point size, proportional sans
 
 
 def _clear_slides(prs) -> None:
@@ -46,6 +58,29 @@ def _set_text(ph, value) -> None:
         ph.text = str(value)
 
 
+def _fit_running_text(ph, text: str) -> None:
+    """Shrink a one-line running strip until it fits its box — and only then.
+
+    We cannot measure text without a font stack, so we estimate (mean advance ~0.5 em) and act only
+    when the estimate says it overflows: the master's own styling is left alone in the common case,
+    and the overflow case gets an explicit size rather than a line running off the slide edge.
+    """
+    box_pt = ph.width / 12700 if ph.width else 0
+    need = _ADVANCE * len(text)             # width per point of font size
+    if not (box_pt and need):
+        return
+    fits_at = box_pt / need
+    if fits_at >= _RUNNING_PT:              # the master's size already fits — do not restyle
+        return
+    size = Pt(max(_MIN_RUNNING_PT, round(fits_at, 1)))
+    tf = ph.text_frame
+    tf.word_wrap = False
+    for para in tf.paragraphs:
+        para.font.size = size
+        for run in para.runs:
+            run.font.size = size
+
+
 def _strip_unused(slide, filled_idxs: set) -> None:
     """Remove the master's placeholders this slide didn't fill, so they don't render as "click to
     add text". Only the UNFILLED ones go: a master's footer and contact strips are furniture the
@@ -61,17 +96,36 @@ def _strip_unused(slide, filled_idxs: set) -> None:
         ph._element.getparent().remove(ph._element)
 
 
+def _next_shape_id(slide) -> int:
+    ids = [int(e.get("id")) for e in slide.shapes._spTree.iter(qn("p:cNvPr"))
+           if (e.get("id") or "").isdigit()]
+    return max(ids, default=1) + 1
+
+
 def _add_slide_number(slide, layout) -> None:
     """Give the slide the master's slide-number placeholder.
 
     `add_slide` skips it (latent), so we deep-copy the layout's own <p:sp> onto the slide. It
     carries a <a:fld type="slidenum"> field, so PowerPoint numbers it live and the number stays
     right when slides are reordered — which a literal string would not.
+
+    The copy arrives carrying the LAYOUT's shape id, which collides with a shape already on the
+    slide (a split slide ends up with two shapes numbered 7). Shape ids must be unique within a
+    slide's spTree, so the clone is renumbered before it is appended.
     """
     for ph in layout.placeholders:
         if ph.element.ph_type == "sldNum" or "SLIDE_NUMBER" in str(ph.placeholder_format.type):
-            slide.shapes._spTree.append(copy.deepcopy(ph._element))
+            el = copy.deepcopy(ph._element)
+            for cnv in el.iter(qn("p:cNvPr")):
+                cnv.set("id", str(_next_shape_id(slide)))
+            slide.shapes._spTree.append(el)
             return
+
+
+def _set_illustration_note(slide, brief: str) -> None:
+    """The ONE thing the notes pane carries: a brief for a picture this slide wants and does not
+    have. Nothing a speaker would read aloud ever goes here."""
+    slide.notes_slide.notes_text_frame.text = f"ILLUSTRATION: {brief}"
 
 
 def _place_picture(slide, ph, img: Path) -> None:
@@ -148,6 +202,9 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
     same on every slide and so is NOT in the spec: the composer never sees it and cannot invent it.
     A text slot takes the slide's own value first and falls back to the furniture.
 
+    A slide with an `illustration` and no figure gets that brief in its notes pane — the only thing
+    notes ever hold. The opening slide carries no page number, as a title page never does.
+
     A missing figure or logo is simply skipped (the box stays empty) — never a crash.
     """
     prs = Presentation(str(master))
@@ -168,6 +225,8 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
             val = slide.get(slot) or furniture.get(slot)     # the slide's own, else the deck's
             if val and idx in phs:
                 _set_text(phs[idx], val)
+                if slot in _RUNNING_SLOTS and isinstance(val, str):
+                    _fit_running_text(phs[idx], val)
                 filled.add(idx)
         for slot, idx in (rdef.get("picture") or {}).items():
             img = figures.get(slide.get(slot))
@@ -181,6 +240,9 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
         _strip_unused(s, filled)      # drop the empty master placeholders this slide didn't use
         if rdef.get("logo_strip"):    # after the strip, so it is not swept up as unfilled
             _place_logo_strip(s, rdef["logo_strip"], items)
-        _add_slide_number(s, layout)
+        if slide.get("illustration") and not slide.get("figure"):
+            _set_illustration_note(s, str(slide["illustration"]))
+        if slide.get("role") != "title":   # the opening slide is never numbered
+            _add_slide_number(s, layout)
     prs.save(str(out_path))
     return out_path

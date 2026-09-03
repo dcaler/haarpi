@@ -3,6 +3,7 @@
  - narrative: raconteur's one-pager (the talk's spine) — the gate-minted release, else the newest draft;
  - figures: the shared figure pool (haarpi.figure), by id + caption;
  - claims: rayleigh's findings.json — each experiment's observed `finding` (the real numbers, verbatim);
+ - title: the PAPER's title — the talk is the paper, so its name is not the composer's to invent;
  - logos: the author affiliations + project funders, resolved to logo files via the neutral registries;
  - byline: every author, in authorship order — with ONE contact address, the presenter's.
 
@@ -12,6 +13,7 @@ Everything is best-effort: an absent one-pager / findings / manifest yields "" o
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from haarpi import figure as _figure
@@ -61,6 +63,33 @@ def manuscript(root: Path, short: str, venue: str = "") -> str:
         return _ctx.load_manuscript(root, short, venue) or ""
     except Exception:
         return ""
+
+
+def paper_title(manuscript_md: str) -> str:
+    """The paper's title: the manuscript's first level-1 heading.
+
+    A talk IS the paper, so the title slide carries the paper's name. Left to the composer it
+    invents one — a live deck went out titled "Local Preferences Generate Emergent Tonal Clusters"
+    for a paper called "A New Sense of Schelling Segregation" — and the invented title then
+    propagated into the running footer on every slide after it. It is a fact, so it is read, not
+    written.
+    """
+    for line in (manuscript_md or "").splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return re.sub(r"\s+", " ", line[2:]).strip()
+        if line.startswith("#"):        # a deeper heading first means there is no title heading
+            break
+    return ""
+
+
+def talk_title(root: Path, fmt: str | None = None, manuscript_md: str | None = None) -> str:
+    """The title this deck opens on: the paper's, else the project's short title. `manuscript_md`
+    lets a caller that has already loaded the manuscript hand it in rather than read it twice."""
+    if manuscript_md is None:
+        short = short_title(root)
+        manuscript_md = manuscript(root, short, _venue_folder(root, deck_config(root, fmt)))
+    return paper_title(manuscript_md) or short_title(root)
 
 
 def figures(root: Path, short: str) -> list[dict]:
@@ -224,14 +253,51 @@ def apply_byline(spec: list[dict], line: str, email: str = "") -> list[dict]:
     return spec
 
 
+def apply_title(spec: list[dict], title: str) -> list[dict]:
+    """Stamp the PAPER's title onto the title slide. Must run before `furniture`, which builds the
+    running footer out of `spec[0]["title"]` — otherwise an invented title propagates onto every
+    slide in the deck."""
+    if spec and spec[0].get("role") == "title" and title:
+        spec[0]["title"] = title
+    return spec
+
+
+def acknowledgements(root: Path, fmt: str | None = None) -> dict:
+    """The closing slide, built from facts: the funders to thank in text, and the affiliation +
+    funder marks in the logo strip.
+
+    This is where the logos belong. The title slide was showing them, squeezed into a band under
+    the byline where two 0.7" marks were all that fit — and a title slide's job is the title, the
+    authors and the venue. Acknowledgement is its own slide because acknowledging is its own act.
+    """
+    cfg = deck_config(root, fmt)
+    funders = [f for f in (cfg.get("funders") or []) if str(f).strip()]
+    slide: dict = {"role": "acknowledgements", "title": "Acknowledgements"}
+    if funders:
+        slide["body"] = [f"Supported by {f}" for f in funders]
+    return slide
+
+
+def apply_acknowledgements(spec: list[dict], slide: dict) -> list[dict]:
+    """Put the acknowledgements slide last, exactly once.
+
+    Idempotent by construction: any existing acknowledgements slide is removed first, so
+    re-rendering an edited `spec.json` refreshes it instead of stacking a second one.
+    """
+    out = [s for s in spec if s.get("role") != "acknowledgements"]
+    out.append(slide)
+    return out
+
+
 def bundle(root: Path, fmt: str | None = None) -> dict:
     """Everything compose + render need from a project, in one call. `fmt` scopes the logos/byline/
     venue/date to that format's deck config when the interview has set one."""
     short = short_title(root)
     cfg = deck_config(root, fmt)
     venue = _venue_folder(root, cfg)
+    ms = manuscript(root, short, venue)
     return {"short_title": short, "narrative": narrative(root, short),
-            "manuscript": manuscript(root, short, venue),
+            "manuscript": ms, "title": paper_title(ms) or short,
             "figures": figures(root, short), "claims": claims(root),
             "logos": logo_entries(root, fmt), "byline": byline(root),
             "email": presenter_email(root, fmt),

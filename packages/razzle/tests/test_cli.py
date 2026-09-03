@@ -43,7 +43,11 @@ def test_render_builds_pptx_from_a_spec(tmp_path):
     from pptx import Presentation
     from haarpi import naming
     pptx = fmt_dir / naming.major_name("demo", "pptx", infix="deck")   # {date}_demo_deck_ra.pptx
-    assert pptx.is_file() and len(Presentation(str(pptx)).slides) == 2
+    prs = Presentation(str(pptx))
+    # 2 authored + the acknowledgements slide razzle appends itself
+    assert pptx.is_file() and len(prs.slides) == 3
+    assert any("Acknowledgements" in (sh.text_frame.text if sh.has_text_frame else "")
+               for sh in prs.slides[-1].shapes)
 
 
 def test_render_without_a_spec_errors(tmp_path):

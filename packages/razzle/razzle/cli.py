@@ -31,15 +31,20 @@ DECK_PROMPT = (
     "read them: the one-pager is the talk's SPINE (re-present it, do not re-argue), the figure pool "
     "(reference figures by id), and the real claims/numbers (use verbatim; never invent one). Write "
     "the deck spec to slides/{fmt}/spec.json — a JSON list of slides, each {{role: title|figure|"
-    "split|content, title, subtitle?, body?, figure?<id>, citation?}}: open on a title slide, one "
-    "idea per slide. A title is the slide's CLAIM in <=9 words, not its topic. At most 3 bullets, "
-    "<=9 words each, fragments not sentences. Prefer `split` (a point beside its figure) and "
-    "`figure` over `content`, and use every figure at least once — a slide that can show something "
-    "shows it. NO speaker notes: what does not fit is spoken. A figure slide's MESSAGE is its "
-    "title (no prose caption); `citation` is a bare source ref only. Bullets go under `body` (a JSON "
-    "array of strings) — that is the key the renderer reads. Write ONLY that one file and then "
-    "stop: razzle renders it itself, so do not run any render command. Start by reading the "
-    "one-pager."
+    "split|content, title, subtitle?, body?, figure?<id>, citation?, illustration?}}: open on a "
+    "title slide, one idea per slide. A title is the slide's CLAIM in <=9 words, not its topic, in "
+    "sentence case. At most 3 bullets, <=9 words each, fragments not sentences, and never one that "
+    "only repeats the title. Prefer `split` (a point beside its figure) and `figure` over "
+    "`content`, and use every figure at least once — a slide that can show something shows it. At "
+    "least one results slide must state a real number from the claims verbatim. Every figure in "
+    "the pool is THIS paper's own work, so a slide showing one carries NO `citation` — that would "
+    "misattribute our own result; cite only on a slide with no figure, as a bare source ref. NO "
+    "speaker notes: what does not fit is spoken. A `content` slide may instead carry "
+    "`illustration` — one line briefing a picture that does not exist yet, for whoever draws it. "
+    "Do not write a title slide title, a byline or an acknowledgements slide: razzle stamps those "
+    "from the paper and the deck config. Bullets go under `body` (a JSON array of strings) — that "
+    "is the key the renderer reads. Write ONLY that one file and then stop: razzle renders it "
+    "itself, so do not run any render command. Start by reading the one-pager."
 )
 
 
@@ -75,8 +80,11 @@ def run_render(args) -> int:
     # every rule in compose.py applied only to a path nothing calls.
     raw = json.loads(spec_path.read_text(encoding="utf-8"))
     spec = compose.normalise(raw, {f["id"] for f in gather.figures(root, short)})
-    # every author is credited; one contact address, the presenter's — facts, not the LLM's
+    # the facts, re-stamped on every render: the paper's title (before the footer is built from
+    # it), every author with one contact address, and the closing acknowledgements
+    gather.apply_title(spec, gather.talk_title(root, fmt))
     gather.apply_byline(spec, gather.byline(root), gather.presenter_email(root, fmt))
+    spec = gather.apply_acknowledgements(spec, gather.acknowledgements(root, fmt))
     # The `_ra` chain draft — the author reviews it in place; `haarpi next` mints it (the format is
     # carried by the folder, so the filename infix is just `deck`).
     out = gather.deck_dir(root, fmt) / _naming.major_name(short, "pptx", infix="deck")

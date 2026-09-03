@@ -33,9 +33,12 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
     b = bundle if bundle is not None else gather.bundle(root, fmt)
     spec = compose.compose(brain, b["narrative"], b["figures"], b["claims"],
                            manuscript=b.get("manuscript", ""), fmt=fmt)
-    # every author is credited; exactly one contact address, the presenter's — both facts,
-    # not the LLM's to guess
+    # The facts the composer does not get to write: the paper's title, every author credited with
+    # exactly one contact address, and the closing acknowledgements. The title goes on FIRST — the
+    # running footer is built from it below.
+    gather.apply_title(spec, b.get("title", ""))
     gather.apply_byline(spec, b["byline"], b["email"])
+    spec = gather.apply_acknowledgements(spec, gather.acknowledgements(root, fmt))
 
     slides_dir = gather.deck_dir(root, fmt)
     slides_dir.mkdir(parents=True, exist_ok=True)

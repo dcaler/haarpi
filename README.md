@@ -252,14 +252,34 @@ A slide here is a projected image with a claim over it, not a document, and the
 budgets are enforced rather than suggested: a title is the slide's claim in nine
 words or fewer, a slide carries at most three bullets of at most nine words, and
 there are **no speaker notes** — what will not fit is spoken, not written down.
-Slides come in four roles, and `split` (a point beside its figure) is the
-workhorse, because a deck goes text-heavy when a slide can show evidence *or*
-make a point but never both. Every author is credited on the title slide;
-exactly one contact address appears, the presenter's.
+Slides come in four authored roles, and `split` (a point beside its figure) is
+the workhorse, because a deck goes text-heavy when a slide can show evidence
+*or* make a point but never both.
+
+The notes pane has exactly one use, and it is not speech. A talk always has more
+slides than the paper has figures, so a slide with nothing to show may carry an
+**illustration** brief instead: one line describing the picture it wants,
+rendered into the notes as a production TODO for whoever draws it. A request for
+art, not a script.
+
+What the composer is not allowed to write, razzle stamps: the **paper's title**
+on the title slide (a talk is the paper, so its name is read, not invented — and
+the footer is built from it), every **author** credited with exactly one contact
+address, the presenter's, and a closing **acknowledgements** slide carrying the
+affiliation and funder marks. That last is where the logos live — a title
+slide's job is the title, the authors and the venue — and the title slide alone
+carries no page number.
+
+Two things are dropped rather than trusted to a prompt. A **citation beside one
+of our own figures** goes: every figure in the pool is this paper's work, and a
+literature reference in the caption strip under it reads as *this figure is
+theirs*. And a **bullet whose words are a subset of the title** goes: the title
+already made the claim, so the bullet spends a line saying nothing.
 
 The deck's running text — venue and date, the footer, the contact — is
 deck-level, so it never enters the spec: the composer cannot invent a venue it
-was never shown.
+was never shown. A running strip is one line in a fixed box, so it is shrunk to
+fit when it would otherwise run off the slide.
 
 ## The shared core
 
