@@ -36,6 +36,10 @@ _ROLES = {"title", "figure", "split", "content", "acknowledgements"}
 MAX_BULLETS = 3          # per slide; more than this is a document, not a slide
 MAX_BULLET_WORDS = 9     # a fragment, not a sentence
 MAX_TITLE_WORDS = 9      # the claim, stated once
+MAX_TITLE_CHARS = 48     # what actually fits the one-line title box; words do not predict width.
+                         # Every title in a live deck was inside the 9-word budget and the one at
+                         # 54 characters wrapped, grew upward out of a bottom-anchored box, and
+                         # was clipped by the top of the slide.
 
 _SYS = ("You turn a finished paper into a conference slide deck. You output JSON only — never prose. "
         "The narrative is the talk's spine: re-present it, don't re-argue. Ground every slide in the "
@@ -70,7 +74,8 @@ Output ONLY JSON:
 
 HOW TO BUILD IT — these are budgets, not suggestions. A slide that breaks them is a worse slide.
 
-TITLE — at most {max_title_words} words, and it states the slide's CLAIM, not its topic.
+TITLE — at most {max_title_words} words AND at most {max_title_chars} characters, and it states
+the slide's CLAIM, not its topic. The character limit is the hard one: it is the width of the box.
   "Three regimes: freeze, settle, churn"          <- a claim; the audience learns something
   "Results of the parameter sweep"                <- a topic; says nothing, wastes the line
   Write it as the sentence you would say out loud if you could only say one.
@@ -86,12 +91,14 @@ SHOW, DON'T LIST — prefer `split` (a point beside its figure) and `figure` (th
 slide) over `content`. Use `content` only where there is genuinely nothing to show: a definition,
 a contribution list, the closing claim. Every figure in AVAILABLE FIGURES must appear on at least
 one slide, and a figure may be shown more than once when the talk returns to it to make a new
-point — that is a normal move in a talk, not repetition.
+point — that is a normal move in a talk, not repetition. Never on two slides in a row, though:
+back to back it reads as a stutter, not a return.
 
 ARC — open with ONE title slide, then motivation -> question -> approach -> results -> takeaway,
 following the spine. One idea per slide. Never a number that is not in the claims.
 
-NUMBERS — the talk's results slides carry the real ones. At least one slide must state a figure
+NUMBERS — write signs as symbols, never as words: "+0.176", "-0.04", never "plus 0.176" or
+"negative 0.04". The talk's results slides carry the real ones. At least one slide must state a figure
 from KEY CLAIMS verbatim ("advantage +0.176 in the band", "mean -0.04 across the sweep"). A
 results slide that says only "positive inside the band" has thrown away the finding. Never a
 number that is not in KEY CLAIMS.
@@ -126,6 +133,20 @@ def _parse(reply: str) -> dict:
 
 def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", str(text).lower())
+
+
+_SIGN = re.compile(r"\b(plus|minus|negative)\s+(?=[.\d])", re.I)
+
+
+def _signs(text: str) -> str:
+    """`plus 0.176` -> `+0.176`, `negative 0.04` -> `-0.04`.
+
+    The prompt hands the model the claims already written as "+0.176" and asks for them verbatim,
+    and the model spells the sign out anyway. On a slide read from the back of a room a word where
+    a symbol belongs costs a beat of reading for nothing, so the symbol is restored here rather
+    than asked for a third time. Only before a number, so "plus a second baseline" is untouched.
+    """
+    return _SIGN.sub(lambda m: "+" if m.group(1).lower() == "plus" else "-", str(text))
 
 
 def _drop_echoed_bullets(slide: dict) -> None:
@@ -187,6 +208,12 @@ def normalise(slides, figure_ids: set[str]) -> list[dict]:
             if s.get("figure") in figure_ids:
                 slide["figure"] = s["figure"]
                 slide.pop("citation", None)     # our own figure: a citation misattributes it
+                # A `figure` role has no body slot — its content placeholder IS the picture — so
+                # bullets written onto one are dropped by the renderer without a word. A live deck
+                # lost three findings that way ("distance ranged 0.275 to 0.65" among them). The
+                # slide the model meant is `split`: the point beside its evidence.
+                if slide["role"] == "figure" and slide.get("body"):
+                    slide["role"] = "split"
             else:
                 # a figure we don't have: `split` keeps its bullets and becomes a plain slide;
                 # a bare `figure` slide has nothing left but its title, which is still a claim
@@ -194,6 +221,17 @@ def normalise(slides, figure_ids: set[str]) -> list[dict]:
         if slide.get("figure"):
             slide.pop("illustration", None)     # it already shows something
         _drop_echoed_bullets(slide)
+        slide["title"] = _signs(slide["title"])
+        if slide.get("body"):
+            slide["body"] = [_signs(b) for b in slide["body"]]
+        # ONE title slide, the opening one. Asked for a closing slide the model reaches for the
+        # title role again ("Local preferences shape emergent sound / Thank you"), which renders on
+        # the opening layout, carries the venue line a second time, and duplicates the
+        # acknowledgements slide razzle appends after it. Its claim is worth keeping; the role is
+        # not, so it lands as the takeaway slide it was meant to be.
+        if slide["role"] == "title" and out:
+            slide["role"] = "content"
+            slide.pop("subtitle", None)
         out.append(slide)
     if not out or out[0]["role"] != "title":       # a talk always opens on a title slide
         out.insert(0, {"role": "title", "title": (out[0]["title"] if out else "Untitled talk")})
@@ -214,8 +252,13 @@ def compose(brain, narrative: str, figures: list[dict], claims: str = "", *,
     reply = brain.coordinator(
         _PROMPT.format(fmt=fmt, mins=(f" (~{mins} minutes)" if mins else ""), max_slides=budget,
                        max_bullets=MAX_BULLETS, max_bullet_words=MAX_BULLET_WORDS,
-                       max_title_words=MAX_TITLE_WORDS,
+                       max_title_words=MAX_TITLE_WORDS, max_title_chars=MAX_TITLE_CHARS,
                        narrative=(narrative or "")[:6000],
                        manuscript=(manuscript or "(not available — compose from the spine)")[:9000],
-                       figures=fig_lines, claims=(claims or "(none provided)")[:4000]), _SYS)
+                       figures=fig_lines, claims=(claims or "(none provided)")[:4000]), _SYS,
+        # A deck spec is a fill-in-the-blanks JSON from a fixed prompt, not the judgement work the
+        # coordinator's reasoning default is there for. Left on, a 27b reasoning model spent 58m55s
+        # of a 68m26s run on 21,579 characters of scratchpad before its first output token, to emit
+        # 3,778 characters of spec — 86% of the wall clock, on a GPU another stage is waiting for.
+        think=False)
     return normalise(_parse(reply).get("slides", []), ids)[:budget]

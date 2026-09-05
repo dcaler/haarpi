@@ -164,3 +164,54 @@ def test_normalise_accepts_a_hand_authored_spec_that_uses_body():
                                  "body": ["a", "b", "c", "d"], "notes": "an essay"}], set())
     assert slides[1]["body"] == ["a", "b", "c"][:compose.MAX_BULLETS]
     assert "notes" not in slides[1]
+
+
+def test_a_figure_slide_with_bullets_becomes_a_split(tmp_path=None):
+    """The `figure` role has no body slot — its content placeholder IS the picture — so bullets
+    written onto one were dropped by the renderer without a word. A live deck lost three findings
+    that way. The slide the model meant is `split`: the point beside its evidence."""
+    out = compose.normalise([{"role": "figure", "title": "T", "figure": "f1",
+                              "bullets": ["distance ranged 0.275 to 0.65"]}], {"f1"})
+    assert out[-1]["role"] == "split"
+    assert out[-1]["body"] == ["distance ranged 0.275 to 0.65"]
+    # a figure slide with nothing but its title stays a figure slide
+    bare = compose.normalise([{"role": "figure", "title": "T", "figure": "f1"}], {"f1"})
+    assert bare[-1]["role"] == "figure"
+
+
+def test_only_the_opening_slide_keeps_the_title_role():
+    """Asked for a closing slide the model reaches for the title role again, which renders on the
+    opening layout, repeats the venue line, drops out of the numbering and duplicates the
+    acknowledgements slide razzle appends after it. The claim is kept; the role is not."""
+    out = compose.normalise([{"role": "title", "title": "A talk", "subtitle": "Ada"},
+                             {"role": "content", "title": "Middle", "bullets": ["x"]},
+                             {"role": "title", "title": "Local preferences shape emergent sound",
+                              "subtitle": "Thank you"}], set())
+    assert [s["role"] for s in out] == ["title", "content", "content"]
+    assert out[-1]["title"] == "Local preferences shape emergent sound"
+    assert "subtitle" not in out[-1]
+    assert out[0]["subtitle"] == "Ada"       # the opening slide keeps its byline
+
+
+def test_a_spelled_out_sign_becomes_a_symbol():
+    """The prompt hands the claims over already written as "+0.176" and asks for them verbatim; the
+    model spelled the sign out anyway. On a slide read from the back of a room that costs a beat."""
+    out = compose.normalise([{"role": "content", "title": "Advantage plus 0.176 in the band",
+                              "bullets": ["Mean negative 0.04 across the sweep",
+                                          "plus a second baseline"]}], set())
+    assert out[-1]["title"] == "Advantage +0.176 in the band"
+    assert out[-1]["body"] == ["Mean -0.04 across the sweep", "plus a second baseline"]
+
+
+def test_the_composer_is_not_asked_to_reason():
+    """A deck spec is a fill-in-the-blanks JSON from a fixed prompt, not judgement work. Left on,
+    a 27b reasoning model spent 58m55s of a 68m26s run before its first output token."""
+    seen = {}
+
+    class _B:
+        def coordinator(self, prompt, system="", **kw):
+            seen.update(kw)
+            return '{"slides": [{"role": "title", "title": "T"}]}'
+
+    compose.compose(_B(), "spine", [])
+    assert seen.get("think") is False

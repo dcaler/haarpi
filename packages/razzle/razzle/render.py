@@ -22,6 +22,7 @@ sentence may not.
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 
 from pptx import Presentation
@@ -31,10 +32,23 @@ from pptx.util import Inches, Pt
 # The running strips (footer/contact/venue) are ONE line in a fixed box, so they are the one place
 # text can overflow silently — the box does not grow and PowerPoint does not wrap what cannot wrap.
 # A long contact address is the standing example: 44 characters into a 3" strip runs off the slide.
+#
+# They are also ONE strip, read as one line, so they get ONE size. The first attempt shrank each
+# box's text on its own against an ASSUMED 12pt master, and this master sets them at 22 — so the
+# address came out at 9.8pt beside a 22pt footer, a smudge next to its own neighbour. The size is
+# now read from the master and shared, and it is the BOXES that move: the contact keeps its right
+# edge and grows leftward into the footer's slack, since a footer reading "venue | short title" is
+# nowhere near its 9.5 inches. Only when the whole strip still will not fit does the size drop, and
+# then it drops for every member at once so they stay a matched pair.
 _RUNNING_SLOTS = {"footer", "contact", "venue"}
-_RUNNING_PT = 12.0        # the largest we assume the master sets these at
-_MIN_RUNNING_PT = 8.0     # below this it is not a contact address, it is a smudge
-_ADVANCE = 0.5            # mean glyph advance as a fraction of point size, proportional sans
+_STRIP_SLOTS = ("footer", "contact")   # the bottom strip, laid out together, left to right
+_MIN_RUNNING_PT = 11.0    # below this it is not a contact address, it is a smudge
+_STRIP_GAP = Inches(0.25)  # the least air between the footer and the address
+_MIN_TITLE_PT = 20.0      # a title smaller than this is not a title, it is a caption
+_DEFAULT_PT = 18.0        # only when a master declares no size of its own
+_ADVANCE = 0.55           # mean glyph advance as a fraction of point size, proportional sans;
+                          # measured 0.53 on this master's footer, rounded up so the estimate errs
+                          # toward a box that is too wide rather than text that is too long
 
 
 def _clear_slides(prs) -> None:
@@ -58,27 +72,114 @@ def _set_text(ph, value) -> None:
         ph.text = str(value)
 
 
-def _fit_running_text(ph, text: str) -> None:
-    """Shrink a one-line running strip until it fits its box — and only then.
+def _layout_pt(layout, idx: int, default: float) -> float:
+    """The size the MASTER sets for this placeholder, in points.
 
-    We cannot measure text without a font stack, so we estimate (mean advance ~0.5 em) and act only
-    when the estimate says it overflows: the master's own styling is left alone in the common case,
-    and the overflow case gets an explicit size rather than a line running off the slide edge.
+    Read, never assumed. A slide placeholder cloned by `add_slide` carries no size of its own — it
+    inherits the layout's `a:lvl1pPr/a:defRPr/@sz` — so anything that reasons about the rendered
+    size has to look there. Assuming a number instead is what put a 9.8pt address next to a 22pt
+    footer on a master that sets both at 22.
     """
-    box_pt = ph.width / 12700 if ph.width else 0
-    need = _ADVANCE * len(text)             # width per point of font size
-    if not (box_pt and need):
-        return
-    fits_at = box_pt / need
-    if fits_at >= _RUNNING_PT:              # the master's size already fits — do not restyle
-        return
-    size = Pt(max(_MIN_RUNNING_PT, round(fits_at, 1)))
+    for ph in layout.placeholders:
+        if ph.placeholder_format.idx == idx:
+            lvl1 = ph._element.find(".//" + qn("a:lstStyle") + "/" + qn("a:lvl1pPr"))
+            d = lvl1.find(qn("a:defRPr")) if lvl1 is not None else None
+            if d is not None and d.get("sz"):
+                return int(d.get("sz")) / 100
+    return default
+
+
+def _usable_pt(ph) -> float:
+    """The placeholder's inner width in points — the box less its own left/right insets.
+
+    The insets are 0.1" a side on this master: 14.4pt of the budget, which is the difference
+    between an address that fits and one the renderer wraps onto a second line.
+    """
+    tf = ph.text_frame
+    return max(0.0, (ph.width - (tf.margin_left or 0) - (tf.margin_right or 0)) / 12700)
+
+
+def _need_pt(text: str, size: float) -> float:
+    """Estimated rendered width of one line, in points. No font stack here to measure with, so
+    this is an estimate — deliberately a generous one (see `_ADVANCE`)."""
+    return _ADVANCE * len(text) * size
+
+
+def _set_size(ph, size: float) -> None:
     tf = ph.text_frame
     tf.word_wrap = False
     for para in tf.paragraphs:
-        para.font.size = size
+        para.font.size = Pt(size)
         for run in para.runs:
-            run.font.size = size
+            run.font.size = Pt(size)
+
+
+def _fit_running_text(ph, text: str, size: float) -> None:
+    """A lone running strip (the title slide's venue line): shrink only if it overflows its box."""
+    box, need = _usable_pt(ph), _need_pt(text, size)
+    if not (box and need):
+        return
+    if need > box:
+        size = max(_MIN_RUNNING_PT, round(size * box / need, 1))
+    _set_size(ph, size)
+
+
+def _fit_strip(members: list[tuple], size: float) -> None:
+    """Lay out the bottom strip — footer then contact — as ONE line at ONE size.
+
+    `members` is [(placeholder, text)] in left-to-right order. Each box is re-cut to what its own
+    text needs: the last member keeps its right edge and grows leftward, the ones before it start
+    at their own left edge and take what is left. The size drops only when the strip as a whole
+    will not fit, and then it drops for everyone, so the footer and the address are never rendered
+    at two different sizes beside each other.
+    """
+    members = [(ph, t) for ph, t in members if ph is not None and t]
+    if not members:
+        return
+    inset = sum(m[0].width - int(_usable_pt(m[0]) * 12700) for m in members)
+    span = members[-1][0].left + members[-1][0].width - members[0][0].left
+    room = span - inset - _STRIP_GAP * (len(members) - 1)
+    chars = _ADVANCE * sum(len(t) for _, t in members)
+    if chars > 0 and room > 0:
+        size = min(size, max(_MIN_RUNNING_PT, round(room / 12700 / chars, 1)))
+    # The last member is right-aligned to the strip's fixed right edge and grows leftward into the
+    # slack; everyone before it keeps their own left edge and takes what remains.
+    def _wants(ph, text) -> int:
+        # ceil, not truncate: a box a hair narrower than the line it holds wraps the line, and the
+        # whole point of moving the box was to keep the address on one of them.
+        return math.ceil(_need_pt(text, size) * 12700) + (ph.width - int(_usable_pt(ph) * 12700))
+
+    def _place(ph, left: int, width: int) -> None:
+        """Re-cut the box, writing ALL FOUR values.
+
+        A placeholder inherits its geometry from the layout and carries no `a:xfrm` of its own.
+        Setting one dimension materialises that element with the other three at zero — the address
+        was re-cut to the right width and landed at the top of the slide with no height at all.
+        """
+        top, height = ph.top, ph.height          # read the inherited values BEFORE writing any
+        ph.left, ph.width, ph.top, ph.height = left, width, top, height
+
+    edge = members[-1][0].left + members[-1][0].width
+    last, last_text = members[-1]
+    _set_size(last, size)
+    width = min(max(_wants(last, last_text), last.width), edge - members[0][0].left)
+    _place(last, edge - width, width)
+    for ph, text in members[:-1]:
+        _set_size(ph, size)
+        _place(ph, ph.left, max(0, min(_wants(ph, text), last.left - _STRIP_GAP - ph.left)))
+
+
+def _fit_title(ph, text: str, size: float) -> None:
+    """Shrink an over-long title until it fits its box on one line.
+
+    The title box is one line tall and anchored to its bottom, so a title that wraps grows UPWARD
+    and the first line is clipped by the top of the slide — the audience reads the bottom half of
+    the letters. `compose` budgets titles in characters to stop this at the source; this is the
+    backstop for the one that still arrives too long.
+    """
+    box, need = _usable_pt(ph), _need_pt(text, size)
+    if box and need > box:
+        _set_size(ph, max(_MIN_TITLE_PT, round(size * box / need, 1)))
 
 
 def _strip_unused(slide, filled_idxs: set) -> None:
@@ -118,6 +219,15 @@ def _add_slide_number(slide, layout) -> None:
             el = copy.deepcopy(ph._element)
             for cnv in el.iter(qn("p:cNvPr")):
                 cnv.set("id", str(_next_shape_id(slide)))
+            # The box is half an inch wide with a tenth of an inch of inset each side, leaving
+            # 21pt for the number. One digit sat in it comfortably; two wrapped, so every slide
+            # from ten on showed its number stacked with the second digit hanging off the bottom
+            # of the slide. The insets buy a page number nothing, so they go — that is 36pt of
+            # room in the same box, and the renderer is told not to wrap in it either.
+            for body in el.iter(qn("a:bodyPr")):
+                body.set("wrap", "none")
+                body.set("lIns", "0")
+                body.set("rIns", "0")
             slide.shapes._spTree.append(el)
             return
 
@@ -213,21 +323,31 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
     figures = figures or {}
     furniture = furniture or {}
     items = _logo_items(logos)
-    for slide in spec:
+    for n, slide in enumerate(spec):
         rdef = roles.get(slide.get("role", "figure"))
         if rdef is None:
             continue
         layout = prs.slide_layouts[rdef["layout"]]
         s = prs.slides.add_slide(layout)
         phs = {ph.placeholder_format.idx: ph for ph in s.placeholders}
+        text_slots = rdef.get("text") or {}
         filled: set = set()
-        for slot, idx in (rdef.get("text") or {}).items():
+        strip: list[tuple] = []
+        for slot, idx in text_slots.items():
             val = slide.get(slot) or furniture.get(slot)     # the slide's own, else the deck's
             if val and idx in phs:
                 _set_text(phs[idx], val)
-                if slot in _RUNNING_SLOTS and isinstance(val, str):
-                    _fit_running_text(phs[idx], val)
+                size = _layout_pt(layout, idx, _DEFAULT_PT)
+                if slot in _STRIP_SLOTS and isinstance(val, str):
+                    strip.append((slot, phs[idx], val, size))
+                elif slot in _RUNNING_SLOTS and isinstance(val, str):
+                    _fit_running_text(phs[idx], val, size)
+                elif slot == "title" and isinstance(val, str):
+                    _fit_title(phs[idx], val, size)
                 filled.add(idx)
+        if strip:      # footer and contact are one line and take one size — see _fit_strip
+            strip.sort(key=lambda m: _STRIP_SLOTS.index(m[0]))
+            _fit_strip([(ph, val) for _, ph, val, _ in strip], min(m[3] for m in strip))
         for slot, idx in (rdef.get("picture") or {}).items():
             img = figures.get(slide.get(slot))
             if img and idx in phs:
@@ -242,7 +362,9 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
             _place_logo_strip(s, rdef["logo_strip"], items)
         if slide.get("illustration") and not slide.get("figure"):
             _set_illustration_note(s, str(slide["illustration"]))
-        if slide.get("role") != "title":   # the opening slide is never numbered
+        if n:      # the OPENING slide is never numbered — by position, not by role. Keying on
+                   # the role dropped the number from a closing "thank you" slide the composer
+                   # had also written as a title, so the deck skipped from 12 to 14.
             _add_slide_number(s, layout)
     prs.save(str(out_path))
     return out_path

@@ -32,6 +32,7 @@ def test_interview_writes_deck_config(tmp_path, monkeypatch):
         "2",              # formats: shorttalk (longtalk/shorttalk/lecture/poster → 2)
         "ISMIR 2026",     # venue
         "2026-11-01",     # date
+        "Short Talk",     # short title for the running footer
         "",               # presenting authors: Enter = all
         "y",              # include UC Berkeley logo
         "n",              # skip Cambridge logo
@@ -43,7 +44,7 @@ def test_interview_writes_deck_config(tmp_path, monkeypatch):
     m = project.load_manifest(root)
     assert m.deck_formats == ["shorttalk"]
     d = m.decks["shorttalk"]
-    assert d == {"venue": "ISMIR 2026", "date": "2026-11-01",
+    assert d == {"venue": "ISMIR 2026", "date": "2026-11-01", "short_title": "Short Talk",
                  "authors": ["Ada", "Bo"], "affiliations": ["UC Berkeley"], "funders": ["Sloan"]}
 
 
@@ -55,8 +56,8 @@ def test_interview_offers_every_authors_affiliation_logo_not_just_the_presenter(
     root = _project(tmp_path)                                          # Ada@UC Berkeley, Bo@Cambridge
     asked: list[str] = []
     real_input = _feed  # noqa: F841
-    it = iter(["2", "ISMIR 2026", "2026-11-01", "1",   # formats, venue, date, presenting = Ada only
-               "y", "y", ""])                            # UC Berkeley y, Cambridge y, funders all
+    it = iter(["2", "ISMIR 2026", "2026-11-01", "", "1",   # formats, venue, date, short, Ada only
+               "y", "y", ""])                                # UC Berkeley y, Cambridge y, funders
     def _rec(prompt=""):
         if "affiliation logo" in prompt:
             asked.append(prompt)
@@ -151,7 +152,7 @@ def test_interview_never_touches_trundlr(tmp_path, monkeypatch):
             raise AssertionError("razzle.interview must not touch trundlr")
     monkeypatch.setitem(sys.modules, "haarpi.trundlr", _Boom())
 
-    _feed(monkeypatch, ["2", "ISMIR 2026", "2026-11-01", "", "y", "n", ""])
+    _feed(monkeypatch, ["2", "ISMIR 2026", "2026-11-01", "", "", "y", "n", ""])
     out = interview.run(root)                              # completes without any trundlr call
     assert out["formats"] == ["shorttalk"] and "queued" not in out
     assert project.load_manifest(root).deck_formats == ["shorttalk"]

@@ -59,7 +59,9 @@ deck always draws on the latest paper.
    (below). razzle fills it; it does not design slides from scratch.
 4. **Authors + affiliations (+ logos)** — from the manifest's `authors` (name, affiliations) resolved
    against a shared **affiliation→logo registry**. Builds the byline on the title slide; the marks
-   themselves go on the acknowledgements slide (the title slide carries no logos).
+   themselves go on the acknowledgements slide (the title slide carries no logos), where each author
+   is also **named beside their own affiliation** — the marks say which institutions are here, they
+   cannot say whose, and on a cross-institution paper the audience was left to guess the pairing.
 5. **Funders (+ logos)** — a per-project `funders` list resolved against a shared **funder→logo
    registry**. Builds the acknowledgements slide, alongside the affiliation marks.
 
@@ -174,7 +176,10 @@ a promotion, not a contract.
    **The deck-open interview (DONE, reworked):** the deck stage's opening splits in two — configuration
    is a **pure-python, no-LLM** `razzle interview` (`razzle/interview.py`), and only the AUTHORING
    (composing the spec) is the LLM `razzle deck` session. The interview asks, via plain `input()`: which
-   formats, and per format the venue, date, presenting authors, which affiliation logos to include —
+   formats, and per format the venue, date, an optional **short title for the running footer** (the
+   footer shares one strip with the contact address and a full paper title crowds it; the short form
+   is the author's editorial call about their own talk, so it is asked and never inferred),
+   presenting authors, which affiliation logos to include —
    **every author's** affiliations, not just the presenter's, since the title slide shows all co-authors
    (each shown `logo ✓` / `NO LOGO → text only` against the neutral registry) — and the funders to
    acknowledge. It writes `deck_formats` + a `decks` block (keyed by format) to the manifest **and
@@ -260,8 +265,11 @@ Cale's two open comments on the demo were real furniture feedback, now addressed
   engineered from a reference deck (design idea only), and its layouts are thin (title / figure /
   content). We need to design razzle's actual house master + its role set together — section dividers,
   two-column, an acknowledgements/funding slide, the logo strip treatment — before razzle ships decks
-  anyone presents. The **running footer** (venue|short-title, page numbers) belongs here too: for now
-  unfilled footer placeholders are stripped rather than populated.
+  anyone presents. The **running footer** (venue|short-title, page numbers) is now populated rather
+  than stripped, but the master's own boxes are what forced the work: the footer and contact strips
+  are sized for a short line each and the slide-number box holds one digit, so razzle re-cuts all
+  three at render time (see `_fit_strip`, `_add_slide_number`). A master designed for the job would
+  not need that.
 - **Poster** is not a slide count — it needs its own shape (one board), a separate mode from the
   timed-talk formats.
 

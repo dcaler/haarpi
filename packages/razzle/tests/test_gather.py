@@ -79,8 +79,44 @@ def test_the_acknowledgements_slide_is_built_from_the_deck_config(tmp_path):
     project.save_manifest(m, tmp_path)
     ack = gather.acknowledgements(tmp_path, "longtalk")
     assert ack["role"] == "acknowledgements" and ack["body"] == ["Supported by The Fund"]
-    # no funders → the logo strip carries the slide on its own
+    # no funders and no affiliations → the logo strip carries the slide on its own
     assert "body" not in gather.acknowledgements(tmp_path, "poster")
+
+
+def test_the_acknowledgements_slide_pairs_each_author_with_their_affiliation(tmp_path):
+    """The logo strip says WHICH institutions are here; it cannot say whose. On a two-author,
+    two-institution paper the audience was left to guess the pairing."""
+    m = project.Manifest(
+        name="d", short_title="demo", brief="x", deck_formats=["longtalk"],
+        authors=[{"name": "Ada", "affiliations": ["UC Berkeley", "Sloan Lab"]},
+                 {"name": "Bo", "affiliations": ["Cambridge"]},
+                 {"name": "Cy"}],                       # no affiliation on record
+        decks={"longtalk": {"venue": "CSS2026", "funders": ["The Fund"]}})
+    project.save_manifest(m, tmp_path)
+    body = gather.acknowledgements(tmp_path, "longtalk")["body"]
+    assert body == ["Ada — UC Berkeley, Sloan Lab",     # authorship order, their own affiliations
+                    "Bo — Cambridge",                   # Cy is left off rather than shown dangling
+                    "Supported by The Fund"]
+
+
+def test_the_running_footer_may_carry_a_short_title(tmp_path):
+    """The footer shares one strip with the contact address, and a full paper title crowds it. The
+    short form is the author's editorial call, so it is read from the config, never invented."""
+    m = project.Manifest(name="d", short_title="demo", brief="x", deck_formats=["longtalk"],
+                         decks={"longtalk": {"venue": "CSS2026",
+                                             "short_title": "Sense of Schelling"}})
+    project.save_manifest(m, tmp_path)
+    spec = [{"role": "title", "title": "A New Sense of Schelling Segregation"}]
+    assert gather.running_title(tmp_path, "longtalk", spec) == "Sense of Schelling"
+    assert gather.furniture(tmp_path, "longtalk", spec)["footer"] == "CSS2026 | Sense of Schelling"
+
+
+def test_without_a_short_title_the_footer_carries_the_full_one(tmp_path):
+    m = project.Manifest(name="d", short_title="demo", brief="x", deck_formats=["longtalk"],
+                         decks={"longtalk": {"venue": "CSS2026"}})
+    project.save_manifest(m, tmp_path)
+    spec = [{"role": "title", "title": "A New Sense of Schelling Segregation"}]
+    assert gather.running_title(tmp_path, "longtalk", spec) == "A New Sense of Schelling Segregation"
 
 
 def test_appending_the_acknowledgements_slide_is_idempotent(tmp_path):

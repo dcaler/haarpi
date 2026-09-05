@@ -199,10 +199,23 @@ def furniture(root: Path, fmt: str | None, spec: list[dict] | None = None) -> di
     """
     cfg = deck_config(root, fmt)
     venue, date = str(cfg.get("venue", "")), str(cfg.get("date", ""))
-    talk = (spec[0].get("title", "") if spec else "") or short_title(root)
+    talk = running_title(root, fmt, spec)
     return {"venue": " · ".join(x for x in (venue, date) if x),
             "footer": " | ".join(x for x in (venue, talk) if x),
             "contact": presenter_email(root, fmt)}
+
+
+def running_title(root: Path, fmt: str | None = None, spec: list[dict] | None = None) -> str:
+    """The title as it appears in the RUNNING FOOTER, which is not the title on the title slide.
+
+    A full paper title is a sentence; the footer is a strip it shares with a contact address, and
+    both of them are read at a glance from the back of a room. So the deck config may carry a
+    `short_title` — "Sense of Schelling" for "A New Sense of Schelling Segregation" — and that is a
+    human's editorial call about their own talk, never the composer's to invent, which is why it
+    lives in the config beside the venue and not in the spec. Absent one, the full title stands.
+    """
+    short = str(deck_config(root, fmt).get("short_title", "")).strip()
+    return short or (spec[0].get("title", "") if spec else "") or short_title(root)
 
 
 def byline(root: Path) -> str:
@@ -271,11 +284,33 @@ def acknowledgements(root: Path, fmt: str | None = None) -> dict:
     authors and the venue. Acknowledgement is its own slide because acknowledging is its own act.
     """
     cfg = deck_config(root, fmt)
-    funders = [f for f in (cfg.get("funders") or []) if str(f).strip()]
     slide: dict = {"role": "acknowledgements", "title": "Acknowledgements"}
-    if funders:
-        slide["body"] = [f"Supported by {f}" for f in funders]
+    body = [f"{a['name']} — {', '.join(a['affiliations'])}"
+            for a in _authors_with_affiliations(root)]
+    body += [f"Supported by {f}" for f in (cfg.get("funders") or []) if str(f).strip()]
+    if body:
+        slide["body"] = body
     return slide
+
+
+def _authors_with_affiliations(root: Path) -> list[dict]:
+    """Every author paired with their own affiliation(s), in authorship order.
+
+    The logo strip below says WHICH institutions are here; it cannot say WHOSE. Two marks under a
+    two-author byline leave the audience to guess the pairing, and on a cross-institution paper the
+    guess is a coin flip. Authors with no affiliation on record are left off rather than shown
+    dangling.
+    """
+    try:
+        m = _hproject.load_manifest(root)
+    except Exception:
+        return []
+    out = []
+    for a in _hproject.authors(m):
+        affs = [x for x in (a.get("affiliations") or []) if str(x).strip()]
+        if a.get("name") and affs:
+            out.append({"name": a["name"], "affiliations": affs})
+    return out
 
 
 def apply_acknowledgements(spec: list[dict], slide: dict) -> list[dict]:

@@ -265,21 +265,30 @@ art, not a script.
 What the composer is not allowed to write, razzle stamps: the **paper's title**
 on the title slide (a talk is the paper, so its name is read, not invented — and
 the footer is built from it), every **author** credited with exactly one contact
-address, the presenter's, and a closing **acknowledgements** slide carrying the
-affiliation and funder marks. That last is where the logos live — a title
-slide's job is the title, the authors and the venue — and the title slide alone
-carries no page number.
+address, the presenter's, and a closing **acknowledgements** slide pairing each
+author with their own affiliation above the affiliation and funder marks. That
+last is where the logos live — a title slide's job is the title, the authors and
+the venue — and the opening slide alone carries no page number.
 
-Two things are dropped rather than trusted to a prompt. A **citation beside one
-of our own figures** goes: every figure in the pool is this paper's work, and a
+Four things are fixed rather than trusted to a prompt. A **citation beside one of
+our own figures** goes: every figure in the pool is this paper's work, and a
 literature reference in the caption strip under it reads as *this figure is
-theirs*. And a **bullet whose words are a subset of the title** goes: the title
-already made the claim, so the bullet spends a line saying nothing.
+theirs*. A **bullet whose words are a subset of the title** goes: the title
+already made the claim. A **spelled-out sign** becomes a symbol (`plus 0.176` →
+`+0.176`), because on a slide read from the back of a room a word where a symbol
+belongs costs a beat. And a `figure` slide that arrives **carrying bullets**
+becomes a `split`: the figure role's content area *is* the picture, so bullets
+written onto one would be dropped without a word.
 
 The deck's running text — venue and date, the footer, the contact — is
 deck-level, so it never enters the spec: the composer cannot invent a venue it
-was never shown. A running strip is one line in a fixed box, so it is shrunk to
-fit when it would otherwise run off the slide.
+was never shown. The footer may carry a **short title** from the deck config
+("Sense of Schelling" for "A New Sense of Schelling Segregation") — an editorial
+call about one's own talk, so it is asked in the interview, never inferred. The
+footer and the contact are one line, so they are laid out as one strip at one
+size read from the master: the boxes move before the type does, the contact
+keeping its right edge and growing left into the footer's slack, and the size
+drops only when the whole strip will not fit, for both halves at once.
 
 ## The shared core
 

@@ -32,11 +32,17 @@ DECK_PROMPT = (
     "(reference figures by id), and the real claims/numbers (use verbatim; never invent one). Write "
     "the deck spec to slides/{fmt}/spec.json — a JSON list of slides, each {{role: title|figure|"
     "split|content, title, subtitle?, body?, figure?<id>, citation?, illustration?}}: open on a "
-    "title slide, one idea per slide. A title is the slide's CLAIM in <=9 words, not its topic, in "
-    "sentence case. At most 3 bullets, <=9 words each, fragments not sentences, and never one that "
-    "only repeats the title. Prefer `split` (a point beside its figure) and `figure` over "
-    "`content`, and use every figure at least once — a slide that can show something shows it. At "
-    "least one results slide must state a real number from the claims verbatim. Every figure in "
+    "title slide — ONE title slide, the opening one; a closing slide is `content` — one idea per "
+    "slide. A title is the slide's CLAIM in <=9 words AND <={title_chars} characters (the "
+    "character limit is the hard one: it is the width of the box), not its topic, in sentence "
+    "case. At most 3 bullets, <=9 words each, fragments not sentences, and never one that "
+    "only repeats the title. Bullets belong on `content` and `split` slides: a `figure` slide has "
+    "no room for them and they would be dropped, so a figure with a point beside it is a `split`. "
+    "Prefer `split` (a point beside its figure) and `figure` over "
+    "`content`, and use every figure at least once — a slide that can show something shows it, and "
+    "a figure may return later in the talk but never on two slides in a row. At "
+    "least one results slide must state a real number from the claims verbatim, with its sign as a "
+    "symbol (`+0.176`, `-0.04`, never `plus 0.176`). Every figure in "
     "the pool is THIS paper's own work, so a slide showing one carries NO `citation` — that would "
     "misattribute our own result; cite only on a slide with no figure, as a bare source ref. NO "
     "speaker notes: what does not fit is spoken. A `content` slide may instead carry "
@@ -204,7 +210,8 @@ def _author_one(args, root: Path, fmt: str) -> int:
         print(f"  Author {gather.deck_dir(root, fmt).relative_to(root)}/spec.json, "
               f"then `haarpi razzle render --format {fmt}`.")
         return 0
-    prompt = DECK_PROMPT.format(fmt=fmt, mins=mins or 0, budget=budget)
+    prompt = DECK_PROMPT.format(fmt=fmt, mins=mins or 0, budget=budget,
+                                title_chars=compose.MAX_TITLE_CHARS)
     if getattr(args, "headless", False):
         return _author_headless(args, root, fmt, prompt)
     print(f"[razzle deck] launching an interactive authoring session for {fmt} in {root} …")

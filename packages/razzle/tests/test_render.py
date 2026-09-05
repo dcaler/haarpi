@@ -126,7 +126,7 @@ def test_a_slide_value_beats_the_deck_furniture(tmp_path):
 
 
 @pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
-def test_every_slide_gets_the_masters_slide_number(tmp_path):
+def test_every_slide_after_the_opening_one_gets_the_masters_slide_number(tmp_path):
     """python-pptx never CLONES a slide-number placeholder (it is latent), so it has to be added.
     The clone carries the master's <a:fld type="slidenum">, which numbers live rather than baking
     a string that would go wrong the moment slides are reordered."""
@@ -134,16 +134,20 @@ def test_every_slide_gets_the_masters_slide_number(tmp_path):
     out = render.render_deck(spec, _DESC["master_path"], _DESC, tmp_path / "d.pptx")
     from pptx import Presentation
     from pptx.oxml.ns import qn
-    for slide in Presentation(str(out)).slides:
+    for slide in list(Presentation(str(out)).slides)[1:]:
         flds = slide.shapes._spTree.findall(f".//{qn('a:fld')}")
         assert any(f.get("type") == "slidenum" for f in flds)
 
 
 @pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
-def test_the_opening_slide_is_not_numbered(tmp_path):
-    """A title page carries no page number. Every slide after it does."""
+def test_only_the_opening_slide_is_unnumbered_even_when_a_later_slide_is_a_title(tmp_path):
+    """A title page carries no page number — the OPENING one, by position.
+
+    Keyed on the role instead, a closing "thank you" slide the composer had also written as a
+    title dropped out of the numbering: a live deck ran 11, 12, blank, 14."""
     spec = [{"role": "title", "title": "A talk", "subtitle": "Ada"},
-            {"role": "content", "title": "Points", "body": ["a"]}]
+            {"role": "content", "title": "Points", "body": ["a"]},
+            {"role": "title", "title": "Thanks", "subtitle": "Thank you"}]
     out = render.render_deck(spec, _DESC["master_path"], _DESC, tmp_path / "d.pptx")
     from pptx import Presentation
     from pptx.oxml.ns import qn
@@ -155,6 +159,7 @@ def test_the_opening_slide_is_not_numbered(tmp_path):
 
     assert not _numbered(prs.slides[0])
     assert _numbered(prs.slides[1])
+    assert _numbered(prs.slides[2])
 
 
 @pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
@@ -172,27 +177,93 @@ def test_the_slide_number_clone_gets_a_fresh_shape_id(tmp_path):
 
 
 @pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
-def test_a_long_contact_address_is_shrunk_to_fit_its_strip(tmp_path):
-    """The running strips are one line in a fixed box, so a 44-character address ran off the slide.
-    It is shrunk only when it overflows — a short one keeps the master's own styling."""
+def _strip(path):
+    """(placeholder-ish view of) the footer and contact on the first rendered slide."""
+    from pptx import Presentation
+    out = {}
+    for sh in Presentation(str(path)).slides[0].shapes:
+        if not sh.has_text_frame:
+            continue
+        t = sh.text_frame.text
+        if "@" in t:
+            out["contact"] = (sh, t)
+        elif "|" in t:
+            out["footer"] = (sh, t)
+    return out
+
+
+def _pt(sh):
+    sz = sh.text_frame.paragraphs[0].font.size
+    return sz.pt if sz else None
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_the_footer_and_the_address_are_rendered_at_one_size(tmp_path):
+    """They are one line, read as one line, so they get one size.
+
+    Sized separately against an ASSUMED 12pt master, a 44-character address came out at 9.8pt
+    beside a 22pt footer — the complaint was that it read as a smudge, and it did.
+    """
+    out = render.render_deck([{"role": "content", "title": "T", "body": ["a"]}],
+                             _DESC["master_path"], _DESC, tmp_path / "d.pptx",
+                             furniture={"contact": "d.cale.reeves@computationalsocialscience.org",
+                                        "footer": "CSS2026 | Sense of Schelling"})
+    st = _strip(out)
+    assert _pt(st["contact"][0]) == _pt(st["footer"][0])
+    assert _pt(st["contact"][0]) >= 18            # the master's own size, not a shrunken stand-in
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_the_address_takes_the_room_it_needs_from_the_footers_slack(tmp_path):
+    """The boxes move before the type does: the contact keeps its right edge and grows left into a
+    footer that is nowhere near its 9.5 inches."""
     long_ = "d.cale.reeves@computationalsocialscience.org"
     out = render.render_deck([{"role": "content", "title": "T", "body": ["a"]}],
-                             _DESC["master_path"], _DESC, tmp_path / "long.pptx",
-                             furniture={"contact": long_, "footer": "CSS2026 | A talk"})
-    short = render.render_deck([{"role": "content", "title": "T", "body": ["a"]}],
-                               _DESC["master_path"], _DESC, tmp_path / "short.pptx",
-                               furniture={"contact": "ada@ucb.edu", "footer": "CSS2026 | A talk"})
+                             _DESC["master_path"], _DESC, tmp_path / "d.pptx",
+                             furniture={"contact": long_, "footer": "CSS2026 | Sense of Schelling"})
+    st = _strip(out)
+    contact, footer = st["contact"][0], st["footer"][0]
+    size = _pt(contact)
+    inner = (contact.width - contact.text_frame.margin_left
+             - contact.text_frame.margin_right) / 12700
+    assert inner >= render._need_pt(long_, size)          # it fits on ONE line
+    assert contact.left > footer.left + footer.width      # and it does not sit on the footer
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_a_strip_that_cannot_fit_shrinks_together_not_one_half_of_it(tmp_path):
+    """A footer carrying a full paper title leaves no slack. Both halves step down as a pair."""
+    out = render.render_deck([{"role": "content", "title": "T", "body": ["a"]}],
+                             _DESC["master_path"], _DESC, tmp_path / "d.pptx",
+                             furniture={"contact": "d.cale.reeves@computationalsocialscience.org",
+                                        "footer": "CSS2026 | A New Sense of Schelling Segregation"})
+    st = _strip(out)
+    assert _pt(st["contact"][0]) == _pt(st["footer"][0]) < 22
+    assert _pt(st["contact"][0]) >= render._MIN_RUNNING_PT
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_an_over_long_title_is_shrunk_rather_than_clipped(tmp_path):
+    """The title box is one line tall and anchored to its bottom, so a title that wraps grows UPWARD
+    and its first line is cut off by the top of the slide — as a live deck's 54-character title was.
+    """
+    long_ = "Rhythm remains unrecovered despite harmonic clustering"
+    out = render.render_deck([{"role": "content", "title": long_, "body": ["a"]},
+                              {"role": "content", "title": "Short one", "body": ["a"]}],
+                             _DESC["master_path"], _DESC, tmp_path / "d.pptx")
     from pptx import Presentation
+    prs = Presentation(str(out))
 
-    def _size_of(path, needle):
-        for sh in Presentation(str(path)).slides[0].shapes:
+    def _title(slide, needle):
+        for sh in slide.shapes:
             if sh.has_text_frame and needle in sh.text_frame.text:
-                return sh.text_frame.paragraphs[0].font.size
-        raise AssertionError(f"{needle} not on the slide")
+                return sh
+        raise AssertionError(needle)
 
-    sized = _size_of(out, long_)
-    assert sized is not None and sized.pt <= 10        # shrunk to fit the ~3" strip
-    assert _size_of(short, "ada@ucb.edu") is None      # untouched — the master's size already fits
+    big = _title(prs.slides[0], long_)
+    inner = (big.width - big.text_frame.margin_left - big.text_frame.margin_right) / 12700
+    assert render._need_pt(long_, _pt(big)) <= inner              # one line, inside the box
+    assert _pt(_title(prs.slides[1], "Short one")) is None        # a short title is left alone
 
 
 @pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
@@ -252,3 +323,36 @@ def test_an_alias_reaches_the_logo_filed_under_a_short_name(tmp_path, monkeypatc
     # an unmatched name keeps its place, with no logo, so it can be set in text
     entries = assets.logo_entries(["Nowhere University"])
     assert entries == [{"name": "Nowhere University", "logo": None}]
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_recutting_a_strip_box_keeps_its_vertical_geometry(tmp_path):
+    """A placeholder inherits its geometry and carries no `a:xfrm` of its own, so setting ONE
+    dimension materialises that element with the other three at zero. The address was re-cut to
+    the right width and rendered at the top of the slide with no height at all."""
+    out = render.render_deck([{"role": "split", "title": "T", "body": ["a"]}],
+                             _DESC["master_path"], _DESC, tmp_path / "d.pptx",
+                             furniture={"contact": "d.cale.reeves@computationalsocialscience.org",
+                                        "footer": "CSS2026 | Sense of Schelling"})
+    st = _strip(out)
+    for sh, _ in st.values():
+        assert sh.top > 0 and sh.height > 0
+
+
+@pytest.mark.skipif(not (_MASTER and _DESC), reason="neutral house master absent")
+def test_a_two_digit_slide_number_stays_on_one_line(tmp_path):
+    """The number box is half an inch wide with a tenth of an inch of inset a side — 21pt for the
+    number. One digit fitted; two wrapped, and every slide from ten on showed a stacked number with
+    its second digit hanging off the bottom of the slide."""
+    spec = [{"role": "title", "title": "A talk"}] + [
+        {"role": "content", "title": f"Slide {i}", "body": ["x"]} for i in range(12)]
+    out = render.render_deck(spec, _DESC["master_path"], _DESC, tmp_path / "d.pptx")
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    for slide in list(Presentation(str(out)).slides)[1:]:
+        for sh in slide.shapes:
+            if "slidenum" not in sh._element.xml.lower():
+                continue
+            body = sh._element.find(".//" + qn("a:bodyPr"))
+            assert body.get("wrap") == "none"
+            assert body.get("lIns") == "0" and body.get("rIns") == "0"

@@ -81,13 +81,17 @@ def _configure_format(m, fmt: str) -> dict:
                             " (poster)") + " ===")
     venue = _ask("  Venue name")
     date = _ask("  Date")
+    # The running footer shares one strip with the contact address. A full paper title crowds it,
+    # so the author may give a short form of their own title here ("Sense of Schelling"). Blank
+    # keeps the full title — this is an editorial call, so it is asked, never inferred.
+    short = _ask("  Short title for the running footer (blank = the full title)")
     authors = _pick_many("  Presenting authors", _author_names(m))
     affs = []
     for aff in _all_affiliations(m):        # every author's affiliations, not just the presenter's
         if _ask_yn(f"  Include affiliation logo '{aff}' ({_logo_status(aff)})", default=True):
             affs.append(aff)
     funders = _pick_many("  Funders to acknowledge", _funder_names(m))
-    return {"venue": venue, "date": date, "authors": authors,
+    return {"venue": venue, "date": date, "short_title": short, "authors": authors,
             "affiliations": affs, "funders": funders}
 
 
