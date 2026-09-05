@@ -88,8 +88,10 @@ never invent a paper; a reply with no usable JSON yields a labelled-stub map, ne
 
 ## Pipeline
 
-`current litreview .md` (draft or minted) + `refs.bib`
- → `parse_threads` (the `## ` thesis threads, minus the Narrative-Review wrapper and the bibliography)
+`current litreview draft` (`.md`, or the `.docx` a redline revise left) + `refs.bib`
+ → `_read_review` (a docx is read with insertions applied, deletions gone, `Heading N` → `#`×N)
+ → `parse_threads` (the `## ` thesis threads, minus the Narrative-Review wrapper, the load-bearing
+   front block, and the bibliography)
  → `bib_keys` / `bib_dois` (the grounding sets)
  → **model** distils a contribution per paper from its citing sentences (`compose`, grounded)
  → `evidence_weight` (importance) + `citation_graph` (edges, sizes) overlaid on the papers
@@ -107,8 +109,15 @@ author reviews:
 - opening chain: `gather → collect → report → mindmap → comment`
 - rework chain (`planner.chain_from_tasks`): `… → revise|report → mindmap → comment`
 
-so the diagnostic lands beside each `_ra` draft. `run()` consumes the newest `*_litreview*.md`
-(`_find_review_md`) and skips gracefully when `refs.bib` is not there yet.
+so the diagnostic lands beside each `_ra` draft. `run()` consumes the newest `*_litreview*` draft
+(`_find_review`) and skips gracefully when `refs.bib` is not there yet.
+
+**The draft is not always markdown.** A redline revise writes tracked changes into the docx and
+returns before step 8, where the `.md` is written — deliberately: the accepted text is the
+reviewer's to settle, and an `.md` written there would become the "current narrative" the next
+revise reads, treating every proposal as settled. So the map reads the docx instead, insertions
+applied and deletions gone — *if this redline were accepted, here is the shape of the review*.
+Globbing `*.md` alone meant the map died with "render a draft first" after every redline cycle.
 
 ## Frozen tests (all GPU-free; the brain is mocked)
 
@@ -116,7 +125,7 @@ so the diagnostic lands beside each `_ra` draft. `run()` consumes the newest `*_
 2. `validate` — the grounding law (invented/duplicate keys dropped; theme coerced; never raises);
    reads the `contribution` key (with `finding`/`phrase` fallback).
 3. `citation_evidence` / `evidence_weight` — citing-sentence extraction and per-paper prose weight
-   (bibliography + headings excluded; tags stripped).
+   (bibliography, load-bearing front block, and headings excluded; tags stripped).
 4. `citation_graph` — the real reference graph from a fake `fetch` (edges + `cited_by_count`), with
    non-corpus and DOI-less papers correctly dropped.
 5. `band_layout` — bands by importance (most-discussed nearest the centre), the target rings holding
@@ -125,6 +134,10 @@ so the diagnostic lands beside each `_ra` draft. `run()` consumes the newest `*_
 6. `to_dot` — a pinned `digraph` with the centre hub, a red ring per quantile cut, theme labels, size +
    black-ring encoding, faded citation arrows, and a legend; renders under `dot -Kneato -n2`.
 7. `build_spec` against a **fake brain** → the composed, grounded `FigureSpec` is deterministic.
+8. `test_docx_draft.py` — the docx-only draft: a tracked insertion is not invisible, a deletion
+   stays gone, `Heading N` comes back as `#`×N and parses as the same threads, and `_find_review`
+   picks the docx when a redline left no markdown (preferring a same-stem `.md` when there is one,
+   ignoring Word's `~$` lock files).
 
 ## Not in scope (yet)
 

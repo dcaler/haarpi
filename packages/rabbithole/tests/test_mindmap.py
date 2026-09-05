@@ -63,6 +63,21 @@ def test_parse_threads_themes_and_citekeys():
     assert ts[1].citekeys == ["allcott2011", "best2011"]
 
 
+def test_the_load_bearing_front_block_is_not_a_theme():
+    """`summarize.top_sources_block` heads every draft with the top 5% of sources and a line of
+    rationale each. Read as review prose it opened a theme holding exactly the papers the map's
+    innermost ring already names, and credited them the block's own words on top of their real
+    ones — the same ranking drawn twice, one copy labelled as a thesis."""
+    md = ("## Most load-bearing sources (top 5% of 184)\n\n"
+          "- **Best 2011** [@best2011] — carries the compliance argument.\n\n"
+          + MD.split("# Literature Review: household sorting\n", 1)[1])
+    assert "Most load-bearing sources (top 5% of 184)" not in [t.theme
+                                                               for t in mindmap.parse_threads(md)]
+    ev = mindmap.citation_evidence(md)
+    assert not any("carries the compliance argument" in s for s in ev["best2011"])
+    assert mindmap.evidence_weight(md) == mindmap.evidence_weight(MD)   # the block adds no weight
+
+
 def test_parse_threads_handles_both_multicite_styles():
     md = "## Theme A\n\nText [@keyA; @keyB] then [@keyC][@keyA] and [@keyB].\n"
     t = mindmap.parse_threads(md)[0]

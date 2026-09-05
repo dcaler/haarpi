@@ -28,11 +28,41 @@ _H2 = re.compile(r"^##[ \t]+(.+?)[ \t]*$", re.M)
 _CITE_GROUP = re.compile(r"\[([^\]]*@[^\]]*)\]")
 # threads that are wrappers, not themes:
 _SKIP = ("narrative review", "annotated bibliography", "references", "bibliography")
+# ...and front matter that only re-lists papers: `summarize.top_sources_block` heads the draft with
+# "## Most load-bearing sources (top 5% of 184)", whose count varies with the corpus so it cannot be
+# an exact _SKIP entry (`redline._TOP_HEADING` and `revise` match it by prefix for the same reason).
+# Left in, it opened a theme holding the very papers the map's innermost ring already names — the
+# same ranking, drawn twice, one of them labelled as a thesis.
+_TOP_SOURCES = re.compile(r"^##\s+most load-bearing sources\b", re.I | re.M)
+_NEXT_H2 = re.compile(r"^##\s", re.M)
+
 # where the bibliography starts — everything from here on is back matter, never a thread. Matching
 # by HEADING NAME alone was not enough: a stray heading emitted inside the bibliography opened a
 # thread whose body ran to EOF and scooped 62 citekeys out of the reference list.
 _BIB_START = re.compile(r"^##\s+(?:annotated\s+bibliography|references|bibliography)\b",
                         re.I | re.M)
+
+
+def _is_wrapper(theme: str) -> bool:
+    return theme.strip().lower() in _SKIP
+
+
+def _review_body(md: str) -> str:
+    """The review's own prose: the load-bearing front block and the bibliography tail cut away.
+
+    Both are apparatus that re-lists papers rather than argument that discusses them, and both
+    were being read as review prose. The front block is the worse of the two: it names the top
+    5% of sources with a sentence of rationale each, so every measure taken over the whole file
+    credited those papers extra weight — the ones already innermost — and handed the composer
+    the block's own blurb as a paper's grounding sentence instead of a claim from the review.
+    Shared by the thread parse and the two per-sentence measures so all three see one body.
+    """
+    if cut := _BIB_START.search(md):
+        md = md[: cut.start()]
+    if top := _TOP_SOURCES.search(md):
+        end = _NEXT_H2.search(md, top.end())
+        md = md[: top.start()] + (md[end.start():] if end else "")
+    return md
 
 
 def _cite_keys(text: str) -> list[str]:
@@ -61,12 +91,11 @@ def parse_threads(md: str) -> list[Thread]:
     The bibliography is CUT, not name-matched: a heading that leaks into the reference list (see
     the claim-extraction fix in summarize) is not in ``_SKIP``, so it opened a thread whose body
     ran to end-of-file and harvested the whole reference list as one theme."""
-    if cut := _BIB_START.search(md):
-        md = md[: cut.start()]
+    md = _review_body(md)
     heads = [(m.group(1).strip(), m.start(), m.end()) for m in _H2.finditer(md)]
     out: list[Thread] = []
     for i, (name, _s, e) in enumerate(heads):
-        if name.lower() in _SKIP:
+        if _is_wrapper(name):
             continue
         body = md[e: heads[i + 1][1]] if i + 1 < len(heads) else md[e:]
         seen: dict[str, None] = {}
@@ -124,9 +153,7 @@ def _review_sentences(md: str):
     """Yield (citekeys, clean_sentence) for each body sentence that cites something — bibliography
     tail and markdown headings excluded, ``[@..]`` tags stripped and punctuation gaps tidied. Shared
     by the findings-evidence and the project-importance measures."""
-    body = md
-    if cut := _BIB_START.search(md):
-        body = md[: cut.start()]
+    body = _review_body(md)
     body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))  # drop headings
     for sent in re.split(r"(?<=[.!?])\s+", body.replace("\n", " ")):
         s = sent.strip()
@@ -835,13 +862,39 @@ def emit(outdir: Path, short: str, spec: figure.FigureSpec) -> dict:
     return {"id": spec.id, "datestamp": ds, "source": src, "svg": rendered}
 
 
-def _find_review_md(out: Path) -> Path | None:
-    """The newest litreview markdown in litReview/output — DRAFT (``*_litreview_ra.md``, written by
-    render every cycle) or minted (``*_litreview.md``). The map is a per-DRAFT diagnostic: it steers
-    while the review is still being written, so it consumes whatever the current draft is, not only a
-    release. The last draft's map is also the minted map, so nothing is lost at mint."""
-    rel = [p for p in out.glob("*.md") if "litreview" in p.stem]
-    return max(rel, key=lambda p: p.stat().st_mtime) if rel else None
+def _find_review(out: Path) -> Path | None:
+    """The newest litreview DRAFT in litReview/output, markdown or docx.
+
+    The map is a per-DRAFT diagnostic: it steers while the review is still being written, so it
+    consumes whatever the current draft is, not only a release. That draft is not always markdown.
+    A redline revise deliberately writes none — the accepted text is the reviewer's to settle, so
+    there is no markdown of a draft whose changes are still proposals — and leaves the tracked-change
+    docx as the only copy. Globbing ``*.md`` alone meant the map died with "render a draft first" on
+    every redline cycle, standing in a directory that held the draft.
+
+    When the newest artifact is a docx that has a same-stem ``.md`` beside it (the resynth path
+    writes both, docx last), the markdown wins: it is the text before pandoc round-tripped it.
+    """
+    rel = [p for p in [*out.glob("*.md"), *out.glob("*.docx")]
+           if "litreview" in p.stem and not p.name.startswith("~$")]
+    if not rel:
+        return None
+    newest = max(rel, key=lambda p: p.stat().st_mtime)
+    if newest.suffix == ".docx" and (md := newest.with_suffix(".md")).is_file():
+        return md
+    return newest
+
+
+def _read_review(path: Path) -> str:
+    """The draft as markdown. A docx is read with its tracked insertions applied and its deletions
+    gone — the honest reading of a redline for a diagnostic: *if this were accepted, here is the
+    shape of the review*. ``Heading N`` styles come back as ``#`` x N so :func:`parse_threads` sees
+    the same sections either way."""
+    if path.suffix == ".docx":
+        from . import docxio
+        docxio.require_docx()
+        return docxio.read_body_markdown(path)
+    return path.read_text()
 
 
 def _project_short(stem: str) -> str:
@@ -861,10 +914,10 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     cfg = _config.load_project(directory)
     gc = _config.load_global()
     paths = _config.project_paths(directory)
-    review = _find_review_md(paths.output)
+    review = _find_review(paths.output)
     if review is None:
-        print(f"[mindmap] no litreview markdown (*_litreview*.md) in {paths.output} — render a draft "
-              "first.", file=sys.stderr)
+        print(f"[mindmap] no litreview draft (*_litreview*.md or .docx) in {paths.output} — render "
+              "a draft first.", file=sys.stderr)
         return 1
     refs = paths.output / "refs.bib"
     if not refs.is_file():
@@ -874,7 +927,7 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     print(f"  {runlog.stamp()}[mindmap] reading {review.name}  "
           f"(coordinator={cfg.brain.coordinator_model})", flush=True)
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
-    review_md, refs_bib = review.read_text(), refs.read_text()
+    review_md, refs_bib = _read_review(review), refs.read_text()
     # Compose the findings phrases (grounded in the review's citing sentences).
     m = compose(brain, parse_threads(review_md), bib_keys(refs_bib),
                 evidence=citation_evidence(review_md))

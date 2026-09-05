@@ -14,6 +14,7 @@ A file is "user-annotated" when its last '_'-separated segment is NOT `ra`.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -130,10 +131,47 @@ def read_track_changes(path: Path) -> dict:
     return {"insertions": insertions, "deletions": deletions}
 
 
+def _para_text(para) -> str:
+    """One paragraph's text with tracked INSERTIONS read as accepted and deletions dropped.
+
+    ``python-docx``'s own ``Paragraph.text`` walks only the runs that are direct children of
+    ``w:p``, so a run nested inside ``w:ins`` — which is every edit a redline revise proposes —
+    reads as empty. That is the shared redline engine's job and it already does it (atoms and
+    all), so this defers to it rather than keeping a second extractor that could disagree.
+    """
+    from haarpi.redline import flatten_paragraph
+    return flatten_paragraph(para._p)
+
+
 def read_body_text(path: Path) -> str:
-    """Body text with tracked insertions visible, deletions gone (python-docx default)."""
+    """Body text with tracked insertions visible, deletions gone."""
     doc = Document(str(path))
-    return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    paras = (_para_text(p) for p in doc.paragraphs)
+    return "\n\n".join(t for t in paras if t.strip())
+
+
+_HEADING_STYLE = re.compile(r"^Heading (\d)$")
+
+
+def read_body_markdown(path: Path) -> str:
+    """Body text as markdown: a ``Heading N`` paragraph comes back as ``#`` x N, everything else
+    as its prose.
+
+    A redline revise deliberately writes no ``.md`` — the accepted text is the reviewer's to
+    settle, so there is no markdown of a draft whose changes are still proposals. That leaves the
+    docx as the only copy of the current draft, and anything reading it downstream (the
+    contribution map) needs its section structure, not just a wall of prose. The citekeys need no
+    special handling: every docx we write carries raw ``[@citekey]`` in the text.
+    """
+    doc = Document(str(path))
+    out: list[str] = []
+    for para in doc.paragraphs:
+        text = _para_text(para).strip()
+        if not text:
+            continue
+        m = _HEADING_STYLE.match(para.style.name or "")
+        out.append(f"{'#' * int(m.group(1))} {text}" if m else text)
+    return "\n\n".join(out)
 
 
 def build_revision_context(path: Path) -> str:

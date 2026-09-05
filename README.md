@@ -146,7 +146,7 @@ exceed them when the work asks for it.
 | `revise` | answers every comment in kind (see the table above) |
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block on an existing draft |
-| `mindmap` | regenerates the contribution map beside each new draft |
+| `mindmap` | regenerates the contribution map beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 
 Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
