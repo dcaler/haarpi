@@ -2087,6 +2087,18 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     if plan.get("escalate"):
         summary.append(f"  NOTE: classifier wanted '{plan['escalate']}' — beyond this "
                        "stage's chains; queued the heaviest available instead. Review!")
+    # WHAT IT DECIDED, before the dry-run return. These three lines are the whole point of a
+    # dry run — the topics it will search, the sections it will write, the term it will
+    # substitute — and they were being appended AFTER it, so `--dry-run` printed the tier and
+    # the chain and stopped, exactly where an author most needs to look before committing a
+    # multi-day cycle. Everything below the return reports side EFFECTS (which config was
+    # written, how many substitutions landed) and rightly stays there.
+    for c in ((built or {}).get("corrections") or []):
+        summary.append(f"  correction: {c['wrong']!r} -> {c['right']!r}")
+    if plan.get("gather_topics"):
+        summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
+    for s in (plan.get("sections") or []):
+        summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
     if dry_run:
         print("\n".join(["[dry-run]"] + summary))
         return 0
@@ -2101,19 +2113,12 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # becoming a task nobody can verify ran.
     corrections = (built or {}).get("corrections") or []
     corr_counts = _apply_corrections(root, m, str(root), corrections) if corrections else {}
-    for c in corrections:
+    if corrections:
         applied = ", ".join(f"{k} ×{v}" for k, v in corr_counts.items()) or "NOTHING MATCHED"
-        summary.append(f"  correction: {c['wrong']!r} -> {c['right']!r}  [{applied}]")
+        summary.append(f"  correction applied: [{applied}]")
     confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or [])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
-    if plan.get("gather_topics"):
-        summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
-    # The sections this chain intends to write, named before it runs. This is the cheap read
-    # that stands in front of an expensive chain: the author can see what will be searched for
-    # and drafted, and stop it here, rather than reading it back out of the finished document.
-    for s in (plan.get("sections") or []):
-        summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
     entry = {"type": "plan", "stage": stage, "deliverable": deliverable, "venue": venue,
              "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,

@@ -175,3 +175,22 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+# ── the dry run has to show what it decided ──────────────────────────────────
+
+def test_the_decision_lines_are_built_before_the_dry_run_return():
+    """A dry run exists to be READ before committing a multi-day cycle, so the topics it will
+    search, the sections it will write and the term it will substitute must print. They were
+    appended after the early return, so `--dry-run` gave the tier and the chain and stopped —
+    silent about every choice an author would want to stop it on.
+    """
+    import inspect
+    src = inspect.getsource(planner.run_next)
+    ret = src.index("if dry_run:\n        print")
+    before = src[:ret]
+    for line in ("section to draft:", "gather topics:", "correction:"):
+        assert line in before, f"{line!r} is not printed by --dry-run"
+    # Side effects still report only once the work is actually done.
+    after = src[ret:]
+    assert "correction applied:" in after and "steering config:" in after
