@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import json
+import os
 import re
 import shutil
 import signal
+import socket
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from . import runlog
@@ -70,8 +74,81 @@ def _slug(remote: Path) -> str:
     return f"{name}-{h}"
 
 
+def _lock_path(remote: Path) -> Path:
+    """Beside the store, not inside it — a lock copied into the staged snapshot and written
+    back out again would outlive the run that took it."""
+    return remote.with_name(remote.name + ".lock")
+
+
+def _holder(remote: Path) -> dict | None:
+    """Who holds the write lock on this store, or None if nobody does.
+
+    A lock whose process is gone is not a lock: a killed run must not wedge the project
+    forever. Liveness is only checkable for our own host, so another machine's lock is treated
+    as live — the cost of being wrong is a slower run, and the cost of the reverse is two
+    writers silently overwriting each other.
+    """
+    fp = _lock_path(remote)
+    try:
+        held = json.loads(fp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if held.get("host") != socket.gethostname():
+        return held
+    try:
+        os.kill(int(held.get("pid", -1)), 0)
+        return held
+    except (OSError, ValueError, TypeError):
+        print(f"  {runlog.stamp()}clearing a stale chroma lock from pid "
+              f"{held.get('pid')} ({held.get('started')})", flush=True)
+        fp.unlink(missing_ok=True)
+        return None
+
+
+def _acquire(remote: Path) -> bool:
+    """Claim the right to write this store back. Advisory, and deliberately so.
+
+    Staging introduced a clobber path that did not exist before: two writers each take their
+    own snapshot, both copy back, and the last one silently discards the other's indexing.
+    Working over the share at least had SQLite arbitrating. This is the replacement — and a
+    caller refused here does not fail, it works on the share instead, which is exactly the
+    behaviour that was safe all along.
+    """
+    held = _holder(remote)
+    if held:
+        if held.get("pid") == os.getpid() and held.get("host") == socket.gethostname():
+            return True                 # already ours: get_collection called twice in one run
+        print(f"  [warn] another run holds the chroma write lock on {remote.name} "
+              f"(host {held.get('host')}, pid {held.get('pid')}, since {held.get('started')}) "
+              f"— working directly on the share instead of staging, so neither run can "
+              f"overwrite the other.", file=sys.stderr)
+        return False
+    try:
+        # O_EXCL so two processes racing here cannot both believe they won.
+        fd = os.open(_lock_path(remote), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"host": socket.gethostname(), "pid": os.getpid(),
+                       "started": datetime.now().isoformat(timespec="seconds")}, fh)
+        return True
+    except FileExistsError:
+        return False
+    except OSError as e:
+        print(f"  [warn] could not take the chroma write lock ({e}); working on the share",
+              file=sys.stderr)
+        return False
+
+
+def _release(remote: Path) -> None:
+    """Drop our lock. Never removes someone else's."""
+    held = _holder(remote)
+    if held and held.get("pid") == os.getpid() and held.get("host") == socket.gethostname():
+        _lock_path(remote).unlink(missing_ok=True)
+
+
 def _stage_in(remote: Path, writable: bool) -> Path:
     """Copy the store down to local disk and return the local path (or ``remote`` on failure)."""
+    if writable and not _acquire(remote):
+        return remote                   # a second writer works on the share; nothing to clobber
     try:
         local = _WORK_ROOT / _slug(remote)
         if local.exists():
@@ -91,6 +168,8 @@ def _stage_in(remote: Path, writable: bool) -> Path:
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] could not stage chroma to local disk ({e}); working on the share",
               file=sys.stderr)
+        if writable:
+            _release(remote)            # we hold a lock for staging we are not doing
         return remote
 
 
@@ -122,6 +201,7 @@ def sync_back() -> None:
                   f"local copy is at {local} — the index is derived data and will be rebuilt "
                   f"on the next run, but nothing is lost by keeping it.", file=sys.stderr)
         finally:
+            _release(remote)
             _staged.pop(remote, None)
 
 

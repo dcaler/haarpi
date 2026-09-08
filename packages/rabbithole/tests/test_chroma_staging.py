@@ -17,6 +17,9 @@ Runnable two ways:
 
 from __future__ import annotations
 
+import json
+import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -166,6 +169,99 @@ def test_two_projects_get_separate_local_stores(tmp_path):
     b.mkdir(parents=True)
     assert chroma._slug(a) != chroma._slug(b)
     assert "projA" in chroma._slug(a) and "projB" in chroma._slug(b)
+
+
+# ── the write lock ───────────────────────────────────────────────────────────
+
+def test_a_second_writer_works_on_the_share_rather_than_clobbering(tmp_path):
+    """The risk staging CREATED. Two writers each take a snapshot, both copy back, and the
+    last one silently discards the other's indexing — where working over the share at least
+    had SQLite arbitrating. The second writer is sent back to the share, which is exactly the
+    behaviour that was safe all along."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    first = chroma.get_collection(remote, writable=True)
+    _add(first, "first-writers-work")
+    assert chroma._staged.get(remote) is not None
+
+    # A different process arrives at the same store.
+    other = tmp_path / "elsewhere"
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": socket.gethostname(), "pid": os.getpid(), "started": "now"}))
+    chroma._staged.pop(remote)                       # pretend we are that other process
+    assert chroma._acquire(remote) is True, "our own pid re-entering is not a conflict"
+
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "some-other-host", "pid": 999999, "started": "now"}))
+    assert chroma._stage_in(remote, writable=True) == remote, "sent to the share, not staged"
+    assert remote not in chroma._staged, "and so it has nothing to write back"
+
+
+def test_a_lock_left_by_a_dead_process_is_cleared(tmp_path):
+    """A killed run must not wedge the project forever."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": socket.gethostname(), "pid": 2 ** 22, "started": "earlier"}))
+    assert chroma._holder(remote) is None
+    assert chroma._acquire(remote) is True
+
+
+def test_another_hosts_lock_is_believed(tmp_path):
+    """Liveness is unknowable across hosts. Being wrong costs a slower run; the reverse costs
+    two writers overwriting each other."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "another-box", "pid": 1, "started": "earlier"}))
+    assert chroma._acquire(remote) is False
+
+
+def test_the_lock_is_released_after_the_write_back(tmp_path):
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma.get_collection(remote, writable=True)
+    assert chroma._lock_path(remote).exists()
+    chroma.sync_back()
+    assert not chroma._lock_path(remote).exists()
+
+
+def test_the_lock_is_released_even_when_the_write_back_fails(tmp_path, monkeypatch):
+    """Otherwise one failed run leaves the project locked against every later one."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma.get_collection(remote, writable=True)
+    monkeypatch.setattr(chroma.shutil, "copytree",
+                        lambda *a, **kw: (_ for _ in ()).throw(OSError("share gone")))
+    chroma.sync_back()
+    assert not chroma._lock_path(remote).exists()
+
+
+def test_a_reader_takes_no_lock(tmp_path):
+    """Readers never write back, so they cannot clobber and must not block a writer."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma.get_collection(remote, writable=False)
+    assert not chroma._lock_path(remote).exists()
+
+
+def test_the_lock_sits_beside_the_store_not_inside_it(tmp_path):
+    """Inside, it would be copied into the snapshot and written back out again — outliving
+    the run that took it."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma.get_collection(remote, writable=True)
+    assert chroma._lock_path(remote).parent == remote.parent
+    assert not any(p.name.endswith(".lock") for p in remote.rglob("*"))
+
+
+def test_a_released_lock_is_never_someone_elses(tmp_path):
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "another-box", "pid": 1, "started": "earlier"}))
+    chroma._release(remote)
+    assert chroma._lock_path(remote).exists(), "we do not drop a lock we did not take"
 
 
 if __name__ == "__main__":
