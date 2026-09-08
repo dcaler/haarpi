@@ -11,19 +11,149 @@ keying by citekey keeps the index aligned with the source it actually holds.
 
 from __future__ import annotations
 
+import atexit
+import hashlib
 import re
+import shutil
+import signal
 import sys
+import time
+from pathlib import Path
+
+from . import runlog
 
 _CHUNK_CHARS = 1800       # max chars per chunk (≈ 450 tokens — leaves room for query + output)
 _COLLECTION_NAME = "papers"
 _LOCATE_CANDIDATES = 3    # chunks fetched per claim, so a collision can fall through to the next
 
 
-def get_collection(chroma_dir):
+def get_collection(chroma_dir, writable: bool = False):
+    """The project's collection, worked on from LOCAL disk rather than over the share.
+
+    The store is a SQLite file, and the project tree is an NFSv3 mount that (on this box)
+    reaches the server over WiFi. SQLite's locking on NFS goes through the server's lock
+    manager on every operation, so each one is a round trip across that link. It is reliable
+    almost always — nine projects indexed in three weeks — but "almost" is a per-operation
+    probability, and a `report` over a 48-paper corpus makes thousands of them. On 2026-09-08
+    one was lost and `chromadb.errors.InternalError: database is locked` ended an hour-long
+    run at paper 7 of 48.
+
+    So the store is staged to local disk, worked on there, and copied back. The canonical copy
+    stays on the share, where it is synced and backed up with the rest of the project.
+
+    ``writable`` says whether this caller INDEXES. Readers (locate, the bibliography passes)
+    stage in and never copy back, which is faster and removes any chance of a reader's stale
+    copy overwriting a writer's work.
+
+    Falls back to working directly on the share if staging cannot be set up: a cache that does
+    not work is not a reason for the tool not to run.
+    """
     import chromadb
-    chroma_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(chroma_dir))
+    chroma_dir = Path(chroma_dir)
+    local = _stage_in(chroma_dir, writable)
+    local.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(local))
     return client.get_or_create_collection(_COLLECTION_NAME)
+
+
+_WORK_ROOT = Path.home() / ".cache" / "haarpi" / "chroma"
+_staged: dict[Path, Path] = {}          # remote -> local, for the copy-back
+_hooks_installed = False
+
+
+def _slug(remote: Path) -> str:
+    """A stable, readable local directory name for one project's store."""
+    h = hashlib.sha1(str(remote.resolve()).encode()).hexdigest()[:10]
+    # <project>/litReview/work/chroma -> the project directory is four levels up
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", remote.parents[2].name if len(remote.parents) > 2
+                  else remote.name)
+    return f"{name}-{h}"
+
+
+def _stage_in(remote: Path, writable: bool) -> Path:
+    """Copy the store down to local disk and return the local path (or ``remote`` on failure)."""
+    try:
+        local = _WORK_ROOT / _slug(remote)
+        if local.exists():
+            shutil.rmtree(local)        # never trust a leftover: the share is the truth
+        local.parent.mkdir(parents=True, exist_ok=True)
+        if remote.exists() and any(remote.iterdir()):
+            t0 = time.time()
+            shutil.copytree(remote, local)
+            print(f"  {runlog.stamp()}chroma staged to local disk "
+                  f"({_size_mb(local):.0f} MB in {time.time() - t0:.0f}s)", flush=True)
+        else:
+            local.mkdir(parents=True, exist_ok=True)
+        if writable:
+            _staged[remote] = local
+            _install_hooks()
+        return local
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not stage chroma to local disk ({e}); working on the share",
+              file=sys.stderr)
+        return remote
+
+
+def sync_back() -> None:
+    """Copy every staged writable store back to the share. Safe to call more than once."""
+    for remote, local in list(_staged.items()):
+        try:
+            if not local.exists():
+                continue
+            t0 = time.time()
+            staging = remote.with_name(remote.name + ".new")
+            if staging.exists():
+                shutil.rmtree(staging)
+            shutil.copytree(local, staging)
+            # Two renames rather than a copy over the live store: an interruption leaves the
+            # previous store recoverable beside it instead of a half-written one in its place.
+            previous = remote.with_name(remote.name + ".old")
+            if previous.exists():
+                shutil.rmtree(previous)
+            if remote.exists():
+                remote.rename(previous)
+            staging.rename(remote)
+            if previous.exists():
+                shutil.rmtree(previous, ignore_errors=True)
+            print(f"  {runlog.stamp()}chroma written back to the project "
+                  f"({_size_mb(remote):.0f} MB in {time.time() - t0:.0f}s)", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] could not write the chroma index back to {remote} ({e}). The "
+                  f"local copy is at {local} — the index is derived data and will be rebuilt "
+                  f"on the next run, but nothing is lost by keeping it.", file=sys.stderr)
+        finally:
+            _staged.pop(remote, None)
+
+
+def _install_hooks() -> None:
+    """Copy back on normal exit, on an unhandled exception, and on SIGTERM.
+
+    SIGTERM matters: it is how the runner stops a task, and without a handler the default
+    disposition would end the process with the run's indexing still only on local disk.
+    """
+    global _hooks_installed
+    if _hooks_installed:
+        return
+    atexit.register(sync_back)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous = signal.getsignal(sig)
+
+            def _handler(signum, frame, _prev=previous):
+                sync_back()
+                if callable(_prev):
+                    _prev(signum, frame)
+                else:
+                    raise SystemExit(128 + signum)
+
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            pass                        # not the main thread: atexit still covers us
+    _hooks_installed = True
+
+
+def _size_mb(p: Path) -> float:
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1e6
 
 
 def _safe_id(citekey: str) -> str:

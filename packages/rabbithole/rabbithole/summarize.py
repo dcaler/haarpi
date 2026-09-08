@@ -1822,7 +1822,9 @@ def build_corpus(cfg, gc, paths, brain, *, from_folder: bool = False,
     collection = None
     if _HAVE_CHROMA:
         try:
-            collection = _chroma.get_collection(paths.work / "chroma")
+            # The only writer: this is the pass that indexes papers. It stages the store to
+            # local disk and writes it back at the end; the read-only locate paths do not.
+            collection = _chroma.get_collection(paths.work / "chroma", writable=True)
             print(f"  ChromaDB ready at {paths.work / 'chroma'}")
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] ChromaDB unavailable ({e}) — locate will use head-truncation",
