@@ -154,3 +154,67 @@ def test_apply_correction_reports_nothing_when_the_term_is_absent():
         assert steering.apply_correction("/nonexistent", "Nowhere Term", "X") == {}
     finally:
         rhconfig.load_project = orig
+
+
+# ── gather_topics: this cycle's asks, not an ever-growing focus line ──────────
+
+def _project(tmp_path, focus: str):
+    """A minimal on-disk litreview project whose config carries `focus`."""
+    from rabbithole import config as rhconfig
+    (tmp_path / "litReview").mkdir(parents=True, exist_ok=True)
+    cfg = rhconfig.ProjectConfig(project_name="t", topic="climate policy", focus=focus)
+    rhconfig.save_project_to(cfg, tmp_path / "litReview" / "litrev.yaml")
+    return tmp_path
+
+
+def test_a_cycles_asks_do_not_grow_the_focus_line(tmp_path):
+    """The defect that stopped elephantRoom's gather working.
+
+    `focus` is fed whole to a query generator that returns a fixed 8-10 queries however long
+    the line gets. Appending every cycle's ask to it meant the newest asks competed with three
+    cycles of older ones for the same slots — and lost, silently.
+    """
+    from rabbithole import config as rhconfig
+    d = _project(tmp_path, "carbon taxes, climate clubs")
+    steering._write_gap_config(str(d), {"gather_topics": ["consumption smoothing"]},
+                               extra_focus="supply chain dependency")
+    cfg = rhconfig.load_project(str(d))
+    assert cfg.focus == "carbon taxes, climate clubs", "the standing scope is untouched"
+    assert cfg.gather_topics == ["consumption smoothing", "supply chain dependency"]
+
+
+def test_gather_topics_are_replaced_each_cycle_not_accumulated(tmp_path):
+    """A satisfied ask is carried by the corpus and the draft from then on. Leaving it in the
+    config re-competes for query slots every cycle forever, which is what unbounded growth was."""
+    from rabbithole import config as rhconfig
+    d = _project(tmp_path, "base scope")
+    steering._write_gap_config(str(d), {"gather_topics": ["first ask"]})
+    steering._write_gap_config(str(d), {"gather_topics": ["second ask"]})
+    cfg = rhconfig.load_project(str(d))
+    assert cfg.gather_topics == ["second ask"], "last cycle's ask does not linger"
+    assert cfg.focus == "base scope"
+
+
+def test_a_genuine_widening_of_scope_still_reaches_the_focus(tmp_path):
+    """`gather_topics` is for one cycle's asks; a standing change of scope is not, and the
+    planner says which is which via `focus_addition`."""
+    from rabbithole import config as rhconfig
+    d = _project(tmp_path, "base scope")
+    steering._write_gap_config(str(d), {"gather_topics": ["one ask"],
+                                        "focus_addition": "now also covers adaptation"})
+    cfg = rhconfig.load_project(str(d))
+    assert cfg.focus == "base scope; now also covers adaptation"
+    assert cfg.gather_topics == ["one ask"]
+
+
+def test_a_redirection_drops_the_previous_cycles_asks(tmp_path):
+    """A redirect rewrites the standing scope, so old asks do not carry across it — but a
+    section asked for IN the redirecting markup still has to be searched."""
+    from rabbithole import config as rhconfig
+    d = _project(tmp_path, "old scope")
+    steering._write_gap_config(str(d), {"gather_topics": ["stale ask"]})
+    steering._write_redirect_config(str(d), {"new_topic": "new topic", "new_focus": "new scope"},
+                                    extra_focus="fresh ask")
+    cfg = rhconfig.load_project(str(d))
+    assert cfg.gather_topics == ["fresh ask"]
+    assert cfg.topic == "new topic" and cfg.focus == "new scope"

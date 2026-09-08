@@ -45,6 +45,11 @@ class Candidate:
     item_type: str = "journal-article"
     language: str = ""           # ISO 639-1 code if known (e.g. "en", "fr"); "" = unknown
     source: str = ""             # which API surfaced it
+    # Every search query that surfaced this paper (merged across duplicates). Provenance, not
+    # metadata: it is what lets `gather` report per-topic yield — how many papers a reviewer's
+    # specific ask actually brought in — instead of only a corpus-wide total that hides an ask
+    # returning nothing.
+    found_by: list = field(default_factory=list)
     citekey: str = ""            # Better BibTeX citation key from Zotero (Extra field), if any
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:

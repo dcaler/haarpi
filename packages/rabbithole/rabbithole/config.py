@@ -59,6 +59,14 @@ class ProjectConfig:
     project_name: str = "untitled"
     topic: str = ""
     focus: str = ""
+    # THIS cycle's specific asks, replaced (never appended to) each time the planner writes a
+    # new numbered config. `focus` is the review's STANDING scope and is fed whole to query
+    # generation, which returns a fixed 8-10 queries however long it grows — so an ask parked
+    # in `focus` competes with every earlier cycle's ask for a slot, and the newest ones lose.
+    # elephantRoom's fourth gather searched a 900-character focus and returned nothing at all
+    # on the two topics that cycle was FOR. Topics here get their own guaranteed queries and
+    # their own per-topic yield report, so a gather that finds nothing for an ask says so.
+    gather_topics: list = field(default_factory=list)
     target_min: int = 20
     target_max: int = 50
     date_from: int | None = None

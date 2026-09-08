@@ -189,6 +189,10 @@ def dedupe(candidates: list[Candidate]) -> list[Candidate]:
         keep.publisher = keep.publisher or drop.publisher
         keep.url = keep.url or drop.url
         keep.cited_by_count = max(keep.cited_by_count, drop.cited_by_count)
+        # Provenance is a UNION, not a pick: a paper reached by both a general query and a
+        # reviewer's topic query counts toward that topic, which is the whole point of tracking it.
+        seen_q = set(keep.found_by)
+        keep.found_by = list(keep.found_by) + [q for q in drop.found_by if q not in seen_q]
         if not keep.authors:
             keep.authors = drop.authors
         best[key] = keep

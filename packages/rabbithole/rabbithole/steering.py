@@ -121,16 +121,26 @@ def _draft_reviews(directory: str) -> list[Path]:
 
 
 def _write_gap_config(directory: str, plan: dict, extra_focus: str = "") -> Path:
-    """Write a new numbered litrev config whose focus steers gather at the gaps.
+    """Write a new numbered litrev config that steers gather at the gaps.
 
-    `extra_focus` carries a section the reviewer asked for. The focus line is the only
-    channel between an annotated docx and a later `report`, which re-plans from the corpus
-    and never reads the docx.
+    This cycle's asks go to `gather_topics`, which is REPLACED each cycle and earns each ask
+    its own guaranteed search queries. They used to be appended to `focus` instead, and that is
+    why elephantRoom's gather stopped working: `focus` is fed whole to a query generator that
+    returns a fixed 8-10 queries however long the line gets, so by the fourth cycle the newest
+    asks were competing with three cycles of older ones and losing. `focus` stays what it was
+    always meant to be — the review's standing scope, the one channel to a later `report`, which
+    re-plans from the corpus and never reads the docx.
     """
     prev = config.load_project(directory)
-    topics = ", ".join(t for t in plan.get("gather_topics", []) if t)
-    addition = plan.get("focus_addition") or (f"Expand coverage of: {topics}" if topics else "")
-    _append_focus(prev, addition, extra_focus)
+    topics = [t for t in plan.get("gather_topics", []) if t]
+    if extra_focus:
+        topics += [s for s in (extra_focus.split("; ") if extra_focus else []) if s.strip()]
+    # Replaced, not appended: a satisfied ask is carried by the corpus and the draft from here
+    # on, not by a config line that re-competes for query slots every cycle thereafter.
+    prev.gather_topics = list(dict.fromkeys(t.strip() for t in topics if t.strip()))
+    # A genuine widening of scope still belongs in `focus` — that is a standing change, not
+    # one cycle's ask — and the planner says so explicitly via `focus_addition`.
+    _append_focus(prev, plan.get("focus_addition") or "")
     fp = config.next_project_file(directory)
     return config.save_project_to(prev, fp)
 
@@ -142,7 +152,7 @@ def _write_section_config(directory: str, extra_focus: str) -> Path:
     section, so the review has to be re-planned. This is the config that tells the planner why.
     """
     prev = config.load_project(directory)
-    _append_focus(prev, extra_focus)
+    prev.gather_topics = [s.strip() for s in (extra_focus or "").split("; ") if s.strip()]
     fp = config.next_project_file(directory)
     return config.save_project_to(prev, fp)
 
@@ -171,6 +181,10 @@ def _write_redirect_config(directory: str, plan: dict, extra_focus: str = "") ->
         prev.focus = new_focus
     if new_prompt:
         prev.research_prompt = new_prompt
-    _append_focus(prev, extra_focus)
+    # A redirection rewrites the standing scope, so the previous cycle's asks do not carry
+    # forward — but a section asked for IN the redirecting markup still has to be searched.
+    prev.gather_topics = ([s.strip() for s in (extra_focus or "").split("; ") if s.strip()]
+                          + [t for t in plan.get("gather_topics", []) if t])
+    prev.gather_topics = list(dict.fromkeys(prev.gather_topics))
     fp = config.next_project_file(directory)
     return config.save_project_to(prev, fp)

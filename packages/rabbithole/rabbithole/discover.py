@@ -276,9 +276,87 @@ def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]
     return queries
 
 
-def _generate_queries(brain: Brain, cfg) -> list[str]:
-    """Decompose topic+focus into several targeted search queries (plus the raw
-    topic). Falls back to the single topic string if generation fails."""
+_TOPIC_QUERY_SYS = """\
+You generate search queries for academic databases. You are given a research topic for
+context and ONE specific sub-topic a reviewer has asked to be covered. Produce 3-4 SHORT
+keyword queries (3-8 words each) aimed squarely at the SUB-TOPIC, using the terminology
+the literature on that sub-topic actually uses — which is often not the wording of the
+request. Do not broaden to the parent topic; these queries exist to reach papers the
+general search misses. Respond with ONLY a JSON array of query strings, no other text."""
+
+
+def _topic_queries(brain: Brain, cfg, topic: str) -> list[str]:
+    """Dedicated queries for ONE reviewer ask, outside the general query budget.
+
+    An ask parked in `focus` competes with the whole standing scope for the 8-10 slots
+    `_generate_queries` returns, and loses — the request is a clause in a long line, and the
+    coordinator spends its queries on the topic as a whole. These are guaranteed slots, phrased
+    in the sub-topic's own vocabulary rather than the reviewer's, because a reviewer writes
+    "households withdraw from their savings during high unemployment" where the literature
+    says "consumption smoothing" and "precautionary saving".
+    """
+    prompt = (f"Research topic (context only): {cfg.topic}\n"
+              f"Sub-topic to cover: {topic}\n"
+              f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+              f"Search queries (JSON array):")
+    try:
+        raw = brain.coordinator(prompt, _TOPIC_QUERY_SYS, num_ctx=4096)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        out = [str(q).strip() for q in (json.loads(m.group(0)) if m else []) if str(q).strip()]
+    except Exception as e:  # noqa: BLE001 — a failed expansion must not lose the general queries
+        print(f"  [warn] could not expand the ask {topic[:60]!r} into queries ({e}); "
+              f"searching it verbatim.", file=sys.stderr)
+        return [topic.strip()][:1]
+    # Fail toward searching SOMETHING for this ask: an empty expansion silently drops the
+    # reviewer's request, which is the failure this whole channel exists to close.
+    return out[:4] or [topic.strip()][:1]
+
+
+def _per_topic_yield(cfg, query_origin: dict[str, str], candidates: list[Candidate],
+                     shortlist: list[Candidate], log=None) -> dict[str, dict[str, int]]:
+    """How many papers each reviewer ask actually brought in, and say so out loud.
+
+    A gather reports one corpus-wide total, which is exactly the number that cannot reveal a
+    failure: elephantRoom's fourth gather returned 45 curated sources and ZERO on either of the
+    two topics that cycle existed to cover, and the total looked healthy. An ask that yields
+    nothing is a finding — the literature may not exist, the vocabulary may be wrong, or the
+    ask may need rephrasing — and it must reach the human rather than being discovered later by
+    reading a section drafted from whatever was nearest.
+    """
+    log = log or (lambda m: print(f"  {m}", flush=True))
+    topics = [str(t).strip() for t in (getattr(cfg, "gather_topics", None) or []) if str(t).strip()]
+    if not topics:
+        return {}
+    short_keys = {c.dedup_key for c in shortlist if c.dedup_key}
+    out: dict[str, dict[str, int]] = {}
+    for t in topics:
+        qs = {q for q, owner in query_origin.items() if owner == t}
+        found = [c for c in candidates if qs & set(c.found_by or ())]
+        out[t] = {"found": len(found),
+                  "curated": sum(1 for c in found if c.dedup_key in short_keys)}
+    log("Yield per reviewer ask:")
+    for t, n in out.items():
+        flag = "   ← NOTHING FOUND" if n["curated"] == 0 else ""
+        log(f"    {t[:60]:<60} {n['found']:>4} found, {n['curated']:>3} curated{flag}")
+    empty = [t for t, n in out.items() if n["curated"] == 0]
+    if empty:
+        log("")
+        log(f"  [!] {len(empty)} ask(s) returned nothing that survived curation. The corpus "
+            f"cannot support a section on these; rephrase the ask, or accept that the "
+            f"literature is not there:")
+        for t in empty:
+            log(f"      - {t}")
+    return out
+
+
+def _generate_queries(brain: Brain, cfg) -> tuple[list[str], dict[str, str]]:
+    """Decompose topic+focus into several targeted search queries (plus the raw topic).
+
+    Returns ``(queries, origin)``; ``origin`` maps each query to the ``cfg.gather_topics``
+    entry it was generated for, or ``""`` for the general topic/focus queries. The general
+    set stays capped; per-topic queries are added ON TOP of that cap, never inside it, so a
+    reviewer's ask cannot be crowded out by the standing scope.
+    """
     base = cfg.topic.strip()
     prompt = (f"Topic: {cfg.topic}\nFocus: {cfg.focus or '(none)'}\n"
               f"Must be about: {cfg.domain_anchor or '(the topic above)'}\n"
@@ -303,7 +381,24 @@ def _generate_queries(brain: Brain, cfg) -> list[str]:
     queries = out[:10]
     if queries:
         queries = _critique_revise_queries(brain, cfg, queries)
-    return queries
+    origin = {q: "" for q in queries}
+    # Per-ask queries are appended AFTER the cap and after the critique pass: the critique
+    # judges distinctness against the general set, and a topic query is meant to be distinct
+    # from it — that is its job.
+    for topic in (getattr(cfg, "gather_topics", None) or []):
+        topic = str(topic).strip()
+        if not topic:
+            continue
+        for q in _topic_queries(brain, cfg, topic):
+            if q.lower() in seen:
+                # Already covered by the general set; still credit the ask, so its yield
+                # report counts the papers that query brings in.
+                origin.setdefault(q, topic)
+                continue
+            seen.add(q.lower())
+            queries.append(q)
+            origin[q] = topic
+    return queries, origin
 
 
 _VOCAB_SYS = """\
@@ -418,38 +513,43 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     source_counts: dict[str, int] = {}
 
     log("Generating search queries with the coordinator model...")
-    queries = _generate_queries(brain, cfg)
+    queries, query_origin = _generate_queries(brain, cfg)
     log(f"{len(queries)} query angles:")
     for q in queries:
-        print(f"        • {q}")
+        owner = query_origin.get(q, "")
+        print(f"        • {q}" + (f"   ← ask: {owner[:48]}" if owner else ""))
     # Spread the budget across query angles so total volume stays comparable to
     # the old single-query run; dedupe collapses the heavy overlap afterwards.
     per_query = max(12, per_source // 2)
     for qi, q in enumerate(queries, 1):
         per_q: list[str] = []
+        found_here: list[Candidate] = []
         if cfg.sources.get("openalex"):
             r = sources.search_openalex(q, per_query, gc.contact_email,
                                         cfg.date_from, cfg.date_to)
             source_counts["OpenAlex"] = source_counts.get("OpenAlex", 0) + len(r)
             per_q.append(f"OpenAlex {len(r)}")
-            raw += r
+            found_here += r
         if cfg.sources.get("crossref"):
             r = sources.search_crossref(q, per_query, gc.contact_email,
                                         cfg.date_from, cfg.date_to)
             source_counts["Crossref"] = source_counts.get("Crossref", 0) + len(r)
             per_q.append(f"Crossref {len(r)}")
-            raw += r
+            found_here += r
         if cfg.sources.get("semantic_scholar"):
             r = sources.search_semantic_scholar(q, per_query, gc.contact_email,
                                                 gc.s2_api_key)
             source_counts["Semantic Scholar"] = source_counts.get("Semantic Scholar", 0) + len(r)
             per_q.append(f"S2 {len(r)}")
-            raw += r
+            found_here += r
         if cfg.sources.get("arxiv") and cfg.include_preprints:
             r = sources.search_arxiv(q, per_query, gc.contact_email)
             source_counts["arXiv"] = source_counts.get("arXiv", 0) + len(r)
             per_q.append(f"arXiv {len(r)}")
-            raw += r
+            found_here += r
+        for c in found_here:
+            c.found_by = [q]
+        raw += found_here
         log(f"[{qi}/{len(queries)}] {q[:55]!r} → {', '.join(per_q) or '(no sources enabled)'}")
 
     # High-value recall: a dedicated "most-cited in this area" pass pulls the
@@ -616,6 +716,8 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         f"(method={rank_method}, floor={floor:g}, arxiv={arxiv_n}/{len(shortlist)}) "
         f"— target {cfg.target_max}")
 
+    topic_yield = _per_topic_yield(cfg, query_origin, kept, shortlist, log)
+
     # Resolve a direct OA PDF link for the final list only — a convenience, NOT a
     # selection criterion. Paywalled papers stay on the list; the DOI is the fetch
     # path (the user has institutional access).
@@ -641,6 +743,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         "already": already,
         "auto_added": auto_added,
         "oa_links": sum(1 for c in shortlist if c.oa_pdf_url),
+        "topic_yield": topic_yield,
     }
     _print_next_steps(cfg, paths, shortlist, collection_key)
     _write_gather_log(cfg, gc, paths, shortlist, collection_key, stats,
