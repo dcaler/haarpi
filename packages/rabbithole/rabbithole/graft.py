@@ -24,6 +24,8 @@ Where the section goes, in priority order:
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import sys
 import time
@@ -92,17 +94,91 @@ def _plan_new_sections(brain: Brain, cfg, existing: list[Section], asks: list[st
     return out[:max_new]
 
 
+_SUPPORT_SYS = (
+    "You judge whether a set of sources can actually carry a proposed literature-review "
+    "section, guarding against the HOMOGRAPH TRAP: a source can share a TERM with the section "
+    "while using it in a completely different SENSE. A section on supply-chain decoupling is "
+    "NOT supported by papers on decoupling economic growth from emissions, however often they "
+    "say 'decoupling'. Judge whether these sources speak to the section's CLAIM. Bias toward "
+    "SUPPORTED — a thin but genuine evidence base is still an evidence base, and declining "
+    "costs the reviewer their section. Answer UNSUPPORTED only when you are confident the "
+    "apparent fit is shared vocabulary in another sense, or the sources are simply about "
+    "something else. Respond with ONLY a JSON object: "
+    '{"verdict": "SUPPORTED" | "UNSUPPORTED", "missing": "what the section needs that these '
+    'sources do not provide", "instead": "what these sources are actually about"}.')
+
+
+def _corpus_supports(brain: Brain, cfg, sec: Section, full: dict[str, str],
+                     tag: str = "graft") -> bool:
+    """Whether the shortlisted sources support ``sec``, or merely rank nearest to it.
+
+    This is the sensor that says the corpus needs filling, not a veto on the reviewer's ask.
+    Every stage before it behaves correctly and the composition still fails: the planner is
+    never shown the corpus, the shortlist has no threshold and returns a top-k regardless, and
+    the drafter writes faithfully from whatever it is handed. Nothing in that chain can say
+    "this should not have been attempted", so a request about reducing supply-chain dependency
+    came back as a section about decoupling growth from emissions, with every number correctly
+    transcribed from its source.
+
+    Fails SAFE toward drafting: an error or an unparseable reply proceeds, because a wrong
+    decline costs one comment restated next cycle and a wrong draft costs a whole revise.
+    """
+    lines = [full.get(k, "") for k in sec.candidates[:12]]
+    lines = [ln for ln in lines if ln.strip()]
+    if not lines:
+        print(f"  {runlog.stamp()}[{tag}] {sec.heading!r}: NO sources shortlisted — the corpus "
+              f"has nothing for this ask.", flush=True)
+        sec.unsupported = "the corpus returned no candidate sources for this section"
+        return False
+    prompt = (f"Review topic: {cfg.topic}\n\n"
+              f"Proposed section: {sec.heading}\n"
+              f"What it would argue: {sec.claim}\n\n"
+              f"The best-matching sources the corpus offers:\n"
+              + "\n".join(f"  - {ln[:300]}" for ln in lines) + "\n\nVerdict JSON:")
+    try:
+        raw = brain.coordinator(prompt, _SUPPORT_SYS, num_ctx=8192, think=False)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] [{tag}] could not check corpus support for {sec.heading!r} ({e}); "
+              f"drafting anyway", file=sys.stderr)
+        return True
+    if "UNSUPPORTED" not in str(data.get("verdict", "")).upper():
+        return True
+    missing = str(data.get("missing", "")).strip() or "sources on this specific topic"
+    instead = str(data.get("instead", "")).strip()
+    print(f"  {runlog.stamp()}[{tag}] {sec.heading!r}: NOT SUPPORTED by the corpus — "
+          f"missing {missing}"
+          + (f"; the closest sources are about {instead}" if instead else ""), flush=True)
+    sec.unsupported = missing + (f" (closest available: {instead})" if instead else "")
+    return False
+
+
 def draft_sections(brain: Brain, cfg, existing: list[Section], asks: list[str],
                    compact, full, corpus_keys: set[str], corpus_size: int = 0,
-                   max_new: int = 3, tag: str = "graft") -> list[Section]:
+                   max_new: int = 3, tag: str = "graft",
+                   planned: list[Section] | None = None) -> list[Section]:
     """Plan, evidence, draft and polish the section(s) a reviewer asked for.
 
     Pure drafting: nothing here touches a .docx. Split out of ``run`` so the same work can be
     driven one comment at a time from the redline loop, where a section ask is answered in the
     same pass as the edits around it instead of costing the set a separate whole-document verb.
+
+    ``planned`` carries sections `haarpi next` already planned — before the gather, so the
+    search could be aimed at them. Prefer them: re-planning here would draft a section the
+    corpus was never filled for, and each already knows which ask it answers.
     """
-    print(f"  {runlog.stamp()}[{tag}] planning the new section(s)...", flush=True)
-    new = _plan_new_sections(brain, cfg, existing, asks, max_new=max_new)
+    if planned:
+        new = list(planned)
+        print(f"  {runlog.stamp()}[{tag}] using {len(new)} section(s) planned before the "
+              f"gather: {', '.join(repr(s.heading) for s in new)}", flush=True)
+    else:
+        print(f"  {runlog.stamp()}[{tag}] planning the new section(s)...", flush=True)
+        new = _plan_new_sections(brain, cfg, existing, asks, max_new=max_new)
+        # Positional fallback: with no pre-plan the only link back to an ask is order, and a
+        # 1:1 call (one ask at a time) is what keeps that honest.
+        for sec, ask in zip(new, asks):
+            sec.ask = sec.ask or ask
     if not new:
         return []
     print(f"  {runlog.stamp()}[{tag}] planned {len(new)}: "
@@ -111,7 +187,16 @@ def draft_sections(brain: Brain, cfg, existing: list[Section], asks: list[str],
     print(f"  {runlog.stamp()}[{tag}] shortlisting evidence over {corpus_size} sources...",
           flush=True)
     _shortlist(brain, new, compact, full)
+    # Does the corpus actually hold this section, or only the nearest thing to it? A shortlist
+    # is a RANKING, and a ranking always has a top — there is no threshold anywhere in it. Ask
+    # before drafting, because a drafter handed the least-bad twelve sources will write a
+    # perfectly sound section out of them and report success. An unsupported section is
+    # RETURNED, not dropped: the caller owes the reviewer an answer naming what was missing.
+    for sec in new:
+        _corpus_supports(brain, cfg, sec, full, tag)
     for i, sec in enumerate(new):
+        if sec.unsupported:
+            continue
         # Timestamp the START of each expensive call, not just its end: a start line with no
         # successor is what makes a stall visible. Drafting and peer review run with the
         # coordinator's chain-of-thought ON (they are judgement work), so each section is three

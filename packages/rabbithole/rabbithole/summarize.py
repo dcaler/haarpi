@@ -577,6 +577,13 @@ class Section:
     claim: str
     candidates: list[str] = field(default_factory=list)   # citekeys, most relevant first
     text: str = ""
+    # The reviewer comment this section was planned for, when it was grafted in answer to one.
+    # Carried so the reply that goes back names THIS section: attribution used to be positional,
+    # which credited one section to three comments and left a second one unmentioned.
+    ask: str = ""
+    # Set when the corpus cannot carry this section: what it needs that the sources do not
+    # provide. A section with this set is never drafted, and the reason reaches the reviewer.
+    unsupported: str = ""
 
 
 # ── 1. plan the sections ──────────────────────────────────────────────────────

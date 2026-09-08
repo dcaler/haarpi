@@ -692,9 +692,36 @@ def _pending_corrections(paths) -> list[dict]:
     return []
 
 
+def _planned_sections(paths) -> dict[str, dict]:
+    """The sections `haarpi next` planned for this cycle, keyed by the ask that produced each.
+
+    Read from the plan ledger for the same reason the corrections are: the planner already
+    decided what each ask becomes, and it decided BEFORE the gather so the search could be aimed
+    at the section. A reviser that re-planned here would draft a section the corpus was never
+    filled for — which is how a request about supply-chain dependency came back as a section
+    about decoupling growth from emissions, written from the papers that happened to rank
+    nearest to the reviewer's own wording.
+    """
+    try:
+        from haarpi import project as _hproject
+    except ImportError:
+        return {}
+    try:
+        plans = _hproject.list_plans(paths.root.parent)
+    except Exception:  # noqa: BLE001
+        return {}
+    for plan in reversed(plans):
+        if (plan or {}).get("stage") != "litreview" or plan.get("type") not in (None, "plan"):
+            continue
+        return {s["ask"]: s for s in (plan.get("sections") or [])
+                if s.get("ask") and s.get("heading")}
+    return {}
+
+
 def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
                  compact, full, citekeys: dict[int, str],
-                 outcomes: dict[str, str], grafted_at: dict[int, str]) -> list[dict]:
+                 outcomes: dict[str, str], grafted_at: dict[int, str],
+                 paths=None) -> list[dict]:
     """Draft the section(s) the reviewer asked for and return them as ``insert_section`` edits.
 
     Placement, in priority order — unchanged from the standalone verb, because the reasoning is
@@ -706,47 +733,49 @@ def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
     """
     from . import graft as _graft
     existing, head_paras = _sections_from_docx(docx)
-    asks = [" ".join(texts) for _a, texts in section_asks]
-    ids_for_ask = [[str(i) for i in a["ids"]] for a, _t in section_asks]
-    try:
-        new = _graft.draft_sections(brain, cfg, existing, asks, compact, full,
-                                    set(citekeys.values()), corpus_size=len(corpus),
-                                    tag="revise/graft")
-    except Exception as e:  # noqa: BLE001 — a failed graft must not lose the edits beside it
-        print(f"  [warn] could not draft the requested section(s) ({e})", file=sys.stderr)
-        new = []
-    if not new:
-        for ids in ids_for_ask:
-            outcomes.update({i: "section_covered" for i in ids})
-        return []
-
+    planned = _planned_sections(paths) if paths is not None else {}
     out: list[dict] = []
-    for i, sec in enumerate(new):
+    # One ask at a time. The whole set used to go in together and come back as a flat list
+    # matched to asks BY POSITION, so two sections drafted for one fused ask credited the
+    # first to every comment and left the second belonging to nobody: three identical replies
+    # naming a section, and a second section the reviewer was never told existed.
+    for anchor, texts in section_asks:
+        ask = " ".join(texts)
+        ids = [str(i) for i in anchor["ids"]]
+        pre = planned.get(ask)
+        seed = ([_graft.Section(heading=pre["heading"], claim=pre["claim"], ask=ask)]
+                if pre else None)
+        try:
+            new = _graft.draft_sections(brain, cfg, existing, [ask], compact, full,
+                                        set(citekeys.values()), corpus_size=len(corpus),
+                                        max_new=1, tag="revise/graft", planned=seed)
+        except Exception as e:  # noqa: BLE001 — a failed graft must not lose the edits beside it
+            print(f"  [warn] could not draft the section for {ask[:60]!r} ({e})",
+                  file=sys.stderr)
+            new = []
+        if not new:
+            # The planner found nothing to add for this ask: the review already covers it.
+            outcomes.update({i: "section_covered" for i in ids})
+            continue
+        sec = new[0]
+        if sec.unsupported:
+            # Distinct from "already covered", and the distinction is the whole point: one says
+            # the review has this ground, the other says the corpus does not. They call for
+            # opposite next moves, and the reviewer is the one who decides which.
+            outcomes.update({i: f"unsupported:{sec.unsupported}" for i in ids})
+            continue
         paras = [t for t in sec.text.split("\n\n") if t.strip()]
         if not paras:
+            outcomes.update({i: "section_covered" for i in ids})
             continue
-        if i < len(section_asks):
-            at_para = section_asks[i][0]["para"]
-            why = "the comment's own anchor"
-        else:
-            # More sections than asks: no comment owns this one, so place it by meaning.
-            at, why = _graft.choose_position(brain, existing, sec, None)
-            at_para = head_paras[at] if 0 <= at < len(head_paras) else (
-                head_paras[-1] if head_paras else 0)
+        at_para = anchor["para"]
         out.append({"para": at_para, "op": "insert_section",
                     "heading": sec.heading, "paras": paras})
         grafted_at[at_para] = sec.heading
-        if i < len(ids_for_ask):
-            outcomes.update({j: f"grafted:{sec.heading}" for j in ids_for_ask[i]})
+        outcomes.update({i: f"grafted:{sec.heading}" for i in ids})
+        existing.append(sec)     # the next ask cannot re-plan the section just written
         print(f"  {runlog.stamp()}Grafting {sec.heading!r} after the section at para "
-              f"{at_para} — {why}", flush=True)
-        if "NO position signal" in why:
-            print(f"  [warn] {sec.heading!r} was appended at the end — no anchor and no "
-                  "embedding signal. Check its placement.", file=sys.stderr)
-    # An ask that produced no section still owes its reviewer an answer.
-    for k, ids in enumerate(ids_for_ask):
-        if k >= len(new):
-            outcomes.update({i: "section_covered" for i in ids})
+              f"{at_para} — the comment's own anchor", flush=True)
     return out
 
 
@@ -776,14 +805,18 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
     # silently dropped — rework was scaled to the heaviest ask in the set rather than to each ask.
     # Nothing is written until `apply_edits`, so a graft never moves the paragraph another
     # comment is anchored to.
-    section_asks = [(a, [cmap[i]["text"] for i in a["ids"] if i in cmap and cmap[i]["text"]])
-                    for a in anchors]
-    section_asks = [(a, texts) for a, texts in section_asks
-                    if any(_is_section_ask(t) for t in texts)]
+    # ONE ASK PER COMMENT, not per anchor paragraph. Grouping by anchor fused every section
+    # request that happened to sit on the same heading into a single ask: three separate
+    # requests on elephantRoom's p14 became one ask, one drafted section credited to all three
+    # comments, and a second section that no comment was ever told about. A reviewer who leaves
+    # three notes in one place has made three requests.
+    section_asks = [({**a, "ids": [i]}, [cmap[i]["text"]])
+                    for a in anchors for i in a["ids"]
+                    if i in cmap and cmap[i]["text"] and _is_section_ask(cmap[i]["text"])]
     grafted_at: dict[int, str] = {}      # para index -> heading, for the log
     if section_asks:
         edits += _graft_edits(brain, cfg, docx, section_asks, corpus, compact, full,
-                              citekeys, outcomes, grafted_at)
+                              citekeys, outcomes, grafted_at, paths)
     handled = {a["para"] for a, _ in section_asks}
 
     for a in anchors:
@@ -1021,6 +1054,14 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
                             "comment sits in — where you left the note is where the ask "
                             "belongs. Every other paragraph is untouched; reject the insertion "
                             "to drop it, or move it if it reads better elsewhere.")
+        elif outcome.startswith("unsupported:"):
+            missing = outcome.split(":", 1)[1]
+            replies[cid] = (
+                f"rabbitHole: did not draft this section — the corpus cannot carry it. It is "
+                f"missing {missing}. Nothing was written rather than assembling it from the "
+                f"sources that merely ranked nearest, which would have read as a real section. "
+                f"Add the literature to the Zotero collection, or re-run the cycle so `gather` "
+                f"searches for it, and the section will be drafted then.")
         elif outcome == "section_covered":
             replies[cid] = ("rabbitHole: read this as a request for a new section, but the "
                             "review already covers that ground in an existing section, so "
@@ -1154,6 +1195,21 @@ def run(directory: str = ".", brain_override: str | None = None,
         print("=" * 60)
         print(f"  {summary['replace']} paragraph(s) revised as tracked changes, "
               f"{summary['comments_preserved']} comment(s) preserved.")
+        # Say what was GRAFTED. The summary used to report only the paragraph rewrites, so a
+        # run that spliced two whole sections into the review announced "1 paragraph(s)
+        # revised" and nothing else — the largest thing it did was the one thing it did not
+        # mention, and the document read as finished for three days.
+        outs = summary.get("comment_outcomes", {}) or {}
+        grafted = sorted({o.split(":", 1)[1] for o in outs.values()
+                          if o.startswith("grafted:")})
+        for h in grafted:
+            print(f"  Section drafted and spliced in: {h}")
+        declined = [o.split(":", 1)[1] for o in outs.values() if o.startswith("unsupported:")]
+        for d in declined:
+            print(f"  Section NOT drafted — corpus cannot carry it: missing {d}")
+        if declined:
+            print(f"  [!] {len(declined)} requested section(s) went unwritten. The reviewer's "
+                  f"comment carries the reason; gather for these topics before the next revise.")
         if "bib_entries" in summary:
             print(f"  Annotated bibliography regenerated: "
                   f"{summary['bib_entries']} entr(y/ies) re-located.")

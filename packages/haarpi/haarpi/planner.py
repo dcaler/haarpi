@@ -1138,6 +1138,66 @@ def _apply_corrections(root: Path, m: project.Manifest, directory: str,
     return counts
 
 
+def _plan_sections(directory: str, markup, cfg: dict, section_focus: list[str]) -> list[dict]:
+    """Turn each "add a section on X" ask into the heading and claim it will become, HERE —
+    before the gather that has to find the literature for it.
+
+    The ordering used to be the other way round: gather searched the reviewer's raw prose, and
+    the section was planned hours later inside `revise`, from whatever the search had returned.
+    So the good query — a six-word heading and a one-sentence claim — was produced only after
+    the one chance to use it had passed, and the search ran on wording like "nation-level drives
+    to reduce supply chain dependencies ... (exactly the elephant in the room)", asides and all.
+
+    Planning first buys three things: the gather searches the section rather than the request,
+    the plan record shows the author what is about to be written and looked for before a long
+    chain is committed, and `revise` drafts the section the corpus was actually filled for
+    instead of re-planning against a corpus it never asked to be built.
+
+    Returns ``[{"ask", "heading", "claim"}]``; an empty list on any failure, which simply leaves
+    the chain steering on the raw asks as before.
+    """
+    if not section_focus:
+        return []
+    try:
+        from rabbithole import config as rhconfig, graft as _rhgraft
+        from rabbithole.summarize import Section
+        from .brain import Brain
+    except ImportError:
+        return []
+    try:
+        rcfg = rhconfig.load_project(directory)
+        existing = [Section(heading=h, claim="") for h in _existing_headings(markup)]
+        o = cfg.get("ollama", {})
+        b = Brain(o.get("url", "http://localhost:11434"),
+                  o.get("coordinator", "qwen3.6:27b-16k"),
+                  o.get("worker", "llama3.1:8b"), tool="haarpi")
+        out: list[dict] = []
+        for ask in section_focus:
+            # One ask at a time: fusing them is how three separate requests became one section
+            # with three identical replies, and a planner that fuses them re-creates that here.
+            for sec in _rhgraft._plan_new_sections(b, rcfg, existing, [ask], max_new=2):
+                out.append({"ask": ask, "heading": sec.heading, "claim": sec.claim})
+                existing.append(sec)     # so the next ask cannot re-plan the same section
+        return out
+    except Exception as e:  # noqa: BLE001 — planning is an improvement to the steering, not a gate
+        print(f"  [warn] could not pre-plan the requested section(s) ({e}); "
+              f"steering the gather on the asks as written")
+        return []
+
+
+def _existing_headings(markup) -> list[str]:
+    """The draft's current section headings, so a planned section cannot duplicate one."""
+    from docx import Document
+    from . import redline
+    out = []
+    for p in Document(str(markup)).paragraphs:
+        if redline.is_heading_style(p.style.name if p.style is not None else ""):
+            t = redline.flatten_paragraph(p._p).strip()
+            if t:
+                out.append(t)
+    return out
+
+
 def _write_litreview_steering(directory: str, built: dict) -> str | None:
     """INSTRUCT the gather/report: write a new numbered litrev config carrying the tasks' queries.
 
@@ -1899,9 +1959,19 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # human is the verification loop. See DESIGN_next_orchestration.md.
         tasks = decompose(check["unresolved"], cfg)
         built = chain_from_tasks(tasks)
+        # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
+        # it was asked for. Replaces each section ask in `gather_topics` with its heading and
+        # claim; the ask itself is kept for any that could not be planned.
+        built["sections"] = _plan_sections(str(root), markup, cfg, built["section_focus"])
+        if built["sections"]:
+            planned = {s["ask"] for s in built["sections"]}
+            built["gather_topics"] = (
+                [f"{s['heading']}. {s['claim']}" for s in built["sections"]]
+                + [t for t in built["gather_topics"] if t not in planned])
         tier, steps = built["tier"], built["steps"]
         plan = {"tier": tier, "steps": steps, "tasks": tasks,
                 "gather_topics": built["gather_topics"],
+                "sections": built["sections"],
                 "assessment": _tasks_assessment(tasks)}
     else:
         plan = classify(stage, check, cfg, tiers=dtiers, deliverable=deliverable)
@@ -1938,10 +2008,16 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
     if plan.get("gather_topics"):
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
+    # The sections this chain intends to write, named before it runs. This is the cheap read
+    # that stands in front of an expensive chain: the author can see what will be searched for
+    # and drafted, and stop it here, rather than reading it back out of the finished document.
+    for s in (plan.get("sections") or []):
+        summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
     entry = {"type": "plan", "stage": stage, "deliverable": deliverable, "venue": venue,
              "annotation_hash": ahash,
              "markup": markup.name, "tier": tier, "steps": steps,
              "assessment": plan.get("assessment", ""),
+             "sections": plan.get("sections") or [],
              "steer_config": steer_config,
              "corrections": corrections, "correction_counts": corr_counts,
              "bindings": _current_bindings(root, m, stage)}
