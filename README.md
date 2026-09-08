@@ -75,16 +75,31 @@ pass, with each response matched to its own ask:
 | the comment asks for | it is answered by |
 |---|---|
 | a prose change (`edit`) | a tracked, sentence-level rewrite of the paragraph it sits on |
-| a new section (`section`) | a section drafted and spliced in at the comment that asked for it |
+| a new section (`section`) | a section planned before the gather, then drafted and spliced in at the comment that asked for it |
 | papers already in Zotero (`cite`) | those citekeys worked into the anchored paragraph |
 | references not yet in Zotero (`ingest`) | fetched, then finalised by the human at a `collect` |
 | a wrong fact (`correct`) | a deterministic substitution across the brief, the config **and** the document |
+| a section the corpus cannot carry | nothing drafted, and a reply naming what was missing |
 | something prose cannot satisfy | no edit, and a reply naming the real reason |
 | a change of direction (`redirect`) | the brief is rewritten and the whole document re-planned |
 
 Only a `redirect` re-plans the whole document. It rewrites the brief, which
 invalidates the premise of every other comment in the set, so cascading there is
 correct rather than lazy. Everything else is answered in place.
+
+**One comment is one ask.** Three "add a section on X" notes left on the same
+heading are three requests, not one — grouping them by where they were written
+fused them into a single ask, drafted one section for it, credited that section
+to all three in identical replies, and left a second section belonging to
+nobody.
+
+**Sections are planned before the gather that has to find their literature.**
+The heading and one-sentence claim are decided in `haarpi next`, so the search
+runs on what will be written rather than on how it was requested — a reviewer's
+prose carries asides and framing that make a poor query. They land in the plan
+record too, which makes `haarpi next --dry-run` a few minutes' read standing in
+front of a multi-day chain: it names every section the cycle intends to write
+and every topic it will search, and writes nothing.
 
 The failure this replaced is worth recording, because it is the obvious design
 and it is wrong: rework used to be scaled to the *heaviest* need in a set. One
@@ -137,7 +152,7 @@ exceed them when the work asks for it.
 | verb | does |
 |---|---|
 | `init` | the brief interview → `litrev.yaml` |
-| `gather` | searches, ranks and curates candidates into the collect-list |
+| `gather` | searches, ranks and curates candidates into the collect-list; each reviewer ask gets its own queries and its own yield line |
 | `collect` | *(human)* adds each real source to Zotero **with its PDF** |
 | `ingest` | pulls reviewer-supplied references into the corpus |
 | `audit` | quarantines lexical false-friends by word sense — reversibly |
@@ -161,6 +176,22 @@ The `audit` verb quarantines by *word sense*, not by domain — a paper that
 shares a term with the topic but transfers no concept is moved to a Zotero
 `quarantine` collection, reversibly, never deleted. Judging by domain would
 throw away exactly the cross-disciplinary work the review exists to find.
+
+**A run has to be able to say it found nothing.** Every stage can behave
+correctly and the composition still fail: a search returns a healthy total while
+returning zero on the one topic the cycle exists to cover; a shortlist is a
+*ranking*, so it always has a top however far away that top is; and a drafter
+handed the twelve nearest sources writes a sound section out of them and reports
+success. Three places therefore report absence rather than a plausible
+substitute. A reviewer's ask gets dedicated search queries — phrased in the
+sub-topic's own vocabulary, since the literature says "consumption smoothing"
+where a reviewer says "households withdraw from their savings" — and its own
+found/curated count, so an ask that brought nothing in says so. Before drafting,
+the same word-sense question `audit` asks at intake is asked of the section's
+evidence: a section on supply-chain decoupling is *not* supported by papers on
+decoupling growth from emissions, however often they say "decoupling". And a
+section that fails that check is not written; the reply names what was missing
+and what the corpus holds instead.
 
 ### 2 · Experiment design — rayleigh
 
@@ -302,8 +333,20 @@ The [haarpi](packages/haarpi) package is what the tools have in common:
   replies, and the guards, with per-tool policy on top
 - **the style engine** — author-voice training shared by rabbitHole and
   raconteur, with the profile kept in `~/.config/haarpi/`, outside any repo
-- **the trundlr client**, the figure engine, run logging, notifications, the
-  document naming chain, and pandoc rendering
+- **the trundlr client**, the figure engine, notifications, the document naming
+  chain, and pandoc rendering
+- **run logging** — every line stamped, and every run teed to
+  `.haarpi/runlog/<stamp>_<verb>.log` in the project. A verb that runs for hours
+  leaves a record of what it decided; the task queue keeps only a few kilobytes
+  of tail, which is not enough to reconstruct a cycle afterwards.
+
+The vector index is **worked on from local disk and written back**. It is a
+SQLite store, project trees live on a network share, and SQLite's locking there
+is a round trip per operation through the server's lock manager — reliable
+almost always, and indexing a corpus makes thousands of those operations. Only
+the indexing pass stages and writes back; the read-only passes stage and never
+do. An advisory lock beside the store keeps two writers from overwriting each
+other, and a refused writer works on the share instead of failing.
 
 ### The document revision chain
 
