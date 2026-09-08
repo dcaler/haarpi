@@ -218,3 +218,47 @@ def test_a_redirection_drops_the_previous_cycles_asks(tmp_path):
     cfg = rhconfig.load_project(str(d))
     assert cfg.gather_topics == ["fresh ask"]
     assert cfg.topic == "new topic" and cfg.focus == "new scope"
+
+
+# ── a corrected name has to read correctly in the sentence it lands in ────────
+
+_DSK = "Dystopian Schumpeter-meeting-Keynes (DSK) model"
+
+
+def test_the_replacement_sheds_its_head_noun_when_the_sentence_supplies_one():
+    """A reviewer names the thing in full; the draft uses the wrong name attributively. Dropped
+    in whole, "the Dosi-Stiglitz-Keynes framework" became "...(DSK) model framework" — four
+    times over in elephantRoom. A correction that fixes a name and breaks the sentence around
+    it is not a correction."""
+    out, n = steering._sub_term("grounded in the Dosi-Stiglitz-Keynes framework, we show",
+                                "Dosi-Stiglitz-Keynes", _DSK)
+    assert n == 1
+    assert out == ("grounded in the Dystopian Schumpeter-meeting-Keynes (DSK) framework, "
+                   "we show")
+
+
+def test_the_drafts_own_head_noun_wins_even_when_it_differs():
+    """'model framework' reads as badly as 'framework framework', and the noun in context is
+    the draft's, not the reviewer's."""
+    assert steering._sub_term("the Dosi-Stiglitz-Keynes approach", "Dosi-Stiglitz-Keynes",
+                              _DSK)[0] == "the Dystopian Schumpeter-meeting-Keynes (DSK) approach"
+    assert steering._sub_term("the Dosi-Stiglitz-Keynes model", "Dosi-Stiglitz-Keynes",
+                              _DSK)[0] == "the Dystopian Schumpeter-meeting-Keynes (DSK) model"
+
+
+def test_a_bare_term_still_gets_the_full_name():
+    """Nothing follows it, so nothing is redundant — the reviewer's full name stands."""
+    assert steering._sub_term("built on Dosi-Stiglitz-Keynes, which is wrong",
+                              "Dosi-Stiglitz-Keynes", _DSK)[0] == \
+        "built on Dystopian Schumpeter-meeting-Keynes (DSK) model, which is wrong"
+
+
+def test_a_right_term_with_no_head_noun_is_never_trimmed():
+    assert steering._sub_term("the Foo-Bar framework", "Foo-Bar", "Baz-Qux")[0] == \
+        "the Baz-Qux framework"
+
+
+def test_separator_tolerance_survives_the_head_noun_logic():
+    """The name travels hyphenated, en-dashed and spaced in the same project."""
+    assert steering._sub_term("the Dosi Stiglitz Keynes framework", "Dosi-Stiglitz-Keynes",
+                              _DSK)[0] == "the Dystopian Schumpeter-meeting-Keynes (DSK) framework"

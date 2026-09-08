@@ -46,6 +46,11 @@ def _append_focus(cfg, *additions: str) -> None:
         cfg.focus = f"{cfg.focus}; {addition}" if cfg.focus else addition
 
 
+# The generic nouns a model/framework name is built on. Doubling one is what makes a corrected
+# name read wrongly, so they are the words a replacement may shed when the sentence supplies one.
+_HEAD_NOUNS = "models?|frameworks?|approach(?:es)?|famil(?:y|ies)|traditions?|paradigms?"
+
+
 def _sub_term(text: str, wrong: str, right: str) -> tuple[str, int]:
     """Case-insensitive whole-term substitution, tolerant of the separators a name picks up.
 
@@ -60,7 +65,22 @@ def _sub_term(text: str, wrong: str, right: str) -> tuple[str, int]:
     if not parts:
         return text, 0
     pat = re.compile(r"(?<!\w)" + r"[\s‐-―-]+".join(parts) + r"(?!\w)", re.I)
-    return pat.subn(right, text)
+
+    # A reviewer names the thing in full — "the Dystopian Schumpeter-meeting-Keynes (DSK)
+    # model" — but the draft uses the wrong name attributively: "the Dosi-Stiglitz-Keynes
+    # framework". Substituting the full phrase in gives "...(DSK) model framework", four times
+    # over, and a correction that fixes a name while breaking the sentence around it is not a
+    # correction. When the text already supplies the head noun, the replacement drops its own.
+    trailing = re.search(rf"\s+({_HEAD_NOUNS})$", right, re.I)
+
+    def _repl(m: re.Match) -> str:
+        # Any head noun following, not only the same one: "model framework" reads as badly as
+        # "framework framework", and the draft's choice of noun is the one in context.
+        if trailing and re.match(rf"\s+(?:{_HEAD_NOUNS})(?!\w)", text[m.end():], re.I):
+            return right[:trailing.start()]
+        return right
+
+    return pat.subn(_repl, text)
 
 
 def apply_correction(directory: str, wrong: str, right: str) -> dict[str, int]:
