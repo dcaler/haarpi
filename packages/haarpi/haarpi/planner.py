@@ -1231,6 +1231,20 @@ def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
         cands = [w for w, _n in sorted(seen.items(), key=lambda kv: -kv[1])[:40]]
         if not cands:
             return ""
+        # THE DETERMINISTIC FLOOR. A corrupted name keeps part of the original — that is what
+        # makes it a corruption rather than an unrelated phrase. "Dosi-Stiglitz-Keynes" holds
+        # onto "Keynes" from "Dystopian Schumpeter-meeting-Keynes"; nothing else in the review
+        # shares a word with it. On the real draft that singled it out 1-in-20, while the 27B
+        # coordinator, handed the same clean list, answered NONE and the correction was lost.
+        # A judgement call the evidence already answers should not be put to a model.
+        overlapping = [c for c in cands if _significant(c) & right_words]
+        if len(overlapping) == 1:
+            print(f"  correction: {overlapping[0]!r} is the only name in the draft sharing "
+                  f"wording with {right!r}")
+            return overlapping[0]
+        # Several near-misses, or none: now it is a real judgement, so ask — narrowed to the
+        # overlapping ones when there are any.
+        cands = overlapping or cands
         o = cfg.get("ollama", {})
         from .brain import Brain
         b = Brain(o.get("url", "http://localhost:11434"),

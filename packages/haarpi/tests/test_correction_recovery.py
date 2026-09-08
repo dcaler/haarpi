@@ -142,8 +142,11 @@ def test_a_fragment_of_the_correct_name_is_never_offered(tmp_path, monkeypatch):
             return json.dumps({"wrong": "NONE"})
 
     monkeypatch.setattr(haarpi.brain, "Brain", _Capture)
+    # Two names share wording with the correct one, so this is a real judgement and the model
+    # is consulted — which is what lets the test see the list it is offered.
     fp = _docx(tmp_path, ["The Dystopian Schumpeter-meeting-Keynes (DSK) model demonstrates.",
-                          "The Dosi-Stiglitz-Keynes framework describes innovation."])
+                          "The Dosi-Stiglitz-Keynes framework describes innovation.",
+                          "The Keynes-Kalecki tradition is also relevant."])
     planner._recover_wrong_term(fp, _DSK, _NOTE, {})
     offered = [l.strip()[2:] for l in captured["p"].splitlines() if l.strip().startswith("- ")]
     assert "Dosi-Stiglitz-Keynes" in offered
@@ -165,7 +168,8 @@ def test_a_term_the_draft_does_not_use_is_refused(tmp_path, monkeypatch):
             return json.dumps({"wrong": "Some Name Not In The Draft"})
 
     monkeypatch.setattr(haarpi.brain, "Brain", _Liar)
-    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here."])
+    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here.",
+                          "The Keynes-Kalecki tradition is also relevant."])
     assert planner._recover_wrong_term(fp, _DSK, _NOTE, {}) == ""
 
 
@@ -187,7 +191,8 @@ def test_a_brain_failure_leaves_it_as_an_edit(tmp_path, monkeypatch):
         def __init__(self, *a, **kw): raise RuntimeError("ollama down")
 
     monkeypatch.setattr(haarpi.brain, "Brain", _Broken)
-    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here."])
+    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here.",
+                          "The Keynes-Kalecki tradition is also relevant."])
     assert planner._recover_wrong_term(fp, _DSK, _NOTE, {}) == ""
 
 
@@ -232,3 +237,41 @@ def test_the_decision_lines_are_built_before_the_dry_run_return():
     # Side effects still report only once the work is actually done.
     after = src[ret:]
     assert "correction applied:" in after and "steering config:" in after
+
+
+# ── the deterministic floor under the selection ──────────────────────────────
+
+def test_the_only_name_sharing_wording_is_taken_without_asking(tmp_path):
+    """A corrupted name KEEPS part of the original — that is what makes it a corruption and
+    not an unrelated phrase. Handed a clean 21-name list from the real draft, the coordinator
+    answered NONE and the correction was silently downgraded to an ordinary edit; the evidence
+    had already answered it 1-in-20. A judgement the evidence settles is not put to a model.
+    """
+    import haarpi.brain
+
+    class _Never:
+        def __init__(self, *a, **kw):
+            raise AssertionError("the model must not be consulted when the answer is unique")
+
+    saved = haarpi.brain.Brain
+    haarpi.brain.Brain = _Never
+    try:
+        fp = _docx(tmp_path, [
+            "The Dystopian Schumpeter-meeting-Keynes (DSK) model demonstrates coupling.",
+            "Models grounded in the Dosi-Stiglitz-Keynes framework describe innovation.",
+            "The Paris Agreement and Monte Carlo methods are also discussed here.",
+        ])
+        assert planner._recover_wrong_term(fp, _DSK, _NOTE, {}) == "Dosi-Stiglitz-Keynes"
+    finally:
+        haarpi.brain.Brain = saved
+
+
+def test_with_no_overlapping_name_it_still_asks(tmp_path, monkeypatch):
+    """No shared wording means no deterministic answer, so the judgement goes to the model —
+    and its pick is still only accepted if the draft really contains it."""
+    import haarpi.brain
+    monkeypatch.setattr(haarpi.brain, "Brain", _Stub)
+    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework describes innovation.",
+                          "The Paris Agreement is discussed."])
+    assert planner._recover_wrong_term(fp, "Eurace Unibi simulator", _NOTE, {}) == \
+        "Dosi-Stiglitz-Keynes"
