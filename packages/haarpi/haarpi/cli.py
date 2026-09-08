@@ -19,6 +19,7 @@ import importlib
 import os
 import shutil
 import sys
+from pathlib import Path
 from haarpi import runlog
 
 # canonical package name <- accepted spellings on the command line
@@ -167,6 +168,18 @@ def main(argv: list[str] | None = None) -> int:
         print(_USAGE, end="")
         return 0
     cmd, rest = args[0], args[1:]
+    # Tee the run to the project's `.haarpi/runlog/` before dispatching. Anchored to the project
+    # ROOT, not the cwd: a verb run from a stage directory belongs to the same project, and a
+    # command run outside a project leaves no litter behind. `init` is excluded — there is no
+    # root to write into until it has made one.
+    if cmd in TOOLS or cmd in ("next", "status", "queue", "authors"):
+        from . import project
+        root = project.find_root()
+        if root is not None:
+            verb = f"{cmd}_{rest[0]}" if cmd in TOOLS and rest else cmd
+            fp = runlog.to_file(root, verb)
+            if fp:
+                print(f"[runlog] {fp}")
     if cmd in TOOLS:
         return _dispatch(TOOLS[cmd], rest)
     if cmd == "doctor":

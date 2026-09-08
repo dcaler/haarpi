@@ -209,6 +209,68 @@ def _strip_md(text: str) -> str:
     return _xml_safe(text.replace("*", ""))
 
 
+def replace_front_matter(path: Path, fields: list[tuple[str, str]]) -> dict:
+    """Rewrite the draft's front-matter block (Project / Date / Sources / Focus / Foundation).
+
+    The redline path carried this block through untouched from the document it was editing,
+    which made it a running record of the LAST full render rather than of this one. A reviewed
+    elephantRoom draft stated "Sources: 162" immediately above a load-bearing block that had
+    just recomputed itself and said 184, alongside an eight-week-old date and a focus line whose
+    model name the reviewer had already had corrected in the config.
+
+    A stat is either refreshed or absent: a wrong number stated confidently is worse than one
+    the document does not claim. Returns ``{"front_matter": 0|1}``.
+    """
+    doc = Document(str(path))
+    target = None
+    for p in doc.paragraphs[:8]:
+        if paragraph_text(p._p).strip().startswith("Project:"):
+            target = p
+            break
+    if target is None:
+        return {"front_matter": 0}
+    for child in list(target._p):
+        if child.tag != qn("w:pPr"):
+            target._p.remove(child)
+    for i, (label, value) in enumerate(fields):
+        if i:
+            br = OxmlElement("w:r")
+            br.append(OxmlElement("w:br"))
+            target._p.append(br)
+        lr = OxmlElement("w:r")
+        rpr = OxmlElement("w:rPr")
+        rpr.append(OxmlElement("w:i"))
+        rpr.append(OxmlElement("w:iCs"))
+        lr.append(rpr)
+        lt = OxmlElement("w:t")
+        lt.text = _xml_safe(label)
+        lr.append(lt)
+        target._p.append(lr)
+        vr = OxmlElement("w:r")
+        vt = OxmlElement("w:t")
+        vt.set(qn("xml:space"), "preserve")
+        vt.text = " " + _xml_safe(value)
+        vr.append(vt)
+        target._p.append(vr)
+    doc.save(str(path))
+    return {"front_matter": 1}
+
+
+def _apply_style(par, name: str) -> bool:
+    """Set a paragraph style by name, falling back to bold if the document lacks it.
+
+    A style id absent from the styles part renders as body text in Word, which would be worse
+    than the bold it replaces — so the fallback is the old behaviour, never nothing.
+    """
+    try:
+        par.style = name
+        return True
+    except KeyError:
+        for r in par.runs:
+            r.bold = True
+        return False
+
+
 def replace_bibliography(path: Path, biblio_md: str) -> dict:
     """Replace the annotated-bibliography section of ``path`` with freshly built entries.
 
@@ -239,8 +301,15 @@ def replace_bibliography(path: Path, biblio_md: str) -> dict:
     n_entries = 0
     for kind, payload in items:
         if kind == "sub":
+            # A real heading, not a bold paragraph. Every citation line below is also bold, so
+            # a bold tier heading was typographically identical to the 300 entries it was
+            # supposed to divide — and absent from the navigation pane, which is the only
+            # practical way to move around a bibliography this long. `report` emits these as
+            # Heading 3; the redline path quietly did not, so a reviewed document lost the
+            # structure a freshly rendered one had.
             sp = doc.add_paragraph()
-            sp.add_run(_strip_md(payload)).bold = True  # tier heading (cited / additional)
+            sp.add_run(_strip_md(payload))
+            _apply_style(sp, "Heading 3")   # after the run: the fallback bolds it
             continue
         citation, claims = payload
         n_entries += 1

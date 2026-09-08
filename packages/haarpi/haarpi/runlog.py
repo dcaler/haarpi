@@ -100,6 +100,59 @@ class _LineStamper(io.TextIOBase):
     def writable(self):              return True
 
 
+class _Tee(io.TextIOBase):
+    """Write to the real stream and to a file, so a run leaves a record that outlives it."""
+
+    def __init__(self, wrapped, sink):
+        self._w = wrapped
+        self._sink = sink
+
+    def write(self, s: str) -> int:                       # noqa: D102
+        n = self._w.write(s)
+        try:
+            self._sink.write(s)
+            self._sink.flush()
+        except (OSError, ValueError):
+            pass          # a full or vanished disk must never take the run down with it
+        return n
+
+    def flush(self):                 return self._w.flush()
+    def isatty(self):                return self._w.isatty()
+    def fileno(self):                return self._w.fileno()
+    @property
+    def encoding(self):              return getattr(self._w, "encoding", "utf-8")
+    @property
+    def buffer(self):                return getattr(self._w, "buffer", None)
+    def writable(self):              return True
+
+
+def to_file(root, verb: str) -> "Path | None":
+    """Start teeing stamped output into ``<root>/.haarpi/runlog/<stamp>_<verb>.log``.
+
+    `.haarpi/runlog/` is created by `haarpi init` and, until now, nothing ever wrote to it: the
+    only record of a run was trundlr's `log_tail`, which keeps a few kilobytes. So the decisions
+    a long verb made — which comment got which treatment, where each section anchored, what the
+    corpus offered — were gone within one run of scrollback. elephantRoom's September revise
+    grafted two sections and the reasoning behind both had to be reconstructed from the .docx
+    afterwards, because the lines that explained them had aged out of a 5.8KB tail.
+
+    Best-effort: a log that cannot be opened is not a reason to refuse to run.
+    """
+    from pathlib import Path
+    try:
+        d = Path(root) / ".haarpi" / "runlog"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / f"{datetime.now():%y%m%d_%H%M%S}_{re.sub(r'[^A-Za-z0-9_-]', '', verb)}.log"
+        sink = fp.open("a", encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "write"):
+            setattr(sys, name, _Tee(stream, sink))
+    return fp
+
+
 def stamp_output() -> None:
     """Route stdout and stderr through the line stamper. Call once, at CLI entry.
 
