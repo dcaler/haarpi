@@ -236,7 +236,7 @@ def test_the_decision_lines_are_built_before_the_dry_run_return():
         assert line in before, f"{line!r} is not printed by --dry-run"
     # Side effects still report only once the work is actually done.
     after = src[ret:]
-    assert "correction applied:" in after and "steering config:" in after
+    assert "correction landed:" in after and "steering config:" in after
 
 
 # ── the deterministic floor under the selection ──────────────────────────────
@@ -275,3 +275,46 @@ def test_with_no_overlapping_name_it_still_asks(tmp_path, monkeypatch):
                           "The Paris Agreement is discussed."])
     assert planner._recover_wrong_term(fp, "Eurace Unibi simulator", _NOTE, {}) == \
         "Dosi-Stiglitz-Keynes"
+
+
+# ── what the log says a correction did ───────────────────────────────────────
+
+def test_the_narrative_count_stops_at_the_bibliography(tmp_path):
+    """`revise` deliberately never rewrites the bibliography — its claims are quotations from
+    the sources. Counting them would promise a correction that is never made there."""
+    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here.",
+                          "And again: the Dosi-Stiglitz-Keynes framework.",
+                          "Annotated Bibliography",
+                          "A quoted claim advancing the Dosi-Stiglitz-Keynes framework."])
+    assert planner._narrative_occurrences(fp, "Dosi-Stiglitz-Keynes") == 2
+
+
+def test_the_count_tolerates_the_separators_a_name_travels_with(tmp_path):
+    fp = _docx(tmp_path, ["the Dosi-Stiglitz-Keynes framework",
+                          "the Dosi Stiglitz Keynes framework"])
+    assert planner._narrative_occurrences(fp, "Dosi-Stiglitz-Keynes") == 2
+
+
+def test_an_unreadable_markup_reports_no_count_rather_than_failing(tmp_path):
+    """A number for a log line is not worth failing the gate over."""
+    bad = tmp_path / "not-a-docx.docx"
+    bad.write_text("this is not a document")
+    assert planner._narrative_occurrences(bad, "anything") == 0
+
+
+def test_no_term_means_no_count(tmp_path):
+    fp = _docx(tmp_path, ["some prose"])
+    assert planner._narrative_occurrences(fp, "") == 0
+
+
+def test_the_log_line_distinguishes_already_correct_from_not_found():
+    """'NOTHING MATCHED' covered two opposite situations: the project's own statements were
+    already right and the work is left to `revise`, or the reviewer named a term the project
+    does not use anywhere. The first is routine; the second wants looking at."""
+    import inspect
+    src = inspect.getsource(planner.run_next)
+    assert "already correct, nothing to change" in src
+    assert "corrected by `revise`" in src
+    assert "NOT FOUND in the document either" in src
+    # The old idiom, not the word: the comment above the fix quotes it deliberately.
+    assert 'or "NOTHING MATCHED"' not in src, "the ambiguous wording is no longer printed"

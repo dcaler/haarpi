@@ -1271,6 +1271,27 @@ def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
         return ""
 
 
+def _narrative_occurrences(markup, term: str) -> int:
+    """How many times the narrative says ``term``. Bounded at the annotated bibliography,
+    whose claims are quotations `revise` will not rewrite — counting them would promise a
+    correction that is deliberately never made there."""
+    if not term:
+        return 0
+    try:
+        from docx import Document
+        from rabbithole.steering import _sub_term
+        from . import redline
+        n = 0
+        for p in Document(str(markup)).paragraphs:
+            t = redline.flatten_paragraph(p._p)
+            if t.strip().lower().startswith("annotated bibliography"):
+                break
+            n += _sub_term(t, term, "x")[1]
+        return n
+    except Exception:  # noqa: BLE001 — a count is not worth failing the gate over
+        return 0
+
+
 def _plan_sections(directory: str, markup, cfg: dict, section_focus: list[str]) -> list[dict]:
     """Turn each "add a section on X" ask into the heading and claim it will become, HERE —
     before the gather that has to find the literature for it.
@@ -2154,8 +2175,19 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     corrections = (built or {}).get("corrections") or []
     corr_counts = _apply_corrections(root, m, str(root), corrections) if corrections else {}
     if corrections:
-        applied = ", ".join(f"{k} ×{v}" for k, v in corr_counts.items()) or "NOTHING MATCHED"
-        summary.append(f"  correction applied: [{applied}]")
+        # Say WHERE it looked and what happens next. `_apply_corrections` only touches the
+        # project's statements about itself — the brief and the litrev config — while the
+        # document is corrected later, by `revise`, as a tracked change. A bare
+        # "NOTHING MATCHED" therefore read as failure in the ordinary case where the config
+        # was already right and every remaining occurrence was in the .docx.
+        where = ", ".join(f"{k} ×{v}" for k, v in corr_counts.items())
+        in_doc = sum(_narrative_occurrences(markup, c.get("wrong", "")) for c in corrections)
+        summary.append(
+            f"  correction landed: brief and config — "
+            f"{where or 'already correct, nothing to change'}"
+            + (f"; {in_doc} occurrence(s) in the document, corrected by `revise`" if in_doc
+               else "; NOT FOUND in the document either — check the term is the one the "
+                    "project actually uses"))
     confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or [])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
