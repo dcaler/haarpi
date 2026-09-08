@@ -921,8 +921,19 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
             task["right"] = (t.get("right") or "").strip()
             # A correction the model could not pin down to a term pair is not actionable as a
             # substitution. Degrade to `edit` rather than queueing a no-op step.
-            if not (task["wrong"] and task["right"]):
+            #
+            # Including the pair that is the SAME term twice. A reviewer usually writes only
+            # the right name — "Do you mean the Dystopian Schumpeter-meeting-Keynes (DSK)
+            # model? better get the name correct" never says what the document actually has —
+            # so the model fills both fields with the correct term and the substitution runs,
+            # matches itself, and reports success. That is how a wrong model name survived a
+            # cycle whose plan record showed a correction applied.
+            if task["right"] and _same_term(task["wrong"], task["right"]):
+                task["wrong"] = ""       # resolved against the draft in `next`, not guessed here
+            if not task["right"]:
                 task["need"] = "edit"
+                task.pop("wrong", None)
+                task.pop("right", None)
         tasks.append(task)
     missed = [i for i in range(1, n + 1) if i not in claimed]
     if missed:
@@ -964,7 +975,18 @@ def _promote_explicit_sections(tasks: list[dict]) -> list[dict]:
     kept: list[dict] = []
     for t in tasks:
         if t["need"] == "section":
-            kept.append(t)
+            # SPLIT it. A task already typed `section` used to pass straight through, so when
+            # the model got the classification right and grouped three section asks into one
+            # task, they stayed fused — one query, one planned section, and two of the three
+            # requests answered by whatever the first one produced. Each comment that asks for
+            # a section is its own section, whoever grouped them.
+            solo = [c for c in t["comments"] if _SECTION_ASK.search(c)]
+            rest = [c for c in t["comments"] if not _SECTION_ASK.search(c)]
+            promoted += solo
+            if rest:
+                # Grouped under `section` but not itself a section ask: keep them together as
+                # the task the model made, minus the ones now standing on their own.
+                kept.append({**t, "comments": rest})
             continue
         stay = [c for c in t["comments"] if not _SECTION_ASK.search(c)]
         promoted += [c for c in t["comments"] if _SECTION_ASK.search(c)]
@@ -1136,6 +1158,77 @@ def _apply_corrections(root: Path, m: project.Manifest, directory: str,
             project.save_manifest(m, root)
             counts[project.MANIFEST] = counts.get(project.MANIFEST, 0) + n
     return counts
+
+
+def _same_term(a: str, b: str) -> bool:
+    """Whether two terms are the same string for correction purposes (case/punctuation-loose)."""
+    norm = lambda s: " ".join(re.sub(r"[^\w\s]", " ", (s or "").lower()).split())  # noqa: E731
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+# A term the review uses that looks like a proper name: capitalised or hyphenated multi-word
+# phrases, which is the shape of the model/framework names a reviewer corrects.
+_NAMEY = re.compile(r"\b(?:[A-Z][\w’']*(?:[-–][A-Z][\w’']*)+|"
+                    r"[A-Z][\w’']+(?:\s+[A-Z][\w’']+){1,4})\b")
+
+
+def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
+    """Find the term the draft uses where the reviewer says it should say ``right``.
+
+    A reviewer almost never states the wrong name. They write "Do you mean the Dystopian
+    Schumpeter-meeting-Keynes (DSK) model? better get the name correct" — the correct name and
+    nothing else, because the wrong one is in front of them on the page. Asked for a pair, the
+    model then fills BOTH fields with the correct term; the substitution runs, matches itself,
+    reports one hit, and the wrong name survives another cycle under a plan record that says a
+    correction was applied.
+
+    So the wrong term is looked up where it actually lives: in the draft. Returns "" when it
+    cannot be identified, which leaves the ask to the reviser as an ordinary edit rather than
+    queueing a substitution that would rewrite the wrong thing.
+    """
+    try:
+        from docx import Document
+        from . import redline
+        body = []
+        for p in Document(str(markup)).paragraphs:
+            t = redline.flatten_paragraph(p._p).strip()
+            if t.lower().startswith("annotated bibliography"):
+                break                       # quotations below here are verbatim by design
+            body.append(t)
+        text = "\n".join(body)
+        seen = {}
+        for m in _NAMEY.findall(text):
+            if not _same_term(m, right) and m.lower() not in right.lower():
+                seen[m] = seen.get(m, 0) + 1
+        # Frequent names first: a term the review leans on is likelier the one being corrected
+        # than a one-off proper noun, and it bounds the prompt.
+        cands = [w for w, _n in sorted(seen.items(), key=lambda kv: -kv[1])[:40]]
+        if not cands:
+            return ""
+        o = cfg.get("ollama", {})
+        from .brain import Brain
+        b = Brain(o.get("url", "http://localhost:11434"),
+                  o.get("coordinator", "qwen3.6:27b-16k"),
+                  o.get("worker", "llama3.1:8b"), tool="haarpi")
+        raw = b.coordinator(
+            f"A reviewer left this note on a literature review:\n{comment}\n\n"
+            f"They are saying the correct name is: {right}\n\n"
+            f"Names the review currently uses:\n"
+            + "\n".join(f"  - {c}" for c in cands)
+            + "\n\nWhich ONE of those names is the reviewer saying is wrong — the name being "
+              "used where it should say the correct name above? Answer with that name exactly "
+              'as listed, or NONE if none of them is it. Respond with ONLY a JSON object: '
+              '{"wrong": "..."}',
+            "You identify which term a reviewer is correcting. Respond with ONLY a JSON object.",
+            think=False)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        got = (json.loads(m.group(0)).get("wrong") or "").strip() if m else ""
+        # Only accept a term the review actually uses: a hallucinated pair would substitute
+        # across the whole document, which is the one edit with no local blast radius.
+        return got if got in seen else ""
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not identify the term to correct ({e}); left as an edit")
+        return ""
 
 
 def _plan_sections(directory: str, markup, cfg: dict, section_focus: list[str]) -> list[dict]:
@@ -1958,6 +2051,14 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
         # human is the verification loop. See DESIGN_next_orchestration.md.
         tasks = decompose(check["unresolved"], cfg)
+        # A correction whose wrong term the reviewer never stated: look it up in the draft
+        # before the chain is built, so it becomes a real substitution rather than a no-op.
+        for t in tasks:
+            if t["need"] == "correct" and t.get("right") and not t.get("wrong"):
+                t["wrong"] = _recover_wrong_term(markup, t["right"],
+                                                 " ".join(t["comments"]), cfg)
+                if not t["wrong"]:
+                    t["need"] = "edit"      # unidentifiable: the reviser answers it in place
         built = chain_from_tasks(tasks)
         # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
         # it was asked for. Replaces each section ask in `gather_topics` with its heading and
