@@ -1166,10 +1166,24 @@ def _same_term(a: str, b: str) -> bool:
     return bool(norm(a)) and norm(a) == norm(b)
 
 
-# A term the review uses that looks like a proper name: capitalised or hyphenated multi-word
-# phrases, which is the shape of the model/framework names a reviewer corrects.
-_NAMEY = re.compile(r"\b(?:[A-Z][\w’']*(?:[-–][A-Z][\w’']*)+|"
-                    r"[A-Z][\w’']+(?:\s+[A-Z][\w’']+){1,4})\b")
+# A term the review uses that looks like a proper name. ONE alternative, not two competing
+# ones: a capitalised word, each optionally carrying hyphenated continuations whose parts may
+# be lowercase ("Schumpeter-meeting-Keynes"), repeated across spaces. Two branches raced here
+# and fragmented the very name this exists to find — "The Dosi-Stiglitz-Keynes" came back as
+# "The Dosi" plus "Stiglitz-Keynes", because the word-sequence branch won at "The" and the
+# hyphen branch got the remainder.
+_NAME_WORD = r"[A-Z][\w’']*(?:[-–][A-Za-z][\w’']*)*"
+_NAMEY = re.compile(rf"\b{_NAME_WORD}(?:\s+{_NAME_WORD})*")
+# Sentences start with a capital; an article carried into a name makes it a different string
+# from the one the reviewer means, and a substitution keyed on it would corrupt correct text.
+_LEADING_ARTICLE = re.compile(r"^(?:The|A|An|This|These|Those|Its|Their|Our)\s+")
+
+
+def _significant(term: str) -> set[str]:
+    """Content words of a term, for deciding whether one name says anything another does not."""
+    return {w for w in re.sub(r"[^\w\s]", " ", (term or "").lower()).split()
+            if w not in {"the", "a", "an", "of", "and", "model", "models", "framework",
+                         "frameworks", "approach", "family"}}
 
 
 def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
@@ -1196,10 +1210,22 @@ def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
                 break                       # quotations below here are verbatim by design
             body.append(t)
         text = "\n".join(body)
+        right_words = _significant(right)
         seen = {}
         for m in _NAMEY.findall(text):
-            if not _same_term(m, right) and m.lower() not in right.lower():
-                seen[m] = seen.get(m, 0) + 1
+            m = _LEADING_ARTICLE.sub("", m).strip(" .,;:")
+            words = _significant(m)
+            # A wrong name is wrong because it SAYS something the right one does not. A
+            # candidate whose content words all appear in the correct term is a variant or a
+            # fragment of it — "Dystopian Schumpeter" against "Dystopian Schumpeter-meeting-
+            # Keynes (DSK) model" — and substituting on it would rewrite text that is already
+            # correct, duplicating the tail of the name it matched a prefix of.
+            if not words or words <= right_words:
+                continue
+            # One bare capitalised word is a sentence opener far more often than a model name.
+            if len(words) < 2 and "-" not in m and "–" not in m:
+                continue
+            seen[m] = seen.get(m, 0) + 1
         # Frequent names first: a term the review leans on is likelier the one being corrected
         # than a one-off proper noun, and it bounds the prompt.
         cands = [w for w, _n in sorted(seen.items(), key=lambda kv: -kv[1])[:40]]

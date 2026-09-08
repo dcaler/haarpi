@@ -117,6 +117,44 @@ def test_the_wrong_term_is_found_in_the_draft(tmp_path, monkeypatch):
     assert planner._recover_wrong_term(fp, _DSK, _NOTE, {}) == "Dosi-Stiglitz-Keynes"
 
 
+def test_a_hyphenated_name_is_not_fragmented(tmp_path, monkeypatch):
+    """Two regex branches raced and split the very name this exists to find: after a sentence-
+    initial "The", "The Dosi-Stiglitz-Keynes" came back as "The Dosi" plus "Stiglitz-Keynes",
+    so the model was choosing among pieces of the answer rather than the answer."""
+    import haarpi.brain
+    monkeypatch.setattr(haarpi.brain, "Brain", _Stub)
+    fp = _docx(tmp_path, ["The Dosi-Stiglitz-Keynes framework is described here.",
+                          "The Dosi-Stiglitz-Keynes framework again."])
+    assert planner._recover_wrong_term(fp, _DSK, _NOTE, {}) == "Dosi-Stiglitz-Keynes"
+
+
+def test_a_fragment_of_the_correct_name_is_never_offered(tmp_path, monkeypatch):
+    """The live run picked 'The Dystopian Schumpeter' — a prefix of the RIGHT name — which
+    would have rewritten correct text into 'Dystopian Schumpeter-meeting-Keynes (DSK)
+    model-meeting-Keynes (DSK) model'. Worse than the no-op it replaced. A wrong name has to
+    SAY something the right one does not."""
+    import haarpi.brain
+    captured = {}
+
+    class _Capture(_Stub):
+        def coordinator(self, prompt, sys, **kw):
+            captured["p"] = prompt
+            return json.dumps({"wrong": "NONE"})
+
+    monkeypatch.setattr(haarpi.brain, "Brain", _Capture)
+    fp = _docx(tmp_path, ["The Dystopian Schumpeter-meeting-Keynes (DSK) model demonstrates.",
+                          "The Dosi-Stiglitz-Keynes framework describes innovation."])
+    planner._recover_wrong_term(fp, _DSK, _NOTE, {})
+    offered = [l.strip()[2:] for l in captured["p"].splitlines() if l.strip().startswith("- ")]
+    assert "Dosi-Stiglitz-Keynes" in offered
+    assert not any("Dystopian" in o or "Schumpeter" in o for o in offered), offered
+
+
+def test_significant_words_ignore_articles_and_generic_nouns():
+    assert planner._significant("The Dystopian Schumpeter model") == {"dystopian", "schumpeter"}
+    assert planner._significant("Dosi-Stiglitz-Keynes") == {"dosi", "stiglitz", "keynes"}
+
+
 def test_a_term_the_draft_does_not_use_is_refused(tmp_path, monkeypatch):
     """A hallucinated pair would substitute across the whole document — the one edit with no
     local blast radius — so only a term actually present is accepted."""
