@@ -50,6 +50,9 @@ class Candidate:
     # specific ask actually brought in — instead of only a corpus-wide total that hides an ask
     # returning nothing.
     found_by: list = field(default_factory=list)
+    # Which query this paper scores best against — the standing focus, or one reviewer ask.
+    # Set by ranking; it is what lets each ask claim a share of the LLM re-rank head.
+    best_query: str = ""
     citekey: str = ""            # Better BibTeX citation key from Zotero (Extra field), if any
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:

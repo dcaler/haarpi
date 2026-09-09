@@ -114,7 +114,18 @@ def _cite_score(c: Candidate, max_cpy: float) -> float:
 
 def rank(candidates: list[Candidate], topic: str, focus: str,
          brain: Brain, method: str = "embedding", rerank_top_n: int = 0,
-         target: int = 15, domain_anchor: str = "", exclude_topics: str = "") -> list[Candidate]:
+         target: int = 15, domain_anchor: str = "", exclude_topics: str = "",
+         gather_topics: list[str] | None = None) -> list[Candidate]:
+    """Order candidates by relevance to the review — and to each reviewer ask separately.
+
+    ``gather_topics`` are this cycle's asks. They are scored as their OWN queries rather than
+    folded into the standing focus, because a paper squarely about one of them is usually
+    unrelated to the rest of the review and would otherwise be buried by it. That is not
+    hypothetical: elephantRoom's cycle-7 gather found 243 papers for a consumption-smoothing
+    ask and 274 for a reshoring ask, scored every one of them against a focus about carbon
+    taxes and border adjustments, ranked them below the LLM re-rank head, and curated 1 and 0.
+    The searches worked; the ranking could not see what they were for.
+    """
     if not candidates:
         return candidates
 
@@ -123,14 +134,23 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
             c.relevance = float(c.cited_by_count)
         return sorted(candidates, key=lambda c: c.relevance, reverse=True)
 
-    # 1) embedding pre-sort: title + abstract + keywords vs the topic/focus
+    # 1) embedding pre-sort: title + abstract + keywords vs the topic/focus AND each ask.
+    # Best-of, not an average: a paper answers the review's standing question or a reviewer's
+    # specific one, and being irrelevant to the other is not evidence against it.
     query = f"{topic}. {focus}".strip()
+    asks = [t for t in (gather_topics or []) if t and t.strip()]
     print(f"  {runlog.stamp()}Embedding {len(candidates)} candidates "
-          f"for relevance pre-sort...", flush=True)
+          f"for relevance pre-sort" + (f" ({len(asks)} reviewer ask(s) scored separately)"
+                                       if asks else "") + "...", flush=True)
     try:
-        q_emb = brain.embed(query)
+        q_embs = brain.embed_batch([query] + asks)
         doc_embs = brain.embed_batch([_doc_text(c) for c in candidates])
-        cosines = [_cosine(q_emb, e) for e in doc_embs]
+        per_query = [[_cosine(q, e) for e in doc_embs] for q in q_embs]
+        cosines = [max(col) for col in zip(*per_query)]
+        for c, *scores in zip(candidates, *per_query):
+            # Which query this paper answers best — used to guarantee each ask a share of the
+            # LLM re-rank head, and reported in the yield line.
+            c.best_query = ([query] + asks)[scores.index(max(scores))]
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] embedding rank failed ({e}); falling back to citations")
         for c in candidates:
@@ -155,10 +175,43 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
     if method == "llm":
         n = min(rerank_top_n or max(target * 2, 25), len(ranked))
         if n > 0:
+            ranked = _head_with_ask_share(ranked, asks, n)
             print(f"  {runlog.stamp()}Expert LLM re-rank of top {n}...")
             ranked = _llm_rerank(ranked, topic, focus, brain, n,
                                  domain_anchor, exclude_topics, max_cpy)
     return ranked
+
+
+def _head_with_ask_share(ranked: list[Candidate], asks: list[str], n: int) -> list[Candidate]:
+    """Reorder so every reviewer ask reaches the LLM re-rank head, not only the loudest.
+
+    Scoring each ask separately gets its papers a fair SCORE; it does not get them a fair
+    SLOT. Asks are not equally well served by the literature, and one with hundreds of strong
+    matches would otherwise fill a 90-slot head on its own while a thinner ask — the kind most
+    likely to be a real gap, and the reason the cycle exists — never reaches the judge that
+    decides what is curated. Each ask is guaranteed a floor; overall rank fills the rest.
+    """
+    if not asks or n >= len(ranked):
+        return ranked
+    floor = max(1, n // (len(asks) + 1) // 2)
+    head: list[Candidate] = []
+    seen: set[int] = set()
+    for ask in asks:
+        for c in ranked:
+            if len(head) >= n:
+                break
+            if id(c) not in seen and getattr(c, "best_query", None) == ask:
+                head.append(c)
+                seen.add(id(c))
+                if sum(1 for h in head if getattr(h, "best_query", None) == ask) >= floor:
+                    break
+    for c in ranked:                      # the rest of the head by overall rank
+        if len(head) >= n:
+            break
+        if id(c) not in seen:
+            head.append(c)
+            seen.add(id(c))
+    return head + [c for c in ranked if id(c) not in seen]
 
 
 def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,

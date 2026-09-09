@@ -2127,9 +2127,14 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         built["sections"] = _plan_sections(str(root), markup, cfg, built["section_focus"])
         if built["sections"]:
             planned = {s["ask"] for s in built["sections"]}
-            built["gather_topics"] = (
-                [f"{s['heading']}. {s['claim']}" for s in built["sections"]]
-                + [t for t in built["gather_topics"] if t not in planned])
+            steer = ([f"{s['heading']}. {s['claim']}" for s in built["sections"]]
+                     + [t for t in built["gather_topics"] if t not in planned])
+            # BOTH channels, or neither. `_write_litreview_steering` passes gather_topics and
+            # section_focus separately and the config writer unions them — so replacing only
+            # the first left the raw comment prose in as well, and cycle 7 searched eight
+            # topics where three of them were the very wording the planning exists to replace.
+            built["gather_topics"] = steer
+            built["section_focus"] = [s for s in steer]
         tier, steps = built["tier"], built["steps"]
         plan = {"tier": tier, "steps": steps, "tasks": tasks,
                 "gather_topics": built["gather_topics"],

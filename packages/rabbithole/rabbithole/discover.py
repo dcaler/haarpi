@@ -682,6 +682,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
                           method=cfg.ranking.get("method", "embedding"),
                           rerank_top_n=cfg.ranking.get("rerank_top_n", 0),
                           target=cfg.target_max,
+                          gather_topics=list(getattr(cfg, "gather_topics", None) or []),
                           domain_anchor=cfg.domain_anchor,
                           exclude_topics=cfg.exclude_topics)
 
