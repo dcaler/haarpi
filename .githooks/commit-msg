@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Dispatcher. This repo sets core.hooksPath=.githooks, which OVERRIDES the machine-wide
+# hooks in ~/.config/git/hooks — git honours exactly one hooks directory, and the local
+# one wins. So the global convention checks have to be re-entered from here or they are
+# silently inert in the one repo that most needs them.
+#
+# The rule lives in ~/.claude/CLAUDE.md: no Co-Authored-By trailer, ever.
+set -euo pipefail
+GLOBAL_HOOK="${HOME}/.config/git/hooks/commit-msg"
+
+if [ -x "$GLOBAL_HOOK" ]; then
+  "$GLOBAL_HOOK" "$@"
+else
+  # Fallback: never let the rule go unenforced just because the global hook is missing.
+  if grep -qiE '^[[:space:]]*Co-Authored-By:' "$1"; then
+    echo >&2
+    echo "  COMMIT REJECTED — Co-Authored-By trailer (no co-authorship, ever)." >&2
+    echo >&2
+    exit 1
+  fi
+fi
