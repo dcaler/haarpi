@@ -21,7 +21,7 @@ from haarpi.planner import Step
 
 
 _TR = {"human_resource": 1, "claude_resource": 4, "gpu_resource": 2, "cpu_resource": 3,
-       "runner_resource": 0}
+       }
 
 
 class _Client:
@@ -44,22 +44,40 @@ class _Client:
 # ── the three states a step can be in ────────────────────────────────────────
 
 def test_an_attended_step_books_the_human_and_claude():
-    s = Step("haarpi rayleigh init", 2.0, "design session", attended=True)
+    s = Step("haarpi rayleigh init", 2.0, "design session",
+             resource="human", attended=True)
     assert s.human is True, "it waits for a person"
     assert s.resources == ("human", "claude")
 
 
 def test_a_step_with_nothing_to_run_books_the_human_alone():
-    """`resource` still reads "runner" on these by default, and honouring it would hand a
-    runner a task with no command to run."""
-    s = Step(None, 0.15, "Review the new draft and annotate it.")
+    s = Step(None, 0.15, "Review the new draft and annotate it.", resource="human")
     assert s.human is True and s.resources == ("human",)
 
 
-def test_a_machine_step_is_unchanged():
-    s = Step("haarpi rabbithole gather", 1.3, "gather")
-    assert s.human is False and s.resources == ("runner",)
-    assert Step("haarpi rabbithole mindmap", 0.5, "map", resource="gpu").resources == ("gpu",)
+def test_a_machine_step_books_exactly_what_it_declared():
+    assert Step("haarpi rabbithole gather", 1.3, "g", resource="gpu").resources == ("gpu",)
+    assert Step("haarpi rayleigh process", 1.0, "p", resource="cpu").resources == ("cpu",)
+
+
+def test_a_step_must_name_its_resource():
+    """There is no default. A step that says nothing used to fall through to the GPU, which
+    is how `rayleigh process` — zero model calls — came to hold the scarce resource."""
+    import pytest
+    with pytest.raises(TypeError):
+        Step("haarpi rabbithole gather", 1.3, "no resource named")
+
+
+def test_every_registered_step_names_a_real_resource():
+    real = {"human", "gpu", "cpu", "claude"}
+    for stage, steps in planner.STAGE_STEPS.items():
+        for name, st in steps.items():
+            assert st.resource in real, f"{stage}:{name} declares {st.resource!r}"
+
+
+def test_the_cpu_only_step_is_not_on_the_gpu():
+    """`rayleigh process` runs process_outputs, which makes no model calls."""
+    assert planner.STAGE_STEPS["experiments"]["process"].resource == "cpu"
 
 
 # ── the registry ─────────────────────────────────────────────────────────────
@@ -115,7 +133,7 @@ def test_a_queued_machine_step_is_unaffected():
     planner.queue_chain(c, 7, "litreview", ["gather"], _TR)
     t = c.tasks[0]
     assert t["command"] == "haarpi rabbithole gather"
-    assert t["resource_ids"] == [2], "runner falls back to the gpu box"
+    assert t["resource_ids"] == [2], "declared gpu"
 
 
 def test_an_unconfigured_claude_resource_degrades_to_the_human_alone():
@@ -123,7 +141,7 @@ def test_an_unconfigured_claude_resource_degrades_to_the_human_alone():
     the task — the session still waits for a person either way."""
     c = _Client()
     planner.queue_chain(c, 7, "design", ["design_session"],
-                        {"human_resource": 1, "gpu_resource": 2, "runner_resource": 0})
+                        {"human_resource": 1, "gpu_resource": 2})
     t = c.tasks[0]
     assert t["resource_ids"] == [1]
     assert t["command"] == "haarpi rayleigh init", "and it still carries its verb"

@@ -45,7 +45,14 @@ class Step:
     command: str | None      # None = nothing to run; the step IS the human's own work
     hours: float             # cold-start estimate; history overrides
     desc: str
-    resource: str = "runner"  # "human" | "runner" | "gpu" | "cpu" | "claude"
+    # MANDATORY, and named for a resource that actually exists on the board. There used to be
+    # a "runner" default that resolved to the GPU whenever a step said nothing — which was
+    # almost every step, because saying nothing was the easy path. It encoded a fact about
+    # which MACHINE ("the runners live on oddjob") when resources 2 and 3 are contention
+    # domains on that same machine, and it hid a real error: `rayleigh process` makes no model
+    # calls at all and sat on the GPU, holding the scarce resource for arithmetic. A default
+    # is only needed because a step is allowed not to say; requiring it removes the question.
+    resource: str            # "human" | "gpu" | "cpu" | "claude"
     # An ATTENDED step has a command AND needs a person at the keyboard: the interactive
     # design, build and review sessions, which launch a Claude session in the project root.
     # Attendance used to be inferred from having no command, so the only way to make such a
@@ -66,9 +73,7 @@ class Step:
         """Every resource the step occupies.
 
         An attended session books the human AND the Claude agent; booking one of the two
-        makes the other look available. A step with nothing to run books the human alone —
-        `resource` still reads "runner" on those by default, and honouring it would hand a
-        runner a task with no command to run.
+        makes the other look available. Every other step books exactly what it declared.
         """
         if self.attended:
             return ("human", "claude")
@@ -80,21 +85,21 @@ class Step:
 STAGE_STEPS: dict[str, dict[str, Step]] = {
     "litreview": {
         "ingest":  Step("haarpi rabbithole ingest", 0.5,
-                        "Pull reviewer-supplied references into the corpus."),
+                        "Pull reviewer-supplied references into the corpus.", resource="gpu"),
         "gather":  Step("haarpi rabbithole gather", 1.3,
                         "Search, rank and curate candidate sources into the collect-list. "
                         "The HUMAN adds them to Zotero at `collect`; gather puts nothing "
-                        "there itself."),
+                        "there itself.", resource="gpu"),
         "collect": Step(None, 0.25,
-                        "Download the new PDFs and add them to the Zotero collection."),
+                        "Download the new PDFs and add them to the Zotero collection.", resource="human"),
         "audit":   Step("haarpi rabbithole audit", 0.5,
                         "Word-sense filter: quarantine lexical false-friends (shared word, no "
-                        "conceptual transfer) from the finalised corpus (reversible)."),
+                        "conceptual transfer) from the finalised corpus (reversible).", resource="gpu"),
         "build":   Step("haarpi rabbithole build", 1.0,
                         "Embed the audited Zotero collection into the working corpus "
                         "(candidates, citekeys, ChromaDB index, per-paper notes). Needed "
                         "before a `revise` re-draft, which reads a cached corpus and never "
-                        "embeds; `report` calls the same builder inline and needs no step."),
+                        "embeds; `report` calls the same builder inline and needs no step.", resource="gpu"),
         # 4.0h of redline, plus ~3.5h PER SECTION the markup asks for: drafting and peer review
         # both run with the coordinator's chain-of-thought on (they are judgement work, unlike
         # lint and the redline itself), so a section costs three thinking calls. A `Step` carries
@@ -103,7 +108,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "revise":  Step("haarpi rabbithole revise --no-queue", 7.5,
                         "Answer every comment in kind: a tracked rewrite for a prose comment, a "
                         "drafted section spliced in at the comment that asked for it, and the "
-                        "cycle's term corrections applied across the document."),
+                        "cycle's term corrections applied across the document.", resource="gpu"),
         # VESTIGIAL: nothing calls this. `haarpi next` stopped selecting it when `revise`
         # absorbed section-grafting, and the only remaining caller of graft.run() is cli.py.
         # The live code is graft.draft_sections/choose_position, which revise imports. Kept as
@@ -111,41 +116,41 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "graft":   Step("haarpi rabbithole graft", 3.5,
                         "Draft ONLY the requested section and splice it into the reviewer's "
                         "own .docx as a tracked insertion — existing paragraphs untouched, "
-                        "comment threads intact."),
+                        "comment threads intact.", resource="gpu"),
         "report":  Step("haarpi rabbithole report", 3.0,
-                        "Re-plan the review's sections and re-synthesise from the corpus."),
+                        "Re-plan the review's sections and re-synthesise from the corpus.", resource="gpu"),
         "mindmap": Step("haarpi rabbithole mindmap", 0.5,
                         "Regenerate the contribution map beside the new draft — a per-draft "
                         "diagnostic of the reference budget and which themes are peripheral.",
                         resource="gpu"),
-        "comment": Step(None, 0.15, "Review the new draft and annotate it."),
+        "comment": Step(None, 0.15, "Review the new draft and annotate it.", resource="human"),
     },
     "paper": {
         "revise":   Step("haarpi raconteur draft", 2.0,
-                         "Answer each comment in place with tracked changes."),
+                         "Answer each comment in place with tracked changes.", resource="gpu"),
         "onepager": Step("haarpi raconteur onepager", 1.0,
-                         "Answer the one-pager annotations with tracked changes."),
+                         "Answer the one-pager annotations with tracked changes.", resource="gpu"),
         "recut":    Step("haarpi raconteur onepager --resynth", 1.0,
-                         "Re-cut the narrative from scratch; the annotations are the brief."),
+                         "Re-cut the narrative from scratch; the annotations are the brief.", resource="gpu"),
         "venue":    Step("haarpi raconteur venue", 1.0,
-                         "Analyse candidate venues from the narrative."),
+                         "Analyse candidate venues from the narrative.", resource="gpu"),
         "skeleton": Step("haarpi raconteur skeleton", 0.6,
                          "Phase one: plan the sections and subsections, and the words "
-                         "each can afford."),
+                         "each can afford.", resource="gpu"),
         "outline":  Step("haarpi raconteur outline", 1.0,
-                         "Phase two: add the content beats to the approved skeleton."),
+                         "Phase two: add the content beats to the approved skeleton.", resource="gpu"),
         "draft":    Step("haarpi raconteur draft", 3.0,
-                         "Write the full paper from the outline and upstream releases."),
-        "comment":  Step(None, 0.25, "Review the new draft and annotate it."),
+                         "Write the full paper from the outline and upstream releases.", resource="gpu"),
+        "comment":  Step(None, 0.25, "Review the new draft and annotate it.", resource="human"),
     },
     "experiments": {
         "process": Step("haarpi rayleigh process", 1.0,
-                        "Re-reduce data to the preregistered outputs and write-up."),
-        "comment": Step(None, 0.25, "Review the results write-up and annotate it."),
+                        "Re-reduce data to the preregistered outputs and write-up.", resource="cpu"),
+        "comment": Step(None, 0.25, "Review the results write-up and annotate it.", resource="human"),
         "review_session": Step("haarpi rayleigh review", 1.0,
                                "Deep review needed (new cells/seeds/experiments): the attended "
                                "session designs and queues the follow-on chain itself.",
-                               attended=True),
+                               resource="human", attended=True),
     },
     # The DESIGN (preregistration) stage. Its rework is always an attended re-run of the
     # design session — rayleigh re-authors experiments.yaml + the prereg docx addressing the
@@ -157,7 +162,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                                "re-render the prereg docx. The EXECUTABLE experiments.yaml is "
                                "not written here — `rayleigh plan` authors it in the "
                                "experiments stage, against the code raster built.",
-                               attended=True),
+                               resource="human", attended=True),
     },
     # The BUILD stage. raster's `handoff` renders the methods digest to a docx the gate mints;
     # rework re-opens the attended build session (raster re-plans/re-builds and re-emits the
@@ -167,7 +172,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                               "Re-open the build to address the annotations. The session "
                               "continues into `raster build`, then `raster handoff` to re-emit "
                               "the methods digest docx.",
-                              attended=True),
+                              resource="human", attended=True),
     },
     # The DECK stage. razzle drafts a venue-specific .pptx the author reviews IN PLACE with
     # PowerPoint comments (no rename to initials — the .pptx is its own markup). Rework re-opens
@@ -181,7 +186,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "author":  Step("haarpi razzle deck", 1.5,
                         "Author the deck spec from the one-pager's spine plus the real figures "
                         "and numbers, and render it to the branded .pptx.", resource="gpu"),
-        "comment": Step(None, 0.25, "Review the rendered deck and annotate it."),
+        "comment": Step(None, 0.25, "Review the rendered deck and annotate it.", resource="human"),
         "deck_session": Step("haarpi razzle deck", 1.0,
                              "Re-author the deck spec to address the PowerPoint comments and "
                              "re-render the .pptx.", resource="gpu"),
@@ -449,7 +454,7 @@ def _queue_packaging(root: Path, m, client, tr_cfg: dict, venue: str, release: P
         _title("paper", "package", venue, cycle), m.trundlr_project_id,
         command=_venued("haarpi raconteur package", venue),
         description=f"Assemble + compile the {venue} submission from {release.name}.",
-        resource_id=_resource_id(tr_cfg, "runner"),
+        resource_id=_resource_id(tr_cfg, "cpu"),
         duration=estimate_hours(client.all_tasks(), "paper", "package", 0.3),
         depends_on_id=_template_task_id(client, m, venue))
     client.create_task(
@@ -575,13 +580,11 @@ def pipeline_config() -> dict:
 
 
 def _resource_id(tr_cfg: dict, kind: str) -> int | None:
-    key = {"human": "human_resource", "runner": "runner_resource",
-           "gpu": "gpu_resource", "cpu": "cpu_resource",
-           "claude": "claude_resource"}[kind]
-    v = int(tr_cfg.get(key) or 0)
-    if kind == "runner" and not v:            # runner falls back to the gpu box
-        v = int(tr_cfg.get("gpu_resource") or 0)
-    return v or None
+    """The trundlr resource id for a step's declared kind. No fallbacks: a step names a
+    resource that exists, or the misconfiguration is visible rather than absorbed."""
+    key = {"human": "human_resource", "gpu": "gpu_resource",
+           "cpu": "cpu_resource", "claude": "claude_resource"}[kind]
+    return int(tr_cfg.get(key) or 0) or None
 
 
 _ESTIMATE_WINDOW = 5
@@ -753,14 +756,16 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
     if approval:
         plan_steps.append((stage, "approve",
                            Step(None, 0.1, "Approve this plan — marking done releases "
-                                           "the chain (confirm_tiers).")))
+                                           "the chain (confirm_tiers).",
+                                resource="human")))
     for name in steps:
         st, _, sname = name.rpartition(":")
         st = st or stage
         plan_steps.append((st, sname, STAGE_STEPS[st][sname]))
     plan_steps.append((stage, "next",
                        Step("haarpi next", 0.1,
-                            "Read the finished markup; mint a release or queue rework.")))
+                            "Read the finished markup; mint a release or queue rework.",
+                            resource="gpu")))
     prev_id = None
     queued = []
     first = True
@@ -1839,7 +1844,7 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
         depends_on_id=(interview or {}).get("id"),
         description="Read the deck config the interview just wrote and queue one authoring chain "
                     "per format.",
-        resource_id=_resource_id(tr_cfg, "runner"), duration=0.1)
+        resource_id=_resource_id(tr_cfg, "gpu"), duration=0.1)
 
 
 def _queue_deck_formats(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
