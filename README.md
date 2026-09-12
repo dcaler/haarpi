@@ -61,6 +61,15 @@ There is no completion tracking across cycles and no escalation. The human is
 the verification loop, deliberately: each `next` is a fresh reading of the
 current markup.
 
+Every queued step names the resource it occupies — the GPU, the CPU, you, or the
+Claude agent — and there is no default, so a step cannot be added without saying
+where it runs. What decides whether a runner picks a task up is that resource,
+not whether the task carries a command: no runner polls the human or the Claude
+resource. So an **attended** step — the interactive design, build and review
+sessions, which launch a Claude session in the project root — books you *and*
+Claude, and still carries its command, because the person opening it should not
+have to retype a verb the task already knows.
+
 ### Rework is scaled to the ask, not to the heaviest ask in the set
 
 This is the load-bearing design decision, and it was learned the hard way.
