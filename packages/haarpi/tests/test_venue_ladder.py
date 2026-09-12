@@ -26,10 +26,12 @@ class _FakeClient:
         return [t for t in self.tasks if t["project_id"] == pid]
 
     def create_task(self, title, project_id, command=None, depends_on_id=None,
-                    description="", resource_id=None, duration=None):
+                    description="", resource_id=None, duration=None, resource_ids=None):
         t = {"id": len(self.tasks) + 1, "title": title, "project_id": project_id,
              "command": command, "depends_on_id": depends_on_id,
-             "description": description}
+             "description": description,
+             "resource_ids": resource_ids if resource_ids is not None
+             else ([resource_id] if resource_id else [])}
         self.tasks.append(t)
         return t
 

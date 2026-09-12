@@ -161,7 +161,14 @@ class TrundlrClient:
 
     def create_task(self, title: str, project_id: int, *, command: str | None = None,
                     depends_on_id: int | None = None, description: str = "",
-                    resource_id: int | None = None, duration: float | None = None) -> dict:
+                    resource_id: int | None = None, duration: float | None = None,
+                    resource_ids: list[int] | None = None) -> dict:
+        """Create one trundlr task.
+
+        ``resource_ids`` books several at once — an attended session occupies the human and
+        the Claude agent together, and booking one of them leaves the other looking free.
+        ``resource_id`` stays for the single-resource callers.
+        """
         body: dict = {"title": title, "project_id": project_id}
         if command:
             body["command"] = command
@@ -169,8 +176,10 @@ class TrundlrClient:
             body["description"] = description
         if depends_on_id is not None:
             body["depends_on_id"] = depends_on_id
-        if resource_id is not None:
-            body["resource_ids"] = [resource_id]
+        ids = [i for i in (resource_ids if resource_ids is not None else [resource_id])
+               if i is not None]
+        if ids:
+            body["resource_ids"] = ids
         if duration is not None:
             body["duration"] = duration
         return create_task(self.base, body)

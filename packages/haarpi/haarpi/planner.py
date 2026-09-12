@@ -42,14 +42,37 @@ from . import naming, project, redline, trundlr
 
 @dataclass(frozen=True)
 class Step:
-    command: str | None      # None = human step (no command; waits in the queue)
+    command: str | None      # None = nothing to run; the step IS the human's own work
     hours: float             # cold-start estimate; history overrides
     desc: str
-    resource: str = "runner"  # "human" | "runner" | "gpu" | "cpu"
+    resource: str = "runner"  # "human" | "runner" | "gpu" | "cpu" | "claude"
+    # An ATTENDED step has a command AND needs a person at the keyboard: the interactive
+    # design, build and review sessions, which launch a Claude session in the project root.
+    # Attendance used to be inferred from having no command, so the only way to make such a
+    # step wait in the queue instead of being claimed by a runner was to drop its command —
+    # which left the person reading the description to retype a verb the task already knew,
+    # and booked the human resource alone while Claude's time showed as free. A session is
+    # both things at once, and the registry has to be able to say so.
+    attended: bool = False
 
     @property
     def human(self) -> bool:
-        return self.command is None
+        """Waits for a person — whether because there is nothing to run, or because a
+        person has to run it."""
+        return self.command is None or self.attended
+
+    @property
+    def resources(self) -> tuple[str, ...]:
+        """Every resource the step occupies.
+
+        An attended session books the human AND the Claude agent; booking one of the two
+        makes the other look available. A step with nothing to run books the human alone —
+        `resource` still reads "runner" on those by default, and honouring it would hand a
+        runner a task with no command to run.
+        """
+        if self.attended:
+            return ("human", "claude")
+        return ("human",) if self.command is None else (self.resource,)
 
 
 # Commands are queued in umbrella form (`haarpi <tool> <verb>`) — on the shared
@@ -119,31 +142,32 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "process": Step("haarpi rayleigh process", 1.0,
                         "Re-reduce data to the preregistered outputs and write-up."),
         "comment": Step(None, 0.25, "Review the results write-up and annotate it."),
-        "review_session": Step(None, 1.0,
-                               "Deep review needed (new cells/seeds/experiments): run "
-                               "`haarpi rayleigh review` — the attended session designs "
-                               "and queues the follow-on chain itself."),
+        "review_session": Step("haarpi rayleigh review", 1.0,
+                               "Deep review needed (new cells/seeds/experiments): the attended "
+                               "session designs and queues the follow-on chain itself.",
+                               attended=True),
     },
     # The DESIGN (preregistration) stage. Its rework is always an attended re-run of the
     # design session — rayleigh re-authors experiments.yaml + the prereg docx addressing the
     # annotations (mirrors experiments' `review_session`). No `comment` step: re-running the
     # session ends by re-rendering the prereg for the author to annotate again.
     "design": {
-        "design_session": Step(None, 1.0,
-                               "Re-open the design session: run `haarpi rayleigh init` to "
-                               "address the annotations and re-render the prereg docx. The "
-                               "EXECUTABLE experiments.yaml is not written here — "
-                               "`rayleigh plan` authors it in the experiments stage, against "
-                               "the code raster built."),
+        "design_session": Step("haarpi rayleigh init", 1.0,
+                               "Re-open the design session to address the annotations and "
+                               "re-render the prereg docx. The EXECUTABLE experiments.yaml is "
+                               "not written here — `rayleigh plan` authors it in the "
+                               "experiments stage, against the code raster built.",
+                               attended=True),
     },
     # The BUILD stage. raster's `handoff` renders the methods digest to a docx the gate mints;
     # rework re-opens the attended build session (raster re-plans/re-builds and re-emits the
     # digest). Same shape as design — one tier, an attended re-run.
     "build": {
-        "build_session": Step(None, 1.0,
-                              "Re-open the build: run `haarpi raster plan` / `raster build` to "
-                              "address the annotations, then `raster handoff` to re-emit the "
-                              "methods digest docx."),
+        "build_session": Step("haarpi raster plan", 1.0,
+                              "Re-open the build to address the annotations. The session "
+                              "continues into `raster build`, then `raster handoff` to re-emit "
+                              "the methods digest docx.",
+                              attended=True),
     },
     # The DECK stage. razzle drafts a venue-specific .pptx the author reviews IN PLACE with
     # PowerPoint comments (no rename to initials — the .pptx is its own markup). Rework re-opens
@@ -552,7 +576,8 @@ def pipeline_config() -> dict:
 
 def _resource_id(tr_cfg: dict, kind: str) -> int | None:
     key = {"human": "human_resource", "runner": "runner_resource",
-           "gpu": "gpu_resource", "cpu": "cpu_resource"}[kind]
+           "gpu": "gpu_resource", "cpu": "cpu_resource",
+           "claude": "claude_resource"}[kind]
     v = int(tr_cfg.get(key) or 0)
     if kind == "runner" and not v:            # runner falls back to the gpu box
         v = int(tr_cfg.get("gpu_resource") or 0)
@@ -740,7 +765,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
     queued = []
     first = True
     for st, name, step in plan_steps:
-        rid = _resource_id(tr_cfg, "human" if step.human else step.resource)
+        rids = [i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i]
         # the venue belongs to the paper stage; an escalation into litreview is shared work
         v = venue if (venue and st == stage) else ""
         title = _title(st, name, v, cycle)
@@ -753,7 +778,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
             command=command,
             depends_on_id=prev_id,
             description=desc,
-            resource_id=rid,
+            resource_ids=rids,
             duration=estimate_hours(history, st, name, step.hours),
         )
         prev_id = task["id"]
@@ -1877,10 +1902,17 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
         elif spec.get("attended"):
             verb, label, blurb = _OPENING.get(stage, ("init", "design session",
                                                       "Interactive design session"))
+            # The command goes in the command FIELD, not only into prose the reader has to
+            # retype. Nothing claims it regardless — neither the human nor the Claude resource
+            # has a runner — so carrying it costs nothing and saves the person opening the
+            # task from looking up a verb the task already knows.
             client.create_task(
                 f"{tool} {label}", m.trundlr_project_id,
+                command=f"haarpi {tool} {verb}",
                 description=f"{blurb} — run: haarpi {tool} {verb}",
-                resource_id=_resource_id(tr_cfg, "human"), duration=2.0)
+                resource_ids=[i for i in (_resource_id(tr_cfg, "human"),
+                                          _resource_id(tr_cfg, "claude")) if i],
+                duration=2.0)
         else:
             # The paper stage opens at the top of its ladder — narrative first,
             # then venue analysis, then the human gate; outline and draft are

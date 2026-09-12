@@ -94,6 +94,7 @@ url = "http://127.0.0.1:{tr.server_address[1]}"
 gpu_resource = 2
 cpu_resource = 3
 human_resource = 1
+claude_resource = 4
 """)
     yield tr, ol
     tr.shutdown()
@@ -411,8 +412,11 @@ def test_dirty_prereg_reopens_the_design_session(proj, servers):
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
     assert new[0]["title"].startswith("rayleigh design_session")
-    assert "command" not in new[0]                         # attended session, yours
-    assert "rayleigh init" in new[0]["description"]
+    # Attended: yours to run, and it carries the verb rather than making you
+    # retype it. What keeps a runner off it is the RESOURCE — neither the human
+    # nor the Claude resource has one attached.
+    assert new[0]["command"] == "haarpi rayleigh init"
+    assert sorted(new[0]["resource_ids"]) == [1, 4]                         # attended session, yours
 
 
 def test_title_parse_disambiguates_rayleighs_two_stages():
@@ -455,7 +459,11 @@ def test_dirty_methods_reopens_the_build_session(proj, servers):
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
     assert new[0]["title"].startswith("raster build_session")
-    assert "command" not in new[0]                            # attended session, yours
+    # Attended: yours to run, and it carries the verb rather than making you
+    # retype it. What keeps a runner off it is the RESOURCE — neither the human
+    # nor the Claude resource has one attached.
+    assert new[0]["command"] == "haarpi raster plan"
+    assert sorted(new[0]["resource_ids"]) == [1, 4]                            # attended session, yours
     assert "raster" in new[0]["description"]
 
 
@@ -470,8 +478,11 @@ def test_experiments_extend_escalates_to_attended_review(proj, servers):
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
     assert new[0]["title"].startswith("rayleigh review_session")
-    assert "command" not in new[0]                              # attended session, yours
-    assert "rayleigh review" in new[0]["description"]
+    # Attended: yours to run, and it carries the verb rather than making you
+    # retype it. What keeps a runner off it is the RESOURCE — neither the human
+    # nor the Claude resource has one attached.
+    assert new[0]["command"] == "haarpi rayleigh review"
+    assert sorted(new[0]["resource_ids"]) == [1, 4]                              # attended session, yours
 
 
 def test_manifest_round_trips_deck_formats(tmp_path):
