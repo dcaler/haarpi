@@ -44,7 +44,7 @@ from haarpi import redline as hredline
 from haarpi import redline_engine as _engine
 from haarpi.redline_engine import Evidence, EvidenceLine, ParaContext, route_class_of
 
-from . import config, corpus as corpus_mod, docxio, guards, render, runlog
+from . import ledger, config, corpus as corpus_mod, docxio, guards, render, runlog
 from .brain import Brain
 from .models import Candidate
 from .summarize import (
@@ -1127,6 +1127,24 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
 
 # ── orchestration ─────────────────────────────────────────────────────────────
 
+def _ledger_refresh(cfg, gc, paths, corpus, citekeys, document_text: str,
+                    *, verb: str) -> None:
+    """Rewrite refs.bib + disposition.json for the document this run produced, and reconcile.
+
+    `report` has always done this; `revise` never did. Both emit documents, so both must —
+    otherwise the accountability artifacts describe a run that is no longer the current one.
+    Never fatal: a revise that cannot reach Zotero still produced a valid document, and the
+    reconciliation it prints is the thing the reviewer needs to see.
+    """
+    try:
+        _bib, _disp, rec = ledger.refresh(cfg, gc, paths, corpus, citekeys,
+                                          ledger.narrative_only(document_text), verb=verb)
+        ledger.print_reconciliation(rec)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not refresh refs.bib / disposition.json ({e}).",
+              file=sys.stderr)
+
+
 def run(directory: str = ".", brain_override: str | None = None,
         docx_path: str | None = None, redline: bool = True,
         queue: bool = True) -> int:
@@ -1251,6 +1269,13 @@ def run(directory: str = ".", brain_override: str | None = None,
         # Reply to each reviewer comment, authored "rabbitHole", with what was done —
         # the docx itself becomes the accountability record (no separate ledger).
         _reply_to_comments(out_docx, summary.get("comment_outcomes", {}), routing)
+        # A redline emits a document: it regenerates the whole annotated bibliography and a
+        # graft splices in new sections carrying new citations. It used to refresh neither
+        # refs.bib nor the ledger, so both went on describing the previous `report` — which is
+        # how a minted review came to cite thirteen keys its own refs.bib never defined.
+        # Reconcile against the document actually produced, not against the input narrative.
+        _ledger_refresh(cfg, gc, paths, corpus, citekeys,
+                        docxio.read_body_text(out_docx), verb="revise (redline)")
         return 0
 
     # 5. Style profile
@@ -1294,6 +1319,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     # revise answers the reviewer's annotations and nothing else (see guards, scoping rule).
     metrics_line = guards.metrics(narrative, set(citekeys.values())).line()
     print(f"  {runlog.stamp()}[polestar] {metrics_line}")
+    _ledger_refresh(cfg, gc, paths, corpus, citekeys, narrative, verb="revise")
     out_md, out_docx = _revision_paths(paths, docx)
     from .render import _paged_reference, build_markdown, pandoc_convert
     from .summarize import top_sources_block

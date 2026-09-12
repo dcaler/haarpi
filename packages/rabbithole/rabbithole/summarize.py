@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, corpus as corpus_mod, guards, render, runlog
+from . import config, corpus as corpus_mod, guards, ledger, render, runlog
 from .brain import Brain
 from .models import Candidate, norm_doi
 from .pdfs import page_marked_text
@@ -489,9 +489,23 @@ def _digest(corpus: list[Candidate], notes: list[dict], citekeys: dict[int, str]
         gap_str = f" NOT addressed: {gaps}" if gaps else ""
         rel = a.get("relevance", "").strip()
         rel_str = f" Relevance: {rel}" if rel else ""
+        # A foundational source states its ROLE where a data source states its findings.
+        # Leaving the raw "does not report quantitative findings" sentence here hands the
+        # drafter a reason to skip it; naming the contribution hands it a reason to cite it.
+        if is_foundational(a):
+            label += " (foundational)"
+            findings_str = _FOUNDATIONAL_ROLE
+        elif reports_qualitatively(a):
+            # It has a finding; the annotation merely appended that it quotes no effect
+            # sizes. Excise that clause and keep the finding — the source competes on what
+            # it found, not on what it declined to tabulate.
+            label += " (qualitative)"
+            findings_str = f"Findings: {_findings_without_the_negation(a)}"
+        else:
+            findings_str = f"Findings: {a.get('findings','')}"
         lines.append(
             f"- {label}{cites} {a.get('argument','')} "
-            f"Findings: {a.get('findings','')}{rel_str} Themes: {themes}{gap_str}".strip())
+            f"{findings_str}{rel_str} Themes: {themes}{gap_str}".strip())
     return "\n".join(lines)
 
 
@@ -531,6 +545,82 @@ _REVISE_CANDIDATE_CHARS = 16_000
 _MAX_ORPHANS_PER_OFFER = 4      # more than a paragraph can absorb without listing them
 _MAX_OFFERS_PER_SOURCE = 2      # nearest section, then one more. Never a tour of all of them.
 _REJECT_BATCH_CHARS = 6_000     # keep the rejection prompt inside the context budget
+_FOUNDATIONAL_SLOTS = 3         # per section, reserved for theory/method sources
+_FOUNDATIONAL_WINDOW = 3        # x top_k: how deep to look for one, vs x2 normally
+
+
+# A source whose annotation declares it has no quantitative results. These are the framework
+# and methodology papers — and the synthesis was quietly biased against them: sections are
+# assembled from triangulatable numeric claims, so a digest line reading "does not report
+# quantitative empirical findings, effect sizes, or statistical data" reads to the drafter as
+# a disqualification. A postIneq review dropped Epstein's iGSS paper that way — the single
+# most on-topic source in its corpus, indexed, annotated, and never cited, in a review whose
+# own section on inverse generative social science cited Epstein 1999 instead.
+#
+# Detection is deterministic and conservative: it fires on an explicit declaration of absence
+# or a named theoretical/methodological genre, never on the mere absence of digits.
+_NO_QUANT_RE = re.compile(
+    r"(?:does\s+not|doesn't|did\s+not|no)\s+(?:\w+\s+){0,3}"
+    r"(?:report|present|provide|contain|include|offer)\w*\s+(?:\w+\s+){0,3}"
+    r"(?:quantitative|empirical|statistical|numerical|effect\s+size)"
+    r"|\bno\s+(?:quantitative|empirical|statistical|numerical)\s+"
+    r"(?:findings?|results?|data|evidence|estimates?)\b",
+    re.IGNORECASE)
+
+# The genre signal: the paper has no results because results are not what it is for.
+_GENRE_RE = re.compile(
+    r"\b(?:theoretical|conceptual|methodological)\s+"
+    r"(?:essay|overview|framework|contribution|paper|piece|article|review|synthesis)\b"
+    r"|\bposition\s+paper\b",
+    re.IGNORECASE)
+
+# The clause that does the damage, so it can be excised rather than the whole field discarded.
+_NEGATION_CLAUSE_RE = re.compile(
+    r"(?:[;,]\s*|\s+(?:but|although|though|and|while|whereas)\s+|^\s*|(?<=\.)\s+)"
+    r"(?:it\s+|the\s+paper\s+|this\s+(?:paper|study|article)\s+)?"
+    r"(?:does\s+not|doesn't|did\s+not|reports?\s+no|provides?\s+no|presents?\s+no)"
+    r"[^.;]*?(?:quantitative|empirical|statistical|numerical|effect\s+size)[^.;]*[.;]?",
+    re.IGNORECASE)
+
+_SUBSTANTIVE_CHARS = 45      # below this, what is left is not a finding
+
+
+def _findings_without_the_negation(note: dict) -> str:
+    """The findings text with any 'reports no quantitative results' clause removed."""
+    fin = (note or {}).get("findings", "") or ""
+    return " ".join(_NEGATION_CLAUSE_RE.sub(" ", fin).split()).strip(" ,;.")
+
+
+def declares_no_quantities(note: dict) -> bool:
+    """The annotation says somewhere that this source reports no numbers."""
+    return bool(_NO_QUANT_RE.search((note or {}).get("findings", "") or ""))
+
+
+def is_foundational(note: dict) -> bool:
+    """True when the source carries a framework rather than measurements.
+
+    Two ways to qualify: it names a theoretical/methodological genre, or it declares an
+    absence of quantitative results and has nothing substantive left once that declaration
+    is removed. The second clause is what separates Epstein's iGSS essay — whose findings
+    field is ONLY the declaration — from a study that reports a real qualitative result and
+    merely adds that it quotes no effect sizes. Both are penalised by the drafter; only the
+    first is foundational, and mislabelling the second would throw its finding away.
+    """
+    note = note or {}
+    if _GENRE_RE.search(note.get("findings", "") or ""):
+        return True
+    return (declares_no_quantities(note)
+            and len(_findings_without_the_negation(note)) < _SUBSTANTIVE_CHARS)
+
+
+def reports_qualitatively(note: dict) -> bool:
+    """It has a real finding AND a disqualifying clause attached to it."""
+    return (declares_no_quantities(note) and not is_foundational(note)
+            and len(_findings_without_the_negation(note)) >= _SUBSTANTIVE_CHARS)
+
+
+_FOUNDATIONAL_ROLE = ("Contribution: theoretical/methodological — cite it for its framework "
+                      "or method, not for data.")
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -555,7 +645,10 @@ def _compact_lines(corpus: list[Candidate], notes: list[dict],
         cites = f", {c.cited_by_count} cites" if c.cited_by_count else ""
         themes = ", ".join((a.get("themes") or [])[:4])
         arg = _truncate(a.get("argument", ""), _COMPACT_ARG_CHARS)
-        out[ck] = f"- [@{ck}] ({c.author_year()}{cites}) {arg}" + (f" [{themes}]" if themes else "")
+        role = (" (foundational)" if is_foundational(a)
+                else " (qualitative)" if reports_qualitatively(a) else "")
+        out[ck] = (f"- [@{ck}] ({c.author_year()}{cites}){role} {arg}"
+                   + (f" [{themes}]" if themes else ""))
     return out
 
 
@@ -647,7 +740,8 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _shortlist(brain: Brain, sections: list[Section], compact: dict[str, str],
-               full: dict[str, str], top_k: int = _SHORTLIST_K) -> list[list[float]]:
+               full: dict[str, str], top_k: int = _SHORTLIST_K,
+               foundational: set[str] = frozenset()) -> list[list[float]]:
     """Rank every source against every section idea. Returns the similarity matrix
     (section × source) so the orphan pass can reuse it, and fills `sec.candidates`.
 
@@ -666,15 +760,45 @@ def _shortlist(brain: Brain, sections: list[Section], compact: dict[str, str],
         sims = [_cosine(sv, v) for v in src_vecs]
         matrix.append(sims)
         ranked = sorted(range(len(keys)), key=lambda i: sims[i], reverse=True)
+        window = ranked[:top_k * 2]
+        # Foundational sources are scanned DEEPER than the ordinary window. The whole reason
+        # they need reserving is that they rank low: a framework paper's cosine against a
+        # section claim phrased as an empirical argument sits below any matching result's. A
+        # reservation that only searched the ordinary window would look exactly where the
+        # penalty has already pushed them out of.
+        found_window = ranked[:top_k * _FOUNDATIONAL_WINDOW]
         chosen, budget = [], _SHORTLIST_CHARS
-        for i in ranked[:top_k * 2]:
+
+        def _admit(i: int) -> bool:
             line = full.get(keys[i], "")
             if len(chosen) >= top_k or len(line) > budget:
-                continue
+                return False
             chosen.append(keys[i])
-            budget -= len(line)
+            return True
+
+        # Foundational sources get first refusal on a few slots. They lose the ordinary
+        # contest twice over: a framework paper's cosine against a section claim phrased as
+        # an empirical argument runs lower than a matching result's, and its digest line is
+        # long, so the character budget drops it even when it ranks. Reserving capacity is
+        # what keeps the corpus's theoretical spine in front of the drafter at all.
+        n_reserved = 0
+        for i in found_window:
+            if n_reserved >= _FOUNDATIONAL_SLOTS:
+                break
+            if keys[i] in foundational and _admit(i):
+                budget -= len(full.get(keys[i], ""))
+                n_reserved += 1
+        for i in window:
+            if keys[i] in chosen:
+                continue
+            if _admit(i):
+                budget -= len(full.get(keys[i], ""))
+        # Restore relevance order: reserving must not tell the drafter these rank first.
+        order = {keys[i]: r for r, i in enumerate(ranked)}
+        chosen.sort(key=lambda k: order.get(k, len(order)))
         sec.candidates = chosen
-        print(f"    §{len(matrix)} {sec.heading[:44]:<44} {len(chosen)} candidate sources",
+        note = f" ({n_reserved} foundational)" if n_reserved else ""
+        print(f"    §{len(matrix)} {sec.heading[:44]:<44} {len(chosen)} candidate sources{note}",
               flush=True)
     return matrix
 
@@ -717,6 +841,11 @@ each later paragraph brings in sources not yet used in this section and connects
 is already established. Most paragraphs should cite several sources — weaving means setting
 sources against each other, so it is citation-dense by construction. Aim to use most of the
 evidence above; a source you leave out is a source you are asserting bears on nothing here.
+
+A source marked (foundational) carries a framework, a method, or a definition rather than
+measurements. Cite it for what it establishes — the concept a later result instantiates, the
+method a later finding depends on — and never skip it for having no numbers to quote. A
+section whose empirical claims rest on an unnamed framework is missing its foundation.
 
 Carry the "what this means for the project" point INSIDE the evidence-bearing paragraphs.
 Never end with a citation-free conclusion.
@@ -937,6 +1066,12 @@ merely because the review is already long enough, because its finding resembles 
 cited, or because it will appear in the annotated bibliography anyway — corroborating
 evidence is what turns a claim into a foundation.
 
+A source marked (foundational) reports no numbers by design: it carries a framework, method,
+or definition. "No quantitative findings", "theoretical only", or "reports no results" is
+NEVER a valid reason to reject one. Reject it only if its framework genuinely bears on none
+of the ideas above — and if the review argues within that framework, it must be cited, not
+rejected.
+
 Reject only what is truly off-topic, superseded by a source already cited, or too weak to
 support any claim. Give the reason in one sentence.
 
@@ -1134,7 +1269,8 @@ def _reject_ledger(brain: Brain, cfg, sections: list[Section], unplaced: set[str
 def _place_orphans(brain: Brain, cfg, sections: list[Section], matrix: list[list[float]],
                    keys: list[str], full: dict[str, str], sys_prompt: str,
                    corpus_keys: set[str], compact: dict[str, str] | None = None,
-                   rounds: int = 4, max_offers: int = _MAX_OFFERS_PER_SOURCE) -> dict[str, str]:
+                   rounds: int = 4, max_offers: int = _MAX_OFFERS_PER_SOURCE,
+                   trace: dict | None = None) -> dict[str, str]:
     """Offer every uncited source to the section it is nearest; if that section declines it,
     offer it once more to the next-nearest. Then demand a reason for whatever no section took.
 
@@ -1201,6 +1337,15 @@ def _place_orphans(brain: Brain, cfg, sections: list[Section], matrix: list[list
                 sec.text = "\n\n".join(paras)
             for k, why in declined.items():
                 refusals.setdefault(k, []).append(f"§{si + 1} ({sec.heading}): {why}")
+            if trace is not None:
+                for k in orphans:
+                    rec = trace.get("sources", {}).get(k)
+                    if rec is None:
+                        continue
+                    rec["offered_to"].append(si)
+                    if k in declined:
+                        rec["refusals"].append({"section": si, "heading": sec.heading,
+                                                "reason": declined[k]})
             took = [k for k in orphans if k not in declined and para
                     and k in guards.all_citekeys(para)]
             placed += len(took)
@@ -1291,7 +1436,8 @@ def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
 
 
 def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
-               citekeys: dict[int, str], style_profile: str = "") -> tuple[str, dict[str, str]]:
+               citekeys: dict[int, str], style_profile: str = "",
+               trace: dict | None = None) -> tuple[str, dict[str, str]]:
     """Build the narrative section by section, and drive every curated source to a decision.
 
     Returns (narrative, rejected) where `rejected` maps citekey -> the reason that source was
@@ -1306,6 +1452,13 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     full = _full_lines(corpus, notes, citekeys)
     corpus_keys = set(citekeys.values())
     keys = list(compact)
+    foundational = {citekeys[i] for i, a in enumerate(notes)
+                    if i in citekeys and is_foundational(a)}
+    if foundational:
+        print(f"  {_stamp()}{len(foundational)} foundational source(s) "
+              f"(framework/method, no quantitative findings) — reserved shortlist capacity: "
+              f"{', '.join(sorted(foundational)[:6])}"
+              f"{' …' if len(foundational) > 6 else ''}", flush=True)
 
     sys_prompt = SYNTH_SYS
     if style_profile:
@@ -1321,7 +1474,25 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     for i, s in enumerate(sections, 1):
         print(f"    {i}. {s.heading}", flush=True)
 
-    matrix = _shortlist(brain, sections, compact, full)
+    matrix = _shortlist(brain, sections, compact, full, foundational=foundational)
+
+    if trace is not None:
+        key_idx = {k: i for i, k in enumerate(keys)}
+        trace["sections"] = [
+            {"heading": sec.heading, "claim": sec.claim,
+             "shortlist": [{"citekey": k,
+                            "similarity": round(matrix[si][key_idx[k]], 4),
+                            "foundational": k in foundational}
+                           for k in sec.candidates]}
+            for si, sec in enumerate(sections)]
+        trace["sources"] = {
+            k: {"foundational": k in foundational,
+                "best_similarity": round(max(matrix[si][key_idx[k]]
+                                             for si in range(len(sections))), 4),
+                "shortlisted_in": [si for si, sec in enumerate(sections)
+                                   if k in sec.candidates],
+                "offered_to": [], "refusals": []}
+            for k in keys}
 
     prev_tail = ""
     for i, sec in enumerate(sections):
@@ -1341,10 +1512,28 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     print(f"\n  {_stamp()}{guards.metrics(_assemble(sections), corpus_keys).line()}", flush=True)
 
     rejected = _place_orphans(brain, cfg, sections, matrix, keys, full,
-                              sys_prompt, corpus_keys, compact)
+                              sys_prompt, corpus_keys, compact, trace=trace)
     _repair_assembly(brain, cfg, sections, full, sys_prompt, corpus_keys, rejected)
 
     narrative = _assemble(sections)
+    if trace is not None:
+        cited = set(guards.all_citekeys(narrative))
+        for k, rec in trace.get("sources", {}).items():
+            rec["outcome"] = ("cited" if k in cited else
+                              "rejected" if k in rejected else "unplaced")
+            if k in rejected:
+                rec["reason"] = rejected[k]
+        trace["summary"] = {
+            "corpus": len(corpus_keys), "sections": len(sections),
+            "foundational": len(foundational),
+            "cited": sum(1 for r in trace["sources"].values() if r["outcome"] == "cited"),
+            "rejected": sum(1 for r in trace["sources"].values() if r["outcome"] == "rejected"),
+            "unplaced": sum(1 for r in trace["sources"].values() if r["outcome"] == "unplaced"),
+            "foundational_cited": sum(1 for r in trace["sources"].values()
+                                      if r["foundational"] and r["outcome"] == "cited"),
+            "never_shortlisted": sorted(k for k, r in trace["sources"].items()
+                                        if not r["shortlisted_in"]),
+        }
     print(f"  {_stamp()}[polestar] {guards.metrics(narrative, corpus_keys, rejected).line()}",
           flush=True)
     return narrative, rejected
@@ -1744,54 +1933,19 @@ def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
 
 def _export_bibtex(cfg, gc, paths, citekeys: dict[int, str],
                    corpus: list[Candidate]) -> "Path | None":
-    """Fetch BibTeX from Zotero, align citekeys with the narrative, write output/refs.bib."""
-    if not gc.have_zotero:
-        return None
-    collection_key = cfg.zotero.get("collection_key", "")
-    if not collection_key:
-        return None
-    from . import zotero as _zotero
-    try:
-        zc = _zotero.ZoteroClient(gc)
-        bib_text = zc.collection_bibtex(collection_key)
-    except Exception as e:  # noqa: BLE001
-        print(f"  [warn] BibTeX export failed ({e}); refs.bib not written.", file=sys.stderr)
-        return None
-    key_by_doi: dict[str, str] = {}
-    key_by_title: dict[str, str] = {}
-    for i, c in enumerate(corpus):
-        ck = citekeys.get(i)
-        if not ck:
-            continue
-        if c.doi_key:
-            key_by_doi[c.doi_key] = ck
-        if c.title_key:
-            key_by_title[c.title_key] = ck
-    bib_text = _patch_bibtex_keys(bib_text, key_by_doi, key_by_title)
-    out = paths.output / "refs.bib"
-    out.write_text(bib_text, encoding="utf-8")
-    return out
+    """Fetch BibTeX from Zotero, align citekeys with the narrative, write output/refs.bib.
+
+    Implementation lives in `ledger` so `revise` writes the identical artifact — it used to
+    write none, and shipped documents citing keys its own refs.bib had never heard of."""
+    return ledger.export_bibtex(cfg, gc, paths, citekeys, corpus)
 
 
 def _write_disposition(paths, corpus: list[Candidate], citekeys: dict[int, str],
-                       narrative: str, rejected: dict[str, str]) -> Path:
-    """Persist what happened to every curated source. The polestar, auditable after the run.
-
-    An unplaced source — neither cited nor rejected — is the defect the ledger exists to make
-    impossible to miss. Silence used to look identical to a decision.
-    """
-    corpus_keys = set(citekeys.values())
-    d = guards.disposition(narrative, corpus_keys, rejected)
-    title_by_key = {citekeys[i]: c.title for i, c in enumerate(corpus) if i in citekeys}
-    payload = {
-        "metrics": guards.metrics(narrative, corpus_keys, rejected).__dict__,
-        "cited": sorted(d.cited),
-        "rejected": {k: rejected[k] for k in sorted(d.rejected)},
-        "unplaced": {k: title_by_key.get(k, "") for k in sorted(d.unplaced)},
-    }
-    out = paths.work / "disposition.json"
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return out
+                       narrative: str, rejected: dict[str, str],
+                       *, reconciliation=None) -> Path:
+    """Persist what happened to every curated source. The polestar, auditable after the run."""
+    return ledger.write_disposition(paths, corpus, citekeys, narrative, rejected,
+                                    verb="report", reconciliation=reconciliation)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1880,8 +2034,21 @@ def run(directory: str = ".", brain_override: str | None = None,
         else:
             print("  [note] use_style=true but no style_profile.md found; "
                   "run 'rabbitHole style' to train one.")
-    narrative, rejected = synthesize(brain, corpus, notes, cfg, citekeys, style_profile)
+    trace: dict = {}
+    narrative, rejected = synthesize(brain, corpus, notes, cfg, citekeys, style_profile,
+                                     trace=trace)
     _write_disposition(paths, corpus, citekeys, narrative, rejected)
+    # What the synthesis saw and chose, per section and per source. disposition.json says what
+    # happened to each source; this says why — and a source that was never shortlisted at all
+    # is now visible as such instead of vanishing between the annotations and the draft.
+    try:
+        ledger.write_synthesis_trace(paths, trace)
+        never = trace.get("summary", {}).get("never_shortlisted", [])
+        if never:
+            print(f"  [trace] {len(never)} source(s) were never shortlisted for any section: "
+                  f"{', '.join(never[:6])}{' …' if len(never) > 6 else ''}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] could not write synthesis trace ({e}).", file=sys.stderr)
 
     print(f"\n{_stamp()}[3/3] Locating claims for the annotated bibliography "
           f"(full curated corpus)...")
@@ -1901,6 +2068,15 @@ def run(directory: str = ".", brain_override: str | None = None,
     # downstream stages bind it, and a bibliography that exists only after the document
     # it belongs to is a trap waiting for the first consumer who reads them in order.
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
+
+    # Reconcile the narrative against the bibliography it is about to ship with. Nothing
+    # checked this before: `metrics(...).unresolved` compares the narrative to the CORPUS,
+    # so a review could report "unresolved keys 0" while citing keys no refs.bib entry
+    # defines. The ledger is rewritten with the result so the check is auditable after the run.
+    _rec = ledger.reconcile(ledger.narrative_only(narrative), set(citekeys.values()),
+                            ledger.read_bib(paths))
+    ledger.print_reconciliation(_rec)
+    _write_disposition(paths, corpus, citekeys, narrative, rejected, reconciliation=_rec)
 
     print(f"  {_stamp()}ranking the load-bearing sources...", flush=True)
     out_md, out_docx = render.write_review(
