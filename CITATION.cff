@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "HAARPi: Human Authored Agentic Research Pipeline"
+abstract: >-
+  A six-stage agentic research system spanning literature review, experiment
+  design, model building, experiments, manuscript and presentation, in which
+  every stage terminates in a human-reviewed document and no stage advances
+  without markup. Offline-first: the working loops run on local open-weight
+  models, so a research project need never leave the machine.
+authors:
+  - family-names: Reeves
+    given-names: D. Cale
+    orcid: "https://orcid.org/0000-0001-5156-594X"
+repository-code: "https://github.com/dcaler/haarpi"
+url: "https://github.com/dcaler/haarpi"
+license-url: "https://polyformproject.org/licenses/noncommercial/1.0.0"
+keywords:
+  - research software
+  - agentic workflows
+  - large language models
+  - reproducible research
+  - human-in-the-loop
+version: 0.1.0
+date-released: "2026-09-13"

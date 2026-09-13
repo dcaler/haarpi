@@ -1,0 +1,19 @@
+{
+  "upload_type": "software",
+  "title": "HAARPi: Human Authored Agentic Research Pipeline",
+  "description": "<p>A six-stage agentic research system spanning literature review, experiment design, model building, experiments, manuscript and presentation, in which every stage terminates in a human-reviewed document and no stage advances without markup. Offline-first: the working loops run on local open-weight models, so a research project need never leave the machine.</p>",
+  "creators": [
+    {
+      "name": "Reeves, D. Cale",
+      "orcid": "0000-0001-5156-594X"
+    }
+  ],
+  "keywords": [
+    "research software",
+    "agentic workflows",
+    "large language models",
+    "reproducible research",
+    "human-in-the-loop"
+  ],
+  "access_right": "open"
+}
