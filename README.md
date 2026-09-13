@@ -186,6 +186,15 @@ shares a term with the topic but transfers no concept is moved to a Zotero
 `quarantine` collection, reversibly, never deleted. Judging by domain would
 throw away exactly the cross-disciplinary work the review exists to find.
 
+It judges against **the author's own statement of the work**, plus the current
+cycle's asks — never against the focus line. The focus exists to aim searches:
+breadth, synonyms, adjacent terms, a deliberately wide net. This test needs the
+opposite, a boundary tight enough that a shared word can be called a false
+friend, and against a wide question nothing ever is one. Verdicts are cached per
+paper against that question, so a normal cycle judges only what is new; a
+question that merely *gained* an ask keeps every paper it already accepted,
+because widening cannot make a transferring paper stop transferring.
+
 **A run has to be able to say it found nothing.** Every stage can behave
 correctly and the composition still fail: a search returns a healthy total while
 returning zero on the one topic the cycle exists to cover; a shortlist is a
