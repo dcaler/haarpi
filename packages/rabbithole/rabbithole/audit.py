@@ -301,7 +301,13 @@ def _clauses(text: str) -> list[str]:
     return sorted(out)
 
 
-def _sig(topic: str, focus: str) -> str:
+def _norm(text: str) -> str:
+    """One clause, canonicalised: lowercased, punctuation flattened, whitespace collapsed."""
+    import re
+    return " ".join(re.sub(r"[^\w\s]", " ", (text or "").lower()).split())
+
+
+def _sig(topic: str, focus: str, asks=()) -> str:
     """A STABLE signature of the research QUESTION, so a re-run reloads the cache instead of
     re-judging.
 
@@ -318,8 +324,12 @@ def _sig(topic: str, focus: str) -> str:
     the cache (and the incremental checkpoints) useless for resuming a long run.
     """
     import hashlib
-    payload = "\x00".join(_clauses(topic) + ["\x01"] + _clauses(focus))
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    # The focus IS a delimited list, so it splits. An ask is one prose sentence and stays
+    # whole — splitting it on its commas would make the signature turn on where a subordinate
+    # clause happens to fall, which is not a change to the question.
+    units = (_clauses(topic) + ["\x01"] + _clauses(focus) + ["\x02"]
+             + sorted({n for n in (_norm(a) for a in (asks or ())) if n}))
+    return hashlib.sha1("\x00".join(units).encode("utf-8")).hexdigest()
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
@@ -368,10 +378,9 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     # generation and the ranker. Judging without them inverts the guard: a paper fetched FOR an
     # ask, against a question that no longer mentions the ask, looks exactly like a source that
     # shares vocabulary without transferring, which is the thing this verb quarantines.
-    question = "; ".join([f for f in [cfg.focus or ""] +
-                          [str(t) for t in (getattr(cfg, "gather_topics", None) or [])]
-                          if f.strip()])
-    sig = _sig(cfg.topic, question)
+    asks = [str(t) for t in (getattr(cfg, "gather_topics", None) or []) if str(t).strip()]
+    question = "; ".join([f for f in [cfg.focus or ""] + asks if f.strip()])
+    sig = _sig(cfg.topic, cfg.focus or "", asks)
     cache = _load_cache(paths, sig)
     min_conf = 7.0
     # Live reporter: a line per item, plus a rolling ETA from the freshly-judged rate (cached items

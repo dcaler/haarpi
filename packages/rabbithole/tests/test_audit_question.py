@@ -68,6 +68,31 @@ def test_the_signature_is_stable_across_processes():
 
 # ── the question includes this cycle's asks ──────────────────────────────────
 
+def test_an_ask_is_one_unit_not_split_on_its_commas():
+    """An ask is a prose sentence. Splitting it on its commas would make the signature turn on
+    where a subordinate clause happens to fall, which is not a change to the question."""
+    ask = "Sugarscape and artificial society models. Analyses and extensions, including "\
+          "wealth distribution, inheritance and the agent life course."
+    other = "Sugarscape and artificial society models. Analyses and extensions; including "\
+            "wealth distribution; inheritance and the agent life course."
+    assert _sig(_T, "f", [ask]) == _sig(_T, "f", [other]), "punctuation inside an ask is wording"
+    assert _sig(_T, "f", [ask]) != _sig(_T, "f", [ask + " And bootstrap resampling."])
+
+
+def test_adding_an_ask_invalidates():
+    assert _sig(_T, "f", ["ask one"]) != _sig(_T, "f", ["ask one", "ask two"])
+
+
+def test_ask_order_does_not_matter():
+    assert _sig(_T, "f", ["a", "b"]) == _sig(_T, "f", ["b", "a"])
+
+
+def test_an_ask_is_not_confusable_with_a_focus_clause():
+    """The two channels are separated in the payload, so moving a strand from one to the other
+    is a real change — which is what happened on elephantRoom, and why re-judging was right."""
+    assert _sig(_T, "carbon taxes; households", []) != _sig(_T, "carbon taxes", ["households"])
+
+
 def test_the_asks_reach_the_question(tmp_path, monkeypatch):
     """The regression this closes: a paper gathered for an ask, judged against a question that
     does not mention the ask, is indistinguishable from a false friend."""
@@ -83,14 +108,13 @@ def test_the_asks_reach_the_question(tmp_path, monkeypatch):
     clauses = _clauses(question)
     assert any("sugarscape" in c for c in clauses)
     assert any("bootstrap" in c or "resampling" in c for c in clauses)
-    assert audit._sig(cfg.topic, question) != audit._sig(cfg.topic, cfg.focus)
+    assert audit._sig(cfg.topic, cfg.focus, cfg.gather_topics) != audit._sig(cfg.topic, cfg.focus)
 
 
 def test_a_project_with_no_asks_is_unchanged():
     """Most cycles have none; those must not see a different signature for it."""
     focus = "opinion dynamics; narrative cognition"
-    question = "; ".join([f for f in [focus] + [] if f.strip()])
-    assert _sig(_T, question) == _sig(_T, focus)
+    assert _sig(_T, focus, []) == _sig(_T, focus)
 
 
 if __name__ == "__main__":
