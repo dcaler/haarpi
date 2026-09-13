@@ -263,7 +263,19 @@ def _cache_path(paths):
     return paths.output / "audit_cache.json"
 
 
-def _load_cache(paths, sig: str) -> dict:
+def _load_cache(paths, sig: str, units=()) -> dict:
+    """Verdicts still usable for THIS question.
+
+    A verdict is a judgement about one paper against one question, so changing the question
+    ought to discard it — but not every change is equal, and the whole-corpus re-judge is the
+    expensive thing here (236 papers, ~17 minutes each on elephantRoom).
+
+    When the question only GAINED units — this cycle added an ask — a paper that transferred
+    to the narrower question still transfers to the wider one: nothing was taken away that its
+    verdict rested on. Only the quarantined papers can change, and they are few. When anything
+    was removed or reworded, every verdict was made against a question that no longer exists
+    and all of them go.
+    """
     p = _cache_path(paths)
     if not p.exists():
         return {}
@@ -271,14 +283,23 @@ def _load_cache(paths, sig: str) -> dict:
         blob = json.loads(p.read_text())
     except Exception:  # noqa: BLE001
         return {}
-    if blob.get("sig") != sig:          # topic/focus changed -> re-judge from scratch
-        return {}
-    return blob.get("verdicts", {})
+    verdicts = blob.get("verdicts", {})
+    if blob.get("sig") == sig:
+        return verdicts
+    was, now = set(blob.get("units") or ()), set(units or ())
+    if was and now > was:               # strictly wider: keep what transferred, re-judge the rest
+        kept = {k: v for k, v in verdicts.items() if v.get("kind") == "transfer"}
+        dropped = len(verdicts) - len(kept)
+        print(f"  {runlog.stamp()}question widened by {len(now - was)} clause(s) — keeping "
+              f"{len(kept)} transfer verdict(s), re-judging {dropped} quarantined", flush=True)
+        return kept
+    return {}
 
 
-def _save_cache(paths, sig: str, cache: dict) -> None:
+def _save_cache(paths, sig: str, cache: dict, units=()) -> None:
     try:
-        _cache_path(paths).write_text(json.dumps({"sig": sig, "verdicts": cache}, indent=1))
+        _cache_path(paths).write_text(json.dumps(
+            {"sig": sig, "units": sorted(units or ()), "verdicts": cache}, indent=1))
     except Exception:  # noqa: BLE001
         pass
 
@@ -324,12 +345,20 @@ def _sig(topic: str, focus: str, asks=()) -> str:
     the cache (and the incremental checkpoints) useless for resuming a long run.
     """
     import hashlib
-    # The focus IS a delimited list, so it splits. An ask is one prose sentence and stays
-    # whole — splitting it on its commas would make the signature turn on where a subordinate
-    # clause happens to fall, which is not a change to the question.
-    units = (_clauses(topic) + ["\x01"] + _clauses(focus) + ["\x02"]
-             + sorted({n for n in (_norm(a) for a in (asks or ())) if n}))
-    return hashlib.sha1("\x00".join(units).encode("utf-8")).hexdigest()
+    return hashlib.sha1("\x00".join(_units(topic, focus, asks)).encode("utf-8")).hexdigest()
+
+
+def _units(topic: str, focus: str, asks=()) -> list[str]:
+    """The question as a canonical set of units — what the signature hashes, and what a later
+    run compares against to tell a widening from a rewrite.
+
+    The stated question IS prose or a delimited list, so it splits. An ask is one sentence and
+    stays whole: splitting it on its commas would make the signature turn on where a
+    subordinate clause happens to fall, which is not a change to the question.
+    """
+    return (sorted({f"t:{c}" for c in _clauses(topic)})
+            + sorted({f"q:{c}" for c in _clauses(focus)})
+            + sorted({f"a:{n}" for n in (_norm(a) for a in (asks or ())) if n}))
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
@@ -372,16 +401,29 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
           f"{' (dry run)' if dry_run else ''} — one model pass each; on this hardware allow "
           f"a few minutes per item. Progress below (resumable — verdicts are cached).", flush=True)
 
-    # THE QUESTION IS THE FOCUS PLUS THIS CYCLE'S ASKS. `gather_topics` carries what the
-    # reviewer asked for that the standing focus does not yet name, and the audit is the third
-    # consumer of "what is this review about" that never learned about them — after query
-    # generation and the ranker. Judging without them inverts the guard: a paper fetched FOR an
-    # ask, against a question that no longer mentions the ask, looks exactly like a source that
-    # shares vocabulary without transferring, which is the thing this verb quarantines.
+    # THE QUESTION IS WHAT THE AUTHOR SAID THE WORK IS, PLUS THIS CYCLE'S ASKS.
+    #
+    # Not `focus`. The focus exists to aim searches — breadth, synonyms, adjacent terms,
+    # deliberately a wide net — and this verb needs the opposite: a tight boundary against
+    # which a shared word can be judged a false friend. Reusing one string for both jobs made
+    # the guard toothless. elephantRoom's audit 8 judged 236 papers against an 837-character
+    # search string and quarantined none of them, in 65 hours.
+    #
+    # `research_prompt` is the author's own statement of the work, and it is stable: across
+    # eleven elephantRoom configs the focus went 230 -> 526 -> 822 -> 837 -> 339 while the
+    # prompt changed exactly once. Stability is not incidental — a question that churns every
+    # cycle discards every cached verdict with it.
+    #
+    # The asks stay in: they are what the reviewer asked for that the prompt does not yet
+    # name, and judging without them inverts the guard — a paper fetched FOR an ask, against a
+    # question that never mentions the ask, is indistinguishable from a source that shares
+    # vocabulary without transferring.
     asks = [str(t) for t in (getattr(cfg, "gather_topics", None) or []) if str(t).strip()]
-    question = "; ".join([f for f in [cfg.focus or ""] + asks if f.strip()])
-    sig = _sig(cfg.topic, cfg.focus or "", asks)
-    cache = _load_cache(paths, sig)
+    stated = (cfg.research_prompt or cfg.focus or "").strip()
+    question = "; ".join([f for f in [stated] + asks if f.strip()])
+    sig = _sig(cfg.topic, stated, asks)
+    units = _units(cfg.topic, stated, asks)
+    cache = _load_cache(paths, sig, units)
     min_conf = 7.0
     # Live reporter: a line per item, plus a rolling ETA from the freshly-judged rate (cached items
     # are instant, so they don't skew it) — the run narrates itself instead of going dark for hours.
@@ -403,8 +445,8 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
                             project_key=project_key, quarantine_key=quarantine_key,
                             items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
                             min_confidence=min_conf, progress=_report,
-                            checkpoint=lambda c: _save_cache(paths, sig, c))
-    _save_cache(paths, sig, cache)
+                            checkpoint=lambda c: _save_cache(paths, sig, c, units))
+    _save_cache(paths, sig, cache, units)
     tr, ff = counts.get("transfer", 0), counts.get("false_friend", 0)
     print(f"  {runlog.stamp()}Judged {total}: {tr} transfer, {ff} false-friend "
           f"({len(summary['flagged'])} confident ≥ {min_conf:.0f}/10).")

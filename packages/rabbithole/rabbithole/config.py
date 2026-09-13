@@ -167,7 +167,35 @@ def load_project(path: str | Path = ".") -> ProjectConfig:
     brain = BrainConfig(**(raw.pop("brain", {}) or {}))
     cfg = ProjectConfig(**raw)
     cfg.brain = brain
+    _adopt_manifest(cfg, p if p.is_dir() else fp.parent.parent)
     return cfg
+
+
+# The three facts the umbrella owns. `haarpi init` used to COPY them into a new litrev config
+# and nothing ever resynced, so they drifted: on an adopted project they diverge from birth,
+# because seeding deliberately never touches an existing file. DigiPros ended up with a 3371-
+# character brief describing a three-model journal paper and a 646-character research_prompt
+# describing the single-model conference paper — two documents about different work, and the
+# audit judging against the wrong one. One owner per fact; the local copy survives only as the
+# standalone fallback, since each tool stays individually usable without the umbrella.
+_MANIFEST_OWNED = {"project_name": "name", "research_prompt": "brief",
+                   "trundlr_project_id": "trundlr_project_id"}
+
+
+def _adopt_manifest(cfg: "ProjectConfig", start: Path) -> None:
+    """Overlay the umbrella-owned fields from haarpi.yaml, when a project has one."""
+    try:
+        from haarpi import project as _hproject
+        root = _hproject.find_root(start)
+        if root is None:
+            return
+        m = _hproject.load_manifest(root)
+    except Exception:  # noqa: BLE001 — no umbrella, or an unreadable manifest: keep the copy
+        return
+    for ours, theirs in _MANIFEST_OWNED.items():
+        v = getattr(m, theirs, None)
+        if v:
+            setattr(cfg, ours, v)
 
 
 def save_project(cfg: ProjectConfig, path: str | Path = ".") -> Path:

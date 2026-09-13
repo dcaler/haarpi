@@ -138,3 +138,72 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+# ── widening the question is cheap; rewriting it is not ──────────────────────
+
+class _Paths:
+    def __init__(self, tmp): self.output = tmp
+
+
+def _write(paths, sig, units, verdicts):
+    from rabbithole import audit
+    audit._save_cache(paths, sig, verdicts, units)
+
+
+def test_adding_an_ask_keeps_the_transfer_verdicts(tmp_path):
+    """A paper that transferred to the narrower question still transfers to the wider one —
+    nothing its verdict rested on was taken away. Only the quarantined few can change.
+    elephantRoom would have re-judged 1 paper instead of 236."""
+    from rabbithole import audit
+    paths = _Paths(tmp_path)
+    old_units = audit._units("t", "stated question", ["ask one"])
+    _write(paths, audit._sig("t", "stated question", ["ask one"]), old_units,
+           {"A": {"kind": "transfer"}, "B": {"kind": "transfer"},
+            "C": {"kind": "false_friend"}})
+    new_asks = ["ask one", "ask two"]
+    kept = audit._load_cache(paths, audit._sig("t", "stated question", new_asks),
+                             audit._units("t", "stated question", new_asks))
+    assert set(kept) == {"A", "B"}, "transfers kept, the quarantined one re-judged"
+
+
+def test_removing_a_clause_discards_everything(tmp_path):
+    """Verdicts made against a wider question do not hold for a narrower one."""
+    from rabbithole import audit
+    paths = _Paths(tmp_path)
+    _write(paths, audit._sig("t", "a; b", []), audit._units("t", "a; b", []),
+           {"A": {"kind": "transfer"}})
+    assert audit._load_cache(paths, audit._sig("t", "a", []),
+                             audit._units("t", "a", [])) == {}
+
+
+def test_rewording_the_question_discards_everything(tmp_path):
+    from rabbithole import audit
+    paths = _Paths(tmp_path)
+    _write(paths, audit._sig("t", "carbon taxes", []), audit._units("t", "carbon taxes", []),
+           {"A": {"kind": "transfer"}})
+    assert audit._load_cache(paths, audit._sig("t", "household savings", []),
+                             audit._units("t", "household savings", [])) == {}
+
+
+def test_an_unchanged_question_keeps_every_verdict(tmp_path):
+    from rabbithole import audit
+    paths = _Paths(tmp_path)
+    sig, units = audit._sig("t", "q", ["a"]), audit._units("t", "q", ["a"])
+    _write(paths, sig, units, {"A": {"kind": "transfer"}, "B": {"kind": "false_friend"}})
+    assert set(audit._load_cache(paths, sig, units)) == {"A", "B"}
+
+
+def test_a_cache_written_before_units_existed_is_discarded(tmp_path):
+    """Old cache files carry no unit list; there is nothing to compare, so they go."""
+    from rabbithole import audit
+    (tmp_path / "audit_cache.json").write_text(
+        '{"sig": "old", "verdicts": {"A": {"kind": "transfer"}}}')
+    assert audit._load_cache(_Paths(tmp_path), "new", audit._units("t", "q", [])) == {}
+
+
+def test_moving_a_strand_from_stated_to_asks_is_a_real_change(tmp_path):
+    """The two channels are separate regions of the payload — which is why elephantRoom's
+    re-judge was correct when four strands moved out of the focus."""
+    from rabbithole import audit
+    assert audit._units("t", "q; households", []) != audit._units("t", "q", ["households"])
