@@ -283,13 +283,43 @@ def _save_cache(paths, sig: str, cache: dict) -> None:
         pass
 
 
+def _clauses(text: str) -> list[str]:
+    """The distinct claims a topic/focus line makes, in a canonical order.
+
+    The focus is a semicolon/comma-separated list that `_write_gap_config` rewrites on most
+    gathering cycles, so it accumulates, gets de-duplicated, and gets reordered. Those are
+    edits to the WORDING, not to the research question, and the audit's verdicts do not
+    depend on them.
+    """
+    import re
+    seen, out = set(), []
+    for c in re.split(r"[;,]", (text or "").lower()):
+        c = " ".join(re.sub(r"[^\w\s]", " ", c).split())
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return sorted(out)
+
+
 def _sig(topic: str, focus: str) -> str:
-    """A STABLE signature of the research question, so a re-run reloads the cache instead of
-    re-judging. Must not use builtin ``hash()``: string hashing is salted per process, so that
-    signature changes every invocation and ``_load_cache`` would discard the cache every time —
-    making the cache (and the incremental checkpoints) useless for resuming a long run."""
+    """A STABLE signature of the research QUESTION, so a re-run reloads the cache instead of
+    re-judging.
+
+    Hashed over the normalised clause SET, not the literal string. Every verdict is a judgement
+    about whether one paper's contribution transfers to this question, so the cache must survive
+    an edit that leaves the question unchanged — and most edits do. elephantRoom's focus was
+    cleaned up from 837 characters to 339 by removing clauses four cycles had duplicated; the
+    question did not move, but the literal signature did, and the next audit re-judged all 236
+    papers at ~17 minutes each. That cleanup cost about 51 GPU-hours. Adding a genuinely new
+    clause still invalidates, which is the distinction worth drawing.
+
+    Must not use builtin ``hash()``: string hashing is salted per process, so that signature
+    changes every invocation and ``_load_cache`` would discard the cache every time — making
+    the cache (and the incremental checkpoints) useless for resuming a long run.
+    """
     import hashlib
-    return hashlib.sha1(f"{topic}\x00{focus}".encode("utf-8")).hexdigest()
+    payload = "\x00".join(_clauses(topic) + ["\x01"] + _clauses(focus))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
@@ -332,7 +362,16 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
           f"{' (dry run)' if dry_run else ''} — one model pass each; on this hardware allow "
           f"a few minutes per item. Progress below (resumable — verdicts are cached).", flush=True)
 
-    sig = _sig(cfg.topic, cfg.focus or "")
+    # THE QUESTION IS THE FOCUS PLUS THIS CYCLE'S ASKS. `gather_topics` carries what the
+    # reviewer asked for that the standing focus does not yet name, and the audit is the third
+    # consumer of "what is this review about" that never learned about them — after query
+    # generation and the ranker. Judging without them inverts the guard: a paper fetched FOR an
+    # ask, against a question that no longer mentions the ask, looks exactly like a source that
+    # shares vocabulary without transferring, which is the thing this verb quarantines.
+    question = "; ".join([f for f in [cfg.focus or ""] +
+                          [str(t) for t in (getattr(cfg, "gather_topics", None) or [])]
+                          if f.strip()])
+    sig = _sig(cfg.topic, question)
     cache = _load_cache(paths, sig)
     min_conf = 7.0
     # Live reporter: a line per item, plus a rolling ETA from the freshly-judged rate (cached items
@@ -351,7 +390,7 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
             print(f"  {runlog.stamp()}… {i}/{n} judged · ~{runlog.fmt_dt(avg)}/item · "
                   f"~{runlog.fmt_dt((n - i) * avg)} left", flush=True)
 
-    summary = perform_audit(zc, brain, cfg.topic, cfg.focus or "",
+    summary = perform_audit(zc, brain, cfg.topic, question,
                             project_key=project_key, quarantine_key=quarantine_key,
                             items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
                             min_confidence=min_conf, progress=_report,
