@@ -123,11 +123,30 @@ def test_num_ctx_auto_sizes_to_the_prompt(server, url):
     assert ctxs[1] == brain.pick_num_ctx(len(big)) > ctxs[0]
 
 
-def test_explicit_num_ctx_is_honored_and_warns_on_overflow(server, url, capsys):
+def test_explicit_num_ctx_is_honored_when_the_prompt_fits(server, url, capsys):
+    brain.chat(url, "m", _msgs("x" * 400), num_ctx=4096)
+    assert server.requests[-1][1]["options"]["num_ctx"] == 4096
+    assert "DISCARD" not in capsys.readouterr().err
+
+
+def test_explicit_num_ctx_GROWS_rather_than_discarding_the_head(server, url, capsys):
+    """An explicit num_ctx is the caller's estimate of the prompt, not permission to throw
+    evidence away when the estimate is wrong. rabbitHole's audit pinned 2048 for a one-line
+    focus string; when the question grew to the author's full research prompt, all 154
+    judgements were made against a question Ollama had discarded off the front."""
     prompt = "x" * (8192 * brain.CHARS_PER_TOKEN)   # ~8k tokens into a 4k window
     brain.chat(url, "m", _msgs(prompt), num_ctx=4096)
-    assert server.requests[-1][1]["options"]["num_ctx"] == 4096
-    assert "DISCARD" in capsys.readouterr().err
+    sent = server.requests[-1][1]["options"]["num_ctx"]
+    assert sent >= brain.estimate_tokens(len(prompt))   # the whole prompt survives
+    assert sent == brain.pick_num_ctx(len(prompt))
+    assert "DISCARD" not in capsys.readouterr().err
+
+
+def test_warns_only_when_even_the_cap_cannot_hold_the_prompt(server, url, capsys):
+    prompt = "x" * (30000 * brain.CHARS_PER_TOKEN)   # past MAX_NUM_CTX's usable budget
+    brain.chat(url, "m", _msgs(prompt), num_ctx=4096)
+    assert server.requests[-1][1]["options"]["num_ctx"] == brain.MAX_NUM_CTX
+    assert "DISCARD" in capsys.readouterr().err       # nothing left to do but say so
 
 
 def test_ollama_error_raises(server, url):

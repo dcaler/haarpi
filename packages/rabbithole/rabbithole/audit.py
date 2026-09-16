@@ -72,8 +72,14 @@ def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
     """One word-sense judgment for one paper. Fails SAFE: any error, or an unparseable reply,
     yields a TRANSFER (keep) at confidence 0 — the tool never quarantines on a bad signal."""
     try:
+        # 4096 is a floor, not a ceiling: Brain grows the window when a prompt needs more.
+        # It was pinned at 2048 when `focus` was a one-line search string, and when the
+        # question became the author's research prompt plus the cycle's asks (5,005 chars)
+        # every prompt overflowed — Ollama discarded the head, which is where the question
+        # sits. Small matters here: this runs once per paper, and the KV cache is linear in
+        # the window, so the coordinator's 16384 default would cost 8x the VRAM for nothing.
         raw = brain.coordinator(_prompt(topic, focus, title, abstract, keywords),
-                                system=_SYS, num_ctx=2048).strip()
+                                system=_SYS, num_ctx=4096).strip()
         m = _JSON.search(raw)
         data = json.loads(m.group(0)) if m else {}
     except Exception:  # noqa: BLE001 — a failed judgment is a keep, not a crash

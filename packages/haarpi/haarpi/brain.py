@@ -102,16 +102,29 @@ def normalize_host(raw: str) -> str:
     return urlunsplit((parts.scheme or "http", f"{host}:{port}", parts.path, "", ""))
 
 
-def _warn_explicit_ctx(prompt_chars: int, num_ctx: int, model: str, tool: str) -> None:
-    """The invisible-truncation warning for an explicitly-sized window.
+def _fit_explicit_ctx(prompt_chars: int, num_ctx: int, model: str, tool: str) -> int:
+    """The window an explicitly-sized call should actually use. GROWS to fit the prompt.
 
     Ollama's response to an over-length prompt is to silently discard the head — no
     error, no log. Evidence at the top of the prompt becomes invisible to the model.
-    This does not truncate or fail; it makes the invisible visible."""
+    An explicit num_ctx is the caller's estimate of how big the prompt will be, and an
+    estimate that turns out wrong is not a reason to throw away evidence: size to what
+    arrived, exactly as the num_ctx=None path already does. Warning was not enough on
+    its own — rabbitHole's audit warned on every one of 154 papers while judging each
+    against a research question it could no longer see.
+
+    Only when even the cap cannot hold the prompt is there nothing to do but say so."""
     est = prompt_chars // CHARS_PER_TOKEN
     budget = int(num_ctx * (1 - _RESERVE_FRACTION))
     if est <= budget:
-        return
+        return num_ctx
+    fitted = pick_num_ctx(prompt_chars)
+    if fitted > num_ctx and est <= int(fitted * (1 - _RESERVE_FRACTION)):
+        log(f"  prompt ~{est:,} tok does not fit num_ctx={num_ctx:,} — raising to "
+            f"{fitted:,} so the head is not discarded", tool)
+        return fitted
+    num_ctx = max(num_ctx, fitted)
+    budget = int(num_ctx * (1 - _RESERVE_FRACTION))
     caller = "?"
     try:  # name the call site — "which prompt is too big" is the only useful part
         import traceback
@@ -125,6 +138,7 @@ def _warn_explicit_ctx(prompt_chars: int, num_ctx: int, model: str, tool: str) -
           f"num_ctx={num_ctx:,} ({model}). Ollama will DISCARD the beginning of this "
           f"prompt — evidence at the top will be invisible to the model. "
           f"Called from {caller}.", file=sys.stderr, flush=True)
+    return num_ctx
 
 
 def _stream_once(host: str, model: str, payload: dict, label: str, tool: str,
@@ -198,7 +212,7 @@ def chat(host: str, model: str, messages: list, *, label: str = "",
                 f"HAARPI_MAX_NUM_CTX if the card has the VRAM (KV cache is linear in "
                 f"num_ctx).", tool)
     else:
-        _warn_explicit_ctx(prompt_chars, num_ctx, model, tool)
+        num_ctx = _fit_explicit_ctx(prompt_chars, num_ctx, model, tool)
 
     log(f"→ ollama {model} {label}: requesting (prompt {prompt_chars} chars "
         f"~{estimate_tokens(prompt_chars)} tok, num_ctx={num_ctx}), "

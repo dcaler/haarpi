@@ -207,3 +207,57 @@ def test_moving_a_strand_from_stated_to_asks_is_a_real_change(tmp_path):
     re-judge was correct when four strands moved out of the focus."""
     from rabbithole import audit
     assert audit._units("t", "q; households", []) != audit._units("t", "q", ["households"])
+
+
+# ── the question must survive the trip to the model ──────────────────────────
+
+def test_judge_item_sizes_the_window_to_the_whole_prompt():
+    """The bug this file's first half fixed created a second one. Once the question became
+    the research prompt plus the asks (5,005 chars on DigiPros), it no longer fit the 2048
+    `judge_item` had pinned for the old one-line focus — and `_prompt` puts the question
+    FIRST, so the head Ollama discards is precisely the question. 154 papers were judged
+    against a question the model could not see; Stauffer 2007 was quarantined 9/10 as a
+    "Schelling model" by a paper that demonstrates on Schelling.
+    """
+    from rabbithole.audit import judge_item, _SYS
+    from rabbithole.brain import Brain
+
+    seen = {}
+
+    class _Brain:
+        def coordinator(self, prompt, system="", num_ctx=16384, think=True):
+            seen["prompt"], seen["system"], seen["num_ctx"] = prompt, system, num_ctx
+            return '{"verdict": "TRANSFER", "confidence": 8}'
+
+    # DigiPros's real shape: a research prompt plus nine asks, ~5,000 characters
+    question = "; ".join(f"ask {i}: " + "narrative extraction from agent trajectories " * 11
+                         for i in range(9))
+    assert len(question) > 4500, "the question that broke it was 5,005 chars"
+
+    judge_item(_Brain(), _T, question, key="k", label="Stauffer 2007",
+               title="Social percolation and the Schelling model",
+               abstract="x" * 1500, keywords=("segregation",))
+
+    # what Brain will actually send, floor plus any growth it decides on
+    final = Brain._fit_context(Brain.__new__(Brain), seen["prompt"], seen["system"],
+                               seen["num_ctx"], "test")
+    est = (len(seen["prompt"]) + len(seen["system"])) // 4
+    assert est <= int(final * 0.65), f"{est} tokens asked of a {final} window"
+    assert est > int(2048 * 0.65), "the prompt that broke it must still overflow 2048"
+
+
+def test_judge_item_asks_for_no_more_window_than_it_needs():
+    """Opposite failure, same cost: the KV cache is linear in num_ctx, and this runs once
+    per paper. Defaulting to the coordinator's 16384 would buy 8x the VRAM for nothing."""
+    from rabbithole.audit import judge_item
+
+    seen = {}
+
+    class _Brain:
+        def coordinator(self, prompt, system="", num_ctx=16384, think=True):
+            seen["num_ctx"] = num_ctx
+            return '{"verdict": "TRANSFER", "confidence": 8}'
+
+    judge_item(_Brain(), _T, "one short focus line", key="k", label="l",
+               title="t", abstract="short")
+    assert seen["num_ctx"] == 4096

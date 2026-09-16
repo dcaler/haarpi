@@ -150,12 +150,38 @@ class Brain:
     # ~4 chars/token is crude but the failure it catches is a 2x-4x overrun, not a 5% one.
     _CHARS_PER_TOKEN = 4
     _RESERVE_FRACTION = 0.35   # leave room for the model's own answer
+    # Grow through the usual sizes rather than to an arbitrary figure, and stop: past this a
+    # 27B model's KV cache stops fitting alongside the weights on this hardware, and an OOM
+    # is a worse answer than a loud complaint.
+    _CTX_STEPS = (2048, 4096, 8192, 16384, 32768)
 
-    def _check_context(self, prompt: str, system: str, num_ctx: int, model: str) -> None:
+    def _fit_context(self, prompt: str, system: str, num_ctx: int, model: str) -> int:
+        """The num_ctx this call actually needs. GROWS to fit rather than letting the head
+        of the prompt fall off the front.
+
+        A caller's num_ctx is a hint about expected size, not a licence to discard evidence.
+        `audit` hardcoded 2048, sized when the research question was a 333-character focus
+        line; when the question became the author's full research prompt plus the cycle's
+        asks — 5,005 characters — every judgement overflowed and Ollama discarded the head of
+        the prompt, which is where the question sits. The model was asked whether 154 papers
+        transferred to a research question it could no longer see, and quarantined Schelling
+        scholarship from a paper that demonstrates on Schelling. Warning about that was not
+        enough; nothing was reading the warning.
+        """
         est = (len(prompt) + len(system)) // self._CHARS_PER_TOKEN
+        if est <= int(num_ctx * (1 - self._RESERVE_FRACTION)):
+            return num_ctx
+        for step in self._CTX_STEPS:
+            if step > num_ctx and est <= int(step * (1 - self._RESERVE_FRACTION)):
+                print(f"  [ctx] prompt ~{est:,} tokens — raising num_ctx {num_ctx:,} -> "
+                      f"{step:,} so nothing is discarded", file=sys.stderr, flush=True)
+                return step
+        num_ctx = max(num_ctx, self._CTX_STEPS[-1])
+        self._warn_context(est, num_ctx, model)      # genuinely too big: the caller must chunk
+        return num_ctx
+
+    def _warn_context(self, est: int, num_ctx: int, model: str) -> None:
         budget = int(num_ctx * (1 - self._RESERVE_FRACTION))
-        if est <= budget:
-            return
         caller = "?"
         try:  # name the call site — "which prompt is too big" is the only useful part
             import traceback
@@ -175,7 +201,7 @@ class Brain:
                 num_ctx: int, temperature: float, retries: int = 3,
                 think: bool = False) -> str:
         import json as _json
-        self._check_context(prompt, system, num_ctx, model)
+        num_ctx = self._fit_context(prompt, system, num_ctx, model)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
