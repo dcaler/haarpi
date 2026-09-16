@@ -358,6 +358,19 @@ The [haarpi](packages/haarpi) package is what the tools have in common:
   leaves a record of what it decided; the task queue keeps only a few kilobytes
   of tail, which is not enough to reconstruct a cycle afterwards.
 
+The context window is **sized to the prompt, never the other way round**. Ollama
+answers an over-length prompt by silently discarding the beginning of it — no
+error, no log — so a call that asks for more than its window gets a confident
+answer founded on whatever survived. A window a caller names is that caller's
+estimate of how big the prompt will be, and an estimate that turns out wrong is
+not a licence to throw evidence away: the window grows to fit, and the run says
+so. Only when the hardware cap itself cannot hold the prompt is there nothing to
+do but warn, because then the prompt is genuinely too big and the caller has to
+divide it. Warning alone was tried and is not enough. `audit` pinned a window
+sized for a one-line focus string, and when the question became the author's
+full research prompt it printed that warning once per paper for 154 papers while
+judging every one of them against a question it could no longer see.
+
 The vector index is **worked on from local disk and written back**. It is a
 SQLite store, project trees live on a network share, and SQLite's locking there
 is a round trip per operation through the server's lock manager — reliable
