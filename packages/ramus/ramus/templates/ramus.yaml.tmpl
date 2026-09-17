@@ -1,0 +1,26 @@
+# ramus project config — MACHINERY, not a shipped deliverable (git-ignored).
+# Written and read by `ramus init`. The back half keeps its own
+# results/rayleigh.yaml; these two never mix.
+# Personal/account details never live here — those stay in ~/.config/haarpi/config.toml.
+
+project: {{PROJECT}}
+cycle: "{{CYCLE}}"             # {YYMMDD} datestamp of the current research direction
+brief: {{BRIEF_YAML}}         # long-form research brief (from init); read by the design session
+
+code:
+  path: {{CODE_PATH}}         # the analytical target raster will BUILD (usually ../code)
+  package: {{PACKAGE}}        # intended import name of the package under code/
+
+author:
+  name: {{AUTHOR}}            # stamped into the .docx write-up
+  tool_initials: {{TOOL_INITIALS}}   # trailing suffix on tool-authored files (revision chain)
+  user_initials: {{USER_INITIALS}}   # the human reviewer's initials
+
+trundlr:                      # carried for the back half's `rayleigh queue` (optional — local runs need none of this)
+  api_url: {{TRUNDLR_API}}
+  project_id: {{PROJECT}}     # numeric trundlr id or a name (resolved + cached on first `queue`)
+  resources: {gpu: {{GPU_RES}}, cpu: {{CPU}}}   # each experiment's `resource: cpu|gpu` picks one; process_outputs = cpu
+
+# The analytical spec is designdocs/experiments.yaml (also git-ignored), authored during
+# `ramus init`. The prereg .docx rendered beside it is what `haarpi next` mints — that commit
+# hands off to raster to build the data infrastructure, then `conduct`/`process` run in results/.

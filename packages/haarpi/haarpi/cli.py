@@ -27,6 +27,7 @@ TOOLS = {
     "rabbithole": "rabbithole",
     "rabbitHole": "rabbithole",
     "raconteur": "raconteur",
+    "ramus": "ramus",
     "raster": "raster",
     "rayleigh": "rayleigh",
     "razzle": "razzle",
@@ -47,7 +48,7 @@ usage:
         the same list, non-interactively — for scripts and queued tasks
   haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi queue              register the trundlr project / queue the opening chain
-  haarpi <tool> <args…>     run a stage tool (rabbithole | raconteur | raster | rayleigh)
+  haarpi <tool> <args…>     run a stage tool (rabbithole | ramus | raster | rayleigh | raconteur | razzle)
   haarpi doctor             report which stack each binary on PATH resolves to
 
 example:
@@ -142,7 +143,7 @@ def _doctor() -> int:
     prefix = sys.prefix
     print(f"haarpi stack : {haarpi.__version__} in {prefix}")
     shadows = 0
-    for name in ("haarpi", "rabbitHole", "raconteur", "raster", "rayleigh", "razzle"):
+    for name in ("haarpi", "rabbitHole", "raconteur", "ramus", "raster", "rayleigh", "razzle"):
         found = shutil.which(name)
         if not found:
             print(f"  {name:<11}: not on PATH")

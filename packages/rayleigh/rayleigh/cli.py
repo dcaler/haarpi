@@ -1,4 +1,9 @@
-"""rayleigh CLI — `rayleigh <init|plan|conduct_exp|process_outputs|review|queue>`."""
+"""rayleigh CLI — `rayleigh <plan|conduct_exp|process_outputs|review|queue>`.
+
+`init` moved to ramus: the preregistration is written BEFORE raster builds anything, and
+rayleigh's half begins once there is built code to write executable experiments against.
+Run `haarpi ramus init` for the design session.
+"""
 
 import argparse
 
@@ -16,17 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Design, conduct, and write up experiments against a codebase.")
     ap.add_argument("--version", action="version", version=f"rayleigh {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    init = sub.add_parser(
-        "init",
-        help="scaffold results/, open/roll a research cycle, and run the interactive design session")
-    _common(init)
-    init.add_argument("--name", help="project name (default: derived from the working-dir name)")
-    init.add_argument("--brief", help="long-form research brief (else prompted)")
-    init.add_argument("--new-cycle", action="store_true",
-                      help="start a fresh {YYMMDD} research cycle, archiving the prior one")
-    init.add_argument("--no-launch", action="store_true",
-                      help="scaffold only; print the playbook path instead of launching claude")
 
     plan = sub.add_parser(
         "plan",
@@ -83,9 +77,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     runlog.stamp_output()
     args = build_parser().parse_args(argv)
-    if args.cmd == "init":
-        from rayleigh.init import run_init
-        return run_init(args)
     if args.cmd == "plan":
         from rayleigh.plan import run_plan
         return run_plan(args)

@@ -1,4 +1,4 @@
-"""`rayleigh init` — the DESIGN stage (preregistration), post-split.
+"""`ramus init` — the DESIGN stage (preregistration), post-split.
 
 init now authors into `design/` (its own directory, upstream of build), reads the litReview +
 brief rather than finished `code/`, and renders a `prereg` docx the haarpi gate mints. These pin
@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from rayleigh import init as rinit
+from ramus import init as rinit
 from rayleigh.config import Config
 
 
@@ -30,7 +30,7 @@ def test_init_authors_into_design_not_results(tmp_path, monkeypatch):
     design = tmp_path / "design"
     assert (design / "designdocs" / "PLANNING.md").is_file()
     assert (design / "designdocs" / "EXPERIMENTS.md").is_file()
-    assert (design / "rayleigh.yaml").is_file()
+    assert (design / "ramus.yaml").is_file()
     assert (design / "output").is_dir()                 # where the minted prereg lands
     assert not (tmp_path / "results").exists()          # conduct's dir is not init's job
     # init authors the FRAMEWORK only — the executable spec is `rayleigh plan`'s job

@@ -39,8 +39,8 @@ DEFAULT_STAGES: dict[str, dict] = {
     # docx (see DESIGN_experiment_split.md). Its own directory, so no stage shares a
     # workspace and the gate stays directory-scoped.
     "design": {
-        "dir": "design", "tool": "rayleigh", "inputs": ["litreview"],
-        "infix": "prereg", "attended": True,        # opens with `rayleigh init`
+        "dir": "design", "tool": "ramus", "inputs": ["litreview"],
+        "infix": "prereg", "attended": True,        # opens with `ramus init`
     },
     "build": {
         "dir": "code", "tool": "raster", "inputs": ["litreview", "design"],

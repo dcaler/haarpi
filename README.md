@@ -16,7 +16,7 @@ loops — gathering, synthesis, building, experiments, drafting, revision, and
 deck authoring — run on local models via Ollama, on your own hardware; a
 research project never needs to leave the machine. Cloud models appear only as
 explicitly-optional, human-invoked deviations (an A/B coordinator swap in
-rabbitHole; the interactive design sessions in raster and rayleigh; razzle's
+rabbitHole; the interactive design sessions in ramus, raster and rayleigh; razzle's
 `deck --claude`), never as shared plumbing and never on an automated path.
 
 ## The pipeline
@@ -24,15 +24,20 @@ rabbitHole; the interactive design sessions in raster and rayleigh; razzle's
 | Stage | Tool | Works in | Produces |
 |---|---|---|---|
 | literature review | [rabbitHole](packages/rabbithole) | `litReview/` | an organized collection of facts + contribution map |
-| experiment design | [rayleigh](packages/rayleigh) | `design/` | the preregistered experiment design |
+| experiment design | [ramus](packages/ramus) | `design/` | the preregistered experiment design |
 | model building | [raster](packages/raster) | `code/` | a built, tested code repo |
 | experiments | [rayleigh](packages/rayleigh) | `results/` | preregistered findings + write-up |
 | paper | [raconteur](packages/raconteur) | `paper/` | the manuscript, revision by revision |
 | deck | [razzle](packages/razzle) | `slides/<venue>/` | venue-specific presentation decks |
 
 The experiment **design** (preregistration) is committed *before* any code is
-built — you fix the experiments, then build to satisfy them, never the reverse
-— so rayleigh owns two stages, one either side of raster's build.
+built — you fix the experiments, then build to satisfy them, never the reverse.
+Those are two different jobs, so they are two agents, one either side of raster's
+build. **ramus** decides what would count as an answer; **rayleigh** finds out.
+The names carry it: Petrus Ramus's project was *method*, laying a subject out
+systematically before reasoning from it, in diagrams that branch — which is what
+the framework schematic is. Lord Rayleigh's was measuring nitrogen two ways,
+finding a 0.5% discrepancy, and refusing to write it off.
 
 ## How a stage works
 
@@ -268,7 +273,7 @@ decoupling growth from emissions, however often they say "decoupling". And a
 section that fails that check is not written; the reply names what was missing
 and what the corpus holds instead.
 
-### 2 · Experiment design — rayleigh
+### 2 · Experiment design — ramus
 
 A live session settles the analytical framework — too open-ended to default — and
 writes `designdocs/PLANNING.md`, `EXPERIMENTS.md`, a `PRIORS.md` index of the project's
@@ -496,7 +501,8 @@ normal use the loop is: read the document, mark it up, mark the task done.
 packages/
   haarpi/       shared core + umbrella CLI + the planner
   rabbithole/   literature review
-  rayleigh/     experiment design + experiments
+  ramus/        experiment design (preregistration)
+  rayleigh/     experiments — conduct, process, review
   raster/       model building
   raconteur/    the manuscript
   razzle/       presentation decks
@@ -554,4 +560,6 @@ declares. The figure had been asserting a data flow that the code has never had.
 
 Four of the tools began as standalone repos (`dcaler/rabbithole`, `raconteur`,
 `raster`, `rayleigh`), now archived and private; their full histories continue
-here under `packages/`. razzle was born in the monorepo.
+here under `packages/`. razzle was born in the monorepo, and ramus was split out
+of rayleigh once it was clear the two halves of the experiment workflow do
+opposite jobs — one fixes what would count as an answer, the other finds out.

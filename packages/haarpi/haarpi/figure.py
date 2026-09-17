@@ -434,3 +434,36 @@ def resolve(root: Path, short_title: str, fig_id: str, want: str = "svg", width:
         pdf = svg.with_suffix(".pdf")
         return pdf if pdf.exists() else export_pdf(svg, pdf)
     return None
+
+
+# ── project-pool helpers shared by the stage tools ───────────────────────────
+# `short_title` and `chain_authored_dot` were in rayleigh.figures, and ramus needed both to
+# put its analytical-framework schematic on the pool. ramus runs before rayleigh, so it must
+# not import it; and neither function is rayleigh's — one reads the project manifest, the
+# other renders a DOT some session authored. The experiment DAG stays in rayleigh, because
+# that one really is its own.
+
+def project_short_title(root, fallback: str) -> str:
+    """The project's chain short_title, so every tool resolves figures by the same key."""
+    from haarpi import project as hproject
+    try:
+        return hproject.load_manifest(root).short_title or fallback
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
+def chain_authored_dot(root, short: str, fig_id: str, dot_path, caption: str,
+                       kind: str = "schematic"):
+    """Render and chain a DOT figure an interactive session authored.
+
+    The tool does not compose it — Claude did, in-session; the engine renders and versions it
+    onto the pool where raconteur and razzle resolve it by id.
+    """
+    from pathlib import Path as _P
+    dot_path = _P(dot_path)
+    if not dot_path.is_file() or not dot_path.read_text().strip():
+        return None
+    spec = FigureSpec(
+        id=fig_id, kind=kind, format="dot", source=dot_path.read_text(), caption=caption,
+        provenance={"mode": "conceptual", "author": "design-session", "from": dot_path.name})
+    return write_figure(root, short, spec)

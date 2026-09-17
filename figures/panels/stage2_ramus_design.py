@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2 (rayleigh designs the study) — content only; the emitter is wip_svg_panel."""
+"""Stage 2 (ramus designs the study) — content only; the emitter is wip_svg_panel."""
 
 
 STAGE = "design"
@@ -20,8 +20,8 @@ ROWS = [
 BAND = (1, 5)
 
 SPINE = {
- "hdr": ("head", "2. rayleigh designs the study"),
- "session": ("amber", "rayleigh init: from the MINTED literature review and the brief, Human + Claude co-design the research questions and the analytical approach in a LIVE session — the strong-reasoning step, too open-ended to default. It SPECIFIES only: building the code is raster's job, downstream"),
+ "hdr": ("head", "2. ramus designs the study"),
+ "session": ("amber", "ramus init: from the MINTED literature review and the brief, Human + Claude co-design the research questions and the analytical approach in a LIVE session — the strong-reasoning step, too open-ended to default. It SPECIFIES only: building the code is raster's job, downstream"),
  "prereg": ("indigo", "renders the preregistration for review: {cycle}_{short}_prereg_ra.docx, track-changes on"),
  "comm": ("amber", "comment: the Human redlines the preregistration (accept and resolve are human-only)"),
  "gate": ("purple", "haarpi next  →  reads the markup. Clean MINTS the design and unlocks raster; any unresolved comment re-opens the session"),

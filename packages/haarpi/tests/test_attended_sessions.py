@@ -44,7 +44,7 @@ class _Client:
 # ── the three states a step can be in ────────────────────────────────────────
 
 def test_an_attended_step_books_the_human_and_claude():
-    s = Step("haarpi rayleigh init", 2.0, "design session",
+    s = Step("haarpi ramus init", 2.0, "design session",
              resource="human", attended=True)
     assert s.human is True, "it waits for a person"
     assert s.resources == ("human", "claude")
@@ -85,7 +85,7 @@ def test_the_cpu_only_step_is_not_on_the_gpu():
 def test_every_claude_launching_step_is_marked_attended():
     """These verbs launch an interactive `claude` session in the project root. A step that
     runs one and is not marked attended would be claimed by a runner and driven headlessly."""
-    launches_claude = {"haarpi rayleigh init", "haarpi rayleigh plan",
+    launches_claude = {"haarpi ramus init", "haarpi rayleigh plan",
                        "haarpi rayleigh review", "haarpi raster plan"}
     for stage, steps in planner.STAGE_STEPS.items():
         for name, s in steps.items():
@@ -96,7 +96,7 @@ def test_every_claude_launching_step_is_marked_attended():
 def test_the_sessions_carry_their_commands():
     """The command belongs in the command field, not only in prose the reader retypes."""
     want = {("experiments", "review_session"): "haarpi rayleigh review",
-            ("design", "design_session"):      "haarpi rayleigh init",
+            ("design", "design_session"):      "haarpi ramus init",
             ("build", "build_session"):        "haarpi raster plan"}
     for (stage, name), cmd in want.items():
         s = planner.STAGE_STEPS[stage][name]
@@ -128,7 +128,7 @@ def test_a_queued_attended_step_lands_with_both_resources_and_its_command():
     c = _Client()
     planner.queue_chain(c, 7, "design", ["design_session"], _TR)
     t = c.tasks[0]                      # [-1] is the `haarpi next` every chain ends with
-    assert t["command"] == "haarpi rayleigh init"
+    assert t["command"] == "haarpi ramus init"
     assert sorted(t["resource_ids"]) == [1, 4]
 
 
@@ -155,7 +155,7 @@ def test_an_unconfigured_claude_resource_degrades_to_the_human_alone():
                         {"human_resource": 1, "gpu_resource": 2})
     t = c.tasks[0]
     assert t["resource_ids"] == [1]
-    assert t["command"] == "haarpi rayleigh init", "and it still carries its verb"
+    assert t["command"] == "haarpi ramus init", "and it still carries its verb"
 
 
 def test_create_task_still_accepts_a_single_resource():

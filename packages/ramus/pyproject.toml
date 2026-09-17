@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ramus"
+version = "0.1.0"
+description = "Preregistration designer in the ra* family — turns the literature into research questions, an analytical approach, and the data infrastructure raster must build."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "haarpi",
+    "PyYAML>=6.0.2",
+]
+
+[project.scripts]
+ramus = "ramus.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ramus*"]
+
+[tool.setuptools.package-data]
+ramus = ["templates/*.tmpl"]

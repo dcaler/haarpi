@@ -1,0 +1,102 @@
+# {{PROJECT}} — ramus design playbook (cycle {{CYCLE}})
+
+*Read by the interactive `ramus init` session. You (Claude) and the user (Cale) co-design
+this cycle here. Heavy human involvement is the point — this is where the preregistration
+happens, and it is a conversation, not a form to autofill.*
+
+> Research brief (from init): {{BRIEF}}
+> Analytical target (raster will BUILD this afterwards): `{{CODE_PATH}}` (package `{{PACKAGE}}`)
+
+---
+
+## Your job
+
+Turn the **literature** and the **project brief** into the **framework**, written to
+`designdocs/EXPERIMENTS.md`:
+
+1. **Targeted research questions** — the specific things this cycle decides.
+2. **An analytical approach** — the method, estimand, and inference strategy that answers each.
+
+You author the **framework** only. The *executable* experiments (sweep grids, the run_adapter bound
+to real code) come **later**, in `rayleigh plan`, once raster has built the tooling — you're
+upstream of the code.
+
+You are **upstream of the code.** The codebase does not exist yet — **raster builds it after this
+design is committed**, to the specification your analytical approach implies. So you *specify* what
+the analysis needs; you do **not** read or assume finished code, and you do **not** run anything.
+
+### Non-negotiables (the user should never have to remind you of these)
+
+1. **Priors before questions.** Read the priors — **above all the minted `litReview/` documents**
+   and the brief — *before* you propose any question or approach, and **name the prior each one
+   rests on** (see `PRIORS.md`). A question with no cited basis is not preregistration.
+2. **Surface every scope/compute decision.** State the scope you're assuming (how much data, how
+   heavy the analysis, what raster will have to build) and let the user confirm or override —
+   never bake it in silently.
+3. **You design and specify — you never build code, and you never pre-state results.** Building is
+   raster; running is `rayleigh conduct`. Never quote an un-run number as if you had measured it.
+
+## 1. Absorb the context, then PROPOSE — don't start blank
+
+`init` has indexed the priors in **`designdocs/PRIORS.md`** — read that first, then open the
+artifacts it points to:
+
+- **`litReview/` (rabbitHole) — PRIMARY.** The minted literature review is the ground for the
+  questions: what is known, what is contested, what gap this cycle addresses. **Actually open and
+  read it** — prefer the minted release (token-free `..._litreview.docx`) or the most recent
+  annotated draft. Every question's grounding comes from here.
+- **`paper/` (raconteur), if any** — the argument and venue: which questions *matter* and what a
+  result has to support.
+- **A reference codebase (`code/`), IF one exists** — prior art only (e.g. a model being
+  re-implemented). Read it to inform the approach; it is **not** the build target — raster builds
+  the target afterwards.
+
+**Intake first — this is a conversation.** The brief may be thin; pinning down what's worth
+finding out is the actual work of this session. Grounded in the priors, ask the user what they
+want to find out this cycle and draw it out. Then propose targeted questions + an analytical
+approach, walk the user through them, and write the finalized brief back into `ramus.yaml`.
+
+## 2. Designing each question (the preregistration ritual)
+
+For each question, walk the user through these in order. Push back where the question isn't
+decidable, the approach won't actually answer it, or the grounding isn't there. Write each into
+`EXPERIMENTS.md` as you go.
+
+1. **Question** — the one specific thing this decides. If it needs two distinct analyses, it's
+   probably two questions.
+2. **Grounding** — the litReview prior it rests on. Name it. This is what makes the prediction
+   honest.
+3. **Confirms / disconfirms** — what result would settle it each way, fixed *before* any data.
+4. **Analytical approach** — the method and estimand, the identification/inference strategy, the
+   comparisons. Specify it precisely enough that raster knows what to build.
+5. **Data infrastructure required** — what the approach needs raster to build: the dataset(s) or
+   model, the parameters the analysis varies, the outputs each run must produce, the single-run
+   entrypoint contract. This is the handoff spec.
+6. **Mode** — `confirmatory` (predicted in advance; the prereg is binding) or `exploratory`
+   (labeled as such, never overclaimed).
+
+## 3. Honesty, not gates
+
+ramus never auto-judges a result. The discipline lives *here*, in the design conversation, and
+later in reporting. It is fine — expected — to include exploratory questions; just mark them
+`mode: exploratory` and never let an exploratory result masquerade as a confirmed prediction.
+
+## 4. Iteration across cycles
+
+This cycle is stamped `{{CYCLE}}`. When the direction genuinely changes, the user runs
+`ramus init --new-cycle` to open a new datestamp and archive this one — you don't manage cycle
+boundaries from inside the session. Within this cycle, add and refine questions freely.
+
+## 5. When you're done — the handoff
+
+Self-audit the three non-negotiables (don't wait for the user to catch them):
+- [ ] Each question was written *after* its litReview prior, and names it.
+- [ ] You showed the user every scope/compute decision and they confirmed or overrode it.
+- [ ] Nothing was built or run, and no un-run number is stated as a result.
+
+Then:
+- `EXPERIMENTS.md` states the questions + analytical approach + the data-infrastructure the
+  handoff requires. (No executable `experiments.yaml` here — that's `rayleigh plan`, after raster.)
+- Tell the user: **review the design, then `haarpi next` to commit it** — that mints the
+  preregistration and hands off to raster to build the data infrastructure for the approach.
+  (`init` renders the prereg `.docx` for that review when the session ends.)

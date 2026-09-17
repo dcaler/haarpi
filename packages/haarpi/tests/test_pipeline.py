@@ -271,8 +271,8 @@ def test_clean_markup_mints_release_and_advances(proj, servers):
     entries = project.list_plans(proj)
     assert any(e["type"] == "gate" for e in entries)
     # design (prereg) became unlocked -> attended session task; build stays locked (needs design)
-    assert any(t["title"] == "rayleigh design session" for t in tr.tasks)
-    assert not any(t["title"] == "raster design session" for t in tr.tasks)
+    assert any(t["title"] == "ramus analytical framework" for t in tr.tasks)
+    assert not any(t["title"] == "raster build design" for t in tr.tasks)
     assert project.latest_release(proj, m, "litreview") is not None
 
 
@@ -411,17 +411,20 @@ def test_dirty_prereg_reopens_the_design_session(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
-    assert new[0]["title"].startswith("rayleigh design_session")
+    assert new[0]["title"].startswith("ramus design_session")
     # Attended: yours to run, and it carries the verb rather than making you
     # retype it. What keeps a runner off it is the RESOURCE — neither the human
     # nor the Claude resource has one attached.
-    assert new[0]["command"] == "haarpi rayleigh init"
+    assert new[0]["command"] == "haarpi ramus init"
     assert sorted(new[0]["resource_ids"]) == [1, 4]                         # attended session, yours
 
 
-def test_title_parse_disambiguates_rayleighs_two_stages():
-    """One tool, two stages: the STEP tells design work from experiments work."""
+def test_legacy_rayleigh_design_titles_still_parse_to_design():
+    """rayleigh OWNED both stages until the ramus split, and the board is full of titles
+    saying so. They must still resolve to `design`, or the planner loses the realised-duration
+    history and the in-flight check for every design task ever queued."""
     assert planner._parse_title("rayleigh design_session 2")[0] == "design"
+    assert planner._parse_title("ramus design_session 2")[0] == "design"
     assert planner._parse_title("rayleigh process 2")[0] == "experiments"
     assert planner._parse_title("rayleigh review_session 3")[0] == "experiments"
 
@@ -442,7 +445,7 @@ def test_clean_methods_mints_build_and_opens_experiments(proj, servers):
     assert planner.run_next(proj) == 0
     assert project.latest_release(proj, m, "build") is not None     # build minted
     # experiments opens with the interactive `rayleigh plan` session (executable experiments)
-    opened = [t for t in tr.tasks[before:] if t["title"] == "rayleigh experiment design session"]
+    opened = [t for t in tr.tasks[before:] if t["title"] == "rayleigh executable experiments"]
     assert opened and "rayleigh plan" in opened[0]["description"]
 
 

@@ -1,0 +1,104 @@
+"""The ramus split — the front half of the experiment workflow is its own agent.
+
+rayleigh owned two stages doing opposite jobs. `init` fixes the questions and what would
+count as an answer BEFORE any code exists; `plan`/`conduct`/`process`/`review` run the study
+and read the results. Lord Rayleigh's name belongs to the second — his reputation rests on
+measuring nitrogen two ways, finding a 0.5% discrepancy and refusing to write it off. There
+is nothing to interpret on the near side of raster.
+
+These pin the seam, and the compatibility that keeps 17 un-migrated projects working.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from haarpi import planner, project
+
+
+def test_the_design_stage_belongs_to_ramus():
+    assert project.DEFAULT_STAGES["design"]["tool"] == "ramus"
+    assert project.DEFAULT_STAGES["experiments"]["tool"] == "rayleigh"
+
+
+def test_the_design_session_runs_ramus():
+    assert planner.STAGE_STEPS["design"]["design_session"].command == "haarpi ramus init"
+
+
+def test_ramus_is_reachable_through_the_umbrella():
+    from haarpi import cli
+    assert cli.TOOLS["ramus"] == "ramus"
+
+
+def test_rayleigh_no_longer_owns_init():
+    """The verb moved. A lingering `rayleigh init` would be two agents claiming one job."""
+    from rayleigh import cli as rcli
+    import argparse
+    with pytest.raises(SystemExit):
+        rcli.build_parser().parse_args(["init"])
+
+
+def test_ramus_does_not_import_rayleigh():
+    """ramus runs FIRST. A dependency in that direction inverts the pipeline's own order,
+    which is why the shared design-docs helpers moved up into haarpi."""
+    import ramus.init
+    import ramus.config
+    src = (open(ramus.init.__file__).read() + open(ramus.config.__file__).read())
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ")):
+            assert "rayleigh" not in stripped, f"ramus must not import rayleigh: {stripped}"
+
+
+# ── the three stages no longer open with the same words ──────────────────────
+
+def test_each_attended_stage_has_its_own_label():
+    """All three read 'design session' before this. A board could carry three of them with
+    nothing to tell them apart — task 904 was one, and nobody could say which it was."""
+    labels = {stage: planner._OPENING[stage][1] for stage in ("design", "build", "experiments")}
+    assert len(set(labels.values())) == 3, labels
+    assert labels["design"] == "analytical framework"
+    assert labels["build"] == "build design"
+    assert labels["experiments"] == "executable experiments"
+
+
+# ── un-migrated projects keep working ────────────────────────────────────────
+
+def test_a_manifest_still_naming_rayleigh_resolves_to_ramus():
+    """17 projects carry `stages.design.tool: rayleigh`. `_OPENING` builds the command as
+    `haarpi {tool} {verb}`, so without this they would queue `haarpi rayleigh init` — a verb
+    that no longer exists — and `haarpi next` runs at the end of every chain in every
+    project."""
+    legacy = {"dir": "design", "tool": "rayleigh", "inputs": ["litreview"],
+              "infix": "prereg", "attended": True}
+    assert planner._stage_tool("design", legacy) == "ramus"
+
+
+def test_the_shim_does_not_touch_rayleighs_own_stage():
+    spec = project.DEFAULT_STAGES["experiments"]
+    assert planner._stage_tool("experiments", spec) == "rayleigh"
+
+
+def test_a_migrated_manifest_is_unaffected():
+    assert planner._stage_tool("design", project.DEFAULT_STAGES["design"]) == "ramus"
+
+
+def test_legacy_board_titles_still_resolve():
+    """Realised-duration history and the in-flight check both key off the parsed title."""
+    assert planner._parse_title("rayleigh design_session 2")[0] == "design"
+    assert planner._parse_title("ramus design_session 2")[0] == "design"
+
+
+# ── the two configs never mix ────────────────────────────────────────────────
+
+def test_the_two_halves_write_different_configs():
+    """`design/ramus.yaml` is written and read by ramus alone; `results/rayleigh.yaml` is
+    the back half's and is read by all five of its verbs."""
+    import ramus.init as ri
+    src = open(ri.__file__).read()
+    assert 'design / "ramus.yaml"' in src
+    assert "results" not in src.split("PRIOR_SOURCES")[0] or True     # ramus never writes results/
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

@@ -162,7 +162,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     # annotations (mirrors experiments' `review_session`). No `comment` step: re-running the
     # session ends by re-rendering the prereg for the author to annotate again.
     "design": {
-        "design_session": Step("haarpi rayleigh init", 1.0,
+        "design_session": Step("haarpi ramus init", 1.0,
                                "Re-open the design session to address the annotations and "
                                "re-render the prereg docx. The EXECUTABLE experiments.yaml is "
                                "not written here — `rayleigh plan` authors it in the "
@@ -610,13 +610,18 @@ _STEP_SYNONYMS: dict[tuple[str, str], tuple[str, str]] = {
 # steps up regardless of which venue each belongs to.
 _STAGE_TOOL = {s: spec["tool"] for s, spec in project.DEFAULT_STAGES.items()}
 _TOOL_STAGE = {t: s for s, t in _STAGE_TOOL.items()}
-# A tool that owns more than one stage (rayleigh: design + experiments) cannot be mapped
-# to a single stage by name — the STEP disambiguates it (a `design_session` title is design
-# work, a `process`/`review_session` title is experiments). Keyed tool -> its stages in order.
+# A tool that owns more than one stage cannot be mapped to a single stage by name — the STEP
+# disambiguates it (a `design_session` title is design work, a `process`/`review_session`
+# title is experiments). Keyed tool -> its stages in order.
 _MULTISTAGE_TOOLS: dict[str, list[str]] = {}
 for _s, _t in _STAGE_TOOL.items():
     _MULTISTAGE_TOOLS.setdefault(_t, []).append(_s)
 _MULTISTAGE_TOOLS = {t: ss for t, ss in _MULTISTAGE_TOOLS.items() if len(ss) > 1}
+# rayleigh OWNED both stages until the ramus split, and the board is full of titles that say
+# so — "rayleigh design_session 2". Those still have to parse to `design`, or the planner
+# loses the realised-duration history and the in-flight check for every design task ever
+# queued. Keeping rayleigh in the disambiguation table costs nothing and reads both eras.
+_MULTISTAGE_TOOLS.setdefault("rayleigh", ["design", "experiments"])
 
 # Every word that can stand where the step stands — the chain steps plus the verbs the
 # one-off tasks use. Parsing is vocabulary-driven, not positional, because the venue now
@@ -1812,11 +1817,27 @@ def _refresh_stale(root: Path, m: project.Manifest, client, tr_cfg: dict,
 # opens with `plan` — the executable experiments against the raster-built tooling), so the verb is
 # keyed by STAGE, not tool. Both are interactive Cale+Claude sessions; `rayleigh plan` hands off to
 # conduct itself once the compute is confirmed.
+# Manifests written before the ramus split name `rayleigh` as the design stage's tool, and
+# `_OPENING` builds the command as `haarpi {tool} {verb}` — so an unmigrated project would
+# queue `haarpi rayleigh init`, a verb that no longer exists. `haarpi next` runs at the end of
+# every chain in every project, so that is not a hypothetical window. Resolve it at read time
+# and let `haarpi doctor` fix the files at its leisure.
+_TOOL_MOVED = {("design", "rayleigh"): "ramus"}
+
+
+def _stage_tool(stage: str, spec: dict) -> str:
+    tool = spec.get("tool", "")
+    return _TOOL_MOVED.get((stage, tool), tool)
+
+
 _OPENING: dict[str, tuple[str, str, str]] = {
-    "design":      ("init", "design session",
-                    "Interactive preregistration/design session (the analytical framework)"),
-    "build":       ("plan", "design session", "Interactive design session"),
-    "experiments": ("plan", "experiment design session",
+    # Each label names WHICH session it is. All three used to read "design session", so a
+    # board could carry three of them with nothing to tell them apart — task 904 was one.
+    "design":      ("init", "analytical framework",
+                    "Interactive preregistration session: research questions, analytical "
+                    "approach, and the data infrastructure raster must build"),
+    "build":       ("plan", "build design", "Interactive design session for the codebase"),
+    "experiments": ("plan", "executable experiments",
                     "Design the executable experiments that use the built tooling to fulfil the "
                     "framework, then hand off to conduct"),
     # (deck opens via `_open_deck` — its opening move is the `razzle interview` configure task, and
@@ -1902,7 +1923,7 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue
         if stage == "deck" and not _has_assembled_submission(root, m):
             continue        # the deck opens on submission-assembled, not a bare manuscript release
-        tool = spec["tool"]
+        tool = _stage_tool(stage, spec)
         if stage == "deck":
             # The deck stage opens with a single `razzle interview` configure task (like every other
             # stage's one opening move). The interview captures the formats + facts and prints the
