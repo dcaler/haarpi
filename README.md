@@ -186,14 +186,32 @@ shares a term with the topic but transfers no concept is moved to a Zotero
 `quarantine` collection, reversibly, never deleted. Judging by domain would
 throw away exactly the cross-disciplinary work the review exists to find.
 
-It judges against **the author's own statement of the work**, plus the current
-cycle's asks — never against the focus line. The focus exists to aim searches:
-breadth, synonyms, adjacent terms, a deliberately wide net. This test needs the
-opposite, a boundary tight enough that a shared word can be called a false
-friend, and against a wide question nothing ever is one. Verdicts are cached per
-paper against that question, so a normal cycle judges only what is new; a
-question that merely *gained* an ask keeps every paper it already accepted,
-because widening cannot make a transferring paper stop transferring.
+The test is **whether the paper is a usable source for one of the review's
+stated needs** — the cycle's asks, presented as a numbered list — and never
+whether it argues what the work being written argues. Those two were once
+concatenated into a single question, and the distinction matters more than it
+sounds: the asks say what literature is *needed*, while the author's statement
+says what the work *contributes*. Judged against the pair fused into one string,
+the comparison became contribution against contribution, and a methodological
+paper's best sources all look wrong — they study a subject in its own right
+where the review only demonstrates upon it. That is a difference in role, not in
+word sense. One corpus quarantined 43 of its first 49 papers at 9/10 on exactly
+that reasoning, Schelling scholarship included, fetched for an ask that named
+Schelling scholarship. The statement stays in the prompt as *background*, which
+is what tells the model which sense of a shared word is meant, explicitly not a
+template the source has to match.
+
+The focus line is not used either. It exists to aim searches: breadth, synonyms,
+adjacent terms, a deliberately wide net. This test needs the opposite, a
+boundary tight enough that a shared word can be called a false friend, and
+against a wide question nothing ever is one.
+
+Verdicts are cached per paper against the question, so a normal cycle judges
+only what is new; a question that merely *gained* an ask keeps every paper it
+already accepted, because widening cannot make a transferring paper stop
+transferring. A change to what a verdict *means* is versioned separately and
+discards the cache outright — that widening rule reasons about the question's
+wording, and cannot see when the test itself has moved.
 
 **A run has to be able to say it found nothing.** Every stage can behave
 correctly and the composition still fail: a search returns a healthy total while
