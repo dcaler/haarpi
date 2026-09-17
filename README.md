@@ -158,6 +158,36 @@ radially.
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 
+**A project can hold more than one review, because one anchor cannot serve two
+questions.** The substantive review is anchored on the *domain*; a methods review
+is anchored on the methodological families and usually excludes that domain
+outright. One project spent five steering rounds trying to get sequence-analysis
+methodology out of a review anchored on innovation policy and could not — the
+methodology lives in life-course sociology and demography, outside the anchor and
+adjacent to an excluded field. Its minted review says "sequence analysis" 42
+times and names two concrete techniques. The failure was structural, and no
+amount of steering addresses it.
+
+So a review is a **kind**: a folder, a config stem, and a deliverable infix.
+`litReview/litrev.yaml` mints a `litreview`; `litReviewMethods/methodsreview.yaml`
+mints a `methodsreview`. The infixes differ because `methods` already belongs to
+raster's build writeup, which raconteur finds by a root-level glob — a methods
+review sharing that name would be read as the writeup.
+
+**One Zotero collection per project, forever, and nothing is ever moved out of
+it.** Which review a source belongs to is recorded in a corpus ledger beside the
+project — `literature`, `methods`, or `quarantine` — and roles scope *ingestion*
+only. That is what lets two reviews share a collection without swallowing each
+other's sources, and it keeps `refs.bib` the union bibliography, correct by
+construction: every source any review has ever cited is still in it. Zotero
+subcollections cannot do this job — neither items endpoint recurses into them.
+
+`gather` writes a row for what it finds, so the common case needs no decision
+from anyone. Anything in the collection without a row is by construction
+something a person added, and `collect` — which is where you download the PDFs
+and file them — codes those in, defaulting to the role of the review you are
+standing in and reporting which sources still lack a PDF.
+
 | verb | does |
 |---|---|
 | `init` | the brief interview → `litrev.yaml` |
@@ -181,30 +211,39 @@ step and still produces an embedded corpus. And **`collect` is a human step on p
 a person confirming each source exists, with its PDF, is what guards the corpus against
 hallucinated citations.
 
-The `audit` verb quarantines by *word sense*, not by domain — a paper that
-shares a term with the topic but transfers no concept is moved to a Zotero
-`quarantine` collection, reversibly, never deleted. Judging by domain would
-throw away exactly the cross-disciplinary work the review exists to find.
+The `audit` verb catches **homographs** — a paper that matched the search on a
+word its own literature uses for something else entirely. `agent` in agent-based
+modelling against `agent` meaning a chemical reagent; `docking` of adaptive
+agents against ligand-receptor docking. Those are not delicate distinctions, and
+that bluntness is the point: a false friend is obvious, and anything needing fine
+weighing is not one.
 
-The test is **whether the paper is a usable source for one of the review's
-stated needs** — the cycle's asks, presented as a numbered list — and never
-whether it argues what the work being written argues. Those two were once
-concatenated into a single question, and the distinction matters more than it
-sounds: the asks say what literature is *needed*, while the author's statement
-says what the work *contributes*. Judged against the pair fused into one string,
-the comparison became contribution against contribution, and a methodological
-paper's best sources all look wrong — they study a subject in its own right
-where the review only demonstrates upon it. That is a difference in role, not in
-word sense. One corpus quarantined 43 of its first 49 papers at 9/10 on exactly
-that reasoning, Schelling scholarship included, fetched for an ask that named
-Schelling scholarship. The statement stays in the prompt as *background*, which
-is what tells the model which sense of a shared word is meant, explicitly not a
-template the source has to match.
+Two things it deliberately does **not** do, each learned by doing them.
 
-The focus line is not used either. It exists to aim searches: breadth, synonyms,
-adjacent terms, a deliberately wide net. This test needs the opposite, a
-boundary tight enough that a shared word can be called a false friend, and
-against a wide question nothing ever is one.
+**It does not judge by discipline.** A statistical-physics paper analysing the
+Schelling segregation model means by that term exactly what the review means.
+Cross-disciplinary work is what a literature review exists to find, so dropping
+it is the most expensive mistake available here — judge the word, never the
+field.
+
+**It is not a relevance test.** Whether a source is useful, central, or worth the
+space was settled by `rank` before this verb ran. A paper squarely in the
+subject that is merely less useful is a keep, as is one the review would cite in
+passing, disagree with, or use only as an example. Two earlier versions handed
+the model the review's stated needs — first fused with the author's own
+statement, then one ask at a time — and both turned the word-sense check into a
+relevance judgement. The first quarantined 43 of a corpus's first 49 papers at
+9/10; the second still took 54% of it, Schelling scholarship included, fetched by
+a search for Schelling scholarship. Almost none were homographs. The needs list
+no longer reaches the model at all.
+
+Quarantine is a **role in the corpus ledger**, never a move and never a delete.
+The item keeps its place in the project's Zotero collection, so it stays in
+`refs.bib` — taking it out was how this verb could hand a minted review a
+dangling citation, silently, from a command nobody thought of as touching
+bibliographies. `--release` puts the role back and *locks* it, so a later audit
+cannot overrule a person; releasing used to move the item back and leave the
+verdict cache alone, which made the decision last exactly until the next run.
 
 Verdicts are cached per paper against the question, so a normal cycle judges
 only what is new; a question that merely *gained* an ask keeps every paper it
@@ -285,6 +324,16 @@ the ladder it was raised, and an **upstream_literature** comment escalates out o
 stage entirely — back to gather, collect, report and comment in the literature review,
 because the claim it doubts is not in the corpus yet. `package` assembles and compiles
 the venue submission.
+
+**A Methods section cites the methods literature when there is any.** raconteur's
+only methods input used to be raster's writeup — what *this project's code does* —
+which can say what was done and cannot say whose method it is, which published
+debate settles a parameter choice, or what the known objections are. The citation
+floor excluded Methods outright and the draft prompt said there was no requirement
+to cite there, so the section was built not to cite at all. A project with a
+methods review now gets it as a second input, and the floor applies; a project
+without one drafts exactly as before, since a floor there would fail a section for
+missing sources nobody ever gathered.
 
 Which release feeds which section is the second figure:
 
@@ -497,9 +546,9 @@ stages it may read, and the map must show a source for each of them and none it 
 
 That check earned its keep immediately. The hand-drawn version showed the **preregistration**
 feeding Methods and Discussion — and it does not. `raconteur.context` loads the literature
-review, the methods writeup and the results digest, and nothing else, which is exactly what
-`project.DEFAULT_STAGES["paper"]["inputs"]` declares. The figure had been asserting a data flow
-that the code has never had.
+review, the methods writeup, the results digest and — where a project has one — the methods
+review, and nothing else, which is exactly what `project.DEFAULT_STAGES["paper"]["inputs"]`
+declares. The figure had been asserting a data flow that the code has never had.
 
 ## History
 

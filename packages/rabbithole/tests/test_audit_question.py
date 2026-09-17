@@ -263,57 +263,60 @@ def test_judge_item_asks_for_no_more_window_than_it_needs():
     assert seen["num_ctx"] == 4096
 
 
-# ── the needs are the test, not the paper's own contribution ─────────────────
+# ── the homograph test, and nothing wider ────────────────────────────────────
 
-def _rendered(asks, background="A method for extracting agent narratives from ABM output.",
-              title="Social percolation and the Schelling model", abstract="x"):
+def _rendered(title="Social percolation and the Schelling model",
+              abstract="Schelling's segregation model via Ising analogies.",
+              asks=("schelling scholarship", "sugarscape models")):
     from rabbithole.audit import _prompt
-    return _prompt(_T, background, asks, title, abstract, ("segregation",))
+    return _prompt(_T, "A method for extracting agent narratives from ABM output.",
+                   asks, title, abstract, ("segregation",))
 
 
-def test_the_asks_are_presented_as_needs_not_fused_into_the_question():
-    """`stated` and the asks were joined with '; ' into one string. The author's statement says
-    what the work CONTRIBUTES; an ask says what literature it NEEDS. Fused, the model compared
-    contribution to contribution and quarantined 43 of the first 49 DigiPros papers at 9/10."""
-    out = _rendered(["schelling segregation model scholarship",
-                     "sequence analysis of individual trajectories"])
-    assert "[1] schelling segregation model scholarship" in out
-    assert "[2] sequence analysis of individual trajectories" in out
-
-
-def test_the_background_is_labelled_as_context_and_not_as_a_template():
-    out = _rendered(["schelling segregation model scholarship"])
-    head, _, tail = out.partition("Background")
-    assert tail, "the author's statement must be labelled as background"
-    assert "NOT a checklist the source must match" in tail
-    # the needs lead, the statement follows: the test comes before the context for it
-    assert "[1] schelling segregation model scholarship" in head
-
-
-def test_the_test_is_restated_last_where_it_is_most_salient():
-    out = _rendered(["schelling segregation model scholarship"])
+def test_the_prompt_asks_about_the_word_not_about_relevance():
+    """Two earlier versions handed the model the review's stated NEEDS — first fused with
+    the author's statement, then one ask at a time. Both turned a word-sense check into a
+    relevance judgement, which `ranking` already made before this verb runs, and quarantined
+    54% of DigiPros at 9/10 with almost no homographs among them."""
+    out = _rendered()
+    assert "DIFFERENT KIND OF THING" in out
     assert out.rstrip().endswith("Verdict JSON:")
-    assert "usable source for at least one of the numbered points" in out.split("Candidate")[-1]
 
 
-def test_a_first_cycle_with_no_asks_still_states_a_need():
-    """No gather_topics yet. The statement is then the only description of need there is, so it
-    serves as one — but still as a need, never as a template the source has to match."""
-    out = _rendered([], background="A method for extracting agent narratives.")
-    assert "[1] A method for extracting agent narratives." in out
-    assert "NOT a checklist the source must match" in out
+def test_the_needs_list_is_not_in_the_prompt_at_all():
+    """The asks are still accepted so callers and cache signatures keep working, but they
+    must not reach the model: their presence is what invited the relevance answer."""
+    out = _rendered(asks=("schelling scholarship", "sugarscape models"))
+    assert "schelling scholarship" not in out and "sugarscape models" not in out
+    assert "numbered points" not in out and "retrieved by a search" not in out
 
 
-def test_the_system_prompt_does_not_ask_for_a_matching_contribution():
-    """The reasons on every DigiPros quarantine contrasted the paper's subject against the
-    review's framing — a difference in ROLE, not word sense. Stauffer 2007 was dropped 9/10
-    because it studies segregation while the paper only demonstrates on Schelling, which is
-    true of nearly every good source a methodological paper can have."""
+def test_the_review_is_described_so_a_shared_word_can_be_placed():
+    out = _rendered()
+    assert _T in out
+    assert "which sense of a shared word is meant" in out
+
+
+def test_the_system_prompt_rules_out_judging_by_discipline():
+    """The costliest mistake this verb can make. A statistical-physics paper analysing
+    Schelling uses the term for exactly the thing the review means, and cross-disciplinary
+    work is what a review exists to find."""
     from rabbithole.audit import _SYS
-    assert "USABLE SOURCE FOR AT LEAST ONE" in _SYS
-    assert "demonstrates upon" in _SYS          # that role difference is named as normal
-    assert "serving NONE of the stated needs" in _SYS
-    assert "same argument" in _SYS              # and explicitly ruled out as the test
+    assert "A DIFFERENT FIELD IS NOT A FALSE FRIEND" in _SYS
+    assert "Judge the WORD, never the discipline" in _SYS
+
+
+def test_the_system_prompt_rules_out_relevance():
+    from rabbithole.audit import _SYS
+    assert "THIS IS NOT A RELEVANCE TEST" in _SYS
+    assert "merely less useful is a KEEP" in _SYS
+
+
+def test_the_system_prompt_names_the_gross_cases():
+    """`agent` in ABM versus `agent` meaning a reagent. Not a delicate distinction."""
+    from rabbithole.audit import _SYS
+    assert "chemical reagent" in _SYS and "ligand-receptor" in _SYS
+    assert "not delicate distinctions" in _SYS
 
 
 # ── a framing change is not a question change ────────────────────────────────
@@ -370,3 +373,21 @@ def test_judge_item_does_not_pay_for_a_reasoning_chain():
 
     judge_item(_Brain(), _T, "a focus line", key="k", label="l", title="t", abstract="a")
     assert seen["think"] is False
+
+
+# ── the framing version tracks what a verdict MEANS ──────────────────────────
+
+def test_the_framing_bump_discards_verdicts_from_every_earlier_test(tmp_path):
+    """DigiPros held 110 verdicts decided under v2, 60 of them quarantines. A matching
+    version number would have meant they were trusted on resume rather than re-judged."""
+    import json
+    from types import SimpleNamespace
+    from rabbithole import audit
+
+    paths = SimpleNamespace(output=tmp_path)
+    for old in (1, 2, 3):
+        (tmp_path / "audit_cache.json").write_text(json.dumps(
+            {"sig": "s", "framing": old, "units": ["t:x"],
+             "verdicts": {"K": {"kind": "false_friend", "confidence": 9.0}}}))
+        assert audit._load_cache(paths, "s", ["t:x"]) == {}, f"v{old} verdicts must not survive"
+    assert audit._FRAMING == 4

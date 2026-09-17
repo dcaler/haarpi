@@ -39,7 +39,8 @@ SPINE = {
  "gather": ("indigo", "gather  →  searches, ranks and curates candidate sources, and writes "
                       "the collect-list for the Human to verify"),
  "collect": ("amber", "collect: the Human adds each real source to Zotero WITH its PDF — "
-                      "verifying it exists, which is what guards against hallucinated citations"),
+                      "verifying it exists, which is what guards against hallucinated "
+                      "citations — then `collect` codes them into the corpus ledger"),
  "report": ("indigo", "report  →  plans the review's sections and synthesises the FIRST draft "
                       "from the corpus, embedding it as it goes. Later, only a redirect re-plans it"),
  "mm": ("indigo", "mindmap  →  places every cited source by how much of the review's argument "
@@ -52,10 +53,11 @@ SPINE = {
 LANE = {
  "ingest": "ingest  →  fetches the references a reviewer NAMED, matching what it can against "
            "Zotero and listing the rest for `collect`",
- "audit":  "audit  →  re-judges the corpus for CONCEPTUAL TRANSFER and moves the false-friends "
-           "(shared word, different sense) into a shared `quarantine` collection — a move, "
-           "never a delete",
- "build":  "build  →  reads the audited Zotero collection into the working corpus: candidates, "
+ "audit":  "audit  →  re-judges each paper against THE ASK THAT FETCHED IT, and marks the "
+           "false-friends (shared word, different sense) `quarantine` in the corpus ledger — "
+           "they stay in Zotero and in refs.bib, and leave the corpus only",
+ "build":  "build  →  reads THIS review's rows of the audited collection into the working "
+           "corpus: candidates, "
            "citekeys, the ChromaDB index, per-paper notes. `revise` reads that cache and never embeds",
  "revise": "revise  →  answers EVERY comment in kind: a tracked rewrite where prose can carry "
            "it, a drafted section spliced in at the comment that asked for it, the cycle's "

@@ -37,7 +37,12 @@ QUARANTINE_COLLECTION = "quarantine"
 # under different semantics are not comparable and the widening rule — which reasons about
 # question CONTENT — cannot tell the difference. v2: the test became "is this a usable source
 # for at least one stated need" rather than "does this paper's contribution match the work's".
-_FRAMING = 2
+# v3 narrowed that to the one ask that fetched each paper. Both were the same mistake: the
+# needs list turns a word-sense check into a RELEVANCE judgement, which `ranking` already made
+# before this verb runs. v2 quarantined 54% of DigiPros at 9/10, almost none of them
+# homographs. v4 asks only what this verb was built for — does a shared word name a different
+# KIND OF THING — with the needs list gone entirely.
+_FRAMING = 4
 _JSON = re.compile(r"\{.*\}", re.S)
 _YEAR = re.compile(r"\b(\d{4})\b")
 
@@ -56,61 +61,64 @@ class Verdict:
 
 
 _SYS = (
-    "You screen a candidate SOURCE for a literature review, guarding against the HOMOGRAPH "
-    "TRAP: a paper can share a TERM with the review while using it in a completely different "
-    "SENSE, which is not relevance. "
-    "THE TEST IS WHETHER THE PAPER IS A USABLE SOURCE FOR AT LEAST ONE OF THE REVIEW'S STATED "
-    "NEEDS. It is NOT whether the paper makes the same argument, shares the same framing, or "
-    "contributes the same kind of thing as the work being written. A review cites the "
-    "scholarship it builds on, extends, replicates, critiques, or demonstrates upon, and such "
-    "a source will almost always study its subject in its own right while the review puts that "
-    "subject to a different use — that difference is normal and is NOT a false friend. "
-    "Genuine cross-disciplinary transfer counts; judge the ideas, not the field. "
-    "Call FALSE-FRIEND only when you are confident the paper shares vocabulary with the review "
-    "while serving NONE of the stated needs, because it uses that vocabulary in another sense. "
-    "Bias toward TRANSFER: a wrong keep costs a line in a review, a wrong drop costs a source. "
+    "A literature corpus was assembled by KEYWORD SEARCH, so a few papers matched on a word "
+    "that means something else entirely in their own literature. Your only job is to find "
+    "those. "
+    "THE TEST: does the shared term denote the SAME KIND OF THING in this paper as in the "
+    "review? `agent` in agent-based modelling versus `agent` meaning a chemical reagent. "
+    "`docking` of adaptive agents versus ligand-receptor docking. `cell` in a lattice model "
+    "versus `cell` in biology. These are not delicate distinctions — a false friend is "
+    "obvious, and if you find yourself weighing it finely, it is not one. "
+    "A DIFFERENT FIELD IS NOT A FALSE FRIEND. A statistical-physics paper analysing the "
+    "Schelling segregation model uses that term for exactly the thing the review means. "
+    "Cross-disciplinary work is what a literature review exists to find, and dropping it is "
+    "the most expensive mistake available here. Judge the WORD, never the discipline. "
+    "THIS IS NOT A RELEVANCE TEST. Whether a paper is useful, central, or worth the space was "
+    "decided by ranking before you saw it. A paper squarely in the review's subject that is "
+    "merely less useful is a KEEP. So is a paper the review would cite in passing, or "
+    "disagree with, or use only as an example. "
+    "Call FALSE-FRIEND only when the shared term names a different kind of thing. Everything "
+    "else transfers. "
     "Respond with ONLY a JSON object: "
     '{"verdict": "TRANSFER" | "FALSE-FRIEND", "term": "the shared word (if a false friend)", '
-    '"its_sense": "the sense THIS paper uses it in", "review_sense": "the sense the review '
-    'needs it in", "confidence": 0-10}.')
+    '"its_sense": "what the word denotes in THIS paper", "review_sense": "what it denotes in '
+    'the review", "confidence": 0-10}.')
 
 
-def _prompt(topic: str, background: str, asks, title: str, abstract: str, keywords) -> str:
-    """The judgement prompt: the review's NEEDS are the test, the author's statement is context.
+def _prompt(topic: str, background: str, asks, title: str, abstract: str, keywords,
+            fetched_for: str = "") -> str:
+    """The judgement prompt: what the review is ABOUT, and one candidate.
 
-    These two were concatenated into one "question" and the result inverted the verb. The
-    author's statement says what the work CONTRIBUTES; the asks say what literature it NEEDS.
-    Asked whether a paper transfers to that blob, the model compared contribution to
-    contribution — and quarantined 43 of the first 49 papers on DigiPros at 9/10, including
-    Schelling scholarship fetched for an ask that names Schelling scholarship, on the reasoning
-    that the paper studies segregation while the review only demonstrates on it. That is a
-    difference in ROLE, not in word sense, and it is true of nearly every good source for a
-    methodological paper. So the needs lead, the statement is labelled as background, and the
-    test is restated last, where it is most salient.
+    Deliberately short, and deliberately not a needs list. Two earlier versions handed the
+    model the review's stated needs — first fused with the author's statement, then one ask
+    at a time — and both turned a word-sense check into a relevance judgement. Relevance was
+    already decided by `ranking`; asking for it again quarantined 43 of DigiPros's first 49
+    papers at 9/10, and 54% of the corpus overall, almost none of them homographs.
+
+    What the model needs to spot `agent`-the-reagent among `agent`-the-ABM is what the
+    review is about. `asks` and `fetched_for` are accepted and ignored, so callers and
+    cached signatures keep working.
     """
     kw = "; ".join(keywords) if keywords else ""
-    needs = [str(a).strip() for a in (asks or ()) if str(a).strip()]
-    out = [f"Research field: {topic}", ""]
-    if needs:
-        out += ["The review needs sources on these specific points:"]
-        out += [f"  [{i}] {n}" for i, n in enumerate(needs, 1)]
-    else:
-        # No asks declared (a first cycle). The statement is then the only description of the
-        # need there is, so it has to serve as one — but still as a need, never as a template
-        # the source has to match.
-        out += ["The review needs sources for this work:", f"  [1] {background}"]
-    out += ["", "Background — what the work being written argues. Use it to tell which SENSE "
-            "of a shared word the review means. It is NOT a checklist the source must match:",
-            background or "(not stated)", "",
-            "Candidate source:", f"Title: {title}", f"Keywords: {kw}",
-            f"Abstract: {abstract[:1500]}", "",
-            "Is this a usable source for at least one of the numbered points above? "
-            "Verdict JSON:"]
-    return "\n".join(out)
+    return "\n".join([
+        f"The review is about: {topic}",
+        "",
+        "In more detail, so you can tell which sense of a shared word is meant:",
+        background or "(not stated)",
+        "",
+        "Candidate source:",
+        f"Title: {title}",
+        f"Keywords: {kw}",
+        f"Abstract: {abstract[:1500]}",
+        "",
+        "Does any term this paper shares with the review name a DIFFERENT KIND OF THING "
+        "here than it does there? Verdict JSON:",
+    ])
 
 
 def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
-               title: str, abstract: str = "", keywords=(), asks=()) -> Verdict:
+               title: str, abstract: str = "", keywords=(), asks=(),
+               fetched_for: str = "") -> Verdict:
     """One word-sense judgment for one paper. Fails SAFE: any error, or an unparseable reply,
     yields a TRANSFER (keep) at confidence 0 — the tool never quarantines on a bad signal."""
     try:
@@ -127,8 +135,9 @@ def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
         # That is 54 hours against 5 for a 154-paper corpus. The chain was not weighing the
         # evidence, it was restating the question before answering it — and the numbered
         # needs in _prompt already do that work, visibly: replies cite "Point [9]" directly.
-        raw = brain.coordinator(_prompt(topic, focus, asks, title, abstract, keywords),
-                                system=_SYS, num_ctx=4096, think=False).strip()
+        raw = brain.coordinator(
+            _prompt(topic, focus, asks, title, abstract, keywords, fetched_for),
+            system=_SYS, num_ctx=4096, think=False).strip()
         m = _JSON.search(raw)
         data = json.loads(m.group(0)) if m else {}
     except Exception:  # noqa: BLE001 — a failed judgment is a keep, not a crash
@@ -174,7 +183,8 @@ def format_progress(i: int, total: int, v: Verdict, cached: bool,
 
 def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
                  cache: dict | None = None, min_confidence: float = 7.0,
-                 *, asks=(), progress=None, checkpoint=None, checkpoint_every: int = 5
+                 *, asks=(), fetched_for: dict | None = None, progress=None,
+                 checkpoint=None, checkpoint_every: int = 5
                  ) -> tuple[list[Verdict], list[Verdict]]:
     """Judge every corpus item (each a dict of key/label/title/abstract/keywords) for word-sense
     transfer. Returns (flagged, all_verdicts); flagged = the CONFIDENT false-friends only. A
@@ -198,7 +208,8 @@ def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
         else:
             v = judge_item(brain, topic, focus, key=key, label=label,
                            title=it.get("title", ""), abstract=it.get("abstract", ""),
-                           keywords=it.get("keywords", ()), asks=asks)
+                           keywords=it.get("keywords", ()), asks=asks,
+                           fetched_for=(fetched_for or {}).get(key, ""))
             cache[key] = _to_cache(v)
             fresh += 1
         verdicts.append(v)
@@ -281,7 +292,8 @@ def _judge_fields(raw: dict, labels: dict | None = None) -> dict:
 def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                   items: list[dict], outdir, project_root=None, dry_run: bool = False,
                   cache: dict | None = None, min_confidence: float = 7.0,
-                  labels: dict | None = None, asks=(), progress=None, checkpoint=None,
+                  labels: dict | None = None, asks=(), fetched_for: dict | None = None,
+                  progress=None, checkpoint=None,
                   checkpoint_every: int = 5, quarantine_key: str | None = None) -> dict:
     """Judge the raw Zotero ``items`` and mark each confident false-friend ``quarantine`` in
     the corpus ledger (unless ``dry_run``), then write the reasons log.
@@ -308,7 +320,8 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
         judge_items.append(f)
         raw_by_key[f["key"]] = raw
     flagged, verdicts = audit_corpus(brain, topic, focus, judge_items, cache=cache,
-                                     min_confidence=min_confidence, asks=asks, progress=progress,
+                                     min_confidence=min_confidence, asks=asks,
+                                     fetched_for=fetched_for, progress=progress,
                                      checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     moved: list[str] = []
     held: list[str] = []
@@ -501,6 +514,11 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     items = [it for it in zc.collection_items(project_key)
              if it.get("data", {}).get("itemType") not in ("attachment", "note")]
+
+    # Level the ledger BEFORE judging, so quarantining writes into a complete picture
+    # rather than creating the only rows there are. Without this, the first audit on a
+    # project leaves a ledger holding nothing but its own quarantines.
+    corpus_ledger.sync(paths, cfg, gc)
     total = len(items)
     print(f"  {runlog.stamp()}Judging {total} corpus item(s) for word-sense transfer"
           f"{' (dry run)' if dry_run else ''} — one model pass each; on this hardware allow "

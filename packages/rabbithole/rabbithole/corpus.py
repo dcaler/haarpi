@@ -131,22 +131,36 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
     # and holds the union of their sources, so ingesting it wholesale would pull the
     # substantive corpus into the methods review and vice versa. The ledger says which
     # rows are ours; `quarantine` is in the collection (and so in refs.bib) but in no
-    # review's corpus. An empty ledger means an un-migrated project: ingest everything,
-    # exactly as before.
+    # review's corpus.
+    #
+    # AN ITEM WITH NO ROW IS NOT EXCLUDED. Requiring a matching row looks right and is a
+    # trap: on a project that has never synced, `audit` writes rows for the papers it
+    # quarantines and for nothing else, so the very next `build` would see a non-empty
+    # ledger in which no item carries the literature role — and ingest ZERO papers. The
+    # rule is therefore: an unrowed item belongs to the default review, which is the only
+    # reading under which a half-populated ledger cannot silently empty a corpus. A
+    # non-default review still takes only what is explicitly its own, or it would hoover
+    # up the substantive corpus.
     project_root = config.work_root(paths.root).parent
     kind = config.kind_of(paths.root)
     rows = corpus_ledger.load(project_root)
-    mine = {k for k, r in rows.items() if r.role == kind.name} if rows else None
-    if mine is not None:
-        dropped = len(items) - sum(
-            1 for it in items
-            if ((it.get("data", {}) or {}).get("key") or it.get("key")) in mine)
-        items = [it for it in items
-                 if ((it.get("data", {}) or {}).get("key") or it.get("key")) in mine]
-        print(f"  Zotero collection has {len(items) + dropped} top-level items; "
-              f"{len(items)} carry the '{kind.name}' role ({dropped} belong to another "
-              f"review or are quarantined).")
+
+    def _mine(it) -> bool:
+        key = (it.get("data", {}) or {}).get("key") or it.get("key")
+        row = rows.get(key)
+        if row is None:
+            return kind.name == config.DEFAULT_KIND
+        return row.role == kind.name
+
+    if rows:
+        before = len(items)
+        items = [it for it in items if _mine(it)]
+        dropped = before - len(items)
+        print(f"  Zotero collection has {before} top-level items; {len(items)} are in the "
+              f"'{kind.name}' corpus ({dropped} belong to another review or are "
+              f"quarantined).")
     else:
+        # No ledger at all: no information, so behave exactly as before it existed.
         print(f"  Zotero collection has {len(items)} top-level items.")
 
     corpus: list[Candidate] = []

@@ -202,5 +202,50 @@ def test_the_deliverable_words_separate_the_two_methods_documents():
     assert "methods" in naming.DELIVERABLE_WORDS
 
 
+# ── migrating a project that has no ledger yet ───────────────────────────────
+
+def _ingest_filter(project, review_dir, collection_keys):
+    """The rule ingest_from_zotero applies, exercised directly."""
+    rows = cl.load(project)
+    kind = config.kind_of(review_dir)
+    if not rows:
+        return list(collection_keys)                      # no ledger: no information
+    out = []
+    for k in collection_keys:
+        row = rows.get(k)
+        keep = (kind.name == config.DEFAULT_KIND) if row is None else (row.role == kind.name)
+        if keep:
+            out.append(k)
+    return out
+
+
+def test_an_unrowed_item_is_not_dropped_from_the_default_review(project):
+    """THE MIGRATION TRAP. Requiring a matching row looks right and empties corpora: on a
+    project that never synced, `audit` writes rows for what it quarantines and nothing
+    else, so the next `build` sees a non-empty ledger in which no item carries the
+    literature role — and ingests zero papers."""
+    cl.set_role(project, "BAD", cl.QUARANTINE, added_by="audit")
+    kept = _ingest_filter(project, project / "litReview", ["BAD", "G1", "G2", "G3"])
+    assert kept == ["G1", "G2", "G3"], "unclassified papers must survive a partial ledger"
+
+
+def test_a_non_default_review_takes_only_what_is_explicitly_its_own(project):
+    """The other side of that rule: a methods review must not inherit every unrowed item,
+    or it swallows the substantive corpus."""
+    cl.set_role(project, "M1", cl.METHODS)
+    kept = _ingest_filter(project, project / "litReviewMethods", ["M1", "G1", "G2"])
+    assert kept == ["M1"]
+
+
+def test_no_ledger_at_all_ingests_everything(project):
+    """Every project predates this feature; none may change behaviour until it has rows."""
+    assert _ingest_filter(project, project / "litReview", ["A", "B"]) == ["A", "B"]
+
+
+def test_a_quarantined_item_is_dropped_but_an_unrowed_one_is_not(project):
+    cl.set_role(project, "Q", cl.QUARANTINE)
+    assert _ingest_filter(project, project / "litReview", ["Q", "U"]) == ["U"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
