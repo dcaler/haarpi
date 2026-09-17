@@ -59,38 +59,31 @@ DESIGN_PROMPT = (
 )
 
 
-def log(msg: str) -> None:
-    print(f"[rayleigh init] {msg}", flush=True)
-
-
-def slugify(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", name.lower()) or "package"
-
-
-def project_name_from_dir(dirname: str) -> str:
-    """Guess a project name the way the ra* family does: strip a leading {YYMMDD}_ (or
-    {YYYYMMDD}_) datestamp prefix. e.g. '260623_rayleigh' -> 'rayleigh'."""
-    return re.sub(r"^\d{6}(?:\d\d)?_", "", dirname) or dirname
-
-
-def detect_package(code_dir: Path, fallback: str) -> str:
-    """Find the import package under code/: a child dir with an __init__.py. Prefer one
-    matching the slug fallback; else the first; else the fallback slug."""
-    if not code_dir.is_dir():
-        return fallback
-    pkgs = sorted(p.name for p in code_dir.iterdir()
-                  if p.is_dir() and (p / "__init__.py").is_file()
-                  and not p.name.startswith((".", "_")) and p.name != "tests")
-    if fallback in pkgs:
-        return fallback
-    return pkgs[0] if pkgs else fallback
+# The design-docs helpers live in haarpi now: `rayleigh plan` and `ramus init` both need
+# them, and ramus runs first, so it must not import rayleigh. Re-exported here so this
+# module's existing callers and tests keep working.
+from haarpi.designdocs import (  # noqa: E402,F401
+    PRUNE_DIRS as _PRUNE_DIRS, derive_brief as _derive_brief, detect_package,
+    discover_priors as _discover_priors, project_name_from_dir, render as _render,
+    render_priors_md as _render_priors_md, slugify,
+)
 
 
 def render(template_name: str, ctx: dict) -> str:
-    text = (files("rayleigh") / "templates" / template_name).read_text()
-    for key, val in ctx.items():
-        text = text.replace("{{" + key + "}}", str(val))
-    return text
+    """rayleigh's own templates."""
+    return _render("rayleigh", template_name, ctx)
+
+
+def discover_priors(root, sources=None):
+    return _discover_priors(root, sources if sources is not None else PRIOR_SOURCES)
+
+
+def render_priors_md(root, priors, project: str, cycle: str) -> str:
+    return _render_priors_md(root, priors, project, cycle, written_by="rayleigh init")
+
+
+def log(msg: str) -> None:
+    print(f"[rayleigh init] {msg}", flush=True)
 
 
 def archive_cycle(design_dir: Path, prior_cycle: str) -> None:
@@ -146,90 +139,7 @@ PRIOR_SOURCES = [
 # Heavy dirs a recursive prior-artifact scan must never descend into — a virtualenv or
 # .git sitting inside code/ is tens of thousands of files, and a plain root.glob("**") walks
 # every one of them, stalling `init` for many seconds. os.walk lets us prune them by name.
-_PRUNE_DIRS = {
-    ".venv", "venv", "env", ".git", "__pycache__", "node_modules", "site-packages",
-    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".ipynb_checkpoints",
-    ".eggs", "build", "dist",
-}
 
-
-def _iter_matches(root: Path, pattern: str):
-    """Yield files under `root` matching a glob `pattern`, pruning _PRUNE_DIRS on the way.
-
-    For non-recursive patterns this is just Path.glob. For a recursive `PREFIX/**/SUFFIX`
-    pattern (SUFFIX a single filename glob, e.g. `code/**/CLAUDE.md`), walk PREFIX with
-    os.walk so heavy directories are skipped instead of crawled."""
-    if "/**/" not in pattern:
-        yield from (p for p in root.glob(pattern) if p.is_file())
-        return
-    prefix, suffix = pattern.split("/**/", 1)
-    base = root / prefix
-    if not base.is_dir():
-        return
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
-        for name in fnmatch.filter(filenames, suffix):
-            yield Path(dirpath) / name
-
-
-def discover_priors(root: Path, sources=None):
-    """Find prior ra* artifacts. Returns [(group, [(label, [relpaths]), ...]), ...],
-    groups with no matches omitted. `sources` defaults to the design-stage PRIOR_SOURCES;
-    `rayleigh plan` passes its own (prereg + built code)."""
-    out = []
-    for group, patterns in (sources or PRIOR_SOURCES):
-        items = []
-        for pattern, label in patterns:
-            matches = sorted(str(p.relative_to(root)) for p in _iter_matches(root, pattern)
-                             if p.is_file())
-            if matches:
-                items.append((label, matches))
-        if items:
-            out.append((group, items))
-    return out
-
-
-def _derive_brief(root: Path) -> str:
-    """Fall back to the HAARPi manifest brief (answered once at `haarpi init`),
-    then the raster build brief/description — the closest statements of research
-    intent already on disk."""
-    from haarpi.project import header_defaults
-    hdr_brief = (header_defaults(root).get("brief") or "").strip()
-    if hdr_brief:
-        return hdr_brief
-    ry = root / "code" / "raster.yaml"
-    if not ry.is_file():
-        return ""
-    try:
-        d = yaml.safe_load(ry.read_text()) or {}
-    except Exception:
-        return ""
-    for k in ("brief", "description"):
-        v = d.get(k)
-        if isinstance(v, str) and v.strip() and "not provided" not in v and "to be generated" not in v:
-            return v.strip()
-    return ""
-
-
-def render_priors_md(root: Path, priors, project: str, cycle: str) -> str:
-    L = [f"# {project} — Prior artifacts (cycle {cycle})", "",
-         "*Index written by `rayleigh init`. Read these — above all the minted litReview — and",
-         "PROPOSE targeted research questions + an analytical approach from them (see PLANNING.md),",
-         "rather than starting from a blank skeleton.*", ""]
-    if not priors:
-        L.append("_No prior artifacts found — design from the brief alone._")
-        return "\n".join(L) + "\n"
-    for group, items in priors:
-        L.append(f"## {group}")
-        for label, matches in items:
-            shown = matches[:6]
-            more = f"  (+{len(matches) - 6} more)" if len(matches) > 6 else ""
-            if len(shown) == 1:
-                L.append(f"- **{label}** — `{shown[0]}`")
-            else:
-                L.append(f"- **{label}** — {', '.join(f'`{m}`' for m in shown)}{more}")
-        L.append("")
-    return "\n".join(L) + "\n"
 
 
 def render_prereg(design_dir: Path, cfg, short_title: str, cycle: str) -> Path | None:
