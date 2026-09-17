@@ -119,7 +119,9 @@ def test_the_revise_path_uses_the_same_ordering_and_helpers():
     assert "write_order(" in src
     assert "section_band(" in src
     assert "_guard_repair(" in src
-    assert "_context_for_section(heading, litrev, code, results, written, narrative)" in src
+    assert "_context_for_section(heading, litrev, code, results, written, narrative" in src
+    assert "methods_review=methods_review" in src, \
+        "revise must reach the methods literature too, or its Methods section cites nobody"
 
 
 def test_the_revise_path_measures_but_does_not_rewrite():

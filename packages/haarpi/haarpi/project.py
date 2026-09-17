@@ -185,6 +185,10 @@ def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
             description=m.brief,
             litrev_dir=m.stages["litreview"]["dir"],
             use_methods=True,
+            # Only set when the project actually has a methods review — an empty string
+            # leaves the Methods section exactly as it was, with no citation floor.
+            methods_litrev_dir=(rh.REVIEW_KINDS["methods"].dir
+                                if (root / rh.REVIEW_KINDS["methods"].dir).exists() else ""),
             results_dir=m.stages["experiments"]["dir"],
         )
         rcfg.save(root)

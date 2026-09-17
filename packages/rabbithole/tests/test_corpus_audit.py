@@ -159,20 +159,40 @@ def test_sig_is_stable_and_question_specific():
     assert audit._sig("ABM", "agent docking") != audit._sig("ABM", "other focus")  # question-specific
 
 
-# ── perform_audit: move only the flagged, log the reasons, respect dry-run ────
+# ── perform_audit: flag only the false-friends, log the reasons, respect dry-run ──
 
-def test_perform_audit_moves_only_the_flagged_and_logs_reasons(tmp_path):
+def test_perform_audit_marks_the_flagged_in_the_ledger_and_never_moves(tmp_path):
+    """Quarantine is a ledger ROLE now. The item keeps its place in the project collection,
+    so it stays in refs.bib — leaving it was how this verb could hand a minted review a
+    dangling citation from a command nobody thought of as touching bibliographies."""
+    from rabbithole import corpus_ledger as cl
     raw = [_zitem("AV"), _zitem("OK")]
     brain = SeqBrain([_ff("docking", "ligand-receptor binding", "agent alignment", 9),
                       _transfer()])
     zc = FakeZotero()
     summary = audit.perform_audit(zc, brain, "ABM", "agent docking",
-                                  project_key="PROJ", quarantine_key="QUAR",
+                                  project_key="PROJ", project_root=tmp_path,
                                   items=raw, outdir=tmp_path)
-    assert zc.moves == [("AV", "PROJ", "QUAR")]         # exactly the false-friend, one direction
+    assert zc.moves == []                               # NOTHING leaves the collection
+    rows = cl.load(tmp_path)
+    assert rows["AV"].role == cl.QUARANTINE             # exactly the false-friend
+    assert "OK" not in rows or rows["OK"].role != cl.QUARANTINE
     log = (tmp_path / "audit_quarantine.md").read_text()
     assert "AV" in log and "docking" in log and "ligand-receptor binding" in log
     assert summary["moved"] == ["AV"]
+
+
+def test_a_released_paper_is_left_alone_by_a_later_audit(tmp_path):
+    """The other half of the old design's failure: release moved the item back but left the
+    verdict cache alone, so the next run quarantined it again. A locked row is final."""
+    from rabbithole import corpus_ledger as cl
+    cl.set_role(tmp_path, "AV", cl.LITERATURE, locked=True)
+    brain = SeqBrain([_ff("docking", "ligand binding", "agent alignment", 9)])
+    summary = audit.perform_audit(FakeZotero(), brain, "ABM", "agent docking",
+                                  project_key="PROJ", project_root=tmp_path,
+                                  items=[_zitem("AV")], outdir=tmp_path)
+    assert cl.load(tmp_path)["AV"].role == cl.LITERATURE
+    assert summary["held"] == ["AV"] and summary["moved"] == []
 
 
 def test_dry_run_judges_and_logs_but_moves_nothing(tmp_path):
@@ -180,7 +200,7 @@ def test_dry_run_judges_and_logs_but_moves_nothing(tmp_path):
     brain = SeqBrain([_ff("docking", "ligand binding", "agent alignment", 9)])
     zc = FakeZotero()
     summary = audit.perform_audit(zc, brain, "ABM", "agent docking",
-                                  project_key="PROJ", quarantine_key="QUAR",
+                                  project_key="PROJ", project_root=tmp_path,
                                   items=raw, outdir=tmp_path, dry_run=True)
     assert zc.moves == []                               # nothing moved
     assert summary["moved"] == [] and summary["flagged"] == ["AV"]   # but it was flagged + logged
@@ -191,18 +211,22 @@ def test_a_brain_error_leaves_the_item_in_the_corpus(tmp_path):
     raw = [_zitem("AV")]
     zc = FakeZotero()
     audit.perform_audit(zc, SeqBrain([RuntimeError("model down")]), "ABM", "x",
-                        project_key="PROJ", quarantine_key="QUAR",
+                        project_key="PROJ", project_root=tmp_path,
                         items=raw, outdir=tmp_path)
     assert zc.moves == []                               # fail-safe: never quarantine on an error
 
 
-# ── release: move an item back to this project's collection ───────────────────
+# ── release: put the role back, and make it stick ─────────────────────────────
 
-def test_release_moves_an_item_back_to_the_project(tmp_path):
+def test_release_restores_the_role_and_locks_it(tmp_path):
+    from rabbithole import corpus_ledger as cl
     zc = FakeZotero()
-    item = _zitem("AV", collections=("QUAR",))
-    ok = audit.release_item(zc, quarantine_key="QUAR", project_key="PROJ", item=item)
-    assert ok and zc.moves == [("AV", "QUAR", "PROJ")]  # reversed direction
+    cl.set_role(tmp_path, "AV", cl.QUARANTINE)
+    ok = audit.release_item(zc, project_root=tmp_path, key="AV")
+    row = cl.load(tmp_path)["AV"]
+    assert ok and row.role == cl.LITERATURE
+    assert row.locked, "an unlocked release is undone by the next audit"
+    assert zc.moves == [], "the item never left the collection, so nothing moves back"
 
 
 # ── the standalone-safety prune of the cached corpus ──────────────────────────

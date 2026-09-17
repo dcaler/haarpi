@@ -174,6 +174,11 @@ class ProjectConfig:
     focus: str = ""
     litrev_dir: str = ""
     use_methods: bool = False
+    # The METHODS REVIEW — methodological literature, e.g. "how sequence distances are
+    # specified and defended". Deliberately a separate field: `use_methods` and
+    # `load_methods` both mean RASTER'S WRITEUP (what this project's code does), and
+    # overloading either would silently change what the Methods section cites.
+    methods_litrev_dir: str = ""
     results_dir: str = ""
     methods_drafted: bool = False
     results_dir_drafted: bool = False

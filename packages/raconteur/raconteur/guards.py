@@ -156,15 +156,19 @@ def budget_kind(heading: str) -> str:
     return "intro" if "introduction" in heading.lower() else "litrev"
 
 
-def expects_citations(kind: str) -> bool:
+def expects_citations(kind: str, *, has_methods_review: bool = False) -> bool:
     """Does the bibliography GROUND this kind of section — i.e. is a paragraph without a
     citation a defect here?
 
-    Methods and Results are grounded in the writeup and the results files, not in the
-    literature. A Methods section may still cite — when the method is an offshoot of prior
-    work, its provenance belongs in the text — but citing is not its JOB, so an uncited
-    paragraph there is not a defect. That distinction is the difference between a floor and
-    a permission; see ``may_cite``.
+    Results are grounded in the results files, not in the literature.
+
+    METHODS DEPENDS ON WHETHER THE PROJECT HAS A METHODS REVIEW. Without one there is no
+    methodological literature to cite, so the floor would fail a section for missing
+    sources the project never gathered — methods is then grounded in raster's writeup, and
+    an uncited paragraph is not a defect. WITH one, the sources exist and the section must
+    use them: a technique described in detail and attributed to nobody is not defensible at
+    review, and that is exactly what this verb produced for as long as the floor was
+    unconditional. The difference between a floor and a permission is in ``may_cite``.
 
     A Conclusion restates what the paper has already argued and pointed forward from. The
     claims were made, and cited, where they were first established; requiring citations
@@ -174,6 +178,8 @@ def expects_citations(kind: str) -> bool:
     An abstract summarises rather than cites, References are not prose, and
     Acknowledgements credit people rather than literature.
     """
+    if kind == "methods":
+        return has_methods_review
     return kind in ("litrev", "intro", "other")
 
 
@@ -307,7 +313,8 @@ def author_year_prose(text: str) -> list[Finding]:
     ] if ay else []
 
 
-def uncited_paragraphs(paras: list[Paragraph]) -> list[Finding]:
+def uncited_paragraphs(paras: list[Paragraph], *,
+                       has_methods_review: bool = False) -> list[Finding]:
     """A paragraph with no citation states ideas it cannot ground.
 
     PHASE: draft. GATED on section kind — a Methods or Results paragraph is grounded in the
@@ -318,7 +325,9 @@ def uncited_paragraphs(paras: list[Paragraph]) -> list[Finding]:
                 f'This paragraph cites no source: "{p.snippet()}" — state the source(s) for '
                 f'its ideas as [@citekey] tags from the bibliography, or merge it into an '
                 f'adjacent paragraph that already carries the evidence.', section=p.section)
-        for p in paras if _is_body(p) and expects_citations(p.kind) and not p.keys
+        for p in paras
+        if _is_body(p) and expects_citations(p.kind, has_methods_review=has_methods_review)
+        and not p.keys
     ]
 
 
@@ -327,7 +336,8 @@ _SENTENCES_PER_SOURCE = 3
 
 
 def sparse_paragraphs(paras: list[Paragraph],
-                      sentences_per_source: int = _SENTENCES_PER_SOURCE) -> list[Finding]:
+                      sentences_per_source: int = _SENTENCES_PER_SOURCE, *,
+                      has_methods_review: bool = False) -> list[Finding]:
     """A long paragraph resting on few sources is assertion with a citation attached.
 
     PHASE: draft. GATED on section kind. This and ``uncited_paragraphs`` are the mechanical
@@ -335,7 +345,9 @@ def sparse_paragraphs(paras: list[Paragraph],
     """
     out: list[Finding] = []
     for p in paras:
-        if not _is_body(p) or not expects_citations(p.kind) or not p.keys:
+        if (not _is_body(p)
+                or not expects_citations(p.kind, has_methods_review=has_methods_review)
+                or not p.keys):
             continue
         n_sents = len(sentence_units(p.text))
         want = max(1, -(-n_sents // sentences_per_source))  # ceil

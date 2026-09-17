@@ -104,11 +104,22 @@ def test_the_sessions_carry_their_commands():
 
 
 def test_the_genuinely_human_steps_keep_no_command():
-    """collect and the comment gates are the person's OWN work — there is nothing to run."""
-    for stage, name in (("litreview", "collect"), ("litreview", "comment"),
-                        ("paper", "comment"), ("experiments", "comment"), ("deck", "comment")):
+    """The comment gates are the person's OWN work — there is nothing to run.
+
+    `collect` used to be in this list and no longer is: the downloading and filing is still
+    the human's, but coding what they added into the corpus ledger is not, so the step now
+    carries `haarpi rabbithole collect` and books both resources.
+    """
+    for stage, name in (("litreview", "comment"), ("paper", "comment"),
+                        ("experiments", "comment"), ("deck", "comment")):
         s = planner.STAGE_STEPS[stage][name]
         assert s.command is None and not s.attended and s.resources == ("human",)
+
+
+def test_collect_carries_the_ledger_verb():
+    s = planner.STAGE_STEPS["litreview"]["collect"]
+    assert s.command == "haarpi rabbithole collect" and s.attended
+    assert s.resources == ("human", "claude")
 
 
 # ── what reaches the board ───────────────────────────────────────────────────

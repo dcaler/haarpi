@@ -90,8 +90,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "Search, rank and curate candidate sources into the collect-list. "
                         "The HUMAN adds them to Zotero at `collect`; gather puts nothing "
                         "there itself.", resource="gpu"),
-        "collect": Step(None, 0.25,
-                        "Download the new PDFs and add them to the Zotero collection.", resource="human"),
+        # Attended: the downloading and filing is the human's, but `collect` now has a verb
+        # that codes what they added into the corpus ledger and reports which items still
+        # lack a PDF. Both halves happen in one sitting, so it books human + claude.
+        "collect": Step("haarpi rabbithole collect", 0.25,
+                        "Download the new PDFs and add them to the Zotero collection, then "
+                        "code them into the corpus ledger (role + what still needs a PDF).",
+                        resource="human", attended=True),
         "audit":   Step("haarpi rabbithole audit", 0.5,
                         "Word-sense filter: quarantine lexical false-friends (shared word, no "
                         "conceptual transfer) from the finalised corpus (reversible).", resource="gpu"),

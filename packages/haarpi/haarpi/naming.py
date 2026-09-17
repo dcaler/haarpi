@@ -36,8 +36,11 @@ def _tokens(value: str | list[str] | None) -> list[str]:
 # Chain tokens that name a KIND of document. Everything else in a chain is either an author
 # (initials, or `ra`) or a VENUE — which is how a venue rides in a filename without the
 # parser, the gate, the redline or the release logic needing to know venues exist.
+# `methodsreview` is the METHODS LITERATURE review; `methods` is raster's build writeup.
+# Two different documents — and raconteur's find_methods_file() searches the project root
+# for the latter, so a methods review sharing its infix would be read as the writeup.
 DELIVERABLE_WORDS = ("onepager", "venue", "skeleton", "outline",
-                     "litreview", "methods", "results")
+                     "litreview", "methodsreview", "methods", "results")
 
 
 def venue_of(path: Path, short_title: str, known: list[str] | None = None) -> str:

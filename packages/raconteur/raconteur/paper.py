@@ -14,7 +14,7 @@ from .guards import (
     is_acknowledgements as _is_acknowledgements,
 )
 from .context import (
-    load_litreview, load_litreview_threads, load_methods, load_results, load_bib_summary,
+    load_litreview, load_litreview_threads, load_methods, load_methods_review, load_results, load_bib_summary,
     load_bib_keys, load_style_profile, load_onepager,
 )
 from .log import log
@@ -303,21 +303,31 @@ def write_order(headings: list[str]) -> list[str]:
 
 def _context_for_section(heading: str, litrev: str, code: str, results: str,
                          written: dict[str, str] | None = None,
-                         narrative: str = "") -> str:
+                         narrative: str = "", methods_review: str = "") -> str:
     kind = _writes_as(heading)
     parts = []
 
     if kind in ("litrev", "intro", "other") and litrev:
         parts.append(f"Literature review:\n{litrev}")
     elif kind == "methods" and litrev:
-        # Methods may cite where the method descends from prior work — an offshoot has a
-        # provenance, and it belongs in the text. It carries no citation FLOOR: citing is
-        # not this section's job, so an uncited paragraph here is not a defect.
-        parts.append("Literature review (cite ONLY where this project's method derives "
-                     f"from prior work; there is no requirement to cite here):\n{litrev}")
+        # The SUBSTANTIVE review, for a methods section, is provenance only — where this
+        # project's method descends from prior work in the domain. The methodological
+        # literature comes from the methods review below, when the project has one.
+        parts.append("Literature review (substantive — cite ONLY where this project's "
+                     f"method derives from prior work):\n{litrev}")
+
+    if kind == "methods" and methods_review:
+        # WHOSE METHOD THIS IS. raster's writeup says what the code does; it cannot say
+        # which published debate settles a parameter choice or what the known objections
+        # are. Without this, a Methods section could describe a technique in detail and
+        # cite nobody for it — which is not defensible at review.
+        parts.append("Methods literature — the methodological sources this project's "
+                     "approach is drawn from and must be defended against. Cite these for "
+                     "the provenance of each technique, for parameter choices that have a "
+                     f"published rationale, and for known limitations:\n{methods_review}")
 
     if kind == "methods" and code:
-        parts.append(f"Methods (raster writeup):\n{code}")
+        parts.append(f"Methods (raster writeup — what THIS project implemented):\n{code}")
     if kind == "results" and results:
         parts.append(f"Results Content:\n{results}")
 
@@ -412,6 +422,7 @@ def _guard_section(
     band: tuple[int, int] | None = None,
     bullets: int = 0,
     figure_start: int = 1,
+    has_methods_review: bool = False,
 ) -> list[guards.Finding]:
     """Draft-phase guards for one section.
 
@@ -438,8 +449,11 @@ def _guard_section(
     if known:  # an empty bib would make every key "unresolved"
         findings += guards.unresolved_keys(text, known)
     findings += guards.author_year_prose(text)
-    findings += guards.uncited_paragraphs(paras)
-    findings += guards.sparse_paragraphs(paras)
+    # A Methods section carries a citation floor ONLY when the project has a methods
+    # review to cite. Without one there are no methodological sources to reach for, and
+    # the floor would fail a section for missing what was never gathered.
+    findings += guards.uncited_paragraphs(paras, has_methods_review=has_methods_review)
+    findings += guards.sparse_paragraphs(paras, has_methods_review=has_methods_review)
     findings += guards.padded_citations(paras)
     findings += guards.wide_paragraphs(paras)
     if band:
@@ -473,6 +487,7 @@ def _guard_repair(
     band: tuple[int, int] | None = None,
     bullets: int = 0,
     figure_start: int = 1,
+    has_methods_review: bool = False,
 ) -> str:
     """Feed mechanical findings back as imperatives until they clear or rounds run out.
 
@@ -480,7 +495,7 @@ def _guard_repair(
     survives every round is logged, not silently dropped.
     """
     kw = dict(expect_figures=expect_figures, band=band, bullets=bullets,
-              figure_start=figure_start)
+              figure_start=figure_start, has_methods_review=has_methods_review)
     for n in range(1, rounds + 1):
         findings = _guard_section(text, heading, known, have_results, **kw)
         if not findings:
@@ -929,6 +944,7 @@ def _draft_paper(
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
+    methods_review = load_methods_review(project_dir, cfg.methods_litrev_dir)
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()
@@ -986,7 +1002,8 @@ def _draft_paper(
             # cannot know who contributed what.
             drafted.append((heading, _ack_passthrough(section_outline, project_dir)))
             continue
-        ctx = _context_for_section(heading, litrev, code, results, written, narrative)
+        ctx = _context_for_section(heading, litrev, code, results, written, narrative,
+                                   methods_review=methods_review)
         band = guards.section_band(heading, outline_text, budget,
                                    cfg.section_shares or None, rates=rates)
         lo, hi = band if band[0] else _DEFAULT_BAND
@@ -1024,7 +1041,8 @@ def _draft_paper(
                              expect_figures=_outline_figure_count(section_outline),
                              band=band if band[0] else None,
                              bullets=n_bullets,
-                             figure_start=fig_start)
+                             figure_start=fig_start,
+                             has_methods_review=bool(methods_review))
         drafted.append((heading, text))
         written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
@@ -1058,6 +1076,7 @@ def _revise_paper(
 ) -> None:
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
+    methods_review = load_methods_review(project_dir, cfg.methods_litrev_dir)
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     style_profile = load_style_profile(project_dir) if cfg.use_style else ""
@@ -1103,7 +1122,8 @@ def _revise_paper(
                             or _ack_passthrough(section_outline, project_dir)))
             continue
         existing = existing_map.get(heading, "")
-        ctx = _context_for_section(heading, litrev, code, results, written, narrative)
+        ctx = _context_for_section(heading, litrev, code, results, written, narrative,
+                                   methods_review=methods_review)
         band = guards.section_band(heading, outline_text, budget,
                                    cfg.section_shares or None, rates=rates)
         log(f"[raconteur] revising '{heading}'…")
@@ -1124,7 +1144,8 @@ def _revise_paper(
         text = _critique_revise(brain, heading, text, section_outline, analysis, 2, band)
         text = _guard_repair(brain, heading, text, section_outline, bib_section,
                              bib_keys, bool(results),
-                             expect_figures=_outline_figure_count(section_outline))
+                             expect_figures=_outline_figure_count(section_outline),
+                             has_methods_review=bool(methods_review))
         revised.append((heading, text))
         written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
@@ -1174,6 +1195,7 @@ def _redline_paper(
 
     litrev = load_litreview(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     code = load_methods(project_dir) if cfg.use_methods else ""
+    methods_review = load_methods_review(project_dir, cfg.methods_litrev_dir)
     results = load_results(project_dir, cfg.results_dir) if cfg.results_dir else ""
     bib_summary = load_bib_summary(project_dir, cfg.litrev_dir) if cfg.litrev_dir else ""
     bib_keys = load_bib_keys(project_dir, cfg.litrev_dir) if cfg.litrev_dir else set()

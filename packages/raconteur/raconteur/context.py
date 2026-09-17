@@ -114,6 +114,23 @@ def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
     return text
 
 
+def load_methods_review(project_dir: Path, subdir: str = "") -> str:
+    """The minted METHODS review — the methodological literature, not raster's writeup.
+
+    `load_methods` reads what THIS project's code does. That tells a Methods section what
+    was done and cannot tell it whose method this is, which published debate settles the
+    parameter choice, or what the known objections are. Those live in a second literature
+    review anchored on the methodological families rather than the substantive domain, and
+    this is how the drafter reaches it.
+
+    Empty when no methods review is configured, which is most projects — the caller then
+    behaves exactly as it always has.
+    """
+    if not subdir:
+        return ""
+    return load_litreview(project_dir, subdir)
+
+
 # ── litreview threads: the harvestable unit (tier-1) ──────────────────────────
 # rabbitHole builds the review as thesis-headed "## " threads (one idea per heading), with
 # an "## Annotated Bibliography" tail. That structure is already a harvestable index: raconteur

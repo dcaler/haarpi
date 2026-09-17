@@ -7,11 +7,13 @@ such homographs slip in. This verb re-judges the corpus for CONCEPTUAL TRANSFER 
 words, and NOT domain membership — cross-disciplinary transfer is the point) and quarantines the
 confident false-friends.
 
-Quarantine is a MOVE between Zotero collections, never a delete: a flagged item leaves the
-project collection and joins a shared ``quarantine`` collection, so it drops out of both the
-corpus (``collection_items``) and refs.bib (``collection_bibtex``) with no filtering — while
-staying in the library, fully reversible with ``--release``. The bias is always toward keep: a
-wrong keep costs a line in a review, a wrong drop costs a cross-disciplinary paper.
+Quarantine is a ROLE IN THE CORPUS LEDGER, never a move and never a delete: a flagged item
+keeps its place in the project collection and is simply not ingested. It therefore stays in
+refs.bib, which is built from that collection — dropping it out was how this verb could hand
+a minted review a dangling citation, invisibly, from a command nobody thought of as touching
+bibliographies. ``--release`` puts the role back and LOCKS it, so the next audit cannot undo
+a human's decision. The bias is always toward keep: a wrong keep costs a line in a review, a
+wrong drop costs a cross-disciplinary paper.
 
 Everything but the one brain call is deterministic and tested (DESIGN_corpus_audit.md).
 """
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .brain import Brain
-from . import config, runlog
+from . import config, corpus_ledger, runlog
 
 QUARANTINE_COLLECTION = "quarantine"
 
@@ -277,14 +279,28 @@ def _judge_fields(raw: dict, labels: dict | None = None) -> dict:
 
 
 def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
-                  quarantine_key: str, items: list[dict], outdir, dry_run: bool = False,
+                  items: list[dict], outdir, project_root=None, dry_run: bool = False,
                   cache: dict | None = None, min_confidence: float = 7.0,
                   labels: dict | None = None, asks=(), progress=None, checkpoint=None,
-                  checkpoint_every: int = 5) -> dict:
-    """Judge the raw Zotero ``items``, move each confident false-friend from the project
-    collection to quarantine (unless ``dry_run``), and write the reasons log. Pure but for the
-    injected ``zc``/``brain``, so the whole flow is testable without the network. ``progress`` and
-    ``checkpoint`` are passed straight through to :func:`audit_corpus` (see there)."""
+                  checkpoint_every: int = 5, quarantine_key: str | None = None) -> dict:
+    """Judge the raw Zotero ``items`` and mark each confident false-friend ``quarantine`` in
+    the corpus ledger (unless ``dry_run``), then write the reasons log.
+
+    QUARANTINE IS A LEDGER ROLE, NOT A MOVE. It used to move the item into a shared
+    ``quarantine`` collection, which took it out of the project collection — and `refs.bib`
+    is built FROM that collection, so a minted review citing the paper silently acquired a
+    dangling key. `ledger.reconcile` could not catch it either: narrative and bibliography
+    shrink together. Now the item never leaves; only its role changes, and only ingestion
+    reads roles.
+
+    A LOCKED row is left alone. `--release` locks what it releases, so a paper the human
+    put back is not quarantined again on the next run — which is what happened for as long
+    as release was a move that left the verdict cache untouched.
+
+    Pure but for the injected ``zc``/``brain`` and the ledger write, so the flow stays
+    testable without the network. ``quarantine_key`` is accepted and ignored, for callers
+    that have not been updated.
+    """
     raw_by_key = {}
     judge_items = []
     for raw in items:
@@ -295,19 +311,35 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                                      min_confidence=min_confidence, asks=asks, progress=progress,
                                      checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     moved: list[str] = []
-    if not dry_run:
+    held: list[str] = []
+    if not dry_run and project_root is not None:
+        rows = corpus_ledger.load(project_root)
         for v in flagged:
-            if zc.move_item_between_collections(raw_by_key[v.key], project_key, quarantine_key):
-                moved.append(v.key)
+            cur = rows.get(v.key)
+            if cur is not None and cur.locked:
+                held.append(v.key)          # the human already ruled on this one
+                continue
+            data = (raw_by_key.get(v.key) or {}).get("data", {}) or {}
+            corpus_ledger.set_role(project_root, v.key, corpus_ledger.QUARANTINE,
+                                   title=data.get("title", ""), added_by="audit")
+            moved.append(v.key)
     log = write_quarantine_log(outdir, flagged)
-    return {"flagged": [v.key for v in flagged], "moved": moved,
+    return {"flagged": [v.key for v in flagged], "moved": moved, "held": held,
             "verdicts": len(verdicts), "log": log}
 
 
-def release_item(zc, *, quarantine_key: str, project_key: str, item: dict) -> bool:
-    """Move one item back from quarantine to this project's collection — the reverse of a
-    quarantine. Because the CLI is project-scoped, ``project_key`` is unambiguous."""
-    return zc.move_item_between_collections(item, quarantine_key, project_key)
+def release_item(zc, *, project_root, key: str, role: str = corpus_ledger.LITERATURE,
+                 quarantine_key: str | None = None, project_key: str | None = None,
+                 item: dict | None = None) -> bool:
+    """Put one item back, and make it STICK.
+
+    Nothing moves in Zotero — the item never left. The row goes back to ``role`` and is
+    LOCKED, which is what stops the next audit re-quarantining it. Releasing used to move
+    the item back and leave the verdict cache alone, so the decision survived exactly until
+    the next run.
+    """
+    row = corpus_ledger.set_role(project_root, key, role, locked=True, added_by="human")
+    return row.role == role
 
 
 # ── the verb wiring (not unit-tested; the tested core is above) ────────────────
@@ -438,23 +470,32 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     from . import zotero
     zc = zotero.ZoteroClient(gc)
     project_key = cfg.zotero.get("collection_key")
-    quarantine_key = zc.create_collection(QUARANTINE_COLLECTION)   # find-or-create
+    # The ledger lives beside the PROJECT, not the review — one collection, shared by
+    # however many reviews the project has. No quarantine collection is created or used:
+    # quarantining is a role now, and the item never leaves the project collection.
+    project_root = config.work_root(directory).parent
 
     print(f"rabbitHole audit — {cfg.project_name}")
 
     if release:
         ident = release.lstrip("@")
+        rows = corpus_ledger.load(project_root)
         target = None
-        for raw in zc.collection_items(quarantine_key):
+        for raw in zc.collection_items(project_key):
             data = raw.get("data", {})
-            if ident in ((data.get("key") or ""), _zotero_label(data, "")):
-                target = raw
+            key = data.get("key") or raw.get("key")
+            if ident in ((key or ""), _zotero_label(data, "")):
+                target = key
                 break
-        if target is None:
-            print(f"  [warn] '{ident}' not found in the quarantine collection.", file=sys.stderr)
+        if target is None or rows.get(target) is None:
+            print(f"  [warn] '{ident}' is not in this project's ledger.", file=sys.stderr)
             return 1
-        ok = release_item(zc, quarantine_key=quarantine_key, project_key=project_key, item=target)
-        print(f"  {'Released' if ok else 'FAILED to release'} {ident} back to {cfg.project_name}.")
+        if rows[target].role != corpus_ledger.QUARANTINE:
+            print(f"  '{ident}' is not quarantined (role: {rows[target].role}).")
+            return 0
+        ok = release_item(zc, project_root=project_root, key=target)
+        print(f"  {'Released' if ok else 'FAILED to release'} {ident} back to "
+              f"{cfg.project_name} — and LOCKED, so the next audit will not undo it.")
         return 0 if ok else 1
 
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
@@ -505,7 +546,7 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
                   f"~{runlog.fmt_dt((n - i) * avg)} left", flush=True)
 
     summary = perform_audit(zc, brain, cfg.topic, stated,
-                            project_key=project_key, quarantine_key=quarantine_key,
+                            project_key=project_key, project_root=project_root,
                             items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
                             min_confidence=min_conf, asks=asks, progress=_report,
                             checkpoint=lambda c: _save_cache(paths, sig, c, units))
@@ -535,9 +576,13 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
         print(f"  {runlog.stamp()}No lexical false-friends found — corpus is clean.")
     elif dry_run:
         print(f"  {runlog.stamp()}{n} suspected false-friend(s) — see {summary['log'].name} "
-              f"(dry run: nothing moved).")
+              f"(dry run: the ledger is untouched).")
     else:
-        print(f"  {runlog.stamp()}Quarantined {len(summary['moved'])}/{n} false-friend(s) to "
-              f"'{QUARANTINE_COLLECTION}'. Reasons in {summary['log'].name}; "
-              f"release any with `rabbitHole audit --release @key`.")
+        print(f"  {runlog.stamp()}Marked {len(summary['moved'])}/{n} false-friend(s) "
+              f"'{corpus_ledger.QUARANTINE}' in the corpus ledger — they stay in Zotero and "
+              f"in refs.bib, and drop out of the corpus only. Reasons in "
+              f"{summary['log'].name}; release any with `rabbitHole audit --release @key`.")
+        if summary.get("held"):
+            print(f"  {runlog.stamp()}Left {len(summary['held'])} released paper(s) alone "
+                  f"(locked by a human): {', '.join(summary['held'][:6])}")
     return 0

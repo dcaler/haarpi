@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, filters
+from . import config, corpus_ledger, filters
 from .models import Author, Candidate, norm_doi
 from .pdfs import extract_text, looks_like_fulltext
 
@@ -126,7 +126,29 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
 
     idx = _load_candidate_index(paths)
     items = zc.collection_items(coll)
-    print(f"  Zotero collection has {len(items)} top-level items.")
+
+    # ONE COLLECTION, MANY ROLES. The collection is shared by every review in the project
+    # and holds the union of their sources, so ingesting it wholesale would pull the
+    # substantive corpus into the methods review and vice versa. The ledger says which
+    # rows are ours; `quarantine` is in the collection (and so in refs.bib) but in no
+    # review's corpus. An empty ledger means an un-migrated project: ingest everything,
+    # exactly as before.
+    project_root = config.work_root(paths.root).parent
+    kind = config.kind_of(paths.root)
+    rows = corpus_ledger.load(project_root)
+    mine = {k for k, r in rows.items() if r.role == kind.name} if rows else None
+    if mine is not None:
+        dropped = len(items) - sum(
+            1 for it in items
+            if ((it.get("data", {}) or {}).get("key") or it.get("key")) in mine)
+        items = [it for it in items
+                 if ((it.get("data", {}) or {}).get("key") or it.get("key")) in mine]
+        print(f"  Zotero collection has {len(items) + dropped} top-level items; "
+              f"{len(items)} carry the '{kind.name}' role ({dropped} belong to another "
+              f"review or are quarantined).")
+    else:
+        print(f"  Zotero collection has {len(items)} top-level items.")
+
     corpus: list[Candidate] = []
     for it in items:
         c = _corpus_item_from_zotero(zc, it, idx, paths)

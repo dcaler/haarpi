@@ -26,8 +26,59 @@ from haarpi import config as haarpi_config
 PROJECT_FILE = "litrev.yaml"          # first/active project config (version 1)
 PROJECT_STEM = "litrev"               # later iterations: litrev_2.yaml, litrev_3.yaml, ...
 _PROJECT_RE = re.compile(r"^litrev(?:_(\d+))?\.yaml$")
-LITREVIEW_DIR = "litReview"           # all rabbitHole files live under <project>/litReview/
+LITREVIEW_DIR = "litReview"           # the DEFAULT review's folder — see REVIEW_KINDS
 GLOBAL_CONFIG_PATH = haarpi_config.legacy_path("rabbithole")
+
+
+# ── review kinds ──────────────────────────────────────────────────────────
+# A project can hold more than one literature review, because one anchor cannot serve
+# two questions. The substantive review is anchored on the DOMAIN; a methods review is
+# anchored on the methodological families and usually EXCLUDES that domain. FirmPathways
+# is the worked case: five rounds of steering could not make a review anchored on
+# "public innovation policy" return sequence-analysis methodology, because the
+# methodology lives in life-course sociology and demography — outside the anchor and
+# adjacent to an excluded field.
+#
+# This registry is the ONE place that knows a kind's folder, config stem and deliverable
+# infix. The infix matters: `methods` is already the BUILD stage's infix (raster's
+# implementation writeup), and raconteur's find_methods_file() searches the project root
+# for it, so a methods REVIEW minted as `..._methods_ra.docx` would be read as raster's
+# writeup. Hence `methodsreview`.
+@dataclass(frozen=True)
+class ReviewKind:
+    name: str       # role recorded in the corpus ledger
+    dir: str        # folder under the project root
+    stem: str       # config filename stem: <stem>.yaml, <stem>_2.yaml, …
+    infix: str      # deliverable infix in the naming chain
+
+
+REVIEW_KINDS: dict[str, ReviewKind] = {
+    "literature": ReviewKind("literature", LITREVIEW_DIR, "litrev", "litreview"),
+    "methods": ReviewKind("methods", "litReviewMethods", "methodsreview", "methodsreview"),
+}
+DEFAULT_KIND = "literature"
+
+
+def _kind_re(stem: str) -> re.Pattern:
+    return re.compile(rf"^{re.escape(stem)}(?:_(\d+))?\.yaml$")
+
+
+def kind_of(path: str | Path = ".") -> ReviewKind:
+    """Which review a directory IS, by what it holds and then by what it is called.
+
+    Contents win over the folder name: a directory holding `methodsreview.yaml` is a
+    methods review whatever it is called, which keeps the name a convention rather than
+    a requirement. Falls back to the default so every existing project is unaffected.
+    """
+    p = Path(path)
+    d = p.parent if p.is_file() else p
+    for kind in REVIEW_KINDS.values():
+        if any(_kind_re(kind.stem).match(fp.name) for fp in d.glob(f"{kind.stem}*.yaml")):
+            return kind
+    for kind in REVIEW_KINDS.values():
+        if d.name == kind.dir:
+            return kind
+    return REVIEW_KINDS[DEFAULT_KIND]
 
 # Default model assignments — change to match what you have in Ollama.
 DEFAULT_COORDINATOR_MODEL = "qwen3.6:27b-16k"
@@ -113,27 +164,52 @@ def _project_number(name: str) -> int | None:
     return int(m.group(1)) if m.group(1) else 1
 
 
+def _is_review_root(p: Path) -> bool:
+    """Does this directory hold a review's config, or carry a review's folder name?
+
+    Either mark makes it the root. Without this, `work_root` appended `litReview` to
+    anything not literally named `litReview` — so pointing a verb at a methods review
+    resolved to `litReviewMethods/litReview/`, and its config was never found.
+    """
+    # next(...) not any(p.glob(...)): a glob GENERATOR is truthy even when it yields
+    # nothing, which would make every directory look like a review root.
+    if any(next(p.glob(f"{k.stem}*.yaml"), None) for k in REVIEW_KINDS.values()):
+        return True
+    return any(p.name == k.dir for k in REVIEW_KINDS.values())
+
+
 def work_root(path: str | Path = ".") -> Path:
-    """The rabbitHole working subfolder (litReview/) inside a project directory.
-    Idempotent if already pointed at the litReview dir."""
+    """The review folder inside a project directory. Idempotent once inside one.
+
+    A path that already IS a review root is returned untouched; anything else gets the
+    default review's folder appended, which is what every single-review project has
+    always done.
+    """
     p = Path(path)
-    return p if p.name == LITREVIEW_DIR else p / LITREVIEW_DIR
+    return p if _is_review_root(p) else p / LITREVIEW_DIR
 
 
 def _project_dir(path: str | Path) -> Path:
-    """Directory that holds the litrev*.yaml files (the litReview subfolder)."""
+    """Directory that holds this review's config files."""
     p = Path(path)
     return p.parent if p.is_file() else work_root(p)
 
 
 def list_project_files(path: str | Path = ".") -> list[Path]:
-    """All litrev*.yaml in the dir, sorted ascending by version number."""
+    """All of THIS review's config files in the dir, ascending by version number.
+
+    Scoped to the directory's own kind: a methods review globs `methodsreview*.yaml` and
+    never `litrev*.yaml`, so two reviews could sit in one folder without either reading
+    the other's cycles.
+    """
     d = _project_dir(path)
+    stem = kind_of(d).stem
+    rx = _kind_re(stem)
     numbered = []
-    for fp in d.glob("litrev*.yaml"):
-        n = _project_number(fp.name)
-        if n is not None:
-            numbered.append((n, fp))
+    for fp in d.glob(f"{stem}*.yaml"):
+        m = rx.match(fp.name)
+        if m:
+            numbered.append((int(m.group(1)) if m.group(1) else 1, fp))
     return [fp for _, fp in sorted(numbered, key=lambda t: t[0])]
 
 
@@ -143,13 +219,15 @@ def latest_project_file(path: str | Path = ".") -> Path | None:
 
 
 def next_project_file(path: str | Path = ".") -> Path:
-    """Path for a new iteration: litrev.yaml if none yet, else litrev_<N+1>.yaml."""
+    """Path for a new iteration of THIS review: <stem>.yaml, else <stem>_<N+1>.yaml."""
     d = _project_dir(path)
+    stem = kind_of(d).stem
     files = list_project_files(path)
     if not files:
-        return d / PROJECT_FILE
-    n = _project_number(files[-1].name) or 1
-    return d / f"{PROJECT_STEM}_{n + 1}.yaml"
+        return d / f"{stem}.yaml"
+    m = _kind_re(stem).match(files[-1].name)
+    n = int(m.group(1)) if m and m.group(1) else 1
+    return d / f"{stem}_{n + 1}.yaml"
 
 
 def load_project(path: str | Path = ".") -> ProjectConfig:

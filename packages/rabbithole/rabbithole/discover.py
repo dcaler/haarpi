@@ -18,7 +18,7 @@ import re
 import sys
 import time
 
-from . import config, filters, ranking, render, runlog, sources
+from . import config, corpus_ledger, filters, ranking, render, runlog, sources
 from .brain import Brain
 from .models import Candidate, _norm_title, norm_doi
 
@@ -699,6 +699,10 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
                 f"{len(ranked)} still missing")
             cfg.zotero["collection_key"] = collection_key
             config.save_project(cfg, directory)
+            # Every item in the collection gets a ledger row, and rabbitHole's own finds
+            # take THIS review's role — so the common case needs no decision from anyone
+            # at `collect`. Only what the human adds on top is left to code in.
+            corpus_ledger.sync(config.project_paths(directory), cfg, gc)
     elif use_zotero:
         print("\n[note] No Zotero credentials — listing all candidates "
               "(can't tell which you already have). "

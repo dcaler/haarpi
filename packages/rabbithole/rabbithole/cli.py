@@ -85,6 +85,17 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--no-zotero", action="store_true",
                    help="do not create/read the Zotero collection (lists all candidates)")
 
+    col = sub.add_parser("collect",
+                         help="code newly-added papers into the corpus ledger and report "
+                              "which of this review's items still need a PDF")
+    col.add_argument("--role", action="append", default=[], metavar="KEY=ROLE",
+                     help="set one item's role explicitly and LOCK it "
+                          "(literature|methods|quarantine); repeatable")
+    col.add_argument("--all-as", default=None,
+                     choices=["literature", "methods", "quarantine"],
+                     help="give every newly-found item this role instead of the role of "
+                          "the review being run")
+
     rep = sub.add_parser("report",
                          help="read the Zotero corpus and write the literature review")
     rep.add_argument("--brain", choices=["ollama", "claude"], default=None,
@@ -174,6 +185,19 @@ def main(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=True)
         from . import discover
         return discover.run(args.dir, use_zotero=not args.no_zotero)
+
+    if args.command == "collect":
+        _check_env(need_pandoc=False)          # Zotero + the ledger; no brain, no pandoc
+        from . import corpus_ledger
+        roles = {}
+        for spec in args.role:
+            if "=" not in spec:
+                print(f"[error] --role wants KEY=ROLE, got {spec!r}", file=sys.stderr)
+                return 1
+            k, _, v = spec.partition("=")
+            roles[k.strip().lstrip("@")] = v.strip()
+        return corpus_ledger.run_collect(args.dir, set_roles=roles,
+                                         default_role=args.all_as)
 
     if args.command == "report":
         _check_env(need_pandoc=True)
