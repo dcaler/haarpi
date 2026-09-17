@@ -175,8 +175,8 @@ def test_perform_audit_marks_the_flagged_in_the_ledger_and_never_moves(tmp_path)
                                   items=raw, outdir=tmp_path)
     assert zc.moves == []                               # NOTHING leaves the collection
     rows = cl.load(tmp_path)
-    assert rows["AV"].role == cl.QUARANTINE             # exactly the false-friend
-    assert "OK" not in rows or rows["OK"].role != cl.QUARANTINE
+    assert rows["AV"].status == cl.QUARANTINE                # exactly the false-friend
+    assert "OK" not in rows or rows["OK"].status == cl.CORPUS
     log = (tmp_path / "audit_quarantine.md").read_text()
     assert "AV" in log and "docking" in log and "ligand-receptor binding" in log
     assert summary["moved"] == ["AV"]
@@ -186,12 +186,12 @@ def test_a_released_paper_is_left_alone_by_a_later_audit(tmp_path):
     """The other half of the old design's failure: release moved the item back but left the
     verdict cache alone, so the next run quarantined it again. A locked row is final."""
     from rabbithole import corpus_ledger as cl
-    cl.set_role(tmp_path, "AV", cl.LITERATURE, locked=True)
+    cl.set_status(tmp_path, "AV", cl.CORPUS, locked=True)
     brain = SeqBrain([_ff("docking", "ligand binding", "agent alignment", 9)])
     summary = audit.perform_audit(FakeZotero(), brain, "ABM", "agent docking",
                                   project_key="PROJ", project_root=tmp_path,
                                   items=[_zitem("AV")], outdir=tmp_path)
-    assert cl.load(tmp_path)["AV"].role == cl.LITERATURE
+    assert cl.load(tmp_path)["AV"].status == cl.CORPUS
     assert summary["held"] == ["AV"] and summary["moved"] == []
 
 
@@ -218,13 +218,16 @@ def test_a_brain_error_leaves_the_item_in_the_corpus(tmp_path):
 
 # ── release: put the role back, and make it stick ─────────────────────────────
 
-def test_release_restores_the_role_and_locks_it(tmp_path):
+def test_release_clears_the_quarantine_and_keeps_the_review(tmp_path):
+    """The role is untouched, so a released METHODS paper returns to the methods corpus —
+    an earlier version stored quarantine as the role, which destroyed that provenance."""
     from rabbithole import corpus_ledger as cl
     zc = FakeZotero()
-    cl.set_role(tmp_path, "AV", cl.QUARANTINE)
+    cl.add_purpose(tmp_path, "AV", cl.METHODS, added_by="methods")
+    cl.set_status(tmp_path, "AV", cl.QUARANTINE, added_by="audit")
     ok = audit.release_item(zc, project_root=tmp_path, key="AV")
     row = cl.load(tmp_path)["AV"]
-    assert ok and row.role == cl.LITERATURE
+    assert ok and row.status == cl.CORPUS and row.purpose == [cl.METHODS]
     assert row.locked, "an unlocked release is undone by the next audit"
     assert zc.moves == [], "the item never left the collection, so nothing moves back"
 

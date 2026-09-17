@@ -41,26 +41,51 @@ from . import config as _config
 LEDGER_NAME = "corpus_ledger.json"
 STATE_DIR = ".haarpi"
 
+# PURPOSE AND STATUS ARE DIFFERENT AXES.
+#
+#   PURPOSE — what a paper is FOR. A SET, not one value: a paper on sequence analysis applied
+#     to funding pathways serves the methods review AND the substantive one, and saying so is
+#     the point of keeping one collection. Written by gather, from the review that found it;
+#     added to, never replaced, when another review's search surfaces the same paper.
+#
+#   STATUS  — whether it is IN the corpus at all. `corpus` or `quarantine`. Written by audit,
+#     reversible, and lockable against a human's decision.
+#
+# These were one field for part of an afternoon and it cost the provenance: quarantining a
+# METHODS paper overwrote its purpose, so the ledger forgot which review it belonged to and
+# releasing it returned everything to `literature`. A paper that serves both reviews could not
+# be expressed at all.
 LITERATURE = "literature"
 METHODS = "methods"
-QUARANTINE = "quarantine"
-ROLES = (LITERATURE, METHODS, QUARANTINE)
+PURPOSES = (LITERATURE, METHODS)
 
-# Roles that put an item in a review's corpus. Quarantine is the one that does not.
-INGESTED_ROLES = (LITERATURE, METHODS)
+CORPUS = "corpus"
+QUARANTINE = "quarantine"
+STATUSES = (CORPUS, QUARANTINE)
 
 
 @dataclass
 class Row:
-    key: str                     # Zotero item key — the stable identity
-    role: str = LITERATURE
+    key: str                          # Zotero item key — the stable identity
+    purpose: list = field(default_factory=lambda: [LITERATURE])   # what it is FOR
+    status: str = CORPUS                                          # whether it is IN
     citekey: str = ""
     title: str = ""
-    locked: bool = False         # a human set this role; the machine may not overrule it
-    added_by: str = ""           # which review filed it, or "human"
+    locked: bool = False              # a human ruled on the status; the machine may not overrule
+    added_by: str = ""                # which review filed it, or "human"
 
-    def ingestible(self) -> bool:
-        return self.role in INGESTED_ROLES
+    def serves(self, purpose: str) -> bool:
+        return purpose in self.purpose
+
+    def ingestible(self, purpose: str) -> bool:
+        """Does THIS review embed it — it is ours, and it is in the corpus."""
+        return self.serves(purpose) and self.status == CORPUS
+
+
+def _clean_purpose(values) -> list:
+    """A sorted, de-duplicated, non-empty purpose set."""
+    out = sorted({v for v in (values or ()) if v in PURPOSES})
+    return out or [LITERATURE]
 
 
 def ledger_path(path: str | Path = ".") -> Path:
@@ -95,8 +120,21 @@ def load(path: str | Path = ".") -> dict[str, Row]:
         key = raw.get("key")
         if not key:
             continue
+        # Read every shape this file has had: `role: quarantine` (one field), then
+        # `role` + `quarantined` (two, purpose singular), now `purpose` + `status`.
+        purpose = raw.get("purpose")
+        status = raw.get("status")
+        if purpose is None:
+            legacy = raw.get("role", LITERATURE)
+            if legacy == QUARANTINE:
+                purpose, status = [LITERATURE], QUARANTINE
+            else:
+                purpose = [legacy]
+        if status is None:
+            status = QUARANTINE if raw.get("quarantined") else CORPUS
         rows[key] = Row(key=key,
-                        role=raw.get("role", LITERATURE),
+                        purpose=_clean_purpose(purpose),
+                        status=status if status in STATUSES else CORPUS,
                         citekey=raw.get("citekey", ""),
                         title=raw.get("title", ""),
                         locked=bool(raw.get("locked", False)),
@@ -113,29 +151,71 @@ def save(path: str | Path, rows: dict[str, Row]) -> Path:
     return fp
 
 
-def roles_for(path: str | Path, role: str) -> set[str]:
-    """Item keys carrying one role — what an ingest filters on."""
-    return {k for k, r in load(path).items() if r.role == role}
+def serving(path: str | Path, purpose: str) -> set[str]:
+    """Item keys a review should ingest: it serves that purpose, and it is in the corpus."""
+    return {k for k, r in load(path).items() if r.ingestible(purpose)}
 
 
-def set_role(path: str | Path, key: str, role: str, *, locked: bool = False,
-             title: str = "", added_by: str = "") -> Row:
-    """Record a role. Refuses to overwrite a LOCKED row unless locking again.
+def add_purpose(path: str | Path, key: str, purpose: str, *, title: str = "",
+                added_by: str = "") -> Row:
+    """ADD a purpose. A paper both reviews found serves both — that is the whole reason for
+    keeping one collection, and replacing here would silently take the first one away."""
+    if purpose not in PURPOSES:
+        raise ValueError(f"unknown purpose {purpose!r} — expected one of {PURPOSES}")
+    rows = load(path)
+    cur = rows.get(key)
+    if cur is None:
+        cur = Row(key=key, purpose=[purpose], title=title, added_by=added_by)
+        rows[key] = cur
+    else:
+        cur.purpose = _clean_purpose(list(cur.purpose) + [purpose])
+        cur.title = title or cur.title
+        cur.added_by = added_by or cur.added_by
+    save(path, rows)
+    return cur
 
-    The refusal is the whole point of `locked`: `audit` calls this to quarantine, and a
-    paper the human released must not be quarantined again on the next run.
+
+def set_purpose(path: str | Path, key: str, purposes, *, title: str = "",
+                added_by: str = "") -> Row:
+    """REPLACE the purpose set — a human saying what a paper is for, in `collect`."""
+    want = _clean_purpose(purposes if isinstance(purposes, (list, tuple, set)) else [purposes])
+    bad = [p for p in (purposes if isinstance(purposes, (list, tuple, set)) else [purposes])
+           if p not in PURPOSES]
+    if bad:
+        raise ValueError(f"unknown purpose {bad[0]!r} — expected one of {PURPOSES}")
+    rows = load(path)
+    cur = rows.get(key)
+    if cur is None:
+        cur = Row(key=key, purpose=want, title=title, added_by=added_by)
+        rows[key] = cur
+    else:
+        cur.purpose = want
+        cur.title = title or cur.title
+        cur.added_by = added_by or cur.added_by
+    save(path, rows)
+    return cur
+
+
+def set_status(path: str | Path, key: str, status: str, *, locked: bool = False,
+               title: str = "", added_by: str = "") -> Row:
+    """Record whether a paper is IN the corpus. Leaves its purpose alone.
+
+    Refuses to change a LOCKED row unless locking again — that refusal is the point: `audit`
+    calls this to quarantine, and a paper the human released must not be quarantined again on
+    the next run. Because purpose is untouched, a released methods paper returns to the
+    methods corpus rather than to whichever review the release code happened to name.
     """
-    if role not in ROLES:
-        raise ValueError(f"unknown role {role!r} — expected one of {ROLES}")
+    if status not in STATUSES:
+        raise ValueError(f"unknown status {status!r} — expected one of {STATUSES}")
     rows = load(path)
     cur = rows.get(key)
     if cur is not None and cur.locked and not locked:
         return cur
     if cur is None:
-        cur = Row(key=key, role=role, title=title, added_by=added_by)
+        cur = Row(key=key, status=status, title=title, added_by=added_by)
         rows[key] = cur
     else:
-        cur.role = role
+        cur.status = status
         cur.title = title or cur.title
         cur.added_by = added_by or cur.added_by
     cur.locked = cur.locked or locked
@@ -155,13 +235,13 @@ class Reconciliation:
         return not self.added and not self.orphaned
 
 
-def reconcile(path: str | Path, items: list[dict], *, default_role: str = LITERATURE,
+def reconcile(path: str | Path, items: list[dict], *, default_purpose: str = LITERATURE,
               added_by: str = "") -> tuple[dict[str, Row], Reconciliation]:
     """Bring the ledger level with the collection. Pure: returns rows, writes nothing.
 
     Every item in the collection gets a row — that is the invariant. An item with no row
     is a human addition (rabbitHole writes its own rows when it files a find), and takes
-    `default_role`, which callers set to the role of the review being run: additions made
+    `default_purpose`, which callers set to the purpose of the review being run: additions made
     while working on the methods review are methods.
 
     A row whose item has gone is REPORTED, not deleted. Losing the record of a human's
@@ -181,7 +261,7 @@ def reconcile(path: str | Path, items: list[dict], *, default_role: str = LITERA
             if not rows[key].title:
                 rows[key].title = data.get("title", "")
             continue
-        row = Row(key=key, role=default_role, title=data.get("title", ""),
+        row = Row(key=key, purpose=[default_purpose], title=data.get("title", ""),
                   added_by=added_by or "human")
         rows[key] = row
         rec.added.append(row)
@@ -195,7 +275,8 @@ def format_reconciliation(rec: Reconciliation, *, prefix: str = "  ") -> list[st
     if rec.added:
         out.append(f"{prefix}{len(rec.added)} item(s) in Zotero with no ledger row:")
         for r in rec.added[:20]:
-            out.append(f"{prefix}  {r.key}  {(r.title or '?')[:58]:<58} -> {r.role}")
+            out.append(f"{prefix}  {r.key}  {(r.title or '?')[:58]:<58} -> "
+                       f"{'+'.join(r.purpose)}")
         if len(rec.added) > 20:
             out.append(f"{prefix}  … and {len(rec.added) - 20} more")
     if rec.orphaned:
@@ -233,7 +314,7 @@ def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
             print(f"  [warn] could not sync the corpus ledger ({e}); it will catch up next run.")
         return Reconciliation()
 
-    rows, rec = reconcile(project_root, items, default_role=kind.name, added_by=kind.name)
+    rows, rec = reconcile(project_root, items, default_purpose=kind.name, added_by=kind.name)
     save(project_root, rows)
     if not quiet:
         for line in format_reconciliation(rec):
@@ -277,21 +358,26 @@ def run_collect(directory: str = ".", *, set_roles: dict[str, str] | None = None
         print(f"  {runlog.stamp()}Ledger is level with the collection "
               f"({rec.total} item(s)); nothing new to code in.")
 
-    for key, role in (set_roles or {}).items():
+    for key, spec in (set_roles or {}).items():
         try:
-            row = set_role(project_root, key, role, locked=True, added_by="human")
+            if spec in STATUSES:
+                row = set_status(project_root, key, spec, locked=True, added_by="human")
+                print(f"  {key} -> status {row.status} (locked)")
+            else:
+                row = set_purpose(project_root, key, [p.strip() for p in spec.split("+")],
+                                  added_by="human")
+                print(f"  {key} -> purpose {'+'.join(row.purpose)}")
         except ValueError as e:
             print(f"  [error] {e}")
             return 1
-        print(f"  {key} -> {row.role} (locked)")
 
     if default_role and rec.added:
         for row in rec.added:
-            set_role(project_root, row.key, default_role, added_by="human")
+            set_purpose(project_root, row.key, [default_role], added_by="human")
         print(f"  {len(rec.added)} new item(s) -> {default_role}")
 
     rows = load(project_root)
-    mine = [r for r in rows.values() if r.role == kind.name]
+    mine = [r for r in rows.values() if r.ingestible(kind.name)]
     have_pdf = {p.stem for p in paths.pdfs.glob("*.pdf")} if paths.pdfs.exists() else set()
     missing = [r for r in mine if r.key not in have_pdf]
     print(f"  {runlog.stamp()}{len(mine)} item(s) carry the '{kind.name}' role; "

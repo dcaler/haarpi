@@ -105,8 +105,8 @@ def test_human_additions_take_the_role_of_the_review_being_run(project):
     construction something the human added — and additions made while working on the
     methods review are methods."""
     rows, _ = cl.reconcile(project / "litReviewMethods", _items(("AAA", "Optimal matching")),
-                           default_role=cl.METHODS)
-    assert rows["AAA"].role == cl.METHODS
+                           default_purpose=cl.METHODS)
+    assert rows["AAA"].purpose == [cl.METHODS]
 
 
 def test_reconcile_reports_orphans_rather_than_deleting_them(project):
@@ -124,37 +124,65 @@ def test_reconcile_writes_nothing(project):
 def test_quarantine_keeps_the_item_out_of_the_corpus_only(project):
     """Exclusion from the corpus, never from the record: the item stays in the collection,
     so `refs.bib` still has it and no minted review loses a citation."""
-    cl.save(project, {"AAA": cl.Row(key="AAA", role=cl.QUARANTINE)})
-    assert cl.load(project)["AAA"].ingestible() is False
-    assert cl.QUARANTINE not in cl.INGESTED_ROLES
+    cl.save(project, {"AAA": cl.Row(key="AAA", status=cl.QUARANTINE)})
+    assert cl.load(project)["AAA"].ingestible(cl.LITERATURE) is False
+
+
+def test_quarantining_does_not_destroy_which_review_a_paper_came_from(project):
+    """ROLE and QUARANTINE are different axes — provenance against disposition — and storing
+    them in one field cost the provenance. A quarantined methods paper stopped being a methods
+    paper, and releasing it put it back into `literature` regardless of where it came from."""
+    cl.set_purpose(project, "M1", [cl.METHODS], added_by="methods")
+    cl.set_status(project, "M1", cl.QUARANTINE, added_by="audit")
+    row = cl.load(project)["M1"]
+    assert row.purpose == [cl.METHODS] and row.status == cl.QUARANTINE
+
+
+def test_a_released_methods_paper_returns_to_the_methods_corpus(project):
+    cl.set_purpose(project, "M1", [cl.METHODS], added_by="methods")
+    cl.set_status(project, "M1", cl.QUARANTINE, added_by="audit")
+    cl.set_status(project, "M1", cl.CORPUS, locked=True, added_by="human")
+    row = cl.load(project)["M1"]
+    assert (row.purpose, row.status, row.locked) == ([cl.METHODS], cl.CORPUS, True)
+    assert row.ingestible(cl.METHODS)
+
+
+def test_a_row_written_before_the_axes_split_still_loads(project):
+    """`role: quarantine` was a real value for part of one afternoon."""
+    import json
+    fp = cl.ledger_path(project); fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps({"version": 1, "items": [
+        {"key": "OLD", "role": "quarantine", "locked": True}]}))
+    row = cl.load(project)["OLD"]
+    assert row.purpose == [cl.LITERATURE] and row.status == cl.QUARANTINE and row.locked is True
 
 
 def test_a_released_paper_is_not_quarantined_again(project):
     """What `--release` never used to do. It moved the item back and left the verdict
     cache alone, so the next audit undid it."""
-    cl.save(project, {"AAA": cl.Row(key="AAA", role=cl.QUARANTINE)})
-    cl.set_role(project, "AAA", cl.LITERATURE, locked=True)     # the human releases it
-    cl.set_role(project, "AAA", cl.QUARANTINE)                  # a later audit tries again
-    assert cl.load(project)["AAA"].role == cl.LITERATURE
+    cl.save(project, {"AAA": cl.Row(key="AAA", status=cl.QUARANTINE)})
+    cl.set_status(project, "AAA", cl.CORPUS, locked=True)      # the human releases it
+    cl.set_status(project, "AAA", cl.QUARANTINE)                    # a later audit tries again
+    assert cl.load(project)["AAA"].status == cl.CORPUS
 
 
 def test_an_unlocked_row_still_yields_to_the_audit(project):
-    cl.save(project, {"AAA": cl.Row(key="AAA", role=cl.LITERATURE)})
-    cl.set_role(project, "AAA", cl.QUARANTINE)
-    assert cl.load(project)["AAA"].role == cl.QUARANTINE
+    cl.save(project, {"AAA": cl.Row(key="AAA", purpose=[cl.LITERATURE])})
+    cl.set_status(project, "AAA", cl.QUARANTINE)
+    assert cl.load(project)["AAA"].status == cl.QUARANTINE
 
 
 def test_roles_for_scopes_an_ingest(project):
-    cl.save(project, {"A": cl.Row(key="A", role=cl.LITERATURE),
-                      "B": cl.Row(key="B", role=cl.METHODS),
-                      "C": cl.Row(key="C", role=cl.QUARANTINE)})
-    assert cl.roles_for(project, cl.LITERATURE) == {"A"}
-    assert cl.roles_for(project, cl.METHODS) == {"B"}
+    cl.save(project, {"A": cl.Row(key="A", purpose=[cl.LITERATURE]),
+                      "B": cl.Row(key="B", purpose=[cl.METHODS]),
+                      "C": cl.Row(key="C", purpose=[cl.LITERATURE], status=cl.QUARANTINE)})
+    assert cl.serving(project, cl.LITERATURE) == {"A"}
+    assert cl.serving(project, cl.METHODS) == {"B"}
 
 
 def test_an_unknown_role_is_refused(project):
     with pytest.raises(ValueError):
-        cl.set_role(project, "AAA", "substance")
+        cl.set_purpose(project, "AAA", ["substance"])
 
 
 def test_an_unreadable_ledger_reads_as_empty_rather_than_raising(project):
@@ -165,11 +193,11 @@ def test_an_unreadable_ledger_reads_as_empty_rather_than_raising(project):
 
 
 def test_rows_survive_a_save_load_round_trip(project):
-    cl.save(project, {"A": cl.Row(key="A", role=cl.METHODS, citekey="studer2016",
+    cl.save(project, {"A": cl.Row(key="A", purpose=[cl.METHODS], citekey="studer2016",
                                   title="What matters", locked=True, added_by="human")})
     got = cl.load(project)["A"]
-    assert (got.role, got.citekey, got.locked, got.added_by) == \
-           (cl.METHODS, "studer2016", True, "human")
+    assert (got.purpose, got.citekey, got.locked, got.added_by) == \
+           ([cl.METHODS], "studer2016", True, "human")
 
 
 
@@ -213,7 +241,8 @@ def _ingest_filter(project, review_dir, collection_keys):
     out = []
     for k in collection_keys:
         row = rows.get(k)
-        keep = (kind.name == config.DEFAULT_KIND) if row is None else (row.role == kind.name)
+        keep = ((kind.name == config.DEFAULT_KIND) if row is None
+                else row.ingestible(kind.name))
         if keep:
             out.append(k)
     return out
@@ -224,7 +253,7 @@ def test_an_unrowed_item_is_not_dropped_from_the_default_review(project):
     project that never synced, `audit` writes rows for what it quarantines and nothing
     else, so the next `build` sees a non-empty ledger in which no item carries the
     literature role — and ingests zero papers."""
-    cl.set_role(project, "BAD", cl.QUARANTINE, added_by="audit")
+    cl.set_status(project, "BAD", cl.QUARANTINE, added_by="audit")
     kept = _ingest_filter(project, project / "litReview", ["BAD", "G1", "G2", "G3"])
     assert kept == ["G1", "G2", "G3"], "unclassified papers must survive a partial ledger"
 
@@ -232,7 +261,7 @@ def test_an_unrowed_item_is_not_dropped_from_the_default_review(project):
 def test_a_non_default_review_takes_only_what_is_explicitly_its_own(project):
     """The other side of that rule: a methods review must not inherit every unrowed item,
     or it swallows the substantive corpus."""
-    cl.set_role(project, "M1", cl.METHODS)
+    cl.set_purpose(project, "M1", [cl.METHODS])
     kept = _ingest_filter(project, project / "litReviewMethods", ["M1", "G1", "G2"])
     assert kept == ["M1"]
 
@@ -243,8 +272,62 @@ def test_no_ledger_at_all_ingests_everything(project):
 
 
 def test_a_quarantined_item_is_dropped_but_an_unrowed_one_is_not(project):
-    cl.set_role(project, "Q", cl.QUARANTINE)
+    cl.set_status(project, "Q", cl.QUARANTINE)
     assert _ingest_filter(project, project / "litReview", ["Q", "U"]) == ["U"]
+
+
+# ── purpose is a SET; status is the other axis ───────────────────────────────
+
+def test_a_paper_can_serve_both_reviews(project):
+    """A paper on sequence analysis applied to funding pathways is methods work AND
+    substantive work. Saying so is the point of keeping one collection; the earlier
+    single-value field could not express it at all."""
+    cl.add_purpose(project, "P1", cl.LITERATURE, added_by="literature")
+    cl.add_purpose(project, "P1", cl.METHODS, added_by="methods")
+    row = cl.load(project)["P1"]
+    assert row.purpose == [cl.LITERATURE, cl.METHODS]
+    assert row.ingestible(cl.LITERATURE) and row.ingestible(cl.METHODS)
+
+
+def test_adding_a_purpose_never_takes_the_first_one_away(project):
+    cl.add_purpose(project, "P1", cl.LITERATURE)
+    cl.add_purpose(project, "P1", cl.METHODS)
+    assert cl.LITERATURE in cl.load(project)["P1"].purpose
+
+
+def test_setting_a_purpose_replaces_because_a_human_said_so(project):
+    """`collect --role KEY=methods` is a person correcting the record, not a gather adding
+    to it, so it replaces."""
+    cl.add_purpose(project, "P1", cl.LITERATURE)
+    cl.set_purpose(project, "P1", [cl.METHODS], added_by="human")
+    assert cl.load(project)["P1"].purpose == [cl.METHODS]
+
+
+def test_quarantine_removes_a_paper_from_every_review_it_serves(project):
+    cl.set_purpose(project, "P1", [cl.LITERATURE, cl.METHODS])
+    cl.set_status(project, "P1", cl.QUARANTINE)
+    row = cl.load(project)["P1"]
+    assert row.purpose == [cl.LITERATURE, cl.METHODS]      # purpose survives
+    assert not row.ingestible(cl.LITERATURE) and not row.ingestible(cl.METHODS)
+
+
+def test_purpose_is_deduplicated_and_never_empty(project):
+    cl.set_purpose(project, "P1", [cl.METHODS, cl.METHODS])
+    assert cl.load(project)["P1"].purpose == [cl.METHODS]
+    cl.set_purpose(project, "P2", [])
+    assert cl.load(project)["P2"].purpose == [cl.LITERATURE]
+
+
+def test_an_unknown_status_is_refused(project):
+    with pytest.raises(ValueError):
+        cl.set_status(project, "P1", "shelved")
+
+
+def test_serving_excludes_the_quarantined(project):
+    cl.set_purpose(project, "A", [cl.METHODS])
+    cl.set_purpose(project, "B", [cl.METHODS])
+    cl.set_status(project, "B", cl.QUARANTINE)
+    assert cl.serving(project, cl.METHODS) == {"A"}
 
 
 if __name__ == "__main__":

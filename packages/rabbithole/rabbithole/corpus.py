@@ -150,7 +150,7 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
         row = rows.get(key)
         if row is None:
             return kind.name == config.DEFAULT_KIND
-        return row.role == kind.name
+        return row.ingestible(kind.name)
 
     if rows:
         before = len(items)

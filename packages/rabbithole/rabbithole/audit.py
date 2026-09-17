@@ -333,26 +333,28 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                 held.append(v.key)          # the human already ruled on this one
                 continue
             data = (raw_by_key.get(v.key) or {}).get("data", {}) or {}
-            corpus_ledger.set_role(project_root, v.key, corpus_ledger.QUARANTINE,
-                                   title=data.get("title", ""), added_by="audit")
+            corpus_ledger.set_status(project_root, v.key, corpus_ledger.QUARANTINE,
+                                     title=data.get("title", ""), added_by="audit")
             moved.append(v.key)
     log = write_quarantine_log(outdir, flagged)
     return {"flagged": [v.key for v in flagged], "moved": moved, "held": held,
             "verdicts": len(verdicts), "log": log}
 
 
-def release_item(zc, *, project_root, key: str, role: str = corpus_ledger.LITERATURE,
+def release_item(zc, *, project_root, key: str, role: str | None = None,
                  quarantine_key: str | None = None, project_key: str | None = None,
                  item: dict | None = None) -> bool:
     """Put one item back, and make it STICK.
 
-    Nothing moves in Zotero — the item never left. The row goes back to ``role`` and is
-    LOCKED, which is what stops the next audit re-quarantining it. Releasing used to move
-    the item back and leave the verdict cache alone, so the decision survived exactly until
-    the next run.
+    Nothing moves in Zotero — the item never left. Only the quarantine flag clears, and the
+    row is LOCKED so the next audit cannot overrule the person. The paper's ROLE is untouched,
+    which is what returns a released methods paper to the methods corpus: an earlier version
+    stored quarantine AS the role, so quarantining destroyed the provenance and releasing put
+    everything back into `literature` regardless of where it came from.
     """
-    row = corpus_ledger.set_role(project_root, key, role, locked=True, added_by="human")
-    return row.role == role
+    row = corpus_ledger.set_status(project_root, key, corpus_ledger.CORPUS, locked=True,
+                                   added_by="human")
+    return row.status == corpus_ledger.CORPUS
 
 
 # ── the verb wiring (not unit-tested; the tested core is above) ────────────────
@@ -503,8 +505,9 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
         if target is None or rows.get(target) is None:
             print(f"  [warn] '{ident}' is not in this project's ledger.", file=sys.stderr)
             return 1
-        if rows[target].role != corpus_ledger.QUARANTINE:
-            print(f"  '{ident}' is not quarantined (role: {rows[target].role}).")
+        if rows[target].status != corpus_ledger.QUARANTINE:
+            print(f"  '{ident}' is not quarantined "
+                  f"(purpose: {'+'.join(rows[target].purpose)}).")
             return 0
         ok = release_item(zc, project_root=project_root, key=target)
         print(f"  {'Released' if ok else 'FAILED to release'} {ident} back to "
