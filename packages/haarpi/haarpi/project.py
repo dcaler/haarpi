@@ -500,3 +500,42 @@ def header_defaults(start: Path | None = None) -> dict:
     m = load_manifest(root)
     return {"name": m.name, "short_title": m.short_title, "brief": m.brief,
             "initials": m.initials, "root": root}
+
+
+# ── one-off migration: the ramus split ───────────────────────────────────────
+# Manifests written before the split name `rayleigh` as the design stage's tool, and the
+# design config sits at design/rayleigh.yaml. `planner._stage_tool` resolves the first at read
+# time so nothing breaks, but a shim is a thing to remember; this makes the files say what is
+# true. Idempotent, and it never touches a project that has already moved.
+_MOVED_TOOLS = {("design", "rayleigh"): "ramus"}
+
+
+def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
+    """Rewrite a project's stage tools and design config to the post-split names.
+
+    Returns a list of what changed (empty when there was nothing to do), so a caller can
+    report per project rather than guess.
+    """
+    changed: list[str] = []
+    try:
+        m = load_manifest(root)
+    except Exception:  # noqa: BLE001 — not a haarpi project, or an unreadable manifest
+        return changed
+
+    for stage, spec in m.stages.items():
+        want = _MOVED_TOOLS.get((stage, spec.get("tool")))
+        if want:
+            changed.append(f"stages.{stage}.tool: {spec['tool']} -> {want}")
+            if not dry_run:
+                spec["tool"] = want
+
+    design_dir = root / (m.stages.get("design", {}).get("dir") or "design")
+    old, new = design_dir / "rayleigh.yaml", design_dir / "ramus.yaml"
+    if old.is_file() and not new.exists():
+        changed.append(f"{old.name} -> {new.name}")
+        if not dry_run:
+            old.rename(new)
+
+    if changed and not dry_run:
+        save_manifest(m, root)
+    return changed

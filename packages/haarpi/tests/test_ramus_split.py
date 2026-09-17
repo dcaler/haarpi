@@ -102,3 +102,47 @@ def test_the_two_halves_write_different_configs():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── the migration ────────────────────────────────────────────────────────────
+
+def _legacy_project(tmp_path):
+    import yaml
+    (tmp_path / "design").mkdir()
+    (tmp_path / "design" / "rayleigh.yaml").write_text("project: X\n")
+    (tmp_path / "haarpi.yaml").write_text(yaml.safe_dump({
+        "name": "X", "short_title": "X", "brief": "b",
+        "stages": {"design": {"dir": "design", "tool": "rayleigh", "inputs": ["litreview"],
+                              "infix": "prereg", "attended": True}}}))
+    return tmp_path
+
+
+def test_migration_rewrites_the_tool_and_renames_the_config(tmp_path):
+    root = _legacy_project(tmp_path)
+    changed = project.migrate_tool_names(root)
+    assert any("ramus" in c for c in changed)
+    assert project.load_manifest(root).stages["design"]["tool"] == "ramus"
+    assert (root / "design" / "ramus.yaml").is_file()
+    assert not (root / "design" / "rayleigh.yaml").exists()
+
+
+def test_migration_is_idempotent(tmp_path):
+    root = _legacy_project(tmp_path)
+    project.migrate_tool_names(root)
+    assert project.migrate_tool_names(root) == [], "a second run must be a no-op"
+
+
+def test_dry_run_reports_without_touching_anything(tmp_path):
+    root = _legacy_project(tmp_path)
+    changed = project.migrate_tool_names(root, dry_run=True)
+    assert changed
+    assert (root / "design" / "rayleigh.yaml").is_file(), "dry run must not rename"
+    assert project.load_manifest(root).stages["design"]["tool"] == "rayleigh"
+
+
+def test_migration_leaves_an_existing_ramus_config_alone(tmp_path):
+    """Both names present means someone moved it by hand. Never clobber their file."""
+    root = _legacy_project(tmp_path)
+    (root / "design" / "ramus.yaml").write_text("project: KEEP\n")
+    project.migrate_tool_names(root)
+    assert (root / "design" / "ramus.yaml").read_text() == "project: KEEP\n"

@@ -136,6 +136,38 @@ def _dispatch(tool_pkg: str, args: list[str]) -> int:
     return int(rc or 0)
 
 
+def _migrate(paths: list[str]) -> int:
+    """`haarpi doctor --migrate [DIR...]` — bring project files to the post-split names.
+
+    A shim already resolves the old names at read time, so this is housekeeping rather than
+    repair: it makes the manifests say what is true, and lets the shim be deleted a cycle
+    from now. Takes project roots, or a directory of them; defaults to the cwd.
+    """
+    from haarpi import project as _project
+    roots: list[Path] = []
+    for raw in (paths or ["."]):
+        p = Path(raw).expanduser().resolve()
+        if (p / "haarpi.yaml").is_file():
+            roots.append(p)
+        elif p.is_dir():
+            roots += sorted(c for c in p.iterdir() if (c / "haarpi.yaml").is_file())
+    if not roots:
+        print("haarpi doctor --migrate: no haarpi projects found.", file=sys.stderr)
+        return 1
+
+    touched = 0
+    for r in roots:
+        changed = _project.migrate_tool_names(r)
+        if changed:
+            touched += 1
+            print(f"{r.name}")
+            for c in changed:
+                print(f"  {c}")
+    print(f"\n{touched} of {len(roots)} project(s) migrated."
+          if touched else f"\nAll {len(roots)} project(s) already current.")
+    return 0
+
+
 def _doctor() -> int:
     """Which stack does each name resolve to? During the oddjob transition both
     generations coexist; this makes the state inspectable rather than remembered."""
@@ -184,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     if cmd in TOOLS:
         return _dispatch(TOOLS[cmd], rest)
     if cmd == "doctor":
+        if "--migrate" in rest:
+            return _migrate([a for a in rest if a != "--migrate"])
         return _doctor()
     if cmd in ("init", "next", "status", "queue", "authors"):
         return _pipeline_verb(cmd, rest)
