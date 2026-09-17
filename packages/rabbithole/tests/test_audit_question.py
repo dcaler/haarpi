@@ -261,3 +261,112 @@ def test_judge_item_asks_for_no_more_window_than_it_needs():
     judge_item(_Brain(), _T, "one short focus line", key="k", label="l",
                title="t", abstract="short")
     assert seen["num_ctx"] == 4096
+
+
+# ── the needs are the test, not the paper's own contribution ─────────────────
+
+def _rendered(asks, background="A method for extracting agent narratives from ABM output.",
+              title="Social percolation and the Schelling model", abstract="x"):
+    from rabbithole.audit import _prompt
+    return _prompt(_T, background, asks, title, abstract, ("segregation",))
+
+
+def test_the_asks_are_presented_as_needs_not_fused_into_the_question():
+    """`stated` and the asks were joined with '; ' into one string. The author's statement says
+    what the work CONTRIBUTES; an ask says what literature it NEEDS. Fused, the model compared
+    contribution to contribution and quarantined 43 of the first 49 DigiPros papers at 9/10."""
+    out = _rendered(["schelling segregation model scholarship",
+                     "sequence analysis of individual trajectories"])
+    assert "[1] schelling segregation model scholarship" in out
+    assert "[2] sequence analysis of individual trajectories" in out
+
+
+def test_the_background_is_labelled_as_context_and_not_as_a_template():
+    out = _rendered(["schelling segregation model scholarship"])
+    head, _, tail = out.partition("Background")
+    assert tail, "the author's statement must be labelled as background"
+    assert "NOT a checklist the source must match" in tail
+    # the needs lead, the statement follows: the test comes before the context for it
+    assert "[1] schelling segregation model scholarship" in head
+
+
+def test_the_test_is_restated_last_where_it_is_most_salient():
+    out = _rendered(["schelling segregation model scholarship"])
+    assert out.rstrip().endswith("Verdict JSON:")
+    assert "usable source for at least one of the numbered points" in out.split("Candidate")[-1]
+
+
+def test_a_first_cycle_with_no_asks_still_states_a_need():
+    """No gather_topics yet. The statement is then the only description of need there is, so it
+    serves as one — but still as a need, never as a template the source has to match."""
+    out = _rendered([], background="A method for extracting agent narratives.")
+    assert "[1] A method for extracting agent narratives." in out
+    assert "NOT a checklist the source must match" in out
+
+
+def test_the_system_prompt_does_not_ask_for_a_matching_contribution():
+    """The reasons on every DigiPros quarantine contrasted the paper's subject against the
+    review's framing — a difference in ROLE, not word sense. Stauffer 2007 was dropped 9/10
+    because it studies segregation while the paper only demonstrates on Schelling, which is
+    true of nearly every good source a methodological paper can have."""
+    from rabbithole.audit import _SYS
+    assert "USABLE SOURCE FOR AT LEAST ONE" in _SYS
+    assert "demonstrates upon" in _SYS          # that role difference is named as normal
+    assert "serving NONE of the stated needs" in _SYS
+    assert "same argument" in _SYS              # and explicitly ruled out as the test
+
+
+# ── a framing change is not a question change ────────────────────────────────
+
+def test_a_framing_bump_discards_every_cached_verdict(tmp_path):
+    """The signature hashes the question's WORDS, which this change left alone. Without a
+    separate version, DigiPros's 49 verdicts — decided under the old test — would be reused
+    verbatim, and the widening rule would have kept them as 'strictly wider'."""
+    import json
+    from types import SimpleNamespace
+    from rabbithole import audit
+
+    paths = SimpleNamespace(output=tmp_path)
+    sig, units = "same-sig", ["t:x", "q:y"]
+    (tmp_path / "audit_cache.json").write_text(json.dumps(
+        {"sig": sig, "framing": audit._FRAMING - 1, "units": units,
+         "verdicts": {"K1": {"kind": "false_friend", "confidence": 9.0},
+                      "K2": {"kind": "transfer", "confidence": 8.0}}}))
+
+    assert audit._load_cache(paths, sig, units) == {}
+
+
+def test_the_cache_still_survives_a_pure_rewording(tmp_path):
+    """The expensive thing is a whole-corpus re-judge; the framing guard must not make every
+    run one. Same framing, same question, reordered clauses -> the cache is kept."""
+    from types import SimpleNamespace
+    from rabbithole import audit
+
+    paths = SimpleNamespace(output=tmp_path)
+    units = audit._units(_T, "carbon taxes; climate clubs")
+    sig = audit._sig(_T, "carbon taxes; climate clubs")
+    audit._save_cache(paths, sig, {"K1": {"kind": "transfer", "confidence": 8.0}}, units)
+
+    sig2 = audit._sig(_T, "climate clubs, carbon taxes")
+    units2 = audit._units(_T, "climate clubs, carbon taxes")
+    assert audit._load_cache(paths, sig2, units2).keys() == {"K1"}
+
+
+def test_judge_item_does_not_pay_for_a_reasoning_chain():
+    """The coordinator reasons by default. For this judgement it was pure cost: over 8
+    DigiPros papers judged both ways (2026-09-17) the keep/quarantine verdict agreed 8/8
+    and confidence moved by at most a point, while the cost went 1,273s to 112s per item —
+    54 hours against 5 for a 154-paper corpus. The numbered needs in `_prompt` already make
+    the model restate the question, which is what the chain was spending its time on.
+    """
+    from rabbithole.audit import judge_item
+
+    seen = {}
+
+    class _Brain:
+        def coordinator(self, prompt, system="", num_ctx=16384, think=True):
+            seen["think"] = think
+            return '{"verdict": "TRANSFER", "confidence": 9}'
+
+    judge_item(_Brain(), _T, "a focus line", key="k", label="l", title="t", abstract="a")
+    assert seen["think"] is False

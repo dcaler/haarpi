@@ -29,6 +29,13 @@ from .brain import Brain
 from . import config, runlog
 
 QUARANTINE_COLLECTION = "quarantine"
+
+# What a verdict MEANS. The signature hashes the question's words; this versions the test
+# those words are put to. Bump it whenever the framing changes, because verdicts decided
+# under different semantics are not comparable and the widening rule — which reasons about
+# question CONTENT — cannot tell the difference. v2: the test became "is this a usable source
+# for at least one stated need" rather than "does this paper's contribution match the work's".
+_FRAMING = 2
 _JSON = re.compile(r"\{.*\}", re.S)
 _YEAR = re.compile(r"\b(\d{4})\b")
 
@@ -47,28 +54,61 @@ class Verdict:
 
 
 _SYS = (
-    "You judge whether a paper belongs in a literature review, guarding against the HOMOGRAPH "
-    "TRAP: a paper can share a TERM with the research question while using it in a completely "
-    "different SENSE, which is not relevance. Decide whether the paper's CONTRIBUTION (a "
-    "finding, method, or concept) TRANSFERS to the research question — genuine cross-"
-    "disciplinary transfer counts, judge the ideas not the field — or whether it is a "
-    "FALSE-FRIEND that only shares vocabulary used in another sense. Bias toward TRANSFER: call "
-    "FALSE-FRIEND only when you are confident the apparent relevance is a shared word in a "
-    "different sense. Respond with ONLY a JSON object: "
+    "You screen a candidate SOURCE for a literature review, guarding against the HOMOGRAPH "
+    "TRAP: a paper can share a TERM with the review while using it in a completely different "
+    "SENSE, which is not relevance. "
+    "THE TEST IS WHETHER THE PAPER IS A USABLE SOURCE FOR AT LEAST ONE OF THE REVIEW'S STATED "
+    "NEEDS. It is NOT whether the paper makes the same argument, shares the same framing, or "
+    "contributes the same kind of thing as the work being written. A review cites the "
+    "scholarship it builds on, extends, replicates, critiques, or demonstrates upon, and such "
+    "a source will almost always study its subject in its own right while the review puts that "
+    "subject to a different use — that difference is normal and is NOT a false friend. "
+    "Genuine cross-disciplinary transfer counts; judge the ideas, not the field. "
+    "Call FALSE-FRIEND only when you are confident the paper shares vocabulary with the review "
+    "while serving NONE of the stated needs, because it uses that vocabulary in another sense. "
+    "Bias toward TRANSFER: a wrong keep costs a line in a review, a wrong drop costs a source. "
+    "Respond with ONLY a JSON object: "
     '{"verdict": "TRANSFER" | "FALSE-FRIEND", "term": "the shared word (if a false friend)", '
-    '"its_sense": "the sense THIS paper uses it in", "review_sense": "the sense the research '
-    'question uses it in", "confidence": 0-10}.')
+    '"its_sense": "the sense THIS paper uses it in", "review_sense": "the sense the review '
+    'needs it in", "confidence": 0-10}.')
 
 
-def _prompt(topic: str, focus: str, title: str, abstract: str, keywords) -> str:
+def _prompt(topic: str, background: str, asks, title: str, abstract: str, keywords) -> str:
+    """The judgement prompt: the review's NEEDS are the test, the author's statement is context.
+
+    These two were concatenated into one "question" and the result inverted the verb. The
+    author's statement says what the work CONTRIBUTES; the asks say what literature it NEEDS.
+    Asked whether a paper transfers to that blob, the model compared contribution to
+    contribution — and quarantined 43 of the first 49 papers on DigiPros at 9/10, including
+    Schelling scholarship fetched for an ask that names Schelling scholarship, on the reasoning
+    that the paper studies segregation while the review only demonstrates on it. That is a
+    difference in ROLE, not in word sense, and it is true of nearly every good source for a
+    methodological paper. So the needs lead, the statement is labelled as background, and the
+    test is restated last, where it is most salient.
+    """
     kw = "; ".join(keywords) if keywords else ""
-    return (f"Research question topic: {topic}\nFocus: {focus}\n\n"
-            f"Paper title: {title}\nKeywords: {kw}\nAbstract: {abstract[:1500]}\n\n"
-            f"Verdict JSON:")
+    needs = [str(a).strip() for a in (asks or ()) if str(a).strip()]
+    out = [f"Research field: {topic}", ""]
+    if needs:
+        out += ["The review needs sources on these specific points:"]
+        out += [f"  [{i}] {n}" for i, n in enumerate(needs, 1)]
+    else:
+        # No asks declared (a first cycle). The statement is then the only description of the
+        # need there is, so it has to serve as one — but still as a need, never as a template
+        # the source has to match.
+        out += ["The review needs sources for this work:", f"  [1] {background}"]
+    out += ["", "Background — what the work being written argues. Use it to tell which SENSE "
+            "of a shared word the review means. It is NOT a checklist the source must match:",
+            background or "(not stated)", "",
+            "Candidate source:", f"Title: {title}", f"Keywords: {kw}",
+            f"Abstract: {abstract[:1500]}", "",
+            "Is this a usable source for at least one of the numbered points above? "
+            "Verdict JSON:"]
+    return "\n".join(out)
 
 
 def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
-               title: str, abstract: str = "", keywords=()) -> Verdict:
+               title: str, abstract: str = "", keywords=(), asks=()) -> Verdict:
     """One word-sense judgment for one paper. Fails SAFE: any error, or an unparseable reply,
     yields a TRANSFER (keep) at confidence 0 — the tool never quarantines on a bad signal."""
     try:
@@ -78,8 +118,15 @@ def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
         # every prompt overflowed — Ollama discarded the head, which is where the question
         # sits. Small matters here: this runs once per paper, and the KV cache is linear in
         # the window, so the coordinator's 16384 default would cost 8x the VRAM for nothing.
-        raw = brain.coordinator(_prompt(topic, focus, title, abstract, keywords),
-                                system=_SYS, num_ctx=4096).strip()
+        # think=False, measured not assumed. The coordinator reasons by default, which is
+        # right where a scratchpad changes the answer. Here it does not: over 8 DigiPros
+        # papers judged both ways (2026-09-17) the keep/quarantine verdict agreed 8/8 and
+        # confidence moved by at most a point, while the cost went 1,273s -> 112s per item.
+        # That is 54 hours against 5 for a 154-paper corpus. The chain was not weighing the
+        # evidence, it was restating the question before answering it — and the numbered
+        # needs in _prompt already do that work, visibly: replies cite "Point [9]" directly.
+        raw = brain.coordinator(_prompt(topic, focus, asks, title, abstract, keywords),
+                                system=_SYS, num_ctx=4096, think=False).strip()
         m = _JSON.search(raw)
         data = json.loads(m.group(0)) if m else {}
     except Exception:  # noqa: BLE001 — a failed judgment is a keep, not a crash
@@ -125,7 +172,7 @@ def format_progress(i: int, total: int, v: Verdict, cached: bool,
 
 def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
                  cache: dict | None = None, min_confidence: float = 7.0,
-                 *, progress=None, checkpoint=None, checkpoint_every: int = 5
+                 *, asks=(), progress=None, checkpoint=None, checkpoint_every: int = 5
                  ) -> tuple[list[Verdict], list[Verdict]]:
     """Judge every corpus item (each a dict of key/label/title/abstract/keywords) for word-sense
     transfer. Returns (flagged, all_verdicts); flagged = the CONFIDENT false-friends only. A
@@ -149,7 +196,7 @@ def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
         else:
             v = judge_item(brain, topic, focus, key=key, label=label,
                            title=it.get("title", ""), abstract=it.get("abstract", ""),
-                           keywords=it.get("keywords", ()))
+                           keywords=it.get("keywords", ()), asks=asks)
             cache[key] = _to_cache(v)
             fresh += 1
         verdicts.append(v)
@@ -232,7 +279,7 @@ def _judge_fields(raw: dict, labels: dict | None = None) -> dict:
 def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                   quarantine_key: str, items: list[dict], outdir, dry_run: bool = False,
                   cache: dict | None = None, min_confidence: float = 7.0,
-                  labels: dict | None = None, progress=None, checkpoint=None,
+                  labels: dict | None = None, asks=(), progress=None, checkpoint=None,
                   checkpoint_every: int = 5) -> dict:
     """Judge the raw Zotero ``items``, move each confident false-friend from the project
     collection to quarantine (unless ``dry_run``), and write the reasons log. Pure but for the
@@ -245,7 +292,7 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
         judge_items.append(f)
         raw_by_key[f["key"]] = raw
     flagged, verdicts = audit_corpus(brain, topic, focus, judge_items, cache=cache,
-                                     min_confidence=min_confidence, progress=progress,
+                                     min_confidence=min_confidence, asks=asks, progress=progress,
                                      checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     moved: list[str] = []
     if not dry_run:
@@ -281,6 +328,10 @@ def _load_cache(paths, sig: str, units=()) -> dict:
     verdict rested on. Only the quarantined papers can change, and they are few. When anything
     was removed or reworded, every verdict was made against a question that no longer exists
     and all of them go.
+
+    A change to ``_FRAMING`` discards everything regardless. That reasoning is about what the
+    question SAYS; a framing bump changes what the verdict MEANS, and the two are not the same
+    kind of change.
     """
     p = _cache_path(paths)
     if not p.exists():
@@ -288,6 +339,12 @@ def _load_cache(paths, sig: str, units=()) -> dict:
     try:
         blob = json.loads(p.read_text())
     except Exception:  # noqa: BLE001
+        return {}
+    if int(blob.get("framing") or 1) != _FRAMING:
+        n = len(blob.get("verdicts") or ())
+        if n:
+            print(f"  {runlog.stamp()}the audit's test changed — discarding {n} verdict(s) "
+                  f"decided under the previous one", flush=True)
         return {}
     verdicts = blob.get("verdicts", {})
     if blob.get("sig") == sig:
@@ -305,7 +362,8 @@ def _load_cache(paths, sig: str, units=()) -> dict:
 def _save_cache(paths, sig: str, cache: dict, units=()) -> None:
     try:
         _cache_path(paths).write_text(json.dumps(
-            {"sig": sig, "units": sorted(units or ()), "verdicts": cache}, indent=1))
+            {"sig": sig, "framing": _FRAMING, "units": sorted(units or ()),
+             "verdicts": cache}, indent=1))
     except Exception:  # noqa: BLE001
         pass
 
@@ -426,7 +484,6 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     # vocabulary without transferring.
     asks = [str(t) for t in (getattr(cfg, "gather_topics", None) or []) if str(t).strip()]
     stated = (cfg.research_prompt or cfg.focus or "").strip()
-    question = "; ".join([f for f in [stated] + asks if f.strip()])
     sig = _sig(cfg.topic, stated, asks)
     units = _units(cfg.topic, stated, asks)
     cache = _load_cache(paths, sig, units)
@@ -447,10 +504,10 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
             print(f"  {runlog.stamp()}… {i}/{n} judged · ~{runlog.fmt_dt(avg)}/item · "
                   f"~{runlog.fmt_dt((n - i) * avg)} left", flush=True)
 
-    summary = perform_audit(zc, brain, cfg.topic, question,
+    summary = perform_audit(zc, brain, cfg.topic, stated,
                             project_key=project_key, quarantine_key=quarantine_key,
                             items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
-                            min_confidence=min_conf, progress=_report,
+                            min_confidence=min_conf, asks=asks, progress=_report,
                             checkpoint=lambda c: _save_cache(paths, sig, c, units))
     _save_cache(paths, sig, cache, units)
     tr, ff = counts.get("transfer", 0), counts.get("false_friend", 0)
