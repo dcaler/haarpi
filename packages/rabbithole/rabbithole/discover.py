@@ -581,12 +581,20 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     log(f"After de-dup: {len(deduped)}")
 
     kept, dropped_excluded, dropped_date, dropped_type, dropped_meta = [], 0, 0, 0, 0
+    dropped_bookrev = 0
     for c in deduped:
         if filters.is_excluded(c, cfg.exclude_publishers):
             dropped_excluded += 1
             continue
         if not filters.within_dates(c, cfg.date_from, cfg.date_to):
             dropped_date += 1
+            continue
+        # Counted separately from type: a book review is typed `journal-article` like
+        # everything else, so folding it into "disallowed type" would hide the one drop
+        # a reader might want to argue with.
+        if filters.is_book_review(c):
+            dropped_bookrev += 1
+            log(f"  [book review] {c.title[:90]}")
             continue
         if not filters.item_type_allowed(c, cfg.include_preprints, cfg.include_news):
             dropped_type += 1
@@ -600,7 +608,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         kept.append(c)
     log(f"Dropped: {dropped_excluded} MDPI/predatory/excluded, "
         f"{dropped_date} out-of-date-range, {dropped_type} disallowed type/language, "
-        f"{dropped_meta} thin metadata")
+        f"{dropped_bookrev} book reviews, {dropped_meta} thin metadata")
     log(f"Candidates: {len(kept)}")
 
     # Snowball: widen via OpenAlex citation trails. Seed from BOTH the researcher's

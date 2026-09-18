@@ -100,13 +100,73 @@ _REVIEW_TITLE_RE = re.compile(
     r"a review of|review of the literature|: a review)\b", re.IGNORECASE)
 
 
+# ── book reviews ───────────────────────────────────────────────────────────
+# A book review is not a contribution to the literature, but nothing in the metadata
+# says so: Crossref, OpenAlex and S2 all type it `journal-article`, and its title is
+# frequently just the reviewed BOOK's title with the imprint appended. So it passes
+# every gate above, and then compounds — `is_review` sees "review", ranking floats it
+# up the cut, and the snowball may take it as a DEEP seed and spend 25 reference pulls
+# on one book's bibliography.
+#
+# The discriminator is not the word "review". "Review of carbon leakage under regionally
+# differentiated climate policies" (elephantRoom, kept) is a real paper. It is that a
+# book review's title carries the reviewed book's IMPRINT — attribution, publisher,
+# place, pagination, binding, price — copied off a title page. Real papers have no
+# reason to carry any of that, let alone two of them at once.
+_BOOK_REVIEW_LABEL_RE = re.compile(
+    r"^\s*[\[(]?\s*(?:book|film|media)\s+reviews?\b"
+    r"|^\s*reviewed\s+works?\b"
+    r"|^\s*review\s+essay\b"
+    r"|[\[(]\s*book\s+review\s*[\])]\s*$", re.IGNORECASE)
+
+# Each is a fragment a title only acquires by quoting a book's title page.
+_IMPRINT_RES = (
+    re.compile(r"\b(?:[ivxlc]{1,7}\s*\+\s*)?\d{1,4}\s*pp\b\.?", re.IGNORECASE),  # xvi + 208 pp.
+    re.compile(r"\bpp\.\s*\d", re.IGNORECASE),                                     # pp. 208
+    re.compile(r"[$\u00a3\u20ac]\s?\d"),                                            # a price
+    re.compile(r"\bisbn\b", re.IGNORECASE),
+    re.compile(r"\b(?:pbk|hbk|hardback|paperback|hardcover|cloth)\b\.?", re.IGNORECASE),
+    # "Cambridge, Mass.: MIT Press, 1996" / "New York, NY, The Guilford Press, 2021"
+    re.compile(r"\b(?:press|publishers?|verlag|routledge|springer|wiley|blackwell|sage|"
+               r"palgrave|guilford|brookings|pergamon|elsevier|academic)\b[^,]{0,24},\s*"
+               r"(?:19|20)\d{2}\b", re.IGNORECASE),
+    # "by J\u00f6rg Henseler" / "edited by Andrew Abbott" — a personal name, not "by doing"
+    re.compile(r"\b(?:edited\s+by|by)\s+[A-Z][\w'\u2019-]+\s+(?:[A-Z]\.\s*)*[A-Z][\w'\u2019-]+"),
+)
+
+
+def is_book_review(c: Candidate) -> bool:
+    """A review OF A BOOK — excluded outright, unlike a review article.
+
+    Two routes, because half of them are not labelled: an explicit "Book Review"/
+    "Reviewed Work" label, or a title carrying TWO OR MORE imprint markers. Two is the
+    threshold that separates the real cases from the coincidences — a genuine title may
+    carry "$1 trillion" or "learning by Doing Well", never those *and* a pagination.
+    """
+    t = (c.title or "").replace("&amp;", "&")
+    if not t:
+        return False
+    if (c.item_type or "").lower() in ("book-review", "bookreview", "review-of-book"):
+        return True
+    if _BOOK_REVIEW_LABEL_RE.search(t):
+        return True
+    return sum(1 for r in _IMPRINT_RES if r.search(t)) >= 2
+
+
 def is_systematic_review(c: Candidate) -> bool:
     """A systematic review / meta-analysis (the most valuable kind of review)."""
     return bool(_SYSTEMATIC_RE.search(f"{c.title} {(c.abstract or '')[:400]}"))
 
 
 def is_review(c: Candidate) -> bool:
-    """Any review article — by item type or by title/abstract signal."""
+    """Any review ARTICLE — by item type or by title/abstract signal.
+
+    A review of a book is not one, and saying otherwise is expensive: `discover` seeds
+    the snowball from reviews at 25 references each, so one mislabelled book review
+    spends a deep seed on a single monograph's bibliography.
+    """
+    if is_book_review(c):
+        return False
     if (c.item_type or "").lower() in REVIEW_ITEM_TYPES:
         return True
     return bool(is_systematic_review(c) or _REVIEW_TITLE_RE.search(c.title or ""))
@@ -115,12 +175,19 @@ def is_review(c: Candidate) -> bool:
 def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool) -> bool:
     """Gate on item type per the project's source-type policy.
 
-    Junk types and whole books are always dropped. Preprints/news are admitted
-    only when the project opted in (the wizard's 4-way question). Everything else
-    (journal-article, book-chapter, report/working-paper) is kept.
+    Junk types, whole books and reviews OF books are always dropped. Preprints/news are
+    admitted only when the project opted in (the wizard's 4-way question). Everything
+    else (journal-article, book-chapter, report/working-paper) is kept.
+
+    Book reviews are decided here rather than at each caller so the rule cannot drift
+    between `discover`'s search loop, its snowball merge, and the two Zotero ingests.
+    The gate has never been purely about the declared type anyway — `is_arxiv` reads
+    the DOI and URL.
     """
     t = (c.item_type or "").lower()
     if t in JUNK_ITEM_TYPES or t in BOOK_ITEM_TYPES:
+        return False
+    if is_book_review(c):
         return False
     if is_arxiv(c) or t in PREPRINT_ITEM_TYPES:
         return include_preprints
