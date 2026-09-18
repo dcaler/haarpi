@@ -1956,8 +1956,8 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue
         if stage == "deck" and not _has_assembled_submission(root, m):
             continue        # the deck opens on submission-assembled, not a bare manuscript release
-        if stage == "methodsreview" and not project.has_methods_review(root, m):
-            continue        # opt-in: no config, no methods review, nothing queued
+        if not project.stage_applies(root, m, stage):
+            continue        # opt-in: a stage this project never asked for queues nothing
         tool = _stage_tool(stage, spec)
         if stage == "deck":
             # The deck stage opens with a single `razzle interview` configure task (like every other

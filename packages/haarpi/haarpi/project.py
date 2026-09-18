@@ -60,7 +60,12 @@ DEFAULT_STAGES: dict[str, dict] = {
     # docx (see DESIGN_experiment_split.md). Its own directory, so no stage shares a
     # workspace and the gate stays directory-scoped.
     "design": {
-        "dir": "design", "tool": "ramus", "inputs": ["litreview"],
+        # MINTING THE PREREG MEANS THE METHODS REVIEW IS DONE. The design session fixes the
+        # analytical approach, and a project that needs methodological sources must have them
+        # in hand first — otherwise the approach is specified against literature nobody has
+        # read, which is what produced FirmPathways' [PROVISIONAL] markers and its "methods
+        # addendum". `methodsreview` is skipped for projects that never opted in.
+        "dir": "design", "tool": "ramus", "inputs": ["litreview", "methodsreview"],
         "infix": "prereg", "attended": True,        # opens with `ramus init`
     },
     "build": {
@@ -308,10 +313,24 @@ def in_flight(root: Path, m: Manifest, stage: str) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 
+def stage_applies(root: Path, m: Manifest, stage: str) -> bool:
+    """Is this stage part of THIS project's pipeline at all?
+
+    Most are, always. `methodsreview` is opt-in — its config's presence is the opt-in — and a
+    stage a project never opted into must not block what comes after it. Without this, adding
+    `methodsreview` to `design.inputs` would wedge every project that has one literature
+    review: the input would have no release, and no release was ever coming.
+    """
+    if stage == "methodsreview":
+        return has_methods_review(root, m)
+    return True
+
+
 def unlocked(root: Path, m: Manifest, stage: str) -> bool:
-    """Presence rule: every input stage has at least one release."""
+    """Presence rule: every input stage that APPLIES has at least one release."""
     return all(latest_release(root, m, s) is not None
-               for s in m.stages[stage].get("inputs", []))
+               for s in m.stages[stage].get("inputs", [])
+               if stage_applies(root, m, s))
 
 
 # ── the planner ledger ───────────────────────────────────────────────────────
@@ -565,6 +584,17 @@ def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
         changed.append(f"{old_dir.name}/ -> {new_dir.name}/")
         if not dry_run:
             old_dir.rename(new_dir)
+    # `design` gained `methodsreview` as an input, and a saved manifest keeps its own copy of
+    # every stage — so the new default does not reach an existing project. Repaired ONLY where
+    # the value still matches the old default: `paper.inputs: ['litreview']` is a documented
+    # customisation, and a migration that overwrote a deliberate override would be worse than
+    # one that did nothing.
+    d = m.stages.get("design")
+    if d and d.get("inputs") == ["litreview"]:
+        changed.append("stages.design.inputs: +methodsreview")
+        if not dry_run:
+            d["inputs"] = ["litreview", "methodsreview"]
+
     spec = m.stages.get("methodsreview")
     if spec and spec.get("dir") == "litReviewMethods":
         changed.append("stages.methodsreview.dir: litReviewMethods -> methodsReview")

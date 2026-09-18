@@ -163,6 +163,16 @@ radially.
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 
+**Minting the preregistration means the methodological sources are in hand.**
+`design` declares both literature stages as inputs, so on a project that has a
+methods review the design session cannot open until that review is released —
+otherwise the analytical approach is specified against literature nobody has
+read, which is what produced one project's `[PROVISIONAL]` markers and its
+hand-written "methods addendum". The methods stage is opt-in, and a stage a
+project never asked for is skipped rather than waited on; without that rule,
+adding the input would have wedged every single-review project's design stage
+forever.
+
 **A project can hold more than one review, because one anchor cannot serve two
 questions.** The substantive review is anchored on the *domain*; a methods review
 is anchored on the methodological families and usually excludes that domain

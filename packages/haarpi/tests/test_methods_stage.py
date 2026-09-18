@@ -104,3 +104,53 @@ def test_an_empty_directory_is_not_an_opt_in(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── minting the design means the methods review is done ──────────────────────
+
+def _proj(tmp_path, *, with_methods: bool, litreview_released: bool,
+          methods_released: bool = False):
+    import yaml
+    (tmp_path / "haarpi.yaml").write_text(yaml.safe_dump(
+        {"name": "X", "short_title": "X", "brief": "b"}))
+    m = project.load_manifest(tmp_path)
+    for stage, released in (("litreview", litreview_released),
+                            ("methodsreview", methods_released)):
+        d = tmp_path / m.stages[stage]["dir"] / "output"
+        d.mkdir(parents=True, exist_ok=True)
+        if released:
+            infix = m.stages[stage]["infix"]
+            (d / f"260917_X_{infix}.md").write_text("released")
+    if with_methods:
+        (tmp_path / m.stages["methodsreview"]["dir"] / "methodsreview.yaml").write_text("{}")
+    return m
+
+
+def test_design_waits_for_a_methods_review_the_project_has(tmp_path):
+    """The requirement: minting the prereg means the methodological sources are in hand.
+    Otherwise the analytical approach is specified against literature nobody has read."""
+    m = _proj(tmp_path, with_methods=True, litreview_released=True)
+    assert project.unlocked(tmp_path, m, "design") is False
+
+
+def test_design_opens_once_the_methods_review_releases(tmp_path):
+    m = _proj(tmp_path, with_methods=True, litreview_released=True, methods_released=True)
+    assert project.unlocked(tmp_path, m, "design") is True
+
+
+def test_a_project_without_a_methods_review_is_not_wedged(tmp_path):
+    """The failure this guards. `methodsreview` is opt-in, so a project that never opted in
+    has an input with no release and none ever coming — every such project's design stage
+    would wait forever."""
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    assert project.stage_applies(tmp_path, m, "methodsreview") is False
+    assert project.unlocked(tmp_path, m, "design") is True
+
+
+def test_the_substantive_review_is_still_required(tmp_path):
+    m = _proj(tmp_path, with_methods=False, litreview_released=False)
+    assert project.unlocked(tmp_path, m, "design") is False
+
+
+def test_design_declares_both_literature_stages():
+    assert project.DEFAULT_STAGES["design"]["inputs"] == ["litreview", "methodsreview"]
