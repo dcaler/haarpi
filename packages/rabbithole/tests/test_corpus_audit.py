@@ -309,3 +309,55 @@ if __name__ == "__main__":
             failures += 1; print(f"  FAIL  {fn.__name__}"); traceback.print_exc()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+# ── audit may widen a purpose, never narrow it ───────────────────────────────
+
+class _Serves:
+    """Transfers on the homograph question; answers the purpose question as told."""
+    def __init__(self, serves):
+        self.serves = serves
+
+    def coordinator(self, prompt, system="", num_ctx=16384, think=True):
+        if "source for" in prompt:
+            import json as _j
+            return _j.dumps({"serves": self.serves})
+        return '{"verdict": "TRANSFER", "confidence": 9}'
+
+
+def test_audit_widens_a_paper_both_reviews_can_use(tmp_path):
+    """gather cannot see this: a methods search found the paper against a methods anchor and
+    never had the substantive question in hand. The audit has both."""
+    from rabbithole import corpus_ledger as cl
+    cl.add_purpose(tmp_path, "AV", cl.METHODS, added_by="methods")
+    audit.perform_audit(FakeZotero(), _Serves(["literature", "methods"]), "ABM", "x",
+                        project_key="PROJ", project_root=tmp_path,
+                        reviews={"literature": "l", "methods": "m"},
+                        items=[_zitem("AV")], outdir=tmp_path)
+    assert cl.load(tmp_path)["AV"].purpose == [cl.LITERATURE, cl.METHODS]
+
+
+def test_audit_never_narrows_what_gather_recorded(tmp_path):
+    """THE CONSTRAINT. gather searched and found, which is certain; this is inference.
+    Subtracting would drop a paper out of the review that deliberately went and got it — a
+    wrong quarantine without the reversibility. A verdict of "serves neither" therefore does
+    nothing at all, which is also why it is not a quarantine signal."""
+    from rabbithole import corpus_ledger as cl
+    cl.add_purpose(tmp_path, "AV", cl.METHODS, added_by="methods")
+    audit.perform_audit(FakeZotero(), _Serves(["literature"]), "ABM", "x",
+                        project_key="PROJ", project_root=tmp_path,
+                        reviews={"literature": "l", "methods": "m"},
+                        items=[_zitem("AV")], outdir=tmp_path)
+    row = cl.load(tmp_path)["AV"]
+    assert cl.METHODS in row.purpose, "gather's record must survive the model's inference"
+    assert cl.LITERATURE in row.purpose
+
+
+def test_a_dry_run_widens_nothing(tmp_path):
+    from rabbithole import corpus_ledger as cl
+    cl.add_purpose(tmp_path, "AV", cl.METHODS, added_by="methods")
+    audit.perform_audit(FakeZotero(), _Serves(["literature", "methods"]), "ABM", "x",
+                        project_key="PROJ", project_root=tmp_path, dry_run=True,
+                        reviews={"literature": "l", "methods": "m"},
+                        items=[_zitem("AV")], outdir=tmp_path)
+    assert cl.load(tmp_path)["AV"].purpose == [cl.METHODS]

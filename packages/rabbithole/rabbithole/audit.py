@@ -58,6 +58,11 @@ class Verdict:
     its_sense: str = ""
     review_sense: str = ""
     confidence: float = 0.0
+    # Which review(s) this paper is a source FOR, when the project has more than one. Empty
+    # when it has one review, or when the model offered nothing usable. ADDITIVE ONLY: it can
+    # only ever add a purpose to what `gather` recorded, never take one away — gather searched
+    # and found, which is certain; this is inference.
+    serves: tuple = ()
 
 
 _SYS = (
@@ -83,6 +88,27 @@ _SYS = (
     '{"verdict": "TRANSFER" | "FALSE-FRIEND", "term": "the shared word (if a false friend)", '
     '"its_sense": "what the word denotes in THIS paper", "review_sense": "what it denotes in '
     'the review", "confidence": 0-10}.')
+
+# The SECOND question, asked only when a project has two reviews. It is a different kind of
+# question from the homograph test and must stay one: choosing between two KNOWN descriptions
+# is classification — what kind of contribution is this — and an abstract carries that. "Does
+# this serve the review's needs" is the open-ended question that quarantined 54% of a corpus,
+# and it is not being asked again.
+#
+# The answer can only ADD. `gather` searched an anchor and found the paper, which is certain;
+# this is inference, and inference must not overrule a record. A paper the model thinks serves
+# neither keeps exactly what gather gave it — so "neither" is not a quarantine signal, and the
+# relevance judgement cannot return through that door.
+_PURPOSE_SYS = (
+    "A project keeps two literature reviews, and one Zotero collection holding both their "
+    "sources. Say which review this paper is a source FOR. "
+    "This is a question about the KIND of contribution the paper makes — methodological or "
+    "substantive — not about how useful or central it is. Usefulness was settled before you "
+    "saw it. "
+    "A paper can serve BOTH, and often does: a paper applying a method to the review's own "
+    "subject matter belongs to each of them. Say both when both are true. "
+    "Answer with ONLY a JSON object: "
+    '{"serves": ["literature"] | ["methods"] | ["literature", "methods"]}.')
 
 
 def _prompt(topic: str, background: str, asks, title: str, abstract: str, keywords,
@@ -116,9 +142,43 @@ def _prompt(topic: str, background: str, asks, title: str, abstract: str, keywor
     ])
 
 
+def _purpose_prompt(reviews: dict, title: str, abstract: str, keywords) -> str:
+    """Both reviews described, the candidate, one question."""
+    kw = "; ".join(keywords) if keywords else ""
+    out = ["This project's two reviews:"]
+    for kind, desc in reviews.items():
+        out.append(f"  [{kind}] {desc}")
+    out += ["", "Candidate source:", f"Title: {title}", f"Keywords: {kw}",
+            f"Abstract: {abstract[:1200]}", "",
+            "Which review is this a source for? Answer with the JSON object:"]
+    return "\n".join(out)
+
+
+def judge_purpose(brain: Brain, reviews: dict, *, title: str, abstract: str = "",
+                  keywords=()) -> tuple:
+    """Which review(s) this paper serves. Fails SAFE: anything unparseable yields (), which
+    adds nothing and leaves gather's record standing."""
+    if len(reviews) < 2:
+        return ()
+    try:
+        raw = brain.coordinator(_purpose_prompt(reviews, title, abstract, keywords),
+                                system=_PURPOSE_SYS, num_ctx=4096, think=False).strip()
+        m = _JSON.search(raw)
+        data = json.loads(m.group(0)) if m else {}
+    except Exception:  # noqa: BLE001
+        return ()
+    got = data.get("serves")
+    if isinstance(got, str):
+        got = [got]
+    if not isinstance(got, (list, tuple)):
+        return ()
+    return tuple(str(v).strip().lower() for v in got
+                 if str(v).strip().lower() in reviews)
+
+
 def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
                title: str, abstract: str = "", keywords=(), asks=(),
-               fetched_for: str = "") -> Verdict:
+               fetched_for: str = "", reviews: dict | None = None) -> Verdict:
     """One word-sense judgment for one paper. Fails SAFE: any error, or an unparseable reply,
     yields a TRANSFER (keep) at confidence 0 — the tool never quarantines on a bad signal."""
     try:
@@ -148,9 +208,11 @@ def judge_item(brain: Brain, topic: str, focus: str, *, key: str, label: str,
         conf = float(data.get("confidence", 0) or 0)
     except (TypeError, ValueError):
         conf = 0.0
+    serves = judge_purpose(brain, reviews or {}, title=title, abstract=abstract,
+                           keywords=keywords)
     return Verdict(key=key, label=label, kind=kind, confidence=conf,
                    term=str(data.get("term", "")), its_sense=str(data.get("its_sense", "")),
-                   review_sense=str(data.get("review_sense", "")))
+                   review_sense=str(data.get("review_sense", "")), serves=serves)
 
 
 def _to_cache(v: Verdict) -> dict:
@@ -183,8 +245,8 @@ def format_progress(i: int, total: int, v: Verdict, cached: bool,
 
 def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
                  cache: dict | None = None, min_confidence: float = 7.0,
-                 *, asks=(), fetched_for: dict | None = None, progress=None,
-                 checkpoint=None, checkpoint_every: int = 5
+                 *, asks=(), fetched_for: dict | None = None, reviews: dict | None = None,
+                 progress=None, checkpoint=None, checkpoint_every: int = 5
                  ) -> tuple[list[Verdict], list[Verdict]]:
     """Judge every corpus item (each a dict of key/label/title/abstract/keywords) for word-sense
     transfer. Returns (flagged, all_verdicts); flagged = the CONFIDENT false-friends only. A
@@ -209,7 +271,7 @@ def audit_corpus(brain: Brain, topic: str, focus: str, items: list[dict],
             v = judge_item(brain, topic, focus, key=key, label=label,
                            title=it.get("title", ""), abstract=it.get("abstract", ""),
                            keywords=it.get("keywords", ()), asks=asks,
-                           fetched_for=(fetched_for or {}).get(key, ""))
+                           fetched_for=(fetched_for or {}).get(key, ""), reviews=reviews)
             cache[key] = _to_cache(v)
             fresh += 1
         verdicts.append(v)
@@ -293,7 +355,7 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
                   items: list[dict], outdir, project_root=None, dry_run: bool = False,
                   cache: dict | None = None, min_confidence: float = 7.0,
                   labels: dict | None = None, asks=(), fetched_for: dict | None = None,
-                  progress=None, checkpoint=None,
+                  reviews: dict | None = None, progress=None, checkpoint=None,
                   checkpoint_every: int = 5, quarantine_key: str | None = None) -> dict:
     """Judge the raw Zotero ``items`` and mark each confident false-friend ``quarantine`` in
     the corpus ledger (unless ``dry_run``), then write the reasons log.
@@ -321,11 +383,25 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
         raw_by_key[f["key"]] = raw
     flagged, verdicts = audit_corpus(brain, topic, focus, judge_items, cache=cache,
                                      min_confidence=min_confidence, asks=asks,
-                                     fetched_for=fetched_for, progress=progress,
+                                     fetched_for=fetched_for, reviews=reviews, progress=progress,
                                      checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     moved: list[str] = []
     held: list[str] = []
+    widened: list[str] = []
     if not dry_run and project_root is not None:
+        # PURPOSE FIRST, AND ONLY EVER ADDED. A paper both reviews can use is the reason one
+        # collection is worth keeping, and gather cannot see it: a methods search found the
+        # paper against a methods anchor and never had the other question in hand. This does.
+        # It may only widen what gather recorded — subtracting would drop a paper out of the
+        # review that deliberately went and found it, which is a wrong quarantine without the
+        # reversibility.
+        for v in verdicts:
+            for kind in v.serves:
+                row = corpus_ledger.load(project_root).get(v.key)
+                if row is None or kind in row.purpose:
+                    continue
+                corpus_ledger.add_purpose(project_root, v.key, kind, added_by="audit")
+                widened.append(f"{v.label}+{kind}")
         rows = corpus_ledger.load(project_root)
         for v in flagged:
             cur = rows.get(v.key)
@@ -338,7 +414,7 @@ def perform_audit(zc, brain: Brain, topic: str, focus: str, *, project_key: str,
             moved.append(v.key)
     log = write_quarantine_log(outdir, flagged)
     return {"flagged": [v.key for v in flagged], "moved": moved, "held": held,
-            "verdicts": len(verdicts), "log": log}
+            "widened": widened, "verdicts": len(verdicts), "log": log}
 
 
 def release_item(zc, *, project_root, key: str, role: str | None = None,
@@ -566,7 +642,28 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
             print(f"  {runlog.stamp()}… {i}/{n} judged · ~{runlog.fmt_dt(avg)}/item · "
                   f"~{runlog.fmt_dt((n - i) * avg)} left", flush=True)
 
-    summary = perform_audit(zc, brain, cfg.topic, stated,
+    # BOTH REVIEWS' DESCRIPTIONS, when the project has two. Assessing purpose needs the
+    # question each review is asking, so this verb is project-scoped in a way the others are
+    # not — it runs from one review's directory and has to look sideways at the other.
+    reviews: dict[str, str] = {}
+    for kind in config.REVIEW_KINDS.values():
+        d = project_root / kind.dir
+        if not d.is_dir() or not config.latest_project_file(d):
+            continue
+        try:
+            other = config.load_project(d)
+        except Exception:  # noqa: BLE001
+            continue
+        desc = (other.research_prompt or other.topic or other.focus or "").strip()
+        if desc:
+            reviews[kind.name] = desc[:900]
+    if len(reviews) > 1:
+        print(f"  {runlog.stamp()}Two reviews in this project — each paper is also asked which "
+              f"it is a source for ({', '.join(reviews)}).", flush=True)
+    else:
+        reviews = {}
+
+    summary = perform_audit(zc, brain, cfg.topic, stated, reviews=reviews,
                             project_key=project_key, project_root=project_root,
                             items=items, outdir=paths.output, dry_run=dry_run, cache=cache,
                             min_confidence=min_conf, asks=asks, progress=_report,
@@ -603,6 +700,10 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
               f"'{corpus_ledger.QUARANTINE}' in the corpus ledger — they stay in Zotero and "
               f"in refs.bib, and drop out of the corpus only. Reasons in "
               f"{summary['log'].name}; release any with `rabbitHole audit --release @key`.")
+        if summary.get("widened"):
+            print(f"  {runlog.stamp()}Widened {len(summary['widened'])} paper(s) to serve both "
+                  f"reviews: {', '.join(summary['widened'][:6])}"
+                  + (" …" if len(summary["widened"]) > 6 else ""))
         if summary.get("held"):
             print(f"  {runlog.stamp()}Left {len(summary['held'])} released paper(s) alone "
                   f"(locked by a human): {', '.join(summary['held'][:6])}")

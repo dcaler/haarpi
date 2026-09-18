@@ -391,3 +391,74 @@ def test_the_framing_bump_discards_verdicts_from_every_earlier_test(tmp_path):
              "verdicts": {"K": {"kind": "false_friend", "confidence": 9.0}}}))
         assert audit._load_cache(paths, "s", ["t:x"]) == {}, f"v{old} verdicts must not survive"
     assert audit._FRAMING == 4
+
+
+# ── the second question: which review is this a source for ───────────────────
+
+class _PurposeBrain:
+    """Answers the homograph question first, then the purpose question."""
+    def __init__(self, serves):
+        self.serves, self.prompts = serves, []
+
+    def coordinator(self, prompt, system="", num_ctx=16384, think=True):
+        self.prompts.append(prompt)
+        if "source for" in prompt:
+            import json as _j
+            return _j.dumps({"serves": self.serves})
+        return '{"verdict": "TRANSFER", "confidence": 9}'
+
+
+def test_purpose_is_not_asked_when_a_project_has_one_review():
+    """One review means the answer is trivially that review — a model pass for nothing, on
+    hardware where every pass costs about two minutes."""
+    from rabbithole.audit import judge_purpose
+    b = _PurposeBrain(["literature"])
+    assert judge_purpose(b, {"literature": "x"}, title="t") == ()
+    assert b.prompts == []
+
+
+def test_a_paper_can_be_judged_to_serve_both():
+    from rabbithole.audit import judge_purpose
+    got = judge_purpose(_PurposeBrain(["literature", "methods"]),
+                        {"literature": "funding pathways", "methods": "sequence analysis"},
+                        title="Sequence analysis of firm funding")
+    assert set(got) == {"literature", "methods"}
+
+
+def test_an_unparseable_purpose_answer_adds_nothing():
+    """Fails safe in the only direction that is safe: gather's record stands."""
+    from rabbithole.audit import judge_purpose
+
+    class _Broken:
+        def coordinator(self, *a, **k):
+            return "I think it's probably methods?"
+    assert judge_purpose(_Broken(), {"literature": "x", "methods": "y"}, title="t") == ()
+
+
+def test_an_unknown_review_name_is_dropped():
+    from rabbithole.audit import judge_purpose
+    got = judge_purpose(_PurposeBrain(["methods", "substance"]),
+                        {"literature": "x", "methods": "y"}, title="t")
+    assert got == ("methods",)
+
+
+def test_the_purpose_prompt_describes_both_reviews_and_asks_one_thing():
+    from rabbithole.audit import _purpose_prompt, _PURPOSE_SYS
+    out = _purpose_prompt({"literature": "firm funding pathways",
+                           "methods": "sequence analysis methodology"},
+                          "Optimal matching costs", "abstract", ())
+    assert "[literature] firm funding pathways" in out
+    assert "[methods] sequence analysis methodology" in out
+    assert out.rstrip().endswith("Answer with the JSON object:")
+    # and it must not reopen the relevance question that failed twice
+    assert "not about how useful or central it is" in _PURPOSE_SYS
+    assert "can serve BOTH" in _PURPOSE_SYS
+
+
+def test_purpose_reaches_the_verdict():
+    from rabbithole.audit import judge_item
+    v = judge_item(_PurposeBrain(["literature", "methods"]), _T, "background",
+                   key="k", label="l", title="t", abstract="a",
+                   reviews={"literature": "x", "methods": "y"})
+    assert set(v.serves) == {"literature", "methods"}
+    assert v.kind == "transfer"
