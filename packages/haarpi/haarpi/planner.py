@@ -608,6 +608,20 @@ _STEP_SYNONYMS: dict[tuple[str, str], tuple[str, str]] = {
 # author actually runs ("raconteur"), so the board reads as the work does. The venue sits
 # AFTER the step — "<tool> <step> <venue?> <cycle>" — so a glance down the column lines the
 # steps up regardless of which venue each belongs to.
+# The two literature stages run the same verbs on different configs, so they share a step
+# registry and the same rework tiers. What differs is the anchor each is gathered against, the
+# corpus each ingests (the ledger scopes that), and who consumes the review it mints.
+LITERATURE_STAGES = ("litreview", "methodsreview")
+STAGE_STEPS["methodsreview"] = STAGE_STEPS["litreview"]
+STAGE_TIERS["methodsreview"] = STAGE_TIERS["litreview"]
+
+# The REVIEW KIND rides in the venue slot, so a board carries "rabbithole gather literature 1"
+# beside "rabbithole gather methods 1" and each chain counts its own cycles. The same token is
+# the command's last word, so the title and the command say the same thing.
+STAGE_VENUE = {"litreview": "literature", "methodsreview": "methods"}
+STAGE_REVIEW = {"litreview": "literature", "methodsreview": "methods"}
+
+
 _STAGE_TOOL = {s: spec["tool"] for s, spec in project.DEFAULT_STAGES.items()}
 _TOOL_STAGE = {t: s for s, t in _STAGE_TOOL.items()}
 # A tool that owns more than one stage cannot be mapped to a single stage by name — the STEP
@@ -745,6 +759,25 @@ def _venued(command: str | None, venue: str) -> str | None:
     return f"{command} --venue {venue}"
 
 
+def _scoped(command: str | None, stage: str) -> str | None:
+    """Name the review a literature verb works on: `haarpi rabbithole gather methods`.
+
+    Both literature stages run the same verbs, so the command has to say which review — and
+    it says it the way the board does, WHO does WHAT to WHICH, matching the task title
+    ("rabbithole gather methods 1"). A directory would leak layout into a slot that means a
+    review, and would not line up with the title at all.
+
+    The default review needs no token: rabbitHole resolves a bare project root to litReview/,
+    which is what every existing chain relies on.
+    """
+    if not command or stage == "litreview":
+        return command
+    kind = STAGE_REVIEW.get(stage)
+    if not kind or " rabbithole " not in f" {command} ":
+        return command
+    return f"{command} {kind}"
+
+
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
                 steps: list[str], tr_cfg: dict, description: str = "",
                 approval: bool = False, venue: str = "") -> dict:
@@ -784,7 +817,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
         # the venue belongs to the paper stage; an escalation into litreview is shared work
         v = venue if (venue and st == stage) else ""
         title = _title(st, name, v, cycle)
-        command = _venued(step.command, v)
+        command = _scoped(_venued(step.command, v), st)
         desc = step.desc
         if first and description:
             desc = f"{description} — {step.desc}"    # the plan + the instructions
@@ -1923,6 +1956,8 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue
         if stage == "deck" and not _has_assembled_submission(root, m):
             continue        # the deck opens on submission-assembled, not a bare manuscript release
+        if stage == "methodsreview" and not project.has_methods_review(root, m):
+            continue        # opt-in: no config, no methods review, nothing queued
         tool = _stage_tool(stage, spec)
         if stage == "deck":
             # The deck stage opens with a single `razzle interview` configure task (like every other
@@ -1944,6 +1979,15 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
                 resource_ids=[i for i in (_resource_id(tr_cfg, "human"),
                                           _resource_id(tr_cfg, "claude")) if i],
                 duration=2.0)
+        elif stage == "methodsreview":
+            # A methods review opens on its own full first cycle, the way litreview does at
+            # `haarpi queue` — there is no earlier output to comment on, so a bare `comment`
+            # step would gate a document nobody has written.
+            queue_chain(client, m.trundlr_project_id, stage,
+                        ["gather", "collect", "build", "report", "comment"], tr_cfg,
+                        venue=STAGE_VENUE[stage],
+                        description="Methods review opened: the substantive review is released, "
+                                    "and the analytical approach needs methodological sources.")
         else:
             # The paper stage opens at the top of its ladder — narrative first,
             # then venue analysis, then the human gate; outline and draft are
@@ -2170,7 +2214,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # unresolved asks -> plan + queue rework
     dtiers = PAPER_DELIVERABLE_TIERS.get(deliverable) if deliverable else None
     built = None
-    if stage == "litreview":
+    if stage in LITERATURE_STAGES:
         # The general solution: decompose the comments into a per-comment task list, derive the
         # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
         # human is the verification loop. See DESIGN_next_orchestration.md.

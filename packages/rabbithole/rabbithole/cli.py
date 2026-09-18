@@ -78,12 +78,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-C", "--dir", default=".", help="project directory (default: cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    from . import config as _cfg
+
+    def _review_arg(sp):
+        """WHO does WHAT to WHICH review: `haarpi rabbithole gather methods`.
+
+        The review is named, not pointed at. A directory in the command line would leak
+        layout into a place that means a review, and it would not match the board title the
+        planner writes ("rabbithole gather methods 1"). `-C` stays what it has always been:
+        which PROJECT, for running from outside its folder.
+        """
+        sp.add_argument("review", nargs="?", default=_cfg.DEFAULT_KIND,
+                        choices=sorted(_cfg.REVIEW_KINDS),
+                        help="which review (default: %(default)s)")
+        return sp
+
     sub.add_parser("init", help="interactive project setup")
 
     g = sub.add_parser("gather",
                        help="discover & curate sources missing from your Zotero collection")
     g.add_argument("--no-zotero", action="store_true",
                    help="do not create/read the Zotero collection (lists all candidates)")
+    _review_arg(g)
 
     col = sub.add_parser("collect",
                          help="code newly-added papers into the corpus ledger and report "
@@ -99,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     col.add_argument("--all-as", default=None, choices=["literature", "methods"],
                      help="give every newly-found item this purpose instead of the purpose "
                           "of the review being run")
+    _review_arg(col)
 
     rep = sub.add_parser("report",
                          help="read the Zotero corpus and write the literature review")
@@ -110,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="keep cached per-paper notes even when the extraction logic has "
                           "changed since they were written (faster, but a prompt fix won't "
                           "reach the existing corpus). Default re-reads stale notes")
+    _review_arg(rep)
 
     bld = sub.add_parser("build",
                          help="embed the (audited) Zotero collection into the working corpus — "
@@ -120,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="ingest PDFs from the local pdfs/ folder instead of Zotero")
     bld.add_argument("--no-refresh-notes", action="store_true",
                      help="keep cached per-paper notes even when the extraction logic changed")
+    _review_arg(bld)
 
     gft = sub.add_parser("graft",
                          help="add a reviewer-requested section to their annotated .docx, "
@@ -128,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="override the brain backend for this run")
     gft.add_argument("--file", default=None,
                      help="path to the annotated .docx (default: newest *_ra*.docx in output/)")
+    _review_arg(gft)
 
     rev = sub.add_parser("revise",
                          help="apply reviewer annotations from a _ra.docx to re-draft")
@@ -144,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="do not queue follow-up corpus work (ingest/gather) for comments "
                           "that ask for new sources; just do the in-place edits. Set "
                           "automatically on runner-executed chain steps to avoid re-planning")
+    _review_arg(rev)
 
     ing = sub.add_parser("ingest",
                          help="pull reviewer-supplied references from a _ra.docx into the corpus")
@@ -151,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="override the brain backend for this run")
     ing.add_argument("--file", default=None,
                      help="path to the annotated .docx (default: newest non-_ra docx in output/)")
+    _review_arg(ing)
 
     sub.add_parser("style",
                    help="train a style profile on the author's Zotero publications")
@@ -162,11 +184,13 @@ def main(argv: list[str] | None = None) -> int:
                      help="override the brain backend for this run")
     rfr.add_argument("--file", default=None,
                      help="refresh this .docx instead of the newest one in output/")
+    _review_arg(rfr)
 
     mm = sub.add_parser("mindmap",
                         help="mint a themed contribution map (mind-map) from the minted litreview")
     mm.add_argument("--brain", choices=["ollama", "claude"], default=None,
                     help="override the brain backend for this run")
+    _review_arg(mm)
 
     aud = sub.add_parser("audit",
                          help="quarantine lexical false-friends (shared word, no conceptual "
@@ -180,6 +204,15 @@ def main(argv: list[str] | None = None) -> int:
                           "(a Zotero item key or an Author-Year label)")
 
     args = parser.parse_args(argv)
+
+    # WHICH REVIEW, resolved once. Every verb below takes a directory, so the named review
+    # becomes one here rather than in ten places — and `-C` keeps meaning which PROJECT.
+    # The default review resolves to the project root unchanged, which is what
+    # `config.work_root` has always turned into litReview/.
+    review = getattr(args, "review", None)
+    if review and review != _cfg.DEFAULT_KIND:
+        from pathlib import Path as _P
+        args.dir = str(_P(args.dir) / _cfg.REVIEW_KINDS[review].dir)
 
     if args.command == "init":
         from . import wizard
@@ -266,3 +299,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+    _review_arg(aud)

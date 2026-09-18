@@ -33,6 +33,27 @@ DEFAULT_STAGES: dict[str, dict] = {
         "dir": "litReview", "tool": "rabbithole", "inputs": [],
         "infix": "litreview", "attended": False,
     },
+    # The METHODS literature — a second review, anchored on the methodological families the
+    # analysis needs rather than on the substantive domain. One anchor cannot serve two
+    # questions: FirmPathways spent five steering rounds trying to get sequence-analysis
+    # methodology out of a review anchored on innovation policy, and could not, because that
+    # methodology lives in life-course sociology, outside the anchor and adjacent to an
+    # excluded field.
+    #
+    # OPT-IN BY THE PRESENCE OF ITS CONFIG. Most projects need no methods review, so this
+    # stage opens only when `litReviewMethods/methodsreview.yaml` exists — the same shape as
+    # `deck`, which opens on an assembled submission rather than a bare manuscript. Nothing is
+    # queued for a project that has not asked for one.
+    #
+    # Both literature stages run rabbitHole with the same steps, so "rabbithole gather 3"
+    # could not say which chain it belonged to — and cycle numbering and duplicate detection
+    # both read the stage back out of a title. The REVIEW KIND rides in the venue slot, which
+    # already exists for exactly this ("whatever is left over" between step and cycle): the
+    # board reads "rabbithole gather methods 1" beside "rabbithole gather literature 1".
+    "methodsreview": {
+        "dir": "methodsReview", "tool": "rabbithole",
+        "inputs": ["litreview"], "infix": "methodsreview", "attended": False,
+    },
     # The experiment DESIGN (preregistration) runs BEFORE build: you commit the
     # experiments, then build code to satisfy them — designing against finished code is
     # the preregistration anti-pattern. rayleigh authors it; the gate mints a `prereg`
@@ -187,8 +208,8 @@ def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
             use_methods=True,
             # Only set when the project actually has a methods review — an empty string
             # leaves the Methods section exactly as it was, with no citation floor.
-            methods_litrev_dir=(rh.REVIEW_KINDS["methods"].dir
-                                if (root / rh.REVIEW_KINDS["methods"].dir).exists() else ""),
+            methods_litrev_dir=(m.stages["methodsreview"]["dir"]
+                                if _has_methods_review(root, m) else ""),
             results_dir=m.stages["experiments"]["dir"],
         )
         rcfg.save(root)
@@ -536,6 +557,40 @@ def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
         if not dry_run:
             old.rename(new)
 
+    # `litReviewMethods` read as "methods OF the literature review", which is the opposite of
+    # what it holds. `litReview` / `methodsReview` is the symmetric pair, and it lines up with
+    # the infixes those two stages mint.
+    old_dir, new_dir = root / "litReviewMethods", root / "methodsReview"
+    if old_dir.is_dir() and not new_dir.exists():
+        changed.append(f"{old_dir.name}/ -> {new_dir.name}/")
+        if not dry_run:
+            old_dir.rename(new_dir)
+    spec = m.stages.get("methodsreview")
+    if spec and spec.get("dir") == "litReviewMethods":
+        changed.append("stages.methodsreview.dir: litReviewMethods -> methodsReview")
+        if not dry_run:
+            spec["dir"] = "methodsReview"
+
     if changed and not dry_run:
         save_manifest(m, root)
     return changed
+
+
+def _has_methods_review(root: Path, m: "Manifest") -> bool:
+    """Has this project asked for a methods review?
+
+    Its config's presence IS the opt-in. Most projects need one literature review, and a
+    methods stage that opened for all of them would queue a gather nobody wanted — so the
+    stage sits in the default graph and stays shut until the config exists. `deck` works the
+    same way, opening on an assembled submission rather than a bare manuscript.
+    """
+    spec = m.stages.get("methodsreview")
+    if not spec:
+        return False
+    from rabbithole import config as rh
+    d = root / spec["dir"]
+    return d.is_dir() and any(d.glob(f"{rh.REVIEW_KINDS['methods'].stem}*.yaml"))
+
+
+def has_methods_review(root: Path, m: "Manifest") -> bool:
+    return _has_methods_review(root, m)

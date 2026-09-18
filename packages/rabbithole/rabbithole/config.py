@@ -54,7 +54,7 @@ class ReviewKind:
 
 REVIEW_KINDS: dict[str, ReviewKind] = {
     "literature": ReviewKind("literature", LITREVIEW_DIR, "litrev", "litreview"),
-    "methods": ReviewKind("methods", "litReviewMethods", "methodsreview", "methodsreview"),
+    "methods": ReviewKind("methods", "methodsReview", "methodsreview", "methodsreview"),
 }
 DEFAULT_KIND = "literature"
 
