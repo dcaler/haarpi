@@ -64,27 +64,36 @@ def test_each_attended_stage_has_its_own_label():
 
 # ── un-migrated projects keep working ────────────────────────────────────────
 
-def test_a_manifest_still_naming_rayleigh_resolves_to_ramus():
-    """17 projects carry `stages.design.tool: rayleigh`. `_OPENING` builds the command as
-    `haarpi {tool} {verb}`, so without this they would queue `haarpi rayleigh init` — a verb
-    that no longer exists — and `haarpi next` runs at the end of every chain in every
-    project."""
-    legacy = {"dir": "design", "tool": "rayleigh", "inputs": ["litreview"],
-              "infix": "prereg", "attended": True}
-    assert planner._stage_tool("design", legacy) == "ramus"
+def test_no_project_manifest_still_names_rayleigh_for_design():
+    """The manifest shim is GONE, and this is the check that let it go. It resolved a saved
+    `tool: rayleigh` at read time while 17 projects were migrated; once none remain, keeping
+    it would only hide the next un-migrated project instead of failing loudly."""
+    from pathlib import Path as _P
+    base = _P("/media/lucullus/Cale_Professional/Current_Work_Projects")
+    if not base.is_dir():
+        pytest.skip("project tree not present")
+    stale = []
+    for d in sorted(base.iterdir()):
+        if not (d / "haarpi.yaml").is_file():
+            continue
+        try:
+            m = project.load_manifest(d)
+        except Exception:  # noqa: BLE001
+            continue
+        if m.stages.get("design", {}).get("tool") == "rayleigh":
+            stale.append(d.name)
+    assert not stale, f"run `haarpi doctor --migrate`: {stale}"
 
 
-def test_the_shim_does_not_touch_rayleighs_own_stage():
-    spec = project.DEFAULT_STAGES["experiments"]
-    assert planner._stage_tool("experiments", spec) == "rayleigh"
-
-
-def test_a_migrated_manifest_is_unaffected():
-    assert planner._stage_tool("design", project.DEFAULT_STAGES["design"]) == "ramus"
+def test_the_stage_tool_is_just_what_the_manifest_says():
+    assert project.DEFAULT_STAGES["design"]["tool"] == "ramus"
+    assert project.DEFAULT_STAGES["experiments"]["tool"] == "rayleigh"
 
 
 def test_legacy_board_titles_still_resolve():
-    """Realised-duration history and the in-flight check both key off the parsed title."""
+    """PERMANENT, unlike the manifest shim. Board titles are history and history does not age
+    out — the planner reads them for realised-duration estimates, so without this every
+    pre-split design session pools into `experiments` instead. No date makes it safe to drop."""
     assert planner._parse_title("rayleigh design_session 2")[0] == "design"
     assert planner._parse_title("ramus design_session 2")[0] == "design"
 

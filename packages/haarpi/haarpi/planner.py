@@ -631,10 +631,11 @@ _MULTISTAGE_TOOLS: dict[str, list[str]] = {}
 for _s, _t in _STAGE_TOOL.items():
     _MULTISTAGE_TOOLS.setdefault(_t, []).append(_s)
 _MULTISTAGE_TOOLS = {t: ss for t, ss in _MULTISTAGE_TOOLS.items() if len(ss) > 1}
-# rayleigh OWNED both stages until the ramus split, and the board is full of titles that say
-# so — "rayleigh design_session 2". Those still have to parse to `design`, or the planner
-# loses the realised-duration history and the in-flight check for every design task ever
-# queued. Keeping rayleigh in the disambiguation table costs nothing and reads both eras.
+# PERMANENT, not a migration shim. rayleigh owned both stages until the ramus split, and the
+# board still carries titles saying so — "rayleigh design_session 2". Those are history, and
+# history does not age out: the planner reads them for realised-duration estimates, so without
+# this entry every pre-split design session silently pools into `experiments` instead. There is
+# no date after which deleting this becomes safe.
 _MULTISTAGE_TOOLS.setdefault("rayleigh", ["design", "experiments"])
 
 # Every word that can stand where the step stands — the chain steps plus the verbs the
@@ -1850,19 +1851,6 @@ def _refresh_stale(root: Path, m: project.Manifest, client, tr_cfg: dict,
 # opens with `plan` — the executable experiments against the raster-built tooling), so the verb is
 # keyed by STAGE, not tool. Both are interactive Cale+Claude sessions; `rayleigh plan` hands off to
 # conduct itself once the compute is confirmed.
-# Manifests written before the ramus split name `rayleigh` as the design stage's tool, and
-# `_OPENING` builds the command as `haarpi {tool} {verb}` — so an unmigrated project would
-# queue `haarpi rayleigh init`, a verb that no longer exists. `haarpi next` runs at the end of
-# every chain in every project, so that is not a hypothetical window. Resolve it at read time
-# and let `haarpi doctor` fix the files at its leisure.
-_TOOL_MOVED = {("design", "rayleigh"): "ramus"}
-
-
-def _stage_tool(stage: str, spec: dict) -> str:
-    tool = spec.get("tool", "")
-    return _TOOL_MOVED.get((stage, tool), tool)
-
-
 _OPENING: dict[str, tuple[str, str, str]] = {
     # Each label names WHICH session it is. All three used to read "design session", so a
     # board could carry three of them with nothing to tell them apart — task 904 was one.
@@ -1958,7 +1946,7 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
             continue        # the deck opens on submission-assembled, not a bare manuscript release
         if not project.stage_applies(root, m, stage):
             continue        # opt-in: a stage this project never asked for queues nothing
-        tool = _stage_tool(stage, spec)
+        tool = spec["tool"]
         if stage == "deck":
             # The deck stage opens with a single `razzle interview` configure task (like every other
             # stage's one opening move). The interview captures the formats + facts and prints the
