@@ -290,8 +290,10 @@ def write_quarantine_log(outdir, flagged: list[Verdict], *, released=()) -> Path
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     lines = ["# Quarantine audit — suspected lexical false-friends", "",
-             "Moved to the shared Zotero `quarantine` collection (nothing deleted; the papers "
-             "stay in your library). Release any with `rabbitHole audit --release @key`.", ""]
+             "Marked `quarantine` in the corpus ledger (nothing moved, nothing deleted; the papers "
+             "stay in your library, in this project's collection, and in refs.bib — only the "
+             "corpus loses them). Release any with `rabbitHole audit --release @key`, which "
+             "also LOCKS the decision so a later audit cannot overrule it.", ""]
     for v in flagged:
         lines += [f"## {v.label}  (`{v.key}`)",
                   f"- shared term: **{v.term}**",
