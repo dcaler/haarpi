@@ -1,41 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="984pt" height="501pt" viewBox="0 0 984 501">
+<svg xmlns="http://www.w3.org/2000/svg" width="984pt" height="558pt" viewBox="0 0 984 558">
 <rect width="100%" height="100%" fill="#ffffff"/>
 <text x="492" y="34" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="19" font-weight="bold" fill="#0f172a">Information-flow map — what each release feeds in the paper</text>
 <path d="M612.0,457.4 L612.0,56.0 L705.2,56.0 L714.2,69.0 L834.0,69.0 L834.0,457.4 Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4" stroke-linejoin="round"/>
 <text x="621.0" y="66.0" font-family="Helvetica,Arial,sans-serif" font-size="8.6" font-weight="bold" fill="#475569">the manuscript .docx</text>
-<g color="#334155"><path d="M268.0,232.1 H308.0 V146.9 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<g color="#334155"><path d="M268.0,232.1 H306.8 V146.9 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,146.9 619.0,141.9 619.0,151.9" fill="currentColor"/></g>
 <text x="275.0" y="229.1" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">motivation</text>
-<g color="#334155"><path d="M268.0,191.5 H336.0 V184.3 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<g color="#334155"><path d="M268.0,191.5 H332.5 V184.3 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,184.35 619.0,179.35 619.0,189.35" fill="currentColor"/></g>
 <text x="275.0" y="188.5" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">defines the section structure</text>
-<g color="#334155"><path d="M268.0,242.4 H364.0 V191.5 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<g color="#334155"><path d="M268.0,242.4 H358.2 V191.5 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,191.5 619.0,186.5 619.0,196.5" fill="currentColor"/></g>
 <text x="275.0" y="239.4" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">the background pillars</text>
-<g color="#a8a29e"><path d="M268.0,447.5 H392.0 V198.6 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
+<g color="#a8a29e"><path d="M268.0,504.7 H383.8 V198.6 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
 <polygon points="628,198.64999999999998 619.0,193.64999999999998 619.0,203.64999999999998" fill="currentColor"/></g>
-<text x="275.0" y="444.5" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">grounds the [@key] citations</text>
-<g color="#334155"><path d="M268.0,299.6 H420.0 V231.3 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
-<polygon points="628,231.33333333333331 619.0,226.33333333333331 619.0,236.33333333333331" fill="currentColor"/></g>
-<text x="275.0" y="296.6" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">what the code does</text>
-<g color="#a8a29e"><path d="M268.0,349.9 H448.0 V240.9 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
-<polygon points="628,240.86666666666665 619.0,235.86666666666665 619.0,245.86666666666665" fill="currentColor"/></g>
-<text x="275.0" y="346.9" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">framework + module figures</text>
-<g color="#a8a29e"><path d="M268.0,363.7 H476.0 V285.5 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
+<text x="275.0" y="501.7" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">grounds the [@key] citations</text>
+<g color="#334155"><path d="M268.0,299.6 H409.5 V236.1 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<polygon points="628,236.1 619.0,231.1 619.0,241.1" fill="currentColor"/></g>
+<text x="275.0" y="296.6" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">whose method it is — provenance + defence</text>
+<g color="#334155"><path d="M268.0,356.8 H435.2 V228.9 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<polygon points="628,228.95 619.0,223.95 619.0,233.95" fill="currentColor"/></g>
+<text x="275.0" y="353.8" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">what the code does</text>
+<g color="#a8a29e"><path d="M268.0,407.1 H460.8 V243.2 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
+<polygon points="628,243.25 619.0,238.25 619.0,248.25" fill="currentColor"/></g>
+<text x="275.0" y="404.1" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">framework + module figures</text>
+<g color="#a8a29e"><path d="M268.0,420.9 H486.5 V285.5 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
 <polygon points="628,285.46666666666664 619.0,280.46666666666664 619.0,290.46666666666664" fill="currentColor"/></g>
-<text x="275.0" y="360.7" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">data figures</text>
-<g color="#334155"><path d="M268.0,402.9 H504.0 V275.9 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<text x="275.0" y="417.9" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">data figures</text>
+<g color="#334155"><path d="M268.0,460.1 H512.2 V275.9 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,275.93333333333334 619.0,270.93333333333334 619.0,280.93333333333334" fill="currentColor"/></g>
-<text x="275.0" y="399.9" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">the findings</text>
-<g color="#334155"><path d="M268.0,252.7 H532.0 V320.5 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<text x="275.0" y="457.1" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">the findings</text>
+<g color="#334155"><path d="M268.0,252.7 H537.8 V320.5 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,320.53333333333336 619.0,315.53333333333336 619.0,325.53333333333336" fill="currentColor"/></g>
 <text x="275.0" y="249.7" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">vs. prior work</text>
-<g color="#334155"><path d="M268.0,412.5 H560.0 V330.1 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
+<g color="#334155"><path d="M268.0,469.7 H563.5 V330.1 H619.0" fill="none" stroke="#334155" stroke-width="1.5"/>
 <polygon points="628,330.06666666666666 619.0,325.06666666666666 619.0,335.06666666666666" fill="currentColor"/></g>
-<text x="275.0" y="409.5" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">interpretation</text>
-<g color="#a8a29e"><path d="M268.0,457.1 H588.0 V420.8 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
+<text x="275.0" y="466.7" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#334155">interpretation</text>
+<g color="#a8a29e"><path d="M268.0,514.3 H589.2 V420.8 H619.0" fill="none" stroke="#a8a29e" stroke-width="1.3" stroke-dasharray="5,4"/>
 <polygon points="628,420.80000000000007 619.0,415.80000000000007 619.0,425.80000000000007" fill="currentColor"/></g>
-<text x="275.0" y="454.1" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">citeproc builds the list</text>
+<text x="275.0" y="511.3" font-family="Helvetica,Arial,sans-serif" font-size="8" fill="#a8a29e">citeproc builds the list</text>
 <g color="#94a3b8"><path d="M818.0,146.9 H850.0 V102.3 H827.0" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="2,3"/>
 <polygon points="818,102.3 827.0,97.3 827.0,107.3" fill="currentColor"/></g>
 <g color="#94a3b8"><path d="M818.0,236.1 H865.0 V102.3 H827.0" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="2,3"/>
@@ -61,13 +64,15 @@
 <path d="M18.0,263.0 L18.0,221.8 L82.0,221.8 L89.0,230.8 L268.0,230.8 L268.0,263.0 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
 <text x="143.0" y="243.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the literature review — load-bearing sources,</text><text x="143.0" y="256.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">narrative, annotated bibliography</text>
 <path d="M18.0,320.2 L18.0,279.0 L82.0,279.0 L89.0,288.0 L268.0,288.0 L268.0,320.2 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
-<text x="143.0" y="300.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the methods digest — DESIGN.md + tasks.yaml + the</text><text x="143.0" y="313.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">frozen tests</text>
-<path d="M18.0,377.4 L18.0,336.2 L82.0,336.2 L89.0,345.2 L268.0,345.2 L268.0,377.4 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="143.0" y="358.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the figures pool — framework, module graph, data</text><text x="143.0" y="370.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">figures</text>
-<path d="M18.0,422.0 L18.0,393.4 L82.0,393.4 L89.0,402.4 L268.0,402.4 L268.0,422.0 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
-<text x="143.0" y="415.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the results write-up — the findings, as preregistered</text>
-<path d="M18.0,466.6 L18.0,438.0 L82.0,438.0 L89.0,447.0 L268.0,447.0 L268.0,466.6 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="143.0" y="459.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">refs.bib — the whole curated corpus</text>
+<text x="143.0" y="300.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the methods review — whose method this is, and what</text><text x="143.0" y="313.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">its known limits are</text>
+<path d="M18.0,377.4 L18.0,336.2 L82.0,336.2 L89.0,345.2 L268.0,345.2 L268.0,377.4 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
+<text x="143.0" y="358.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the methods digest — DESIGN.md + tasks.yaml + the</text><text x="143.0" y="370.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">frozen tests</text>
+<path d="M18.0,434.6 L18.0,393.4 L82.0,393.4 L89.0,402.4 L268.0,402.4 L268.0,434.6 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="143.0" y="415.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the figures pool — framework, module graph, data</text><text x="143.0" y="427.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">figures</text>
+<path d="M18.0,479.2 L18.0,450.6 L82.0,450.6 L89.0,459.6 L268.0,459.6 L268.0,479.2 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
+<text x="143.0" y="472.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">the results write-up — the findings, as preregistered</text>
+<path d="M18.0,523.8 L18.0,495.2 L82.0,495.2 L89.0,504.2 L268.0,504.2 L268.0,523.8 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="143.0" y="517.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.8" fill="#0f172a">refs.bib — the whole curated corpus</text>
 <rect x="628.0" y="88.0" width="190.0" height="28.6" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
 <text x="723.0" y="105.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">Abstract</text>
 <rect x="628.0" y="132.6" width="190.0" height="28.6" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>

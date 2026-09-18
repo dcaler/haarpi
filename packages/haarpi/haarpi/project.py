@@ -81,7 +81,10 @@ DEFAULT_STAGES: dict[str, dict] = {
     },
     "paper": {
         "dir": "paper", "tool": "raconteur",
-        "inputs": ["litreview", "build", "experiments"],
+        # `methodsreview` because raconteur's Methods section is written from it and carries
+        # a citation floor when it exists — a real read, so a real edge. Skipped by
+        # `stage_applies` for the projects that never asked for one.
+        "inputs": ["litreview", "methodsreview", "build", "experiments"],
         "infix": "", "attended": False,
     },
     # The venue-specific presentation DECK (razzle), forked per presentation FORMAT. Feeds on the
@@ -590,10 +593,17 @@ def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
     # customisation, and a migration that overwrote a deliberate override would be worse than
     # one that did nothing.
     d = m.stages.get("design")
-    if d and d.get("inputs") == ["litreview"]:
-        changed.append("stages.design.inputs: +methodsreview")
+    if d and d.get("inputs") == ["litreview", "methodsreview"]:
+        # the design edge was tried and reverted: it stopped the session opening at all, and
+        # the session is where the methods scope comes from. The gate is on the MINT now.
+        changed.append("stages.design.inputs: -methodsreview")
         if not dry_run:
-            d["inputs"] = ["litreview", "methodsreview"]
+            d["inputs"] = ["litreview"]
+    pa = m.stages.get("paper")
+    if pa and pa.get("inputs") == ["litreview", "build", "experiments"]:
+        changed.append("stages.paper.inputs: +methodsreview")
+        if not dry_run:
+            pa["inputs"] = ["litreview", "methodsreview", "build", "experiments"]
 
     spec = m.stages.get("methodsreview")
     if spec and spec.get("dir") == "litReviewMethods":
