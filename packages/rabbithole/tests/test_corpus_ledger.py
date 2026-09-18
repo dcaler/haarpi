@@ -332,3 +332,34 @@ def test_serving_excludes_the_quarantined(project):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── collect's two flags ──────────────────────────────────────────────────────
+
+def test_collect_sets_a_purpose_and_a_status_independently(project, monkeypatch):
+    """`--role` took either axis, so its meaning depended on its value. Two flags now."""
+    from rabbithole import corpus_ledger as mod
+    monkeypatch.setattr(mod, "sync", lambda *a, **k: mod.Reconciliation())
+    monkeypatch.setattr(mod._config, "load_project", lambda d: type(
+        "C", (), {"project_name": "X", "zotero": {"collection_key": "K"}})())
+    monkeypatch.setattr(mod._config, "load_global", lambda: type(
+        "G", (), {"have_zotero": True})())
+    mod.set_purpose(project, "A", [mod.LITERATURE])
+
+    rc = mod.run_collect(str(project / "litReview"),
+                         purposes={"A": "literature+methods"},
+                         statuses={"A": mod.QUARANTINE})
+    row = mod.load(project)["A"]
+    assert rc == 0
+    assert row.purpose == [mod.LITERATURE, mod.METHODS]   # both, from one flag
+    assert row.status == mod.QUARANTINE and row.locked    # the other axis, locked
+
+
+def test_collect_rejects_a_purpose_in_the_status_flag(project, monkeypatch):
+    from rabbithole import corpus_ledger as mod
+    monkeypatch.setattr(mod, "sync", lambda *a, **k: mod.Reconciliation())
+    monkeypatch.setattr(mod._config, "load_project", lambda d: type(
+        "C", (), {"project_name": "X", "zotero": {"collection_key": "K"}})())
+    monkeypatch.setattr(mod._config, "load_global", lambda: type(
+        "G", (), {"have_zotero": True})())
+    assert mod.run_collect(str(project / "litReview"), statuses={"A": "methods"}) == 1

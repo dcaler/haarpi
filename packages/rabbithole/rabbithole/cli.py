@@ -88,13 +88,17 @@ def main(argv: list[str] | None = None) -> int:
     col = sub.add_parser("collect",
                          help="code newly-added papers into the corpus ledger and report "
                               "which of this review's items still need a PDF")
-    col.add_argument("--role", action="append", default=[], metavar="KEY=ROLE",
-                     help="set one item's role explicitly and LOCK it "
-                          "(literature|methods|quarantine); repeatable")
-    col.add_argument("--all-as", default=None,
-                     choices=["literature", "methods", "quarantine"],
-                     help="give every newly-found item this role instead of the role of "
-                          "the review being run")
+    # PURPOSE and STATUS are separate axes, so they are separate flags. One `--role` taking
+    # either was a flag whose meaning depended on its value.
+    col.add_argument("--purpose", action="append", default=[], metavar="KEY=PURPOSE",
+                     help="what one item is FOR: literature, methods, or both as "
+                          "literature+methods. Replaces that item's purpose; repeatable")
+    col.add_argument("--status", action="append", default=[], metavar="KEY=STATUS",
+                     help="whether one item is IN the corpus: corpus | quarantine. LOCKS it, "
+                          "so a later audit cannot overrule you; repeatable")
+    col.add_argument("--all-as", default=None, choices=["literature", "methods"],
+                     help="give every newly-found item this purpose instead of the purpose "
+                          "of the review being run")
 
     rep = sub.add_parser("report",
                          help="read the Zotero corpus and write the literature review")
@@ -189,15 +193,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "collect":
         _check_env(need_pandoc=False)          # Zotero + the ledger; no brain, no pandoc
         from . import corpus_ledger
-        roles = {}
-        for spec in args.role:
-            if "=" not in spec:
-                print(f"[error] --role wants KEY=ROLE, got {spec!r}", file=sys.stderr)
-                return 1
-            k, _, v = spec.partition("=")
-            roles[k.strip().lstrip("@")] = v.strip()
-        return corpus_ledger.run_collect(args.dir, set_roles=roles,
-                                         default_role=args.all_as)
+
+        def _pairs(specs, flag):
+            out = {}
+            for spec in specs:
+                if "=" not in spec:
+                    print(f"[error] {flag} wants KEY=VALUE, got {spec!r}", file=sys.stderr)
+                    return None
+                k, _, v = spec.partition("=")
+                out[k.strip().lstrip("@")] = v.strip()
+            return out
+
+        purposes = _pairs(args.purpose, "--purpose")
+        statuses = _pairs(args.status, "--status")
+        if purposes is None or statuses is None:
+            return 1
+        return corpus_ledger.run_collect(args.dir, purposes=purposes, statuses=statuses,
+                                         default_purpose=args.all_as)
 
     if args.command == "report":
         _check_env(need_pandoc=True)

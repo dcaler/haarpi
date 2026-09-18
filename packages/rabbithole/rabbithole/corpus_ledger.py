@@ -322,8 +322,9 @@ def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
     return rec
 
 
-def run_collect(directory: str = ".", *, set_roles: dict[str, str] | None = None,
-                default_role: str | None = None) -> int:
+def run_collect(directory: str = ".", *, purposes: dict[str, str] | None = None,
+                statuses: dict[str, str] | None = None,
+                default_purpose: str | None = None) -> int:
     """`rabbitHole collect` — code newly-added papers into the ledger and say what is ready.
 
     Collect has always been the human's step: rabbitHole lists what it could not find, you
@@ -331,10 +332,12 @@ def run_collect(directory: str = ".", *, set_roles: dict[str, str] | None = None
     queued it with command `None`. This is that support, and it does two things a person
     should not have to do by hand.
 
-    FIRST, every item in the collection gets a role. What rabbitHole found already has one
-    (gather wrote it), so anything still missing a row is by construction something you
-    added, and it takes the role of the review you are standing in: additions made while
-    working on the methods review are methods. Override any of them with `--role KEY=role`.
+    FIRST, every item in the collection gets a purpose — what it is FOR. What rabbitHole
+    found already has one (gather wrote it), so anything still missing a row is by
+    construction something you added, and it takes the purpose of the review you are standing
+    in: additions made while working on the methods review are methods. Override with
+    `--purpose KEY=methods`, or `--purpose KEY=literature+methods` for a source that genuinely
+    serves both. `--status KEY=quarantine` is the other axis, and locks against a later audit.
 
     SECOND, it reports which items cannot yet be used — an item with no PDF is in the
     bibliography but will never reach the corpus, and that is worth knowing at collect time
@@ -354,27 +357,31 @@ def run_collect(directory: str = ".", *, set_roles: dict[str, str] | None = None
         return 1
 
     rec = sync(paths, cfg, gc)
-    if rec.clean and not set_roles:
+    if rec.clean and not purposes and not statuses:
         print(f"  {runlog.stamp()}Ledger is level with the collection "
               f"({rec.total} item(s)); nothing new to code in.")
 
-    for key, spec in (set_roles or {}).items():
+    for key, spec in (purposes or {}).items():
         try:
-            if spec in STATUSES:
-                row = set_status(project_root, key, spec, locked=True, added_by="human")
-                print(f"  {key} -> status {row.status} (locked)")
-            else:
-                row = set_purpose(project_root, key, [p.strip() for p in spec.split("+")],
-                                  added_by="human")
-                print(f"  {key} -> purpose {'+'.join(row.purpose)}")
+            row = set_purpose(project_root, key, [p.strip() for p in spec.split("+")],
+                              added_by="human")
         except ValueError as e:
             print(f"  [error] {e}")
             return 1
+        print(f"  {key} -> purpose {'+'.join(row.purpose)}")
 
-    if default_role and rec.added:
+    for key, spec in (statuses or {}).items():
+        try:
+            row = set_status(project_root, key, spec, locked=True, added_by="human")
+        except ValueError as e:
+            print(f"  [error] {e}")
+            return 1
+        print(f"  {key} -> status {row.status} (locked)")
+
+    if default_purpose and rec.added:
         for row in rec.added:
-            set_purpose(project_root, row.key, [default_role], added_by="human")
-        print(f"  {len(rec.added)} new item(s) -> {default_role}")
+            set_purpose(project_root, row.key, [default_purpose], added_by="human")
+        print(f"  {len(rec.added)} new item(s) -> purpose {default_purpose}")
 
     rows = load(project_root)
     mine = [r for r in rows.values() if r.ingestible(kind.name)]
