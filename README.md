@@ -180,18 +180,31 @@ raster's build writeup, which raconteur finds by a root-level glob — a methods
 review sharing that name would be read as the writeup.
 
 **One Zotero collection per project, forever, and nothing is ever moved out of
-it.** Which review a source belongs to is recorded in a corpus ledger beside the
-project — `literature`, `methods`, or `quarantine` — and roles scope *ingestion*
-only. That is what lets two reviews share a collection without swallowing each
-other's sources, and it keeps `refs.bib` the union bibliography, correct by
-construction: every source any review has ever cited is still in it. Zotero
-subcollections cannot do this job — neither items endpoint recurses into them.
+it.** A corpus ledger beside the project records two independent things about
+each source:
 
-`gather` writes a row for what it finds, so the common case needs no decision
-from anyone. Anything in the collection without a row is by construction
-something a person added, and `collect` — which is where you download the PDFs
-and file them — codes those in, defaulting to the role of the review you are
-standing in and reporting which sources still lack a PDF.
+- **purpose** — what it is *for*: `literature`, `methods`, or **both**. A paper
+  on sequence analysis applied to funding pathways is methodological work and
+  substantive work at once, and a single collection is pointless if it cannot say
+  so. Written by `gather`, from the review that found it; *added to*, never
+  replaced, so nothing takes the first purpose away.
+- **status** — whether it is *in* the corpus at all: `corpus` or `quarantine`.
+  Written by `audit`, reversible, and lockable against a person's decision.
+
+Those are different questions — provenance against disposition — and keeping them
+in one field cost the provenance: quarantining a methods paper made the ledger
+forget which review it belonged to. Ingestion asks one question of a row: does it
+serve *my* review, and is it in the corpus. That is what lets two reviews share a
+collection without swallowing each other's sources, and it keeps `refs.bib` the
+union bibliography, correct by construction — every source any review has ever
+cited is still in it. Zotero subcollections cannot do this job; neither items
+endpoint recurses into them.
+
+`gather` writes a row for what it finds, so the common case needs no decision from
+anyone. Anything in the collection without a row is by construction something a
+person added, and `collect` — where you download the PDFs and file them — codes
+those in, defaulting to the purpose of the review you are standing in and
+reporting which sources still lack a PDF.
 
 | verb | does |
 |---|---|
@@ -242,13 +255,16 @@ relevance judgement. The first quarantined 43 of a corpus's first 49 papers at
 a search for Schelling scholarship. Almost none were homographs. The needs list
 no longer reaches the model at all.
 
-Quarantine is a **role in the corpus ledger**, never a move and never a delete.
+Quarantine is a **status in the corpus ledger**, never a move and never a delete.
 The item keeps its place in the project's Zotero collection, so it stays in
 `refs.bib` — taking it out was how this verb could hand a minted review a
 dangling citation, silently, from a command nobody thought of as touching
-bibliographies. `--release` puts the role back and *locks* it, so a later audit
-cannot overrule a person; releasing used to move the item back and leave the
-verdict cache alone, which made the decision last exactly until the next run.
+bibliographies. `--release` returns the status to `corpus` and *locks* it, so a
+later audit cannot overrule a person. The source's purpose is untouched, which is
+what returns a released methods paper to the methods corpus rather than to
+whichever review the release happened to name; releasing used to move the item
+back and leave the verdict cache alone, which made the decision last exactly until
+the next run.
 
 Verdicts are cached per paper against the question, so a normal cycle judges
 only what is new; a question that merely *gained* an ask keeps every paper it
