@@ -194,7 +194,7 @@ times and names two concrete techniques. The failure was structural, and no
 amount of steering addresses it.
 
 So a review is a **kind**: a folder, a config stem, and a deliverable infix.
-`litReview/litrev.yaml` mints a `litreview`; `litReviewMethods/methodsreview.yaml`
+`litReview/litrev.yaml` mints a `litreview`; `methodsReview/methodsreview.yaml`
 mints a `methodsreview`. The infixes differ because `methods` already belongs to
 raster's build writeup, which raconteur finds by a root-level glob — a methods
 review sharing that name would be read as the writeup.
@@ -311,14 +311,28 @@ and what the corpus holds instead.
 
 ### 2 · Experiment design — ramus
 
-A live session settles the analytical framework — too open-ended to default — and
-writes `designdocs/PLANNING.md`, `EXPERIMENTS.md`, a `PRIORS.md` index of the project's
-earlier `ra*` artifacts, a framework schematic into the figure pool, and the prereg
-`.docx` the gate reads. It **specifies only**: the executable `experiments.yaml` is
-authored later, by `rayleigh plan` in the experiments stage, against the code raster
-actually built. The human redlines the design; any severity of comment re-opens the
-session rather than patching the document, because a design is a set of decisions, not
-prose.
+**Two live sessions, with a literature search between them.**
+
+`ramus init` settles the analytical framework — too open-ended to default — and
+writes `designdocs/PLANNING.md`, `EXPERIMENTS.md`, a `PRIORS.md` index of the
+project's earlier `ra*` artifacts, a framework schematic into the figure pool, and
+`METHODS_SCOPE.md`: the methodological families this approach has to be able to
+defend. That last one is what calls for the methods review, and the gate refuses
+to mint the rung without it — a session that settles an approach and names nothing
+to read for it stopped early rather than found a shortcut.
+
+rabbitHole then gathers exactly those families, and `ramus design` binds them:
+each choice — the distance measure, the cost scheme, the clustering and its
+validity index, the estimator — stated with the source it rests on and the
+standing objection to it. A choice with no citation is not bound; a citation with
+no objection named has not been read carefully. Nothing may remain provisional,
+because by this rung the sources are in hand.
+
+It **specifies only**: the executable `experiments.yaml` is authored later, by
+`rayleigh plan` in the experiments stage, against the code raster actually built.
+The human redlines each rung; any severity of comment re-opens the session that
+authored it rather than patching the document, because a design is a set of
+decisions, not prose.
 
 This stage is **preregistration**: it is released before the code that satisfies
 it exists.
