@@ -19,10 +19,21 @@ def main(argv=None) -> int:
     init.add_argument("--no-launch", action="store_true",
                       help="scaffold and write the prompt, but do not launch the session")
     init.add_argument("--model", default="", help="override the design-session model")
+    design = sub.add_parser(
+        "design",
+        help="bind the methods and plan the study — the session AFTER the methods review")
+    design.add_argument("-C", "--dir", default=".", help="project directory (default: cwd)")
+    design.add_argument("--no-launch", action="store_true",
+                        help="write the prompt but do not launch the session")
+    design.add_argument("--model", default="", help="override the session model")
+
     args = p.parse_args(argv)
     if args.command == "init":
         from ramus.init import run_init
         return run_init(args)
+    if args.command == "design":
+        from ramus.design import run_design
+        return run_design(args)
     return 1
 
 

@@ -179,3 +179,48 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+# ── every queued command must be a verb that exists ──────────────────────────
+
+def test_every_command_the_planner_queues_is_a_real_verb():
+    """THE CHECK THAT WAS MISSING, twice in one day.
+
+    After the ramus split, three briefs and two runtime log lines still told you to run
+    `rayleigh init` — a verb that had moved. Then the design ladder queued `haarpi ramus
+    design` while ramus had only `init`. Both were invisible: the registries agreed with
+    themselves, the figure agreed with the registries, and nothing asked the TOOLS.
+
+    Asks each tool's CLI to PARSE the verb rather than inspecting its parser — tools build
+    their parsers differently, and a structural check quietly skipped the one tool that was
+    broken. Parsing is the thing the runner will actually do.
+    """
+    import importlib
+    import contextlib
+    import io
+
+    seen = {}
+    for stage, steps in planner.STAGE_STEPS.items():
+        for name, step in steps.items():
+            cmd = (step.command or "").split()
+            if len(cmd) < 3 or cmd[0] != "haarpi":
+                continue                      # `haarpi next`, or a command-less human step
+            seen.setdefault((cmd[1], cmd[2]), f"{stage}.{name}")
+
+    missing = []
+    for (tool, verb), where in sorted(seen.items()):
+        try:
+            cli = importlib.import_module(f"{tool}.cli")
+        except ImportError:                   # tool not installed in this stack
+            continue
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                cli.main([verb, "--help"])
+        except SystemExit as e:
+            if e.code not in (0, None):       # argparse exits 2 on an unknown verb
+                missing.append(f"{where} queues `haarpi {tool} {verb}`, which {tool} rejects: "
+                               f"{buf.getvalue().strip().splitlines()[-1:]}")
+        except Exception:                     # noqa: BLE001 — a verb that runs rather than
+            pass                              # printing help is present, which is the question
+    assert not missing, "\n".join(missing)
