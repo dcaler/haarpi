@@ -13,11 +13,20 @@ from pathlib import Path
 
 GAP, MARGIN, HEAD = 26, 22, 96
 INK, MINT = "#334155", "#4f46e5"
-HANDOFF = [("the review",      "unlocks the design"),
-           ("the prereg",      "unlocks the build"),
-           ("the methods digest", "unlocks the experiments"),
-           ("the findings",    "unlock the paper"),
-           ("the submission",  "unlocks the deck")]
+# One label per JOIN between panels, so this list is always one shorter than the panels and
+# must be extended whenever a stage is inserted. It was silently indexed by position and threw
+# IndexError the first time the ladder grew; now it is keyed by the pair it sits between, and a
+# pair with no label draws an unlabelled bus rather than crashing the build.
+STAGES_IN_ORDER: list = []
+HANDOFF_BY_PAIR = {
+    ("litreview", "methodsreview"): ("the review", "scopes the methods search"),
+    ("methodsreview", "design"):    ("the methods review", "unlocks the prereg"),
+    ("litreview", "design"):        ("the review", "unlocks the design"),
+    ("design", "build"):            ("the prereg", "unlocks the build"),
+    ("build", "experiments"):       ("the methods digest", "unlocks the experiments"),
+    ("experiments", "paper"):       ("the findings", "unlock the paper"),
+    ("paper", "deck"):              ("the submission", "unlocks the deck"),
+}
 
 def panel(path):
     txt = Path(path).read_text(encoding="utf-8")
@@ -26,6 +35,19 @@ def panel(path):
     return body, a
 
 def stitch(paths, out):
+    # The stage each panel depicts, in the order they are stitched — so a handoff label can be
+    # looked up by the pair it sits between rather than by a position that shifts whenever a
+    # stage is inserted.
+    global STAGES_IN_ORDER
+    STAGES_IN_ORDER = []
+    for _p in paths:
+        stem = Path(_p).stem
+        try:
+            import importlib, sys
+            sys.path.insert(0, str(Path(_p).parent.parent))
+            STAGES_IN_ORDER.append(getattr(importlib.import_module(stem), "STAGE", stem))
+        except Exception:  # noqa: BLE001
+            STAGES_IN_ORDER.append(stem)
     panels = [panel(p) for p in paths]
     ph = max(a["height"] for _b, a in panels)
     bus = HEAD + ph + 46                       # the hand-off bus, clear of every panel
@@ -65,7 +87,10 @@ def stitch(paths, out):
         S.append(f'<polygon points="{xs[i+1]+a1["spine_x"]:.1f},{y1:.1f} '
                  f'{xs[i+1]+a1["spine_x"]-9:.1f},{y1-4.5:.1f} '
                  f'{xs[i+1]+a1["spine_x"]-9:.1f},{y1+4.5:.1f}" fill="{MINT}"/>')
-        lab_a, lab_b = HANDOFF[i]
+        pair = (STAGES_IN_ORDER[i], STAGES_IN_ORDER[i + 1]) if i + 1 < len(STAGES_IN_ORDER) else None
+        lab_a, lab_b = HANDOFF_BY_PAIR.get(pair, ("", ""))
+        if not lab_a and not lab_b:
+            continue
         S.append(f'<text x="{(x0+x1)/2:.1f}" y="{bus-8:.1f}" text-anchor="middle" '
                  f'font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" '
                  f'fill="{MINT}">{lab_a} {lab_b}</text>')

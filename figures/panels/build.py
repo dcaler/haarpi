@@ -10,7 +10,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT, FIGS = HERE / "out", HERE.parent
-STAGES = sorted(p.stem for p in HERE.glob("stage[0-9]_*.py"))
+# stage[0-9]* plus suffixed panels like stage1b_: a stage can be inserted between two
+# others without renumbering every file after it.
+STAGES = sorted(p.stem for p in HERE.glob("stage[0-9]*_*.py"))
 
 
 def cairosvg_png(src: Path, dst: Path, width: int) -> None:

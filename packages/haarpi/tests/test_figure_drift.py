@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(not PANELS.is_dir(), reason="figure sources not 
 
 def _modules():
     sys.path.insert(0, str(PANELS))
-    for p in sorted(PANELS.glob("stage[0-9]_*.py")):
+    for p in sorted(PANELS.glob("stage[0-9]*_*.py")):
         yield importlib.import_module(p.stem)
 
 
@@ -195,3 +195,19 @@ def test_the_readme_lists_the_umbrella_cli_as_it_is():
     assert not missing, f"README's CLI line omits {sorted(missing)}"
     stray = listed - real
     assert not stray, f"README's CLI line names {sorted(stray)}, which `haarpi` does not offer"
+
+
+def test_every_stage_in_the_ladder_has_a_panel():
+    """THE GAP THAT LET A WHOLE STAGE GO UNDRAWN.
+
+    Every other check here reads the panels and asks whether each is still true of the code.
+    None of them could notice a stage with NO panel at all — and `methodsreview` shipped that
+    way, because it shares `STAGE_STEPS` with `litreview`, so the verb-coverage checks saw
+    nothing new and passed. The drawing was a stage short and the suite was green.
+    """
+    from haarpi import project
+    drawn = {getattr(m, "STAGE", None) for m in ALL}
+    missing = sorted(set(project.DEFAULT_STAGES) - drawn)
+    assert not missing, (
+        f"{missing} in the stage ladder with no panel in figures/panels/ — the drill-down "
+        f"cannot describe a pipeline it does not draw")
