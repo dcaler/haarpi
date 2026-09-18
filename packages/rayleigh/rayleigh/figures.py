@@ -4,7 +4,7 @@ Two figures come out of rayleigh, both onto the project's chain-named pool (`<ro
 
  - the DETERMINISTIC **experiment DAG**, from the executable `experiments.yaml` (`rayleigh plan`) —
    no model at all;
- - the CONCEPTUAL **analytical-framework schematic** (`rayleigh init`) — authored as Graphviz DOT by
+ - the CONCEPTUAL **analytical-framework schematic** (`ramus init`, upstream) — authored as Graphviz DOT by
    the strong Claude design session (rayleigh has no ollama brain of its own), then rendered onto the
    chain. So rayleigh uses the engine's deterministic + render/naming paths, not `compose`.
 

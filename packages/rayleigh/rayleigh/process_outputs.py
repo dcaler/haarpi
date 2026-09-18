@@ -549,12 +549,12 @@ def run_process_outputs(args) -> int:
     results = root / "results"
     spec_path = active_spec_path(results / "designdocs")
     if not spec_path.is_file():
-        log(f"no {spec_path} — run `rayleigh init` first")
+        log(f"no {spec_path} — run `haarpi rayleigh plan` first (it authors the executable\n            spec; the FRAMEWORK it implements comes from `haarpi ramus init`)")
         return 1
     spec = yaml.safe_load(spec_path.read_text()) or {}
     exps = spec.get("experiments") or []
     if not exps:
-        log("experiments.yaml has no experiments — author them in `rayleigh init`")
+        log("experiments.yaml has no experiments — author them in `haarpi rayleigh plan`")
         return 1
     if getattr(args, "experiment", None):
         exps = [e for e in exps if str(e.get("id")) == args.experiment]

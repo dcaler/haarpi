@@ -11,7 +11,10 @@ The record of the review is results/designdocs/REVIEW.md — the human's per-exp
 human approves an IN-CYCLE change (re-conduct / fix-analysis / a spec-editing fix-presentation),
 the session also writes the revised spec as a COMPLETE new experiments_<N>.yaml (leaving the base
 experiments.yaml as the preregistration of record; the diff is what the review changed). re-init
-is a NEW cycle (init --new-cycle), not an iterated spec; accept writes nothing.
+is a NEW cycle — and it now crosses an agent boundary: the redesign belongs to RAMUS, which
+owns the preregistration, so it is `ramus init --new-cycle`, not an iterated spec here. This
+module writes REVIEW.md; ramus reads it as the mandate for that redesign. accept writes
+nothing.
 
 FOLD-FORWARD (parseNplan-style). Deciding is the human's job; carrying the decision out is
 rayleigh's. When the interactive session ends, `review` reads the verdicts back out of REVIEW.md
@@ -84,7 +87,8 @@ REVIEW_PROMPT = (
     "marked `accept` must stay byte-identical. Leave results/designdocs/experiments.yaml untouched as "
     "the preregistration of record — the diff between it and experiments_<N>.yaml is the record of "
     "what this review changed. Do NOT write an iterated spec for an all-`accept` review (no change) or "
-    "for `re-init` (that is a NEW cycle — I run `rayleigh init --new-cycle`, not an in-cycle revision). "
+    "for `re-init` (that is a NEW cycle, and a different agent's: I run `ramus init "
+    "--new-cycle`, which reads this REVIEW.md as its mandate — not an in-cycle revision here). "
     "Show me the diff and let me confirm before you write the file. "
     "Four hard rules: (1) HUMAN-LED — never record a verdict I did not give, never sign off for me, "
     "and put ONLY changes I approved into the revised spec (never invent one, and never to make a "
@@ -270,9 +274,10 @@ def fold_forward(root: Path, cfg, args) -> int:
         return 0
     if any(v == "re-init" for v in verdicts.values()):
         reinit = [e for e, v in verdicts.items() if v == "re-init"]
-        log(f"re-init verdict on {', '.join(sorted(reinit))} — that is a new cycle, not an "
-            "in-cycle revision. Run `rayleigh init --new-cycle` (it ingests REVIEW.md). "
-            "Not mixing it into the in-cycle chain.")
+        log(f"re-init verdict on {', '.join(sorted(reinit))} — that is a new cycle, and it "
+            "belongs to ramus, which owns the preregistration. Run `haarpi ramus init "
+            "--new-cycle`; it reads this REVIEW.md as the mandate for the redesign. Not "
+            "mixing it into the in-cycle chain.")
         # fall through: any non-re-init actionable verdicts still get queued below.
 
     api, resources, pid_raw = _trundlr_meta(results, root, cfg)
@@ -344,7 +349,7 @@ def run_review(args) -> int:
     results = root / "results"
     spec_path = active_spec_path(results / "designdocs")
     if not spec_path.is_file():
-        log(f"no {spec_path} — run `rayleigh init` (then conduct_exp + process_outputs) first")
+        log(f"no {spec_path} — run `haarpi rayleigh plan` (then conduct_exp + process_outputs) first")
         return 1
     if not _has_report(results):
         log("no report yet — run `rayleigh process_outputs` first, then review it.")

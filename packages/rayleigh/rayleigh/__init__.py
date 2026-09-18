@@ -7,7 +7,7 @@ account of the experiments and their results, with figures. Siblings: rabbitHole
 raster (offline-first, test-driven code builder -> code/).
 
 Verbs:
-  rayleigh init            scaffold results/, open/roll a research cycle, and run the
+  (ramus init)             the FRAMEWORK — a different agent, upstream of raster. Run the
                            interactive prereg/design session -> designdocs/experiments.yaml
   rayleigh conduct_exp <E> expand an experiment's design into cells and run them against
                            code/ (restartable, provenance)

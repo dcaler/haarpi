@@ -1,5 +1,6 @@
 # rayleigh project config — MACHINERY, not a shipped deliverable (git-ignored).
-# Written by `rayleigh init` (into design/) and `rayleigh plan` (into results/). Read by every verb.
+# Written by `rayleigh plan` into results/. The design half keeps its own design/ramus.yaml;
+# these two never mix.
 # Personal/account details never live here — those stay in ~/.config/rayleigh/config.toml.
 
 project: {{PROJECT}}
@@ -21,5 +22,5 @@ trundlr:                      # used by `rayleigh queue` (optional — local run
   resources: {gpu: {{GPU_RES}}, cpu: {{CPU}}}   # each experiment's `resource: cpu|gpu` picks one; process_outputs = cpu
 
 # The analytical spec is designdocs/experiments.yaml (also git-ignored), authored during
-# `rayleigh init`. The prereg .docx rendered beside it is what `haarpi next` mints — that commit
+# `ramus init`. The prereg .docx rendered beside it is what `haarpi next` mints — that commit
 # hands off to raster to build the data infrastructure, then `conduct`/`process` run in results/.

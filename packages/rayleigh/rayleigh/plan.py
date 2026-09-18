@@ -1,7 +1,7 @@
 """`rayleigh plan` — the EXPERIMENTS stage: design the executable experiments that use the
 raster-built tooling to fulfil the committed analytical framework, then hand off to conduct.
 
-The SECOND interactive Cale+Claude session. `rayleigh init` (the design stage) designed the
+The SECOND interactive Cale+Claude session. `ramus init` (the design stage) designed the
 analytical FRAMEWORK upstream of the code; `plan` runs AFTER raster has built the tooling. It
 reads the minted prereg (the framework) + the real, built `code/` (its entrypoint, config surface,
 output format) and authors the EXECUTABLE `results/designdocs/experiments.yaml` — sweeps/cells,

@@ -7,7 +7,7 @@ from the one-pager + figures) stays the LLM session `razzle deck`. Facts a tool 
 belong to the human, so they are collected by asking, not by a model.
 
 It writes `deck_formats` + `decks` to the manifest — and nothing else. It does NOT touch trundlr:
-task creation and closing belong to haarpi (the board's owner), exactly as `rayleigh init` writes a
+task creation and closing belong to haarpi (the board's owner), exactly as `ramus init` writes a
 preregistration and never queues its own downstream. `haarpi next` reads the config this writes and
 queues one `razzle deck --format <fmt>` authoring session per format. Input is plain `input()`, so it
 is scriptable in tests by patching builtins.input.
