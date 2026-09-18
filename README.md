@@ -163,15 +163,20 @@ radially.
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 
-**Minting the preregistration means the methodological sources are in hand.**
-`design` declares both literature stages as inputs, so on a project that has a
-methods review the design session cannot open until that review is released —
-otherwise the analytical approach is specified against literature nobody has
-read, which is what produced one project's `[PROVISIONAL]` markers and its
-hand-written "methods addendum". The methods stage is opt-in, and a stage a
-project never asked for is skipped rather than waited on; without that rule,
-adding the input would have wedged every single-review project's design stage
-forever.
+**The design conversation is what spurs the methods search.** Working out which
+methodological families an approach needs is the design session's job — so it
+opens on the substantive review, and as it settles the approach it writes a
+**methods scoping brief** naming those families. That brief opens the methods
+review and seeds its config, anchored on the families with the project's own
+subject matter excluded.
+
+**And the preregistration will not mint until that review is delivered.** Binding
+a method to literature nobody has read is what produced one project's
+`[PROVISIONAL]` markers and its hand-written "methods addendum". This is a gate on
+the MINT rather than an `inputs` edge, and the difference is the whole flow: an
+input would stop the design session opening at all, and the session is where the
+methods scope comes from. A clean design markup is refused, not consumed — the
+same file mints the moment the review releases.
 
 **A project can hold more than one review, because one anchor cannot serve two
 questions.** The substantive review is anchored on the *domain*; a methods review

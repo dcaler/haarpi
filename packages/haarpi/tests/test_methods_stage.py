@@ -126,31 +126,93 @@ def _proj(tmp_path, *, with_methods: bool, litreview_released: bool,
     return m
 
 
-def test_design_waits_for_a_methods_review_the_project_has(tmp_path):
-    """The requirement: minting the prereg means the methodological sources are in hand.
-    Otherwise the analytical approach is specified against literature nobody has read."""
-    m = _proj(tmp_path, with_methods=True, litreview_released=True)
-    assert project.unlocked(tmp_path, m, "design") is False
-
-
-def test_design_opens_once_the_methods_review_releases(tmp_path):
-    m = _proj(tmp_path, with_methods=True, litreview_released=True, methods_released=True)
-    assert project.unlocked(tmp_path, m, "design") is True
-
-
-def test_a_project_without_a_methods_review_is_not_wedged(tmp_path):
-    """The failure this guards. `methodsreview` is opt-in, so a project that never opted in
-    has an input with no release and none ever coming — every such project's design stage
-    would wait forever."""
+def test_the_design_session_opens_before_the_methods_search(tmp_path):
+    """THE FLOW. The design conversation is what works out which methodological families the
+    approach needs, so it must be reachable first. An `inputs` edge on `methodsreview` would
+    have inverted that and made the conversation unreachable — the methods scope would then
+    have to be written by hand before anything could think about it."""
     m = _proj(tmp_path, with_methods=False, litreview_released=True)
-    assert project.stage_applies(tmp_path, m, "methodsreview") is False
     assert project.unlocked(tmp_path, m, "design") is True
+    assert project.DEFAULT_STAGES["design"]["inputs"] == ["litreview"]
 
 
-def test_the_substantive_review_is_still_required(tmp_path):
+def test_the_scope_brief_opens_the_methods_review(tmp_path):
+    """The opt-in belongs where the thinking happens. `ramus init` writes the brief; the
+    stage opens on it, rather than on someone remembering to create a directory."""
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    assert project.has_methods_review(tmp_path, m) is False
+    d = tmp_path / m.stages["design"]["dir"] / "designdocs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / project.METHODS_SCOPE).write_text("Sequence analysis; optimal matching costs.")
+    assert project.has_methods_review(tmp_path, m) is True
+
+
+def test_an_empty_scope_brief_does_not_count(tmp_path):
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    d = tmp_path / m.stages["design"]["dir"] / "designdocs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / project.METHODS_SCOPE).write_text("   \n")
+    assert project.has_methods_review(tmp_path, m) is False
+
+
+def test_the_prereg_is_pending_until_the_methods_review_releases(tmp_path):
+    """Asked for, not yet delivered. The gate consults this instead of `inputs`, so the
+    session stays open while the search runs."""
+    m = _proj(tmp_path, with_methods=True, litreview_released=True)
+    assert project.methods_review_pending(tmp_path, m) is True
+    m2 = _proj(tmp_path, with_methods=True, litreview_released=True, methods_released=True)
+    assert project.methods_review_pending(tmp_path, m2) is False
+
+
+def test_nothing_is_pending_for_a_project_that_never_asked(tmp_path):
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    assert project.methods_review_pending(tmp_path, m) is False
+
+
+def test_design_still_needs_the_substantive_review(tmp_path):
     m = _proj(tmp_path, with_methods=False, litreview_released=False)
     assert project.unlocked(tmp_path, m, "design") is False
 
 
-def test_design_declares_both_literature_stages():
-    assert project.DEFAULT_STAGES["design"]["inputs"] == ["litreview", "methodsreview"]
+# ── the conversation seeds the search ────────────────────────────────────────
+
+def test_the_scope_brief_seeds_a_methods_config(tmp_path):
+    """So nobody hand-writes one. The brief names the families; the config inverts the
+    anchor onto them and EXCLUDES the project's own subject matter — getting that backwards
+    is what made five rounds of steering fail to find sequence-analysis methodology."""
+    from rabbithole import config as rh
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    d = tmp_path / m.stages["design"]["dir"] / "designdocs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / project.METHODS_SCOPE).write_text(
+        "Optimal matching and sequence distance measures\nCluster validity indices")
+
+    planner._seed_methods_config(tmp_path, m)
+    fp = rh.latest_project_file(tmp_path / m.stages["methodsreview"]["dir"])
+    assert fp is not None and fp.name == "methodsreview.yaml"
+    cfg = rh.load_project(tmp_path / m.stages["methodsreview"]["dir"])
+    assert "Optimal matching" in cfg.domain_anchor
+    assert "methodological contribution" in cfg.exclude_topics
+    assert cfg.target_max <= 30, "a methods review is small by design"
+
+
+def test_seeding_never_overwrites_an_edited_config(tmp_path):
+    """The author edits it from here; re-running must not discard that."""
+    from rabbithole import config as rh
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    d = tmp_path / m.stages["design"]["dir"] / "designdocs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / project.METHODS_SCOPE).write_text("families")
+    md = tmp_path / m.stages["methodsreview"]["dir"]
+    md.mkdir(parents=True, exist_ok=True)
+    (md / "methodsreview.yaml").write_text("project_name: MINE\n")
+
+    planner._seed_methods_config(tmp_path, m)
+    assert (md / "methodsreview.yaml").read_text() == "project_name: MINE\n"
+
+
+def test_no_brief_seeds_nothing(tmp_path):
+    from rabbithole import config as rh
+    m = _proj(tmp_path, with_methods=False, litreview_released=True)
+    planner._seed_methods_config(tmp_path, m)
+    assert rh.latest_project_file(tmp_path / m.stages["methodsreview"]["dir"]) is None

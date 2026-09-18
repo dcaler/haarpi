@@ -60,12 +60,12 @@ DEFAULT_STAGES: dict[str, dict] = {
     # docx (see DESIGN_experiment_split.md). Its own directory, so no stage shares a
     # workspace and the gate stays directory-scoped.
     "design": {
-        # MINTING THE PREREG MEANS THE METHODS REVIEW IS DONE. The design session fixes the
-        # analytical approach, and a project that needs methodological sources must have them
-        # in hand first — otherwise the approach is specified against literature nobody has
-        # read, which is what produced FirmPathways' [PROVISIONAL] markers and its "methods
-        # addendum". `methodsreview` is skipped for projects that never opted in.
-        "dir": "design", "tool": "ramus", "inputs": ["litreview", "methodsreview"],
+        # OPENS on the substantive review, MINTS only once the methods review is done. The
+        # design conversation is what works out which methodological families the approach
+        # needs — so it has to happen BEFORE the methods search, not after it. An `inputs`
+        # edge would have inverted that and made the conversation unreachable. See
+        # `methods_review_pending`, which the gate consults instead.
+        "dir": "design", "tool": "ramus", "inputs": ["litreview"],
         "infix": "prereg", "attended": True,        # opens with `ramus init`
     },
     "build": {
@@ -606,20 +606,48 @@ def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
     return changed
 
 
+METHODS_SCOPE = "METHODS_SCOPE.md"
+
+
+def methods_scope_brief(root: Path, m: "Manifest") -> Path | None:
+    """The design session's statement that this project needs methodological sources.
+
+    Written by `ramus init` into the design stage's designdocs/, naming the methodological
+    families the analytical approach requires. It is what OPENS the methods review — the
+    decision belongs where the thinking happens, in the conversation, rather than depending
+    on someone remembering to create a directory first.
+    """
+    d = root / (m.stages.get("design", {}).get("dir") or "design") / "designdocs"
+    fp = d / METHODS_SCOPE
+    return fp if fp.is_file() and fp.read_text(encoding="utf-8", errors="replace").strip() else None
+
+
 def _has_methods_review(root: Path, m: "Manifest") -> bool:
     """Has this project asked for a methods review?
 
-    Its config's presence IS the opt-in. Most projects need one literature review, and a
-    methods stage that opened for all of them would queue a gather nobody wanted — so the
-    stage sits in the default graph and stays shut until the config exists. `deck` works the
-    same way, opening on an assembled submission rather than a bare manuscript.
+    Either the design conversation asked for one (the scope brief), or a config already
+    exists — the second covers a review opened by hand before the brief was a thing.
+    Most projects need one literature review, and a methods stage that opened for all of
+    them would queue a gather nobody wanted, so it stays shut until asked.
     """
     spec = m.stages.get("methodsreview")
     if not spec:
         return False
+    if methods_scope_brief(root, m) is not None:
+        return True
     from rabbithole import config as rh
     d = root / spec["dir"]
     return d.is_dir() and any(d.glob(f"{rh.REVIEW_KINDS['methods'].stem}*.yaml"))
+
+
+def methods_review_pending(root: Path, m: "Manifest") -> bool:
+    """Asked for, not yet delivered — the design stage must not mint its prereg yet.
+
+    This is a MINT gate rather than an `inputs` edge, and the difference is the whole flow:
+    an input would stop the design session opening at all, and the session is where the
+    methods scope comes from.
+    """
+    return _has_methods_review(root, m) and latest_release(root, m, "methodsreview") is None
 
 
 def has_methods_review(root: Path, m: "Manifest") -> bool:

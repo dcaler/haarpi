@@ -1867,6 +1867,42 @@ _OPENING: dict[str, tuple[str, str, str]] = {
 }
 
 
+def _seed_methods_config(root: Path, m: project.Manifest) -> None:
+    """Give the methods review a config, from the design session's scope brief.
+
+    The brief names the methodological families; a review needs those as its anchor, with the
+    project's own subject matter EXCLUDED — that inversion is the whole point, and getting it
+    backwards is what made a five-round steering effort fail. Seeded once and never
+    overwritten: the author edits it from here, and re-running must not discard that.
+    """
+    from rabbithole import config as rh
+    d = root / m.stages["methodsreview"]["dir"]
+    if rh.latest_project_file(d) is not None:
+        return
+    brief = project.methods_scope_brief(root, m)
+    if brief is None:
+        return
+    scope = brief.read_text(encoding="utf-8", errors="replace").strip()
+    cfg = rh.ProjectConfig(
+        project_name=m.name,
+        trundlr_project_id=m.trundlr_project_id,
+        research_prompt=(
+            "The METHODS apparatus for this project's preregistration. What is needed is the "
+            "procedural methodology literature behind the analytical approach — how to compute "
+            "and defend the choices it makes, and what the standing critiques of them are — so "
+            "that each can be justified at review.\n\n" + scope),
+        domain_anchor=scope.splitlines()[0][:300] if scope else "",
+        exclude_topics=(f"{m.brief[:200]}; substantive applications carrying no "
+                        f"methodological contribution"),
+        target_min=20, target_max=25,
+    )
+    d.mkdir(parents=True, exist_ok=True)
+    rh.save_project_to(cfg, d / f"{rh.REVIEW_KINDS['methods'].stem}.yaml")
+    print(f"  seeded {m.stages['methodsreview']['dir']}/"
+          f"{rh.REVIEW_KINDS['methods'].stem}.yaml from the design session's scope brief "
+          f"— read it before the gather runs.")
+
+
 def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
     """Open the deck stage with TWO tasks: the human interview, then the unattended authoring.
 
@@ -1968,6 +2004,7 @@ def _advance(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]
                                           _resource_id(tr_cfg, "claude")) if i],
                 duration=2.0)
         elif stage == "methodsreview":
+            _seed_methods_config(root, m)
             # A methods review opens on its own full first cycle, the way litreview does at
             # `haarpi queue` — there is no earlier output to comment on, so a bare `comment`
             # step would gate a document nobody has written.
@@ -2078,6 +2115,21 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
           f"{check['reviewer_changes']} reviewer edit(s)")
     if stage == "paper":
         print(f"  ladder    {_ladder_line(root, m, venue, deliverable)}")
+
+    # A CLEAN DESIGN MARKUP DOES NOT MINT WHILE ITS METHODS REVIEW IS OUTSTANDING. The
+    # preregistration fixes the analytical approach, and approving one whose methodological
+    # choices rest on literature nobody has read is the thing this whole arrangement exists to
+    # prevent — it is what produced one project's [PROVISIONAL] markers and its hand-written
+    # "methods addendum". Refuse, and say what is missing; the design is not re-opened and the
+    # markup is not consumed, so the same file mints the moment the review releases.
+    if stage == "design" and not check["unresolved"] and project.methods_review_pending(root, m):
+        print(f"haarpi next: the design reads clean, but this project's METHODS review has not "
+              f"been released yet.\n"
+              f"  The prereg binds methodological choices to sources — minting now would fix "
+              f"them against literature nobody has read.\n"
+              f"  Run the methods chain first (`haarpi rabbithole gather methods`, then "
+              f"collect/build/report). Nothing is consumed; re-run this when it releases.")
+        return 0
 
     ahash = project.annotation_hash(check["unresolved"], check["reviewer_changes"],
                                     markup.name)

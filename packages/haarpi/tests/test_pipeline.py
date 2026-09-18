@@ -392,7 +392,7 @@ def test_reordered_ladder_puts_design_before_build(proj):
     m = project.load_manifest(proj)
     assert list(m.stages) == ["litreview", "methodsreview", "design", "build",
                               "experiments", "paper", "deck"]
-    assert m.stages["design"]["inputs"] == ["litreview", "methodsreview"]
+    assert m.stages["design"]["inputs"] == ["litreview"]
     assert m.stages["design"]["dir"] == "design"
     assert m.stages["design"]["infix"] == "prereg"
     assert "design" in m.stages["build"]["inputs"]
