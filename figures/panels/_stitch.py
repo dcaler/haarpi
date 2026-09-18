@@ -19,9 +19,10 @@ INK, MINT = "#334155", "#4f46e5"
 # pair with no label draws an unlabelled bus rather than crashing the build.
 STAGES_IN_ORDER: list = []
 HANDOFF_BY_PAIR = {
-    ("litreview", "methodsreview"): ("the review", "scopes the methods search"),
-    ("methodsreview", "design"):    ("the methods review", "unlocks the prereg"),
-    ("litreview", "design"):        ("the review", "unlocks the design"),
+    ("litreview", "design"):        ("the review", "opens the design conversation"),
+    ("design", "methodsreview"):    ("METHODS_SCOPE.md", "scopes the methods search"),
+    ("methodsreview", "build"):     ("the methods review", "unblocks the prereg — which "
+                                     "unlocks the build"),
     ("design", "build"):            ("the prereg", "unlocks the build"),
     ("build", "experiments"):       ("the methods digest", "unlocks the experiments"),
     ("experiments", "paper"):       ("the findings", "unlock the paper"),

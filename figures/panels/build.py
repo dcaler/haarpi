@@ -10,9 +10,26 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT, FIGS = HERE / "out", HERE.parent
-# stage[0-9]* plus suffixed panels like stage1b_: a stage can be inserted between two
-# others without renumbering every file after it.
-STAGES = sorted(p.stem for p in HERE.glob("stage[0-9]*_*.py"))
+def _panels_in_ladder_order():
+    """Panels left-to-right in the order the LADDER runs, not the order filenames sort.
+
+    Sorting by name put `stage2b_` before `stage2_`, and before that put the methods review
+    immediately after the literature review — which draws the ordering that was tried and
+    rejected, where nothing could spur the methods search. The drawing must not be able to
+    contradict `project.DEFAULT_STAGES`; reading the order from it is the only way to be sure.
+    """
+    import importlib, sys
+    sys.path.insert(0, str(HERE))
+    by_stage = {}
+    for fp in HERE.glob("stage[0-9]*_*.py"):
+        mod = importlib.import_module(fp.stem)
+        by_stage.setdefault(getattr(mod, "STAGE", fp.stem), fp.stem)
+    from haarpi import project
+    ordered = [by_stage.pop(s) for s in project.DEFAULT_STAGES if s in by_stage]
+    return ordered + sorted(by_stage.values())      # anything unknown, last and stable
+
+
+STAGES = _panels_in_ladder_order()
 
 
 def cairosvg_png(src: Path, dst: Path, width: int) -> None:

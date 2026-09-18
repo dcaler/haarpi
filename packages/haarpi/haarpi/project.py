@@ -34,7 +34,11 @@ DEFAULT_STAGES: dict[str, dict] = {
         "infix": "litreview", "attended": False,
     },
     # The METHODS literature — a second review, anchored on the methodological families the
-    # analysis needs rather than on the substantive domain. One anchor cannot serve two
+    # analysis needs rather than on the substantive domain. IT SITS AFTER `design` IN THIS
+    # ORDER, and the order is load-bearing: the ramus conversation is what works out which
+    # families the approach needs, so this cannot run before it. `design` opens on the
+    # substantive review, writes METHODS_SCOPE.md, this gathers against that scope, and only
+    # then does the prereg mint (see `methods_review_pending`). One anchor cannot serve two
     # questions: FirmPathways spent five steering rounds trying to get sequence-analysis
     # methodology out of a review anchored on innovation policy, and could not, because that
     # methodology lives in life-course sociology, outside the anchor and adjacent to an
@@ -50,21 +54,23 @@ DEFAULT_STAGES: dict[str, dict] = {
     # both read the stage back out of a title. The REVIEW KIND rides in the venue slot, which
     # already exists for exactly this ("whatever is left over" between step and cycle): the
     # board reads "rabbithole gather methods 1" beside "rabbithole gather literature 1".
-    "methodsreview": {
-        "dir": "methodsReview", "tool": "rabbithole",
-        "inputs": ["litreview"], "infix": "methodsreview", "attended": False,
-    },
     # The experiment DESIGN (preregistration) runs BEFORE build: you commit the
     # experiments, then build code to satisfy them — designing against finished code is
     # the preregistration anti-pattern. rayleigh authors it; the gate mints a `prereg`
     # docx (see DESIGN_experiment_split.md). Its own directory, so no stage shares a
     # workspace and the gate stays directory-scoped.
     "design": {
-        # OPENS on the substantive review, MINTS only once the methods review is done. The
-        # design conversation is what works out which methodological families the approach
-        # needs — so it has to happen BEFORE the methods search, not after it. An `inputs`
-        # edge would have inverted that and made the conversation unreachable. See
-        # `methods_review_pending`, which the gate consults instead.
+        # THREE RUNGS, ONE STAGE — like `paper`, which climbs onepager -> skeleton -> outline
+        # -> manuscript. The methods review is INSIDE this stage, not beside it:
+        #
+        #   ramus init   -> `scope`          the framework + METHODS_SCOPE.md
+        #   rabbitHole   -> `methodsreview`  gather/collect/build/report, against that scope
+        #   ramus design -> `prereg`         binds the methods and plans the study
+        #
+        # It was briefly a stage of its own and that was wrong twice over: before `design` it
+        # made the conversation that scopes it unreachable, and after `design` it drew a
+        # methods search that nothing had asked for. One conversation, interrupted by the
+        # search it calls for, is what it actually is.
         "dir": "design", "tool": "ramus", "inputs": ["litreview"],
         "infix": "prereg", "attended": True,        # opens with `ramus init`
     },
@@ -81,10 +87,10 @@ DEFAULT_STAGES: dict[str, dict] = {
     },
     "paper": {
         "dir": "paper", "tool": "raconteur",
-        # `methodsreview` because raconteur's Methods section is written from it and carries
-        # a citation floor when it exists — a real read, so a real edge. Skipped by
-        # `stage_applies` for the projects that never asked for one.
-        "inputs": ["litreview", "methodsreview", "build", "experiments"],
+        # `design` because raconteur's Methods section is written from the METHODS REVIEW,
+        # which is a rung of that stage — a real read, so a real edge. It does not read the
+        # prereg itself; the flow map says so and a test holds it to that.
+        "inputs": ["litreview", "design", "build", "experiments"],
         "infix": "", "attended": False,
     },
     # The venue-specific presentation DECK (razzle), forked per presentation FORMAT. Feeds on the
@@ -216,7 +222,7 @@ def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
             use_methods=True,
             # Only set when the project actually has a methods review — an empty string
             # leaves the Methods section exactly as it was, with no citation floor.
-            methods_litrev_dir=(m.stages["methodsreview"]["dir"]
+            methods_litrev_dir=(rh.REVIEW_KINDS["methods"].dir
                                 if _has_methods_review(root, m) else ""),
             results_dir=m.stages["experiments"]["dir"],
         )
@@ -324,8 +330,6 @@ def stage_applies(root: Path, m: Manifest, stage: str) -> bool:
     `methodsreview` to `design.inputs` would wedge every project that has one literature
     review: the input would have no release, and no release was ever coming.
     """
-    if stage == "methodsreview":
-        return has_methods_review(root, m)
     return True
 
 
@@ -592,18 +596,21 @@ def migrate_tool_names(root: Path, *, dry_run: bool = False) -> list[str]:
     # the value still matches the old default: `paper.inputs: ['litreview']` is a documented
     # customisation, and a migration that overwrote a deliberate override would be worse than
     # one that did nothing.
-    d = m.stages.get("design")
-    if d and d.get("inputs") == ["litreview", "methodsreview"]:
-        # the design edge was tried and reverted: it stopped the session opening at all, and
-        # the session is where the methods scope comes from. The gate is on the MINT now.
-        changed.append("stages.design.inputs: -methodsreview")
-        if not dry_run:
-            d["inputs"] = ["litreview"]
+    # the methods review became a RUNG of design rather than a stage, so anything that named
+    # it as a stage input is repaired back
+    for st in ("design", "paper"):
+        spec = m.stages.get(st)
+        if spec and "methodsreview" in (spec.get("inputs") or []):
+            changed.append(f"stages.{st}.inputs: -methodsreview")
+            if not dry_run:
+                spec["inputs"] = [i for i in spec["inputs"] if i != "methodsreview"]
     pa = m.stages.get("paper")
     if pa and pa.get("inputs") == ["litreview", "build", "experiments"]:
-        changed.append("stages.paper.inputs: +methodsreview")
+        changed.append("stages.paper.inputs: +design (it reads the methods review)")
         if not dry_run:
-            pa["inputs"] = ["litreview", "methodsreview", "build", "experiments"]
+            pa["inputs"] = ["litreview", "design", "build", "experiments"]
+    if m.stages.pop("methodsreview", None) is not None:
+        changed.append("stages.methodsreview: removed (it is a rung of design)")
 
     spec = m.stages.get("methodsreview")
     if spec and spec.get("dir") == "litReviewMethods":
@@ -640,13 +647,10 @@ def _has_methods_review(root: Path, m: "Manifest") -> bool:
     Most projects need one literature review, and a methods stage that opened for all of
     them would queue a gather nobody wanted, so it stays shut until asked.
     """
-    spec = m.stages.get("methodsreview")
-    if not spec:
-        return False
     if methods_scope_brief(root, m) is not None:
         return True
     from rabbithole import config as rh
-    d = root / spec["dir"]
+    d = root / rh.REVIEW_KINDS["methods"].dir
     return d.is_dir() and any(d.glob(f"{rh.REVIEW_KINDS['methods'].stem}*.yaml"))
 
 
@@ -657,7 +661,17 @@ def methods_review_pending(root: Path, m: "Manifest") -> bool:
     an input would stop the design session opening at all, and the session is where the
     methods scope comes from.
     """
-    return _has_methods_review(root, m) and latest_release(root, m, "methodsreview") is None
+    from . import naming
+    from rabbithole import config as rh
+    if not _has_methods_review(root, m):
+        return False
+    d = root / rh.REVIEW_KINDS["methods"].dir / "output"
+    got = naming.find_latest_release(d, m.short_title, ext="docx",
+                                     chain_includes="methodsreview") if d.is_dir() else None
+    if got is None and d.is_dir():
+        got = naming.find_latest_release(d, m.short_title, ext="md",
+                                         chain_includes="methodsreview")
+    return got is None
 
 
 def has_methods_review(root: Path, m: "Manifest") -> bool:

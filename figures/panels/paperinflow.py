@@ -15,7 +15,7 @@ stage is allowed to read, and test_figure_drift.py checks this list against it.
 # every source, and the stage whose release it is (None = a produced component, not a mint)
 FROM_STAGE = {
  "s_one": "paper", "s_skel": "paper", "s_out": "paper",
- "s_lit": "litreview", "s_mrev": "methodsreview", "s_meth": "build",
+ "s_lit": "litreview", "s_mrev": "design", "s_meth": "build",
  "s_res": "experiments", "s_fig": None, "s_refs": None,
 }
 
@@ -25,7 +25,8 @@ SOURCES = {
  "s_out":  ("the outline — the content beats on the approved skeleton", "mint"),
  "s_lit":  ("the literature review — load-bearing sources, narrative, "
             "annotated bibliography", "mint"),
- "s_mrev": ("the methods review — whose method this is, and what its known limits are", "mint"),
+ "s_mrev": ("the methods review — a design-stage rung: whose method this is, and what its "
+            "known limits are", "mint"),
  "s_meth": ("the methods digest — DESIGN.md + tasks.yaml + the frozen tests", "mint"),
  "s_fig":  ("the figures pool — framework, module graph, data figures", "art"),
  "s_res":  ("the results write-up — the findings, as preregistered", "mint"),

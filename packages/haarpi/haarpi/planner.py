@@ -162,6 +162,30 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     # annotations (mirrors experiments' `review_session`). No `comment` step: re-running the
     # session ends by re-rendering the prereg for the author to annotate again.
     "design": {
+        # The methods search, inside the design stage. Same rabbitHole verbs as a literature
+        # review, pointed at the methods review by its name.
+        "methods_gather": Step("haarpi rabbithole gather methods", 3.0,
+                               "Search the methodological families METHODS_SCOPE.md named — "
+                               "anchored on them, with this project's own subject matter "
+                               "excluded.", resource="gpu"),
+        "methods_collect": Step("haarpi rabbithole collect methods", 0.25,
+                                "Add the real sources to Zotero with their PDFs, then code "
+                                "them into the corpus ledger with purpose `methods`.",
+                                resource="human", attended=True),
+        "methods_build": Step("haarpi rabbithole build methods", 1.0,
+                              "Embed the methods corpus — only the ledger rows whose purpose "
+                              "is `methods`.", resource="gpu"),
+        "methods_report": Step("haarpi rabbithole report methods", 2.0,
+                               "Synthesise the methods review: how each choice is computed "
+                               "and defended, and what its standing critiques are.",
+                               resource="gpu"),
+        # The SECOND conversation. `plan` was the obvious name and is taken twice already —
+        # `raster plan` authors the build spec, `rayleigh plan` the executable experiments,
+        # and both mean "plan against something already built", which is the opposite of this.
+        "design_bind": Step("haarpi ramus design", 1.5,
+                            "Bind the methods now that their literature is in hand, and plan "
+                            "the study. Mints the prereg — raster's build target.",
+                            resource="human", attended=True),
         "design_session": Step("haarpi ramus init", 1.0,
                                "Re-open the design session to address the annotations and "
                                "re-render the prereg docx. The EXECUTABLE experiments.yaml is "
@@ -257,14 +281,38 @@ STAGE_REFRESH: dict[str, list[str]] = {
 
 _PAPER_DELIVERABLE_WORDS = ("onepager", "skeleton", "outline", "venue")
 
+# ── the design stage's rungs ─────────────────────────────────────────────────
+# The methods review lives INSIDE this stage. The ramus conversation works out which
+# methodological families the approach needs, the search runs against that, and a second
+# session binds them and plans the study:
+#
+#   ramus init    -> scope          framework + METHODS_SCOPE.md
+#   rabbitHole    -> methodsreview  gather -> collect -> build -> report, against that scope
+#   ramus design  -> prereg         binds the methods, plans the study; raster's build target
+#
+# A stage of its own was tried twice and is wrong both ways round: before `design` nothing
+# could spur the search, after it the search had nothing to be scoped by.
+_DESIGN_DELIVERABLE_WORDS = ("scope", "methodsreview")
+_DESIGN_LADDER = ("scope", "methodsreview", "")
+
+DESIGN_LADDER: dict[str, list[str]] = {
+    "scope":         ["methods_gather", "methods_collect", "methods_build",
+                      "methods_report", "comment"],
+    "methodsreview": ["design_bind", "comment"],
+}
+
 # The ORDER the rungs are climbed, which the set above does not carry — "venue" sits after
 # "outline" there and before it here. "" is the manuscript itself: the rung with no
 # deliverable word, which is why it cannot simply be named.
 _PAPER_LADDER = ("onepager", "venue", "skeleton", "outline", "", "package")
 _LADDER_NAME = {"": "manuscript"}
+# What the rung-less deliverable IS, per stage — for the header line.
+_LADDER_FINAL = {"paper": "manuscript", "design": "prereg"}
 
 _DELIVERABLE_LABEL = {
     "":         "full manuscript draft",
+    "scope":    "analytical framework + methods scope",
+    "methodsreview": "methods review",
     "onepager": "one-pager (the narrative through-line)",
     "venue":    "venue analysis",
     "skeleton": "section skeleton (phase one — headings only)",
@@ -395,16 +443,18 @@ def _queue_template_task(root: Path, m, client, tr_cfg: dict, slug: str, vcfg,
 
 
 def _queue_next_rung(root: Path, m, client, tr_cfg: dict, deliverable: str,
-                     venue: str, dst: Path) -> str:
+                     venue: str, dst: Path, stage: str = "paper") -> str:
     """Queue what comes after a deliverable's gate — once per venue where that applies.
 
-    The venue analysis is the FORK in the ladder. Before it, there is one narrative and one
-    of everything. After it, there is one outline and one manuscript PER SELECTED VENUE, and
-    those chains are independent: they share the one-pager, not the paper.
+    The venue analysis is the FORK in the paper's ladder. Before it, there is one narrative and
+    one of everything. After it, there is one outline and one manuscript PER SELECTED VENUE,
+    and those chains are independent: they share the one-pager, not the paper.
+
+    The design stage climbs rungs too, and has no fork: scope -> methods review -> prereg.
     """
-    steps = PAPER_LADDER[deliverable]
+    steps = _LADDERS[stage][deliverable]
     if deliverable != "venue":
-        queued = queue_chain(client, m.trundlr_project_id, "paper", steps, tr_cfg,
+        queued = queue_chain(client, m.trundlr_project_id, stage, steps, tr_cfg,
                              description=f"{deliverable} gate passed: {dst.name}.",
                              venue=venue)
         return (f"; queued cycle {queued['cycle']} "
@@ -471,13 +521,27 @@ def _queue_packaging(root: Path, m, client, tr_cfg: dict, venue: str, release: P
     return f"; queued packaging for {venue} (cycle {cycle}: package -> submission)"
 
 
-def _deliverable_of(markup: Path, short_title: str) -> str:
-    """The paper-stage deliverable a markup belongs to; '' = the manuscript."""
+# Which stages climb rungs, and the deliverable words each rung is named by. A stage not
+# listed here has one deliverable and mints on its first clean markup.
+_LADDER_WORDS = {"paper": _PAPER_DELIVERABLE_WORDS, "design": _DESIGN_DELIVERABLE_WORDS}
+_LADDERS = {"paper": PAPER_LADDER, "design": DESIGN_LADDER}
+
+
+def has_rungs(stage: str) -> bool:
+    return stage in _LADDER_WORDS
+
+
+def _deliverable_of(markup: Path, short_title: str, stage: str = "paper") -> str:
+    """The rung a markup belongs to; '' = the stage's final deliverable.
+
+    '' is the manuscript for `paper` and the prereg for `design` — in both cases the document
+    with no rung word in its chain, which is why it cannot simply be named.
+    """
     parsed = naming.parse(markup, short_title)
     if not parsed:
         return ""
     chain = [c.lower() for c in parsed[1]]
-    for w in _PAPER_DELIVERABLE_WORDS:
+    for w in _LADDER_WORDS.get(stage, ()):
         if w in chain:
             return w
     return ""
@@ -1876,7 +1940,7 @@ def _seed_methods_config(root: Path, m: project.Manifest) -> None:
     overwritten: the author edits it from here, and re-running must not discard that.
     """
     from rabbithole import config as rh
-    d = root / m.stages["methodsreview"]["dir"]
+    d = root / rh.REVIEW_KINDS["methods"].dir
     if rh.latest_project_file(d) is not None:
         return
     brief = project.methods_scope_brief(root, m)
@@ -1898,7 +1962,7 @@ def _seed_methods_config(root: Path, m: project.Manifest) -> None:
     )
     d.mkdir(parents=True, exist_ok=True)
     rh.save_project_to(cfg, d / f"{rh.REVIEW_KINDS['methods'].stem}.yaml")
-    print(f"  seeded {m.stages['methodsreview']['dir']}/"
+    print(f"  seeded {rh.REVIEW_KINDS['methods'].dir}/"
           f"{rh.REVIEW_KINDS['methods'].stem}.yaml from the design session's scope brief "
           f"— read it before the gather runs.")
 
@@ -2101,15 +2165,16 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # Say where we are and what we are reading BEFORE deciding anything, so the header is
     # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:
     # the run named neither the file it gated nor its place on the ladder.
-    deliverable = _deliverable_of(markup, m.short_title) if stage == "paper" else ""
+    deliverable = _deliverable_of(markup, m.short_title, stage) if has_rungs(stage) else ""
     # A deck lives in slides/<venue>/, so the markup's parent NAMES the venue — which is what a
     # deck rework has to be told, or it re-authors the wrong deliverable.
     venue = (naming.venue_of(markup, m.short_title) if stage == "paper"
              else markup.parent.name if stage == "deck" else "")
     check = redline.gate_check(markup)
-    rung = _DELIVERABLE_LABEL.get(deliverable, deliverable) if stage == "paper" else stage
+    rung = _DELIVERABLE_LABEL.get(deliverable, deliverable) if has_rungs(stage) else stage
     print(f"haarpi next: {stage}" + (f" · {venue}" if venue else "")
-          + (f" · {deliverable or 'manuscript'} rung" if stage == "paper" else ""))
+          + (f" · {deliverable or _LADDER_FINAL.get(stage, 'final')} rung"
+             if has_rungs(stage) else ""))
     print(f"  reading   {markup.name}")
     print(f"  markup    {len(check['unresolved'])} unresolved comment(s), "
           f"{check['reviewer_changes']} reviewer edit(s)")
@@ -2168,6 +2233,22 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             elif not deliverable and stage == "paper" and venue:
                 print(f"[dry-run] would queue packaging for {venue} (package -> submission)")
             return 0
+        # A SCOPE RUNG WITHOUT A METHODS BRIEF HAS NOT FINISHED. Every empirical study has
+        # methods it must defend at review — a distance measure, an estimator, a validation
+        # procedure. A session that settled an analytical approach and named nothing to read
+        # for it did not find a shortcut; it stopped early. Refusing here is what keeps that
+        # from passing silently into a prereg.
+        if stage == "design" and deliverable == "scope" \
+                and project.methods_scope_brief(root, m) is None:
+            print(f"haarpi next: the framework reads clean, but there is no "
+                  f"{project.METHODS_SCOPE} in {m.stages['design']['dir']}/designdocs/.\n"
+                  f"  Name the methodological families this approach has to defend — the "
+                  f"distance measure, the estimator, the validation procedure — and what it "
+                  f"needs to be able to answer about each.\n"
+                  f"  If the substantive review genuinely covers them all, say THAT in the "
+                  f"file. Nothing is consumed; re-run when it is written.")
+            return 0
+
         # A rung may need its release reconciled with what the author actually approved.
         # The skeleton does: its word-plan comments were written against the structure as
         # generated, and the author has since moved subsections. Reconciling at the mint is
@@ -2219,7 +2300,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                 try:
                     client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
                     queued_note = _queue_next_rung(
-                        root, m, client, tr_cfg, deliverable, venue, dst)
+                        root, m, client, tr_cfg, deliverable, venue, dst, stage)
                 except trundlr.TrundlrError as e:
                     queued_note = f"; [trundlr] queueing failed ({e}) — queue the next rung manually"
             for_v = f" ({venue})" if venue else ""

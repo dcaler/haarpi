@@ -163,20 +163,25 @@ radially.
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 
-**The design conversation is what spurs the methods search.** Working out which
-methodological families an approach needs is the design session's job — so it
-opens on the substantive review, and as it settles the approach it writes a
-**methods scoping brief** naming those families. That brief opens the methods
-review and seeds its config, anchored on the families with the project's own
-subject matter excluded.
+**The methods review is a rung of the design stage, not a stage beside it.** The
+design stage climbs three, the way the paper climbs onepager → skeleton → outline:
 
-**And the preregistration will not mint until that review is delivered.** Binding
-a method to literature nobody has read is what produced one project's
-`[PROVISIONAL]` markers and its hand-written "methods addendum". This is a gate on
-the MINT rather than an `inputs` edge, and the difference is the whole flow: an
-input would stop the design session opening at all, and the session is where the
-methods scope comes from. A clean design markup is refused, not consumed — the
-same file mints the moment the review releases.
+```
+ramus init    → scope          the framework, plus METHODS_SCOPE.md
+rabbitHole    → methodsreview  gather → collect → build → report, against that scope
+ramus design  → prereg         binds the methods, plans the study
+```
+
+The ramus conversation is what works out which methodological families the
+approach needs, so the search cannot precede it — and the preregistration cannot
+precede the search, because binding a method to literature nobody has read is the
+thing this exists to prevent. One conversation, interrupted by the search it
+calls for.
+
+A scope rung that names nothing to read is a session that stopped early, not a
+shortcut: every empirical study has methods it must defend at review, so the gate
+refuses to mint a scope with no brief. If the substantive review genuinely covers
+them all, the brief says *that*.
 
 **A project can hold more than one review, because one anchor cannot serve two
 questions.** The substantive review is anchored on the *domain*; a methods review
