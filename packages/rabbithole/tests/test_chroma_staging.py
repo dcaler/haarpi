@@ -20,9 +20,17 @@ from __future__ import annotations
 import json
 import os
 import socket
+import time
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_waiting(monkeypatch):
+    """The production wait is ten minutes; no test may sit through it."""
+    monkeypatch.setattr(chroma, "_LOCK_WAIT_S", 0.0)
+    monkeypatch.setattr(chroma, "_LOCK_POLL_S", 0.05)
 
 from rabbithole import chroma
 
@@ -173,29 +181,131 @@ def test_two_projects_get_separate_local_stores(tmp_path):
 
 # ── the write lock ───────────────────────────────────────────────────────────
 
-def test_a_second_writer_works_on_the_share_rather_than_clobbering(tmp_path):
-    """The risk staging CREATED. Two writers each take a snapshot, both copy back, and the
-    last one silently discards the other's indexing — where working over the share at least
-    had SQLite arbitrating. The second writer is sent back to the share, which is exactly the
-    behaviour that was safe all along."""
+def test_a_second_writer_is_refused_not_sent_to_the_share(tmp_path):
+    """The behaviour this test used to assert is the bug it now guards against.
+
+    It read: "the second writer is sent back to the share, which is exactly the behaviour that
+    was safe all along." It was not safe. On 2026-09-19 a DigiPros `build` was refused the lock,
+    fell back to the share, indexed 125 of 195 papers over 2h24m against a store another process
+    was already holding, and died on `chromadb.errors.InternalError: database is locked` — the
+    exact failure the whole staging mechanism exists to prevent. Falling back to the share during
+    genuine contention is strictly worse than the NFS flakiness it was built to escape, because
+    now there really IS a second writer on the file.
+
+    So a refused writer raises, in seconds, naming who holds the store."""
     remote = tmp_path / "p" / "l" / "w" / "chroma"
     remote.mkdir(parents=True)
     first = chroma.get_collection(remote, writable=True)
     _add(first, "first-writers-work")
     assert chroma._staged.get(remote) is not None
 
-    # A different process arrives at the same store.
-    other = tmp_path / "elsewhere"
-    chroma._lock_path(remote).write_text(json.dumps(
-        {"host": socket.gethostname(), "pid": os.getpid(), "started": "now"}))
     chroma._staged.pop(remote)                       # pretend we are that other process
     assert chroma._acquire(remote) is True, "our own pid re-entering is not a conflict"
 
     chroma._lock_path(remote).write_text(json.dumps(
-        {"host": "some-other-host", "pid": 999999, "started": "now"}))
-    assert chroma._stage_in(remote, writable=True) == remote, "sent to the share, not staged"
-    assert remote not in chroma._staged, "and so it has nothing to write back"
+        {"host": "some-other-host", "pid": 999999, "started": "now",
+         "command": "rabbithole report"}))
+    with pytest.raises(chroma.ChromaBusy) as ei:
+        chroma._stage_in(remote, writable=True, )
+    assert remote not in chroma._staged, "and it has nothing to write back"
+    assert "rabbithole report" in str(ei.value), "says WHAT holds it, not just a pid"
 
+
+def test_a_busy_store_is_waited_for_then_refused(tmp_path):
+    """Two tasks queued back to back are the ordinary case, so contact alone must not refuse.
+    The wait is bounded: after it, the caller stops rather than degrading."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "some-other-host", "pid": 999999, "started": "now"}))
+    t0 = time.monotonic()
+    with pytest.raises(chroma.ChromaBusy):
+        chroma._acquire(remote, wait_s=0.6)
+    assert time.monotonic() - t0 >= 0.5, "it waited rather than refusing on contact"
+
+
+def test_a_suspended_holder_is_named_and_refused_immediately(tmp_path, monkeypatch):
+    """pid 2063721 held DigiPros' store for 9h29m in state `T`. `os.kill(pid, 0)` says such a
+    process is alive, so the lock looked healthy and nothing could ever clear it.
+
+    A stopped process will never finish on its own, so waiting out the clock only delays the
+    same refusal — it is reported at once, and the message says how to resolve it."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": socket.gethostname(), "pid": os.getppid(), "started": "now",
+         "command": "rabbithole report"}))
+    monkeypatch.setattr(chroma, "_proc_state", lambda pid: "T")
+    t0 = time.monotonic()
+    with pytest.raises(chroma.ChromaBusy) as ei:
+        chroma._acquire(remote, wait_s=30)
+    # (the holder must be a live pid that is NOT ours, or re-entrancy short-circuits)
+    assert time.monotonic() - t0 < 2, "a suspended holder is refused at once, not waited out"
+    msg = str(ei.value)
+    assert "SUSPENDED" in msg and "kill -CONT" in msg and "--unlock" in msg
+
+
+def test_a_suspended_holder_is_never_cleared(tmp_path, monkeypatch):
+    """It can be resumed, and would then write into a store someone else had taken. Reporting
+    is the fix; deciding is the human's."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": socket.gethostname(), "pid": os.getppid(), "started": "now"}))
+    monkeypatch.setattr(chroma, "_proc_state", lambda pid: "T")
+    held = chroma._holder(remote)
+    assert held and held.get("suspended") is True
+    assert chroma._lock_path(remote).exists(), "reported, not cleared"
+
+
+def test_a_running_holder_is_not_called_suspended(tmp_path, monkeypatch):
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": socket.gethostname(), "pid": os.getpid(), "started": "now"}))
+    monkeypatch.setattr(chroma, "_proc_state", lambda pid: "S")
+    assert not (chroma._holder(remote) or {}).get("suspended")
+
+
+def test_proc_state_reads_a_real_process(tmp_path):
+    """Guard the parse: `comm` can contain spaces and parentheses, so state is the field after
+    the FINAL ')', not split()[2]."""
+    assert chroma._proc_state(os.getpid()) in ("R", "S", "D")
+    assert chroma._proc_state(999999) == ""
+
+
+def test_unlock_takes_an_abandoned_store_and_says_who_had_it(tmp_path):
+    """The escape hatch the old code lacked — with no way to clear a lock but knowing the
+    file's path, a suspended or cross-host holder wedged the project indefinitely."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "some-other-host", "pid": 999999, "started": "now",
+         "command": "rabbithole report"}))
+    held = chroma.unlock(remote)
+    assert held["command"] == "rabbithole report"
+    assert not chroma._lock_path(remote).exists()
+    assert chroma.unlock(remote) is None, "nothing to release the second time"
+    assert chroma._acquire(remote, wait_s=0) is True, "and the store can be taken again"
+
+
+def test_a_reader_is_never_blocked_by_a_writers_lock(tmp_path):
+    """Readers take no lock and never write back, so a busy store must not stop a `locate`."""
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    chroma._lock_path(remote).write_text(json.dumps(
+        {"host": "some-other-host", "pid": 999999, "started": "now"}))
+    chroma.get_collection(remote, writable=False)     # must not raise
+    assert remote not in chroma._staged
+
+
+def test_the_lock_records_what_is_holding_it(tmp_path):
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    assert chroma._acquire(remote, wait_s=0) is True
+    held = json.loads(chroma._lock_path(remote).read_text())
+    assert held["command"], "a bare pid sends you to `ps`; the command tells you what to do"
+    assert held["host"] == socket.gethostname() and held["pid"] == os.getpid()
 
 def test_a_lock_left_by_a_dead_process_is_cleared(tmp_path):
     """A killed run must not wedge the project forever."""
@@ -214,7 +324,8 @@ def test_another_hosts_lock_is_believed(tmp_path):
     remote.mkdir(parents=True)
     chroma._lock_path(remote).write_text(json.dumps(
         {"host": "another-box", "pid": 1, "started": "earlier"}))
-    assert chroma._acquire(remote) is False
+    with pytest.raises(chroma.ChromaBusy):
+        chroma._acquire(remote, wait_s=0)
 
 
 def test_the_lock_is_released_after_the_write_back(tmp_path):

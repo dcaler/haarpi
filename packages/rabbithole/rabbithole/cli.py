@@ -69,6 +69,21 @@ def _line_buffer_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run a verb, turning a busy vector store into a sentence rather than a traceback.
+
+    A `ChromaBusy` is an ordinary operational outcome — another run has the store —
+    so it exits 1 with an instruction. It reached the runner as a chromadb stack
+    trace before, 2h24m after the collision that caused it.
+    """
+    from .chroma import ChromaBusy
+    try:
+        return _run(argv)
+    except ChromaBusy as e:
+        print(f"\n[busy] {e}", file=sys.stderr)
+        return 1
+
+
+def _run(argv: list[str] | None = None) -> int:
     _line_buffer_output()
     runlog.stamp_output()
     parser = argparse.ArgumentParser(
@@ -203,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
                      help="move an item back from quarantine to this project's collection "
                           "(a Zotero item key or an Author-Year label)")
 
+    chr_ = sub.add_parser("chroma",
+                          help="inspect or release the vector store's write lock")
+    chr_.add_argument("--unlock", action="store_true",
+                      help="release the lock held by an abandoned run (shows the holder first)")
+    _review_arg(chr_)
+
     args = parser.parse_args(argv)
 
     # WHICH REVIEW, resolved once. Every verb below takes a directory, so the named review
@@ -256,6 +277,27 @@ def main(argv: list[str] | None = None) -> int:
         from . import build
         return build.run(args.dir, from_folder=args.from_folder,
                          refresh_notes=not args.no_refresh_notes, brain_override=args.brain)
+
+    if args.command == "chroma":
+        from . import chroma as _chroma, config as _c
+        store = _c.project_paths(args.dir).work / "chroma"
+        held = _chroma._holder(store)
+        if not held:
+            print(f"No write lock on {store}.")
+            return 0
+        age = _chroma._held_for(held)
+        print(f"{store}\n  held by {held.get('command') or 'a rabbitHole run'} "
+              f"(host {held.get('host')}, pid {held.get('pid')}"
+              f"{', SUSPENDED' if held.get('suspended') else ''})"
+              f"{', for ' + age if age else ''}, since {held.get('started')}")
+        if not args.unlock:
+            print("  Pass --unlock to release it. Do that only if that run is abandoned: "
+                  "a suspended run that is later resumed will write into the store.")
+            return 0
+        _chroma.unlock(store)
+        print("  lock released. The index is derived data — the next build rebuilds "
+              "whatever the interrupted run had not written back.")
+        return 0
 
     if args.command == "graft":
         _check_env(need_pandoc=True)

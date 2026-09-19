@@ -26,8 +26,42 @@ from pathlib import Path
 
 from . import runlog
 
+class ChromaBusy(RuntimeError):
+    """Another run holds this store's write lock and did not let go in time.
+
+    Raised INSTEAD of quietly working over the share. On 2026-09-19 a `build` was refused
+    the lock, fell back to the share, indexed 125 of 195 papers over 2h24m, and then died on
+    `database is locked` anyway — the exact failure staging was built to prevent. A refusal
+    that costs two and a half hours of GPU time before surfacing is worse than no refusal.
+    """
+
+    def __init__(self, remote: Path, held: dict, waited: float):
+        self.remote, self.held, self.waited = remote, held, waited
+        super().__init__(self.message())
+
+    def message(self) -> str:
+        cmd = self.held.get("command") or "another rabbitHole run"
+        who = (f"host {self.held.get('host')}, pid {self.held.get('pid')}"
+               f"{', ' + self.held.get('state_word') if self.held.get('state_word') else ''}")
+        lines = [f"the chroma store {self.remote.name} is locked by {cmd} ({who}), "
+                 f"held since {self.held.get('started')}."]
+        if self.waited:
+            lines.append(f"Waited {self.waited:.0f}s for it to finish.")
+        if self.held.get("suspended"):
+            lines.append(f"THAT PROCESS IS SUSPENDED, not working — it cannot finish or release "
+                         f"the lock on its own. Resume it with `kill -CONT {self.held.get('pid')}`, "
+                         f"or, if it is abandoned, take the store with "
+                         f"`rabbitHole chroma --unlock`.")
+        else:
+            lines.append("Run this again once it finishes, or take the store with "
+                         "`rabbitHole chroma --unlock` if that run is abandoned.")
+        return " ".join(lines)
+
+
 _CHUNK_CHARS = 1800       # max chars per chunk (≈ 450 tokens — leaves room for query + output)
 _COLLECTION_NAME = "papers"
+_LOCK_WAIT_S = float(os.environ.get("HAARPI_CHROMA_LOCK_WAIT", "600"))   # 10 min, then refuse
+_LOCK_POLL_S = 5.0
 _LOCATE_CANDIDATES = 3    # chunks fetched per claim, so a collision can fall through to the next
 
 
@@ -80,6 +114,23 @@ def _lock_path(remote: Path) -> Path:
     return remote.with_name(remote.name + ".lock")
 
 
+def _proc_state(pid: int) -> str:
+    """The kernel's one-letter state for a local pid, or "" if it cannot be read.
+
+    `os.kill(pid, 0)` answers "does this pid exist", which is not the question. A process
+    SUSPENDED with SIGSTOP answers yes forever while doing no work and releasing nothing —
+    which is how pid 2063721 held DigiPros' store for nine and a half hours and looked
+    perfectly healthy doing it.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    # comm can contain spaces and parentheses; state is the field after the final ')'.
+    tail = stat.rpartition(")")[2].split()
+    return tail[0] if tail else ""
+
+
 def _holder(remote: Path) -> dict | None:
     """Who holds the write lock on this store, or None if nobody does.
 
@@ -87,6 +138,10 @@ def _holder(remote: Path) -> dict | None:
     forever. Liveness is only checkable for our own host, so another machine's lock is treated
     as live — the cost of being wrong is a slower run, and the cost of the reverse is two
     writers silently overwriting each other.
+
+    A SUSPENDED holder is reported, never cleared. It can be resumed, and would then write
+    into a store someone else had taken — so the fact is surfaced and the decision is the
+    human's. Saying WHICH of the two it is turns an unexplained wedge into an instruction.
     """
     fp = _lock_path(remote)
     try:
@@ -96,46 +151,98 @@ def _holder(remote: Path) -> dict | None:
     if held.get("host") != socket.gethostname():
         return held
     try:
-        os.kill(int(held.get("pid", -1)), 0)
-        return held
+        pid = int(held.get("pid", -1))
+        os.kill(pid, 0)
     except (OSError, ValueError, TypeError):
         print(f"  {runlog.stamp()}clearing a stale chroma lock from pid "
               f"{held.get('pid')} ({held.get('started')})", flush=True)
         fp.unlink(missing_ok=True)
         return None
+    if _proc_state(pid) in ("T", "t"):
+        held["suspended"] = True
+        held["state_word"] = "SUSPENDED"
+    return held
 
 
-def _acquire(remote: Path) -> bool:
-    """Claim the right to write this store back. Advisory, and deliberately so.
-
-    Staging introduced a clobber path that did not exist before: two writers each take their
-    own snapshot, both copy back, and the last one silently discards the other's indexing.
-    Working over the share at least had SQLite arbitrating. This is the replacement — and a
-    caller refused here does not fail, it works on the share instead, which is exactly the
-    behaviour that was safe all along.
-    """
-    held = _holder(remote)
-    if held:
-        if held.get("pid") == os.getpid() and held.get("host") == socket.gethostname():
-            return True                 # already ours: get_collection called twice in one run
-        print(f"  [warn] another run holds the chroma write lock on {remote.name} "
-              f"(host {held.get('host')}, pid {held.get('pid')}, since {held.get('started')}) "
-              f"— working directly on the share instead of staging, so neither run can "
-              f"overwrite the other.", file=sys.stderr)
-        return False
+def _held_for(held: dict) -> str:
+    """How long the lock has been held, in words — the number that makes a wedge obvious."""
     try:
-        # O_EXCL so two processes racing here cannot both believe they won.
+        age = (datetime.now() - datetime.fromisoformat(held["started"])).total_seconds()
+    except Exception:  # noqa: BLE001
+        return ""
+    return f"{age / 3600:.1f}h" if age >= 3600 else f"{age / 60:.0f}m"
+
+
+def _claim(remote: Path) -> bool:
+    """One attempt at the lock file itself. O_EXCL so two racers cannot both believe they won."""
+    try:
         fd = os.open(_lock_path(remote), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"host": socket.gethostname(), "pid": os.getpid(),
-                       "started": datetime.now().isoformat(timespec="seconds")}, fh)
-        return True
     except FileExistsError:
         return False
     except OSError as e:
-        print(f"  [warn] could not take the chroma write lock ({e}); working on the share",
-              file=sys.stderr)
+        print(f"  [warn] could not take the chroma write lock ({e})", file=sys.stderr)
         return False
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"host": socket.gethostname(), "pid": os.getpid(),
+                   # The command, not just the pid: "held by `rabbithole report`" tells you
+                   # what to do about it; "held by pid 2063721" sends you to `ps`.
+                   "command": " ".join(sys.argv[:2]) or "rabbitHole",
+                   "started": datetime.now().isoformat(timespec="seconds")}, fh)
+    return True
+
+
+def _acquire(remote: Path, wait_s: float | None = None) -> bool:
+    """Claim the right to write this store back, waiting a bounded time for a busy one.
+
+    Two tasks queued back to back are the ordinary case and should simply work, so we wait
+    rather than refuse on contact. What we must NOT do is the old behaviour: return False and
+    let the caller work directly on the share. `get_collection`'s docstring records why that
+    path exists at all — SQLite over NFS lost a lock on 2026-09-08 and ended an hour-long run
+    at paper 7 of 48 — and falling back to it during genuine contention is strictly worse than
+    the flakiness it was built to escape, because now there really is a second writer on the
+    file. On 2026-09-19 that cost 2h24m and 125 of 195 papers before `database is locked`.
+
+    So: wait, then raise. The caller stops in seconds with a sentence saying who holds it.
+    """
+    wait_s = _LOCK_WAIT_S if wait_s is None else wait_s
+    deadline = time.monotonic() + max(0.0, wait_s)
+    announced = False
+    while True:
+        held = _holder(remote)
+        if not held:
+            if _claim(remote):
+                return True
+            held = _holder(remote) or {}            # lost the race; fall through and wait
+        elif held.get("pid") == os.getpid() and held.get("host") == socket.gethostname():
+            return True                             # already ours: called twice in one run
+        if not announced:
+            age = _held_for(held)
+            print(f"  {runlog.stamp()}chroma store {remote.name} is locked by "
+                  f"{held.get('command') or 'another run'} (host {held.get('host')}, "
+                  f"pid {held.get('pid')}{', SUSPENDED' if held.get('suspended') else ''}"
+                  f"{', held ' + age if age else ''}) — waiting up to {wait_s:.0f}s.",
+                  flush=True)
+            announced = True
+        # A suspended holder will never finish on its own, so waiting out the clock only
+        # delays the same refusal. Say so now.
+        if held.get("suspended") or time.monotonic() >= deadline:
+            raise ChromaBusy(remote, held, 0.0 if held.get("suspended")
+                             else max(0.0, wait_s - max(0.0, deadline - time.monotonic())))
+        time.sleep(_LOCK_POLL_S)
+
+
+def unlock(chroma_dir) -> dict | None:
+    """Take a store whose holder is abandoned. Returns the lock that was cleared, or None.
+
+    The escape hatch the old code lacked: with no way to clear a lock but knowing the file's
+    path, a suspended or cross-host holder wedged the project indefinitely.
+    """
+    remote = Path(chroma_dir)
+    held = _holder(remote)
+    if held is None:
+        return None
+    _lock_path(remote).unlink(missing_ok=True)
+    return held
 
 
 def _release(remote: Path) -> None:
@@ -147,8 +254,8 @@ def _release(remote: Path) -> None:
 
 def _stage_in(remote: Path, writable: bool) -> Path:
     """Copy the store down to local disk and return the local path (or ``remote`` on failure)."""
-    if writable and not _acquire(remote):
-        return remote                   # a second writer works on the share; nothing to clobber
+    if writable:
+        _acquire(remote)                # raises ChromaBusy rather than dropping to the share
     try:
         local = _WORK_ROOT / _slug(remote)
         if local.exists():

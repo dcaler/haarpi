@@ -240,6 +240,7 @@ reporting which sources still lack a PDF.
 | `refresh` | recomputes the load-bearing block on an existing draft |
 | `mindmap` | regenerates the contribution map beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
+| `chroma` | shows who holds the vector store's write lock, and releases an abandoned one |
 
 Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
 `revise` reads a cached corpus and never embeds, so every rework chain that changes the
