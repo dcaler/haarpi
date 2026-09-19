@@ -208,12 +208,23 @@ each source:
   substantive work at once, and a single collection is pointless if it cannot say
   so. Written by `gather`, from the review that found it; *added to*, never
   replaced, so nothing takes the first purpose away.
-- **status** — whether it is *in* the corpus at all: `corpus` or `quarantine`.
-  Written by `audit`, reversible, and lockable against a person's decision.
+- **status** — whether it is *in* the corpus at all: `corpus`, `quarantine` or
+  `retired`. The last two are both "out", and they are not the same fact.
+  **`quarantine`** is a machine verdict — `audit` judged a shared word not to
+  transfer — so it is re-judged every run, contestable, and `--release` locks your
+  override. **`retired`** is a scope decision *you* made: the thread this source
+  served was cut from the current draft. It is still the project's, still cited by
+  the earlier draft, and `audit` never judges it again. It carries the reason, and
+  the reason is load-bearing — a cut thread comes back as a thread, with
+  `audit --restore "<thread>"`, not one item key at a time.
 
 Those are different questions — provenance against disposition — and keeping them
 in one field cost the provenance: quarantining a methods paper made the ledger
-forget which review it belonged to. Ingestion asks one question of a row: does it
+forget which review it belonged to. Collapsing the two *dispositions* costs the
+reason instead: DigiPros' audit of 2026-09-19 wrote up fourteen papers from a cut
+narrative-communication thread as lexical false friends, so the report asserted
+that Green 2000 was out because "narrative" means something else. It is out
+because the thread was cut. Ingestion asks one question of a row: does it
 serve *my* review, and is it in the corpus. That is what lets two reviews share a
 collection without swallowing each other's sources, and it keeps `refs.bib` the
 union bibliography, correct by construction — every source any review has ever
@@ -232,7 +243,7 @@ reporting which sources still lack a PDF.
 | `gather` | searches, ranks and curates candidates into the collect-list; each reviewer ask gets its own queries and its own yield line |
 | `collect` | *(human)* adds each real source to Zotero **with its PDF** |
 | `ingest` | pulls reviewer-supplied references into the corpus |
-| `audit` | quarantines lexical false-friends by word sense — reversibly |
+| `audit` | quarantines lexical false-friends by word sense — reversibly; `--retire`/`--restore` take a cut thread out and bring it back, without a verdict |
 | `build` | embeds the audited corpus (candidates, citekeys, ChromaDB, notes) |
 | `report` | generates the first review — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
 | `revise` | answers every comment in kind (see the table above) |

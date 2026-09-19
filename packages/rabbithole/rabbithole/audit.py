@@ -551,7 +551,8 @@ def _units(topic: str, focus: str, asks=()) -> list[str]:
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
-        brain_override: str | None = None) -> int:
+        retire: list | None = None, as_thread: str = "", restore: str | None = None,
+        threads: bool = False, brain_override: str | None = None) -> int:
     runlog.start()
     cfg = config.load_project(directory)
     gc = config.load_global()
@@ -570,6 +571,53 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
 
     print(f"rabbitHole audit — {cfg.project_name}")
 
+    if threads:
+        found = corpus_ledger.threads(project_root)
+        if not found:
+            print("  Nothing retired.")
+            return 0
+        rows = corpus_ledger.load(project_root)
+        for reason, keys in sorted(found.items()):
+            print(f"\n  \"{reason}\"  ({len(keys)} paper(s))")
+            for k in sorted(keys):
+                print(f"     {k}  {(rows[k].title or '')[:70]}")
+        print("\n  `rabbitHole audit --restore \"<thread>\"` brings one back as a unit.")
+        return 0
+
+    if retire:
+        if not as_thread.strip():
+            print("[error] --retire needs --as \"<why the thread was cut>\". The reason is "
+                  "what restores the thread as a unit later.", file=sys.stderr)
+            return 1
+        ledger_rows = corpus_ledger.load(project_root)
+        unknown = [k for k in (x.lstrip("@") for x in retire) if k not in ledger_rows]
+        if unknown:
+            print(f"[error] not in this project's ledger: {', '.join(unknown)}",
+                  file=sys.stderr)
+            return 1
+        done = corpus_ledger.retire(project_root, retire, reason=as_thread)
+        print(f"  Retired {len(done)} paper(s) under \"{as_thread}\" — out of the corpus, "
+              f"still in Zotero and in refs.bib, and NEVER judged by audit again.")
+        for r in done:
+            print(f"     {r.key}  {(r.title or '')[:66]}")
+        print(f"  Restore the thread with `rabbitHole audit --restore \"{as_thread}\"`.")
+        return 0
+
+    if restore:
+        ident = restore.lstrip("@")
+        rows = corpus_ledger.load(project_root)
+        done = (corpus_ledger.restore(project_root, keys=[ident])
+                if ident in rows else corpus_ledger.restore(project_root, reason=ident))
+        if not done:
+            print(f"  Nothing retired matches '{ident}'. "
+                  f"`rabbitHole audit --threads` lists what is.", file=sys.stderr)
+            return 1
+        print(f"  Restored {len(done)} paper(s) to the corpus — and LOCKED, so the next "
+              f"audit will not quarantine them.")
+        for r in done:
+            print(f"     {r.key}  {(r.title or '')[:66]}")
+        return 0
+
     if release:
         ident = release.lstrip("@")
         rows = corpus_ledger.load(project_root)
@@ -582,6 +630,13 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
                 break
         if target is None or rows.get(target) is None:
             print(f"  [warn] '{ident}' is not in this project's ledger.", file=sys.stderr)
+            return 1
+        if rows[target].status == corpus_ledger.RETIRED:
+            print(f"  '{ident}' is not quarantined — it is RETIRED"
+                  f"{f' ({rows[target].reason})' if rows[target].reason else ''}, a scope "
+                  f"decision rather than a word-sense verdict. Bring it back with "
+                  f"`rabbitHole audit --restore {ident}`, or the whole thread with "
+                  f"`--restore \"{rows[target].reason}\"`.")
             return 1
         if rows[target].status != corpus_ledger.QUARANTINE:
             print(f"  '{ident}' is not quarantined "
@@ -600,6 +655,26 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     # rather than creating the only rows there are. Without this, the first audit on a
     # project leaves a ledger holding nothing but its own quarantines.
     corpus_ledger.sync(paths, cfg, gc)
+
+    # RETIRED PAPERS ARE NOT JUDGED — not once, not to confirm, not to re-confirm.
+    #
+    # They are out because a human cut the thread they served, which is a fact no word-sense
+    # test can speak to. Judging them anyway produced DigiPros' 2026-09-19 report, where a cut
+    # narrative-communication thread was written up as fourteen lexical false friends — a
+    # wrong reason in the permanent record — at ~1m18s per item to generate it.
+    held_out = corpus_ledger.retired(project_root)
+    if held_out:
+        items = [it for it in items if (it.get("data", {}).get("key") or it.get("key"))
+                 not in held_out]
+        by_thread: dict[str, int] = {}
+        for r in held_out.values():
+            by_thread[r.reason or "(no reason recorded)"] = \
+                by_thread.get(r.reason or "(no reason recorded)", 0) + 1
+        print(f"  {runlog.stamp()}Not judging {len(held_out)} retired paper(s) — "
+              + "; ".join(f"{n} from \"{t}\"" for t, n in sorted(by_thread.items()))
+              + ". They stay in Zotero and in refs.bib; `rabbitHole audit --restore` "
+                "brings a thread back.", flush=True)
+
     total = len(items)
     print(f"  {runlog.stamp()}Judging {total} corpus item(s) for word-sense transfer"
           f"{' (dry run)' if dry_run else ''} — one model pass each; on this hardware allow "

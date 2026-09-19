@@ -59,9 +59,26 @@ LITERATURE = "literature"
 METHODS = "methods"
 PURPOSES = (LITERATURE, METHODS)
 
+#   Two ways out of the corpus, and they are not the same fact.
+#
+#   QUARANTINE is a MACHINE verdict: `audit` judged a shared word not to transfer. It is
+#     re-judged on every run, it is contestable, and `--release` locks the human's override.
+#
+#   RETIRED is a HUMAN scope decision: the thread this paper served was cut from the current
+#     draft. The paper is still the project's, it is still cited by the previous draft, and it
+#     may come back if the thread does. `audit` never judges it — not once — because there is
+#     nothing for a word-sense test to say about it.
+#
+#   Collapsing the second into the first is what DigiPros' 2026-09-19 audit did: fourteen
+#   papers from a cut narrative-communication thread were reported as lexical false friends,
+#   so `audit_quarantine.md` asserted that Green 2000 was out because "narrative" means
+#   something else. It does not. It is out because the thread was cut. A wrong reason in the
+#   record is worse than no record, and it cost ~18 minutes of judging per run to produce.
 CORPUS = "corpus"
 QUARANTINE = "quarantine"
-STATUSES = (CORPUS, QUARANTINE)
+RETIRED = "retired"
+STATUSES = (CORPUS, QUARANTINE, RETIRED)
+OUT_OF_CORPUS = (QUARANTINE, RETIRED)
 
 
 @dataclass
@@ -73,6 +90,10 @@ class Row:
     title: str = ""
     locked: bool = False              # a human ruled on the status; the machine may not overrule
     added_by: str = ""                # which review filed it, or "human"
+    # WHY it is out. For `retired` this is the thread that was cut, and it is what makes the
+    # decision reversible as a UNIT: a cut thread comes back as a thread, and restoring it one
+    # item key at a time is the kind of chore that does not get done.
+    reason: str = ""
 
     def serves(self, purpose: str) -> bool:
         return purpose in self.purpose
@@ -138,7 +159,8 @@ def load(path: str | Path = ".") -> dict[str, Row]:
                         citekey=raw.get("citekey", ""),
                         title=raw.get("title", ""),
                         locked=bool(raw.get("locked", False)),
-                        added_by=raw.get("added_by", ""))
+                        added_by=raw.get("added_by", ""),
+                        reason=raw.get("reason", ""))
     return rows
 
 
@@ -197,7 +219,7 @@ def set_purpose(path: str | Path, key: str, purposes, *, title: str = "",
 
 
 def set_status(path: str | Path, key: str, status: str, *, locked: bool = False,
-               title: str = "", added_by: str = "") -> Row:
+               title: str = "", added_by: str = "", reason: str = "") -> Row:
     """Record whether a paper is IN the corpus. Leaves its purpose alone.
 
     Refuses to change a LOCKED row unless locking again — that refusal is the point: `audit`
@@ -218,9 +240,62 @@ def set_status(path: str | Path, key: str, status: str, *, locked: bool = False,
         cur.status = status
         cur.title = title or cur.title
         cur.added_by = added_by or cur.added_by
+    # The reason belongs to the status it was given with, so returning to the corpus clears it
+    # rather than leaving a stale "cut from draft 2" on a paper that is back in.
+    cur.reason = reason if reason else ("" if status == CORPUS else cur.reason)
     cur.locked = cur.locked or locked
     save(path, rows)
     return cur
+
+
+def retire(path: str | Path, keys, *, reason: str, added_by: str = "human") -> list:
+    """Take papers out of the corpus because the THREAD THEY SERVED WAS CUT.
+
+    Locked by construction: this is a human scope decision, so the machine must not overrule
+    it, and `audit` skips these rows outright rather than judging and re-judging them.
+    """
+    if not (reason or "").strip():
+        raise ValueError("retiring needs a reason — it is what restores the thread as a unit")
+    out = []
+    for k in ([keys] if isinstance(keys, str) else list(keys)):
+        out.append(set_status(path, k.lstrip("@"), RETIRED, locked=True,
+                              added_by=added_by, reason=reason.strip()))
+    return out
+
+
+def restore(path: str | Path, *, keys=None, reason: str | None = None) -> list:
+    """Put retired papers back — by key, or by the reason they were retired under.
+
+    By reason is the point: a cut thread returns as a thread. Matching is case-insensitive
+    and substring, so `--restore "narrative"` reaches everything filed under the
+    narrative-communication thread without naming fourteen item keys.
+    """
+    rows = load(path)
+    if keys:
+        want = {k.lstrip("@") for k in ([keys] if isinstance(keys, str) else keys)}
+        targets = [k for k in want if rows.get(k) and rows[k].status == RETIRED]
+    elif reason:
+        needle = reason.strip().lower()
+        targets = [k for k, r in rows.items()
+                   if r.status == RETIRED and needle in (r.reason or "").lower()]
+    else:
+        raise ValueError("restore needs keys or a reason")
+    # Locked stays True: the human ruled, and returning it to the corpus is another human
+    # ruling, not permission for the next audit to quarantine it.
+    return [set_status(path, k, CORPUS, locked=True, added_by="human") for k in sorted(targets)]
+
+
+def retired(path: str | Path = ".") -> dict:
+    """Retired rows by key — what `audit` must not judge."""
+    return {k: r for k, r in load(path).items() if r.status == RETIRED}
+
+
+def threads(path: str | Path = ".") -> dict:
+    """Retirement reason -> the keys filed under it. What `--restore` can name."""
+    out: dict = {}
+    for k, r in retired(path).items():
+        out.setdefault(r.reason or "(no reason recorded)", []).append(k)
+    return out
 
 
 @dataclass
