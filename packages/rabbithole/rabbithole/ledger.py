@@ -181,17 +181,23 @@ def export_bibtex(cfg, gc, paths, citekeys: dict[int, str], corpus: list) -> Pat
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] BibTeX export failed ({e}); refs.bib not written.", file=sys.stderr)
         return None
-    key_by_doi: dict[str, str] = {}
-    key_by_title: dict[str, str] = {}
+    from .corpus import unambiguous
+    dois, title_years, titles = [], [], []
     for i, c in enumerate(corpus):
         ck = citekeys.get(i)
         if not ck:
             continue
         if getattr(c, "doi_key", None):
-            key_by_doi[c.doi_key] = ck
-        if getattr(c, "title_key", None):
-            key_by_title[c.title_key] = ck
-    bib_text = _patch_bibtex_keys(bib_text, key_by_doi, key_by_title)
+            dois.append((c.doi_key, ck))
+        tk = getattr(c, "title_key", None)
+        if tk:
+            titles.append((tk, ck))
+            if getattr(c, "year", None):
+                title_years.append(((tk, str(c.year)), ck))
+    # Ambiguity-safe in this direction too: two corpus records under one title would
+    # otherwise stamp the last one's key onto the other's block in refs.bib.
+    bib_text = _patch_bibtex_keys(bib_text, unambiguous(dois), unambiguous(titles),
+                                  unambiguous(title_years))
     out = paths.output / "refs.bib"
     out.write_text(bib_text, encoding="utf-8")
     return out

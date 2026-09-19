@@ -193,21 +193,51 @@ def dropped_citekeys(old: str, new: str) -> list[Finding]:
     ] if lost else []
 
 
-def duplicate_citekeys(citekeys: dict[int, str]) -> list[Finding]:
-    """Two corpus entries under one citekey. The key→index map keeps only one of them, so
-    the other is uncitable and the bibliography may render the wrong record — typically the
-    poorer one (no DOI, no year). A dedup failure upstream, visible only here."""
+def duplicate_citekeys(citekeys: dict[int, str], corpus: list | None = None) -> list[Finding]:
+    """Two corpus entries under one citekey. The key→index map keeps only one of them, so the
+    other is uncitable and the bibliography may render the wrong record.
+
+    There are two ways to arrive here and their remedies are OPPOSITE, so the finding says
+    which it is. Same paper twice -> de-duplicate. Two DIFFERENT papers -> nothing may be
+    deleted; the key was mis-assigned upstream and both records are real. The message used to
+    assert the first unconditionally, and on DigiPros it advised deleting Dogan & Lebaron's
+    2023 "Prosopography" because Stone's 1971 essay of the same title had claimed the key.
+    """
     seen: dict[str, list[int]] = {}
     for i, k in citekeys.items():
         seen.setdefault(k, []).append(i)
     dupes = {k: v for k, v in seen.items() if len(v) > 1}
-    return [
-        Finding("duplicate-citekey", "corpus",
+
+    def _distinct(idxs: list[int]) -> bool:
+        """Different works, not one work twice — judged on author and year, which is what
+        separates the two cases when the titles are identical."""
+        if not corpus:
+            return False
+        marks = set()
+        for i in idxs:
+            try:
+                c = corpus[i]
+            except (IndexError, TypeError):
+                return False
+            marks.add((getattr(c, "first_author_last", "").lower(), getattr(c, "year", None)))
+        return len(marks) > 1
+
+    out = []
+    for k, v in sorted(dupes.items()):
+        if _distinct(v):
+            out.append(Finding(
+                "duplicate-citekey", "corpus",
+                f"Corpus entries {v} are DIFFERENT works that were both assigned the citekey "
+                f"[@{k}] — same title, different author or year, so a title-only match in the "
+                f"citekey backfill collapsed them. Do not delete either; one needs its own "
+                f"key."))
+        else:
+            out.append(Finding(
+                "duplicate-citekey", "corpus",
                 f"Corpus entries {v} share the citekey [@{k}] — only one can be cited or "
                 f"appear in the bibliography, and which one wins is arbitrary. De-duplicate "
-                f"the corpus (the richer record, with a DOI, should survive).")
-        for k, v in sorted(dupes.items())
-    ]
+                f"the corpus (the richer record, with a DOI, should survive)."))
+    return out
 
 
 def dropped_sentinels(old: str, new: str) -> list[Finding]:

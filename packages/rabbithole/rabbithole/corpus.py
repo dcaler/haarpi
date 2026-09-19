@@ -248,15 +248,50 @@ def count_uningested(cfg, gc, existing: list[Candidate]) -> int:
     return n
 
 
-def _bibtex_key_maps(bib_text: str) -> tuple[dict[str, str], dict[str, str]]:
-    """From a Better BibTeX export, map normalised DOI → key and normalised title → key.
+def unambiguous(pairs) -> dict:
+    """A fingerprint -> citekey map that DROPS any fingerprint two different keys claim.
 
-    Uses the same block split and title/DOI normalisation as _patch_bibtex_keys, so the
-    keys recovered here are exactly those the export (and a pinned Extra) would carry."""
+    The rule this encodes: a wrong match is worse than no match. An unmatched record falls
+    through to a generated {last}{year} key, which is correct and unique; a wrongly-matched
+    one is cited under another work's key, so the bibliography prints the wrong source and
+    the real one becomes uncitable.
+
+    `setdefault` — first block wins, rest discarded — is what this replaces. DigiPros holds
+    two different works titled exactly "Prosopography" (Stone, Daedalus 1971; Dogan & Lebaron,
+    2023), neither with a DOI, and title-only matching gave the 2023 chapter Stone's citekey.
+    """
+    out: dict = {}
+    poisoned: set = set()
+    for fp, key in pairs:
+        if not fp or fp in poisoned:
+            continue
+        if fp in out and out[fp] != key:
+            del out[fp]
+            poisoned.add(fp)
+            continue
+        out[fp] = key
+    return out
+
+
+def _bibtex_year(block: str) -> str:
+    """The 4-digit year of a BibTeX block. `\bdate` does not match inside `urldate`."""
+    m = re.search(r"\b(?:year|date)\s*=\s*\{([^}]*)\}", block, re.IGNORECASE)
+    if not m:
+        return ""
+    y = re.search(r"\b(1[5-9]\d{2}|20\d{2})\b", m.group(1))
+    return y.group(1) if y else ""
+
+
+def _bibtex_key_maps(bib_text: str) -> tuple[dict, dict, dict]:
+    """From a Better BibTeX export: DOI -> key, (title, year) -> key, and title -> key.
+
+    Three maps rather than two because title alone is not an identity. Uses the same block
+    split and title/DOI normalisation as _patch_bibtex_keys, so the keys recovered here are
+    exactly those the export (and a pinned Extra) would carry.
+    """
     from .models import _norm_title
     starts = [m.start() for m in re.finditer(r"^@", bib_text, re.MULTILINE)]
-    by_doi: dict[str, str] = {}
-    by_title: dict[str, str] = {}
+    dois, title_years, titles = [], [], []
     for i, s in enumerate(starts):
         block = bib_text[s: starts[i + 1] if i + 1 < len(starts) else len(bib_text)]
         m = re.match(r"@\w+\{([^,\s]+)", block)
@@ -265,12 +300,16 @@ def _bibtex_key_maps(bib_text: str) -> tuple[dict[str, str], dict[str, str]]:
         key = m.group(1)
         doi_m = re.search(r"\bdoi\s*=\s*\{([^}]+)\}", block, re.IGNORECASE)
         if doi_m:
-            by_doi.setdefault(norm_doi(doi_m.group(1).strip()), key)
+            dois.append((norm_doi(doi_m.group(1).strip()), key))
         title_m = re.search(r"\btitle\s*=\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
                             block, re.IGNORECASE)
         if title_m:
-            by_title.setdefault(_norm_title(re.sub(r"[{}]", "", title_m.group(1))), key)
-    return by_doi, by_title
+            t = _norm_title(re.sub(r"[{}]", "", title_m.group(1)))
+            titles.append((t, key))
+            year = _bibtex_year(block)
+            if year:
+                title_years.append(((t, year), key))
+    return unambiguous(dois), unambiguous(title_years), unambiguous(titles)
 
 
 def backfill_citekeys(cfg, gc, paths, corpus: list[Candidate]) -> int:
@@ -297,10 +336,16 @@ def backfill_citekeys(cfg, gc, paths, corpus: list[Candidate]) -> int:
         print(f"  [warn] citekey backfill skipped — Zotero BibTeX fetch failed ({e}).")
         return 0
 
-    by_doi, by_title = _bibtex_key_maps(bib_text)
+    by_doi, by_title_year, by_title = _bibtex_key_maps(bib_text)
     filled = 0
     for c in missing:
-        ck = (c.doi_key and by_doi.get(c.doi_key)) or by_title.get(c.title_key)
+        # DOI, then title+year, then title — and the last only when exactly one work in the
+        # export carries that title. Title alone identified two different "Prosopography"
+        # chapters as one source; the year separates them, and where it cannot, no key is
+        # better than another work's.
+        ck = ((c.doi_key and by_doi.get(c.doi_key))
+              or (c.year and by_title_year.get((c.title_key, str(c.year))))
+              or by_title.get(c.title_key))
         if ck:
             c.citekey = ck
             filled += 1

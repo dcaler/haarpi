@@ -79,7 +79,7 @@ def _make_citekeys(corpus: list[Candidate]) -> dict[int, str]:
     # paper, different titles, one without a DOI). Step 1 honours both verbatim, and then the
     # key→index inversion silently keeps whichever comes last — so the bibliography can print
     # the poorer record, with no year and no link, for a source the narrative cites.
-    for f in guards.duplicate_citekeys(keys):
+    for f in guards.duplicate_citekeys(keys, corpus):
         print(f"  [warn] {f.imperative}", file=sys.stderr)
     return keys
 
@@ -1895,12 +1895,19 @@ def citation_check(narrative: str, citekeys: dict[int, str]) -> list[str]:
 # BibTeX export
 # ──────────────────────────────────────────────────────────────────────────
 def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
-                        key_by_title: dict[str, str]) -> str:
+                        key_by_title: dict[str, str],
+                        key_by_title_year: dict | None = None) -> str:
     """Align the export's citekeys with the ones used in the narrative.
 
     For Zotero items these already match (both come from the Better BibTeX key),
     so this is a no-op; it still rewrites the key for any source that fell back to
-    a generated {last}{year} key, keeping refs.bib consistent with the .docx."""
+    a generated {last}{year} key, keeping refs.bib consistent with the .docx.
+
+    This is the same match as `corpus.backfill_citekeys` run backwards, and it had the same
+    defect: two different works sharing a title got one another's key stamped onto their
+    block. Title+year is tried first, and `corpus.unambiguous` has already dropped any title
+    two keys claim — so an unmatched block keeps the key Zotero gave it, which is right.
+    """
     starts = [m.start() for m in re.finditer(r"^@", bib_text, re.MULTILINE)]
     if not starts:
         return bib_text
@@ -1923,7 +1930,11 @@ def _patch_bibtex_keys(bib_text: str, key_by_doi: dict[str, str],
             if title_m:
                 raw = re.sub(r"[{}]", "", title_m.group(1))
                 norm = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
-                new_key = key_by_title.get(norm)
+                year = corpus_mod._bibtex_year(block)
+                if year and key_by_title_year:
+                    new_key = key_by_title_year.get((norm, year))
+                if not new_key:
+                    new_key = key_by_title.get(norm)
         if new_key and new_key != zotero_key:
             block = block.replace(f"@{entry_type}{{{zotero_key}",
                                   f"@{entry_type}{{{new_key}", 1)
