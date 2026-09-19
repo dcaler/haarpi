@@ -217,6 +217,7 @@ def _run(argv: list[str] | None = None) -> int:
     aud.add_argument("--release", default=None, metavar="KEY",
                      help="move an item back from quarantine to this project's collection "
                           "(a Zotero item key or an Author-Year label)")
+    _review_arg(aud)
 
     chr_ = sub.add_parser("chroma",
                           help="inspect or release the vector store's write lock")
@@ -341,4 +342,3 @@ def _run(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-    _review_arg(aud)
