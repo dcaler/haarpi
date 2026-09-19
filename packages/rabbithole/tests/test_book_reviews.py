@@ -72,9 +72,10 @@ def test_a_book_review_is_never_a_review_article():
     assert not filters.is_review(_c(BY_AUTHOR))
 
 
-def test_the_type_gate_drops_them():
-    """One rule for all four call sites — discover's search loop, its snowball merge,
-    and the two Zotero ingests all go through here."""
+def test_the_gather_gate_drops_them():
+    """GATHER ONLY. This gate judges what rabbitHole proposes off the open web. It is
+    deliberately NOT applied when reading the Zotero collection — see
+    test_ingest_trusts_the_collection.py for the other half of the rule."""
     for t in (LABELLED, BARE, BY_AUTHOR, ISBN_FORM):
         assert not filters.item_type_allowed(_c(t), include_preprints=True,
                                              include_news=True)

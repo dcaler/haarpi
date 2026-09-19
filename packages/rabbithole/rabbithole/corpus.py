@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, corpus_ledger, filters
+from . import config, corpus_ledger
 from .models import Author, Candidate, norm_doi
 from .pdfs import extract_text, looks_like_fulltext
 
@@ -89,15 +89,25 @@ def _enrich(c: Candidate, idx: dict[str, Candidate]) -> Candidate:
 def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
                              quiet: bool = False) -> Candidate | None:
     """Turn one Zotero collection item into a full-text Candidate, or None if it is
-    an attachment/note, an excluded type, or has no usable full text."""
+    an attachment/note or has no usable full text.
+
+    NO TYPE POLICY HERE. Membership of the collection IS the decision. `gather` judges
+    what to propose off the open web, where a whole book, an editorial or a review of a
+    book is usually noise; but an item sitting in the collection with a PDF attached got
+    there because a person put it there, and second-guessing that threw away Epstein &
+    Axtell's *Growing Artificial Societies* and Epstein's *Generative Social Science* —
+    two of DigiPros' foundations — on the grounds that they are books.
+
+    This path already trusts the human on publisher, date and language: none of
+    `is_excluded`, `within_dates` or `is_english` is applied here. The type gate was the
+    last holdout, and dropping it makes the rule one thing instead of two.
+
+    The full-text requirement stays, because it is not a policy: there is simply nothing
+    to embed without text."""
     data = it.get("data", {})
     if data.get("itemType") in ("attachment", "note"):
-        return None
+        return None          # Zotero plumbing, not a source
     c = _enrich(_zotero_item_to_candidate(data), idx)
-    if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
-        if not quiet:
-            print(f"    [skip] excluded item type ({c.item_type}): {c.title[:60]}")
-        return None
     att = zc.pdf_attachment_key(it["key"])
     text, n_pages = "", 0
     if att:
@@ -310,9 +320,8 @@ def ingest_from_folder(paths) -> list[Candidate]:
         c = idx.get(fp.name)
         if c is None:
             c = _candidate_from_pdf(fp, text)
-        if not filters.item_type_allowed(c, include_preprints=True, include_news=False):
-            print(f"    [skip] excluded item type ({c.item_type}): {fp.name}")
-            continue
+        # Same rule as the Zotero path: a PDF you dropped in this folder by hand is a
+        # decision already made. Only the full-text check above applies.
         c.pdf_path = str(fp)
         c.fulltext = text
         corpus.append(c)

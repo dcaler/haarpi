@@ -175,14 +175,17 @@ def is_review(c: Candidate) -> bool:
 def item_type_allowed(c: Candidate, include_preprints: bool, include_news: bool) -> bool:
     """Gate on item type per the project's source-type policy.
 
+    GATHER ONLY. This judges what rabbitHole PROPOSES off the open web — `discover`'s
+    search loop and its snowball merge, and nothing else. It is deliberately not applied
+    when reading the Zotero collection or the pdfs/ folder: an item there was put there
+    by a person, and that is a decision, not a candidate. See `corpus.py`.
+
     Junk types, whole books and reviews OF books are always dropped. Preprints/news are
     admitted only when the project opted in (the wizard's 4-way question). Everything
     else (journal-article, book-chapter, report/working-paper) is kept.
 
-    Book reviews are decided here rather than at each caller so the rule cannot drift
-    between `discover`'s search loop, its snowball merge, and the two Zotero ingests.
-    The gate has never been purely about the declared type anyway — `is_arxiv` reads
-    the DOI and URL.
+    The gate has never been purely about the declared type — `is_arxiv` reads the DOI
+    and URL, and `is_book_review` reads the title's imprint.
     """
     t = (c.item_type or "").lower()
     if t in JUNK_ITEM_TYPES or t in BOOK_ITEM_TYPES:
