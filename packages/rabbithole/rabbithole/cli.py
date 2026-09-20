@@ -220,9 +220,7 @@ def _run(argv: list[str] | None = None) -> int:
     aud.add_argument("--retire", nargs="+", default=None, metavar="KEY",
                      help="take papers out of the corpus because they are no longer in scope "
                           "— a scope decision, not a word-sense verdict. They stay in Zotero "
-                          "and refs.bib, and audit never judges them again. Requires --as")
-    aud.add_argument("--as", dest="as_reason", default="", metavar="REASON",
-                     help="why they are out — recorded on each row")
+                          "and refs.bib, and audit never judges them again")
     aud.add_argument("--restore", default=None, metavar="KEY",
                      help="put one retired paper back (retiring locks the row, so this is "
                           "how a mislabel is corrected)")
@@ -343,8 +341,8 @@ def _run(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=False)          # brain + Zotero; no pandoc
         from . import audit
         return audit.run(args.dir, dry_run=args.dry_run, release=args.release,
-                         retire=args.retire, as_reason=args.as_reason,
-                         restore=args.restore, brain_override=args.brain)
+                         retire=args.retire, restore=args.restore,
+                         brain_override=args.brain)
 
     parser.print_help()
     return 1

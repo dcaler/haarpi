@@ -10,16 +10,11 @@ from the second draft. They are still the project's, still cited by the FIRST dr
 may return if the thread does. The machine had nothing to say about any of it, and spent
 ~1m18s per item saying it.
 
-So `retired` is a third status: human-set, reason-carrying, never judged. The reason is
-required because recording the TRUE one is the point — the false one is what the report
-was publishing.
+So `retired` is a third status: human-set, and never judged.
 """
 import pytest
 
 from rabbithole import corpus_ledger as cl
-
-THREAD = "narrative-communication thread, cut from draft 2"
-
 
 @pytest.fixture
 def led(tmp_path):
@@ -30,48 +25,30 @@ def led(tmp_path):
 
 
 def test_retiring_takes_them_out_of_the_corpus(led):
-    cl.retire(led, ["GREEN2000", "VANLAER14", "MAR2004"], reason=THREAD)
+    cl.retire(led, ["GREEN2000", "VANLAER14", "MAR2004"])
     serving = cl.serving(led, cl.LITERATURE)
     assert serving == {"OUYANG22", "SYME1939"}
 
 
-def test_a_retired_paper_keeps_its_purpose_and_its_reason(led):
-    (row,) = cl.retire(led, "GREEN2000", reason=THREAD)
+def test_a_retired_paper_keeps_its_purpose(led):
+    (row,) = cl.retire(led, "GREEN2000")
     assert row.status == cl.RETIRED
     assert row.purpose == [cl.LITERATURE], "still the literature review's paper"
-    assert row.reason == THREAD
     assert row.locked is True, "a human ruled; the machine may not overrule"
-
-
-def test_retiring_demands_a_reason(led):
-    """Without one there is nothing to restore the thread by, and the record says only
-    that somebody once removed something."""
-    with pytest.raises(ValueError):
-        cl.retire(led, "GREEN2000", reason="")
-    with pytest.raises(ValueError):
-        cl.retire(led, "GREEN2000", reason="   ")
 
 
 def test_a_mislabel_can_be_corrected(led):
     """Retiring LOCKS the row, so without a reversal the label would be a one-way door.
     That is why `restore` exists — not as a feature, as the door handle."""
-    cl.retire(led, "GREEN2000", reason=THREAD)
+    cl.retire(led, "GREEN2000")
     assert cl.load(led)["GREEN2000"].locked is True
     (row,) = cl.restore(led, keys=["GREEN2000"])
     assert row.status == cl.CORPUS
     assert cl.retired(led) == {}, "and it is back in the corpus the build reads"
 
 
-def test_restoring_clears_the_reason_but_keeps_the_lock(led):
-    cl.retire(led, "GREEN2000", reason=THREAD)
-    (row,) = cl.restore(led, keys=["GREEN2000"])
-    assert row.status == cl.CORPUS
-    assert row.reason == "", "a paper that is back in is not 'cut from draft 2'"
-    assert row.locked is True, "returning it is a human ruling too"
-
-
 def test_restore_by_key_still_works(led):
-    cl.retire(led, ["GREEN2000", "VANLAER14"], reason=THREAD)
+    cl.retire(led, ["GREEN2000", "VANLAER14"])
     back = cl.restore(led, keys=["VANLAER14"])
     assert [r.key for r in back] == ["VANLAER14"]
     assert set(cl.retired(led)) == {"GREEN2000"}
@@ -80,7 +57,7 @@ def test_restore_by_key_still_works(led):
 def test_retired_is_not_quarantine(led):
     """The two must stay distinguishable — one is contestable, the other is not the
     machine's business."""
-    cl.retire(led, "GREEN2000", reason=THREAD)
+    cl.retire(led, "GREEN2000")
     cl.set_status(led, "SYME1939", cl.QUARANTINE, added_by="audit")
     rows = cl.load(led)
     assert rows["GREEN2000"].status == cl.RETIRED
@@ -91,7 +68,7 @@ def test_retired_is_not_quarantine(led):
 def test_audit_may_not_overrule_a_retirement(led):
     """`set_status` refuses a locked row, and retiring locks — so the next audit cannot
     quietly re-file a cut thread as a word-sense failure."""
-    cl.retire(led, "GREEN2000", reason=THREAD)
+    cl.retire(led, "GREEN2000")
     cl.set_status(led, "GREEN2000", cl.QUARANTINE, added_by="audit")
     assert cl.load(led)["GREEN2000"].status == cl.RETIRED
 
@@ -105,5 +82,5 @@ def test_an_old_ledger_without_reasons_still_loads(led):
         {"key": "OLD2", "purpose": ["methods"], "status": "corpus"},
     ]}), encoding="utf-8")
     rows = cl.load(led)
-    assert rows["OLD1"].status == cl.QUARANTINE and rows["OLD1"].reason == ""
+    assert rows["OLD1"].status == cl.QUARANTINE
     assert rows["OLD2"].purpose == ["methods"]

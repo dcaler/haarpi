@@ -551,7 +551,7 @@ def _units(topic: str, focus: str, asks=()) -> list[str]:
 
 
 def run(directory: str = ".", *, dry_run: bool = False, release: str | None = None,
-        retire: list | None = None, as_reason: str = "", restore: str | None = None,
+        retire: list | None = None, restore: str | None = None,
         brain_override: str | None = None) -> int:
     runlog.start()
     cfg = config.load_project(directory)
@@ -572,19 +572,15 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
     print(f"rabbitHole audit — {cfg.project_name}")
 
     if retire:
-        if not as_reason.strip():
-            print("[error] --retire needs --as \"<why it is out>\" — recording the true "
-                  "reason is the point of the label.", file=sys.stderr)
-            return 1
         ledger_rows = corpus_ledger.load(project_root)
         unknown = [k for k in (x.lstrip("@") for x in retire) if k not in ledger_rows]
         if unknown:
             print(f"[error] not in this project's ledger: {', '.join(unknown)}",
                   file=sys.stderr)
             return 1
-        done = corpus_ledger.retire(project_root, retire, reason=as_reason)
-        print(f"  Retired {len(done)} paper(s) — \"{as_reason}\". Out of the corpus, still "
-              f"in Zotero and in refs.bib, and never judged by audit again.")
+        done = corpus_ledger.retire(project_root, retire)
+        print(f"  Retired {len(done)} paper(s) — out of the corpus, still in Zotero and in "
+              f"refs.bib, and never judged by audit again.")
         for r in done:
             print(f"     {r.key}  {(r.title or '')[:66]}")
         print("  `rabbitHole audit --restore KEY` reverses one if it was mislabelled.")
@@ -616,9 +612,8 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
             print(f"  [warn] '{ident}' is not in this project's ledger.", file=sys.stderr)
             return 1
         if rows[target].status == corpus_ledger.RETIRED:
-            print(f"  '{ident}' is not quarantined — it is RETIRED"
-                  f"{f' ({rows[target].reason})' if rows[target].reason else ''}, a scope "
-                  f"decision rather than a word-sense verdict. Bring it back with "
+            print(f"  '{ident}' is not quarantined — it is RETIRED, a scope decision "
+                  f"rather than a word-sense verdict. Bring it back with "
                   f"`rabbitHole audit --restore {ident}`.")
             return 1
         if rows[target].status != corpus_ledger.QUARANTINE:
@@ -641,21 +636,16 @@ def run(directory: str = ".", *, dry_run: bool = False, release: str | None = No
 
     # RETIRED PAPERS ARE NOT JUDGED — not once, not to confirm, not to re-confirm.
     #
-    # They are out because a human cut the thread they served, which is a fact no word-sense
-    # test can speak to. Judging them anyway produced DigiPros' 2026-09-19 report, where a cut
-    # narrative-communication thread was written up as fourteen lexical false friends — a
-    # wrong reason in the permanent record — at ~1m18s per item to generate it.
+    # They are out because a human ruled them out of scope, which is a fact no word-sense test
+    # can speak to. Judging them anyway produced DigiPros' 2026-09-19 report, where fourteen
+    # papers from a cut thread were written up as lexical false friends, at ~1m18s each.
     held_out = corpus_ledger.retired(project_root)
     if held_out:
         items = [it for it in items if (it.get("data", {}).get("key") or it.get("key"))
                  not in held_out]
-        by_thread: dict[str, int] = {}
-        for r in held_out.values():
-            by_thread[r.reason or "(no reason recorded)"] = \
-                by_thread.get(r.reason or "(no reason recorded)", 0) + 1
-        print(f"  {runlog.stamp()}Not judging {len(held_out)} retired paper(s) — "
-              + "; ".join(f"{n} from \"{t}\"" for t, n in sorted(by_thread.items()))
-              + ". They stay in Zotero and in refs.bib.", flush=True)
+        print(f"  {runlog.stamp()}Not judging {len(held_out)} retired paper(s) — they are "
+              f"out of scope, not false friends. They stay in Zotero and in refs.bib.",
+              flush=True)
 
     total = len(items)
     print(f"  {runlog.stamp()}Judging {total} corpus item(s) for word-sense transfer"

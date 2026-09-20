@@ -214,16 +214,14 @@ each source:
   transfer — so it is re-judged every run, contestable, and `--release` locks your
   override. **`retired`** is a scope decision *you* made: the thread this source
   served was cut from the current draft. It is still the project's, still cited by
-  the earlier draft, and `audit` never judges it again. It records *why*, which is
-  the point: the false reason is what the report was publishing.
+  the earlier draft, and `audit` never judges it again.
 
 Those are different questions — provenance against disposition — and keeping them
 in one field cost the provenance: quarantining a methods paper made the ledger
 forget which review it belonged to. Collapsing the two *dispositions* costs the
 reason instead: DigiPros' audit of 2026-09-19 wrote up fourteen papers from a cut
-narrative-communication thread as lexical false friends, so the report asserted
-that Green 2000 was out because "narrative" means something else. It is out
-because the thread was cut. Ingestion asks one question of a row: does it
+narrative-communication thread as lexical false friends — a verdict about word
+sense on a decision that was never about word sense. Ingestion asks one question of a row: does it
 serve *my* review, and is it in the corpus. That is what lets two reviews share a
 collection without swallowing each other's sources, and it keeps `refs.bib` the
 union bibliography, correct by construction — every source any review has ever

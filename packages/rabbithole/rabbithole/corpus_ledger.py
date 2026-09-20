@@ -64,16 +64,13 @@ PURPOSES = (LITERATURE, METHODS)
 #   QUARANTINE is a MACHINE verdict: `audit` judged a shared word not to transfer. It is
 #     re-judged on every run, it is contestable, and `--release` locks the human's override.
 #
-#   RETIRED is a HUMAN scope decision: the thread this paper served was cut from the current
-#     draft. The paper is still the project's, it is still cited by the previous draft, and it
-#     may come back if the thread does. `audit` never judges it — not once — because there is
-#     nothing for a word-sense test to say about it.
+#   RETIRED is a HUMAN scope decision: the paper is no longer in scope for the current draft.
+#     It is still the project's and still in Zotero and refs.bib. `audit` never judges it —
+#     not once — because there is nothing for a word-sense test to say about it.
 #
 #   Collapsing the second into the first is what DigiPros' 2026-09-19 audit did: fourteen
 #   papers from a cut narrative-communication thread were reported as lexical false friends,
-#   so `audit_quarantine.md` asserted that Green 2000 was out because "narrative" means
-#   something else. It does not. It is out because the thread was cut. A wrong reason in the
-#   record is worse than no record, and it cost ~18 minutes of judging per run to produce.
+#   at ~1m18s each to reach a verdict nobody wanted.
 CORPUS = "corpus"
 QUARANTINE = "quarantine"
 RETIRED = "retired"
@@ -90,10 +87,6 @@ class Row:
     title: str = ""
     locked: bool = False              # a human ruled on the status; the machine may not overrule
     added_by: str = ""                # which review filed it, or "human"
-    # WHY it is out. For `retired` this is the thread that was cut, and it is what makes the
-    # decision reversible as a UNIT: a cut thread comes back as a thread, and restoring it one
-    # item key at a time is the kind of chore that does not get done.
-    reason: str = ""
 
     def serves(self, purpose: str) -> bool:
         return purpose in self.purpose
@@ -159,8 +152,7 @@ def load(path: str | Path = ".") -> dict[str, Row]:
                         citekey=raw.get("citekey", ""),
                         title=raw.get("title", ""),
                         locked=bool(raw.get("locked", False)),
-                        added_by=raw.get("added_by", ""),
-                        reason=raw.get("reason", ""))
+                        added_by=raw.get("added_by", ""))
     return rows
 
 
@@ -219,7 +211,7 @@ def set_purpose(path: str | Path, key: str, purposes, *, title: str = "",
 
 
 def set_status(path: str | Path, key: str, status: str, *, locked: bool = False,
-               title: str = "", added_by: str = "", reason: str = "") -> Row:
+               title: str = "", added_by: str = "") -> Row:
     """Record whether a paper is IN the corpus. Leaves its purpose alone.
 
     Refuses to change a LOCKED row unless locking again — that refusal is the point: `audit`
@@ -240,31 +232,19 @@ def set_status(path: str | Path, key: str, status: str, *, locked: bool = False,
         cur.status = status
         cur.title = title or cur.title
         cur.added_by = added_by or cur.added_by
-    # The reason belongs to the status it was given with, so returning to the corpus clears it
-    # rather than leaving a stale "cut from draft 2" on a paper that is back in.
-    cur.reason = reason if reason else ("" if status == CORPUS else cur.reason)
     cur.locked = cur.locked or locked
     save(path, rows)
     return cur
 
 
-def retire(path: str | Path, keys, *, reason: str, added_by: str = "human") -> list:
-    """Take papers out of the corpus because the THREAD THEY SERVED WAS CUT.
+def retire(path: str | Path, keys, *, added_by: str = "human") -> list:
+    """Take papers out of the corpus because they are no longer in scope.
 
-    Locked by construction: this is a human scope decision, so the machine must not overrule
-    it, and `audit` skips these rows outright rather than judging and re-judging them.
-
-    The reason is required because recording the true one is the whole point: the ledger used
-    to file these as quarantines, so the audit report asserted a word-sense failure that had
-    not happened.
+    Locked by construction: this is a human decision, so the machine must not overrule it,
+    and `audit` skips these rows outright rather than judging and re-judging them.
     """
-    if not (reason or "").strip():
-        raise ValueError("retiring needs a reason — recording why is the point of the label")
-    out = []
-    for k in ([keys] if isinstance(keys, str) else list(keys)):
-        out.append(set_status(path, k.lstrip("@"), RETIRED, locked=True,
-                              added_by=added_by, reason=reason.strip()))
-    return out
+    return [set_status(path, k.lstrip("@"), RETIRED, locked=True, added_by=added_by)
+            for k in ([keys] if isinstance(keys, str) else list(keys))]
 
 
 def restore(path: str | Path, *, keys) -> list:
