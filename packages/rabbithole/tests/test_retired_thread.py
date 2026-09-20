@@ -11,7 +11,8 @@ may return if the thread does. The machine had nothing to say about any of it, a
 ~1m18s per item saying it.
 
 So `retired` is a third status: human-set, reason-carrying, never judged. The reason is
-load-bearing — a thread comes back as a thread.
+required because recording the TRUE one is the point — the false one is what the report
+was publishing.
 """
 import pytest
 
@@ -51,14 +52,14 @@ def test_retiring_demands_a_reason(led):
         cl.retire(led, "GREEN2000", reason="   ")
 
 
-def test_the_thread_comes_back_as_a_thread(led):
-    """The point of the reason: fourteen keys is a chore nobody does."""
-    cl.retire(led, ["GREEN2000", "VANLAER14", "MAR2004"], reason=THREAD)
-    cl.retire(led, ["OUYANG22"], reason="a different thread entirely")
-    back = cl.restore(led, reason="narrative-communication")
-    assert {r.key for r in back} == {"GREEN2000", "MAR2004", "VANLAER14"}
-    assert cl.serving(led, cl.LITERATURE) == {"GREEN2000", "MAR2004", "VANLAER14", "SYME1939"}
-    assert cl.retired(led).keys() == {"OUYANG22"}, "the other thread is untouched"
+def test_a_mislabel_can_be_corrected(led):
+    """Retiring LOCKS the row, so without a reversal the label would be a one-way door.
+    That is why `restore` exists — not as a feature, as the door handle."""
+    cl.retire(led, "GREEN2000", reason=THREAD)
+    assert cl.load(led)["GREEN2000"].locked is True
+    (row,) = cl.restore(led, keys=["GREEN2000"])
+    assert row.status == cl.CORPUS
+    assert cl.retired(led) == {}, "and it is back in the corpus the build reads"
 
 
 def test_restoring_clears_the_reason_but_keeps_the_lock(led):
@@ -74,14 +75,6 @@ def test_restore_by_key_still_works(led):
     back = cl.restore(led, keys=["VANLAER14"])
     assert [r.key for r in back] == ["VANLAER14"]
     assert set(cl.retired(led)) == {"GREEN2000"}
-
-
-def test_threads_groups_what_is_out_by_why(led):
-    cl.retire(led, ["GREEN2000", "MAR2004"], reason=THREAD)
-    cl.retire(led, ["OUYANG22"], reason="pedagogy thread")
-    t = cl.threads(led)
-    assert t[THREAD] == sorted(["GREEN2000", "MAR2004"])
-    assert t["pedagogy thread"] == ["OUYANG22"]
 
 
 def test_retired_is_not_quarantine(led):

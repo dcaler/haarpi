@@ -253,9 +253,13 @@ def retire(path: str | Path, keys, *, reason: str, added_by: str = "human") -> l
 
     Locked by construction: this is a human scope decision, so the machine must not overrule
     it, and `audit` skips these rows outright rather than judging and re-judging them.
+
+    The reason is required because recording the true one is the whole point: the ledger used
+    to file these as quarantines, so the audit report asserted a word-sense failure that had
+    not happened.
     """
     if not (reason or "").strip():
-        raise ValueError("retiring needs a reason — it is what restores the thread as a unit")
+        raise ValueError("retiring needs a reason — recording why is the point of the label")
     out = []
     for k in ([keys] if isinstance(keys, str) else list(keys)):
         out.append(set_status(path, k.lstrip("@"), RETIRED, locked=True,
@@ -263,23 +267,12 @@ def retire(path: str | Path, keys, *, reason: str, added_by: str = "human") -> l
     return out
 
 
-def restore(path: str | Path, *, keys=None, reason: str | None = None) -> list:
-    """Put retired papers back — by key, or by the reason they were retired under.
-
-    By reason is the point: a cut thread returns as a thread. Matching is case-insensitive
-    and substring, so `--restore "narrative"` reaches everything filed under the
-    narrative-communication thread without naming fourteen item keys.
-    """
+def restore(path: str | Path, *, keys) -> list:
+    """Put retired papers back. Reversal exists because retiring LOCKS the row, so without
+    it a mislabel would be a one-way door."""
     rows = load(path)
-    if keys:
-        want = {k.lstrip("@") for k in ([keys] if isinstance(keys, str) else keys)}
-        targets = [k for k in want if rows.get(k) and rows[k].status == RETIRED]
-    elif reason:
-        needle = reason.strip().lower()
-        targets = [k for k, r in rows.items()
-                   if r.status == RETIRED and needle in (r.reason or "").lower()]
-    else:
-        raise ValueError("restore needs keys or a reason")
+    want = {k.lstrip("@") for k in ([keys] if isinstance(keys, str) else keys)}
+    targets = [k for k in want if rows.get(k) and rows[k].status == RETIRED]
     # Locked stays True: the human ruled, and returning it to the corpus is another human
     # ruling, not permission for the next audit to quarantine it.
     return [set_status(path, k, CORPUS, locked=True, added_by="human") for k in sorted(targets)]
@@ -288,14 +281,6 @@ def restore(path: str | Path, *, keys=None, reason: str | None = None) -> list:
 def retired(path: str | Path = ".") -> dict:
     """Retired rows by key — what `audit` must not judge."""
     return {k: r for k, r in load(path).items() if r.status == RETIRED}
-
-
-def threads(path: str | Path = ".") -> dict:
-    """Retirement reason -> the keys filed under it. What `--restore` can name."""
-    out: dict = {}
-    for k, r in retired(path).items():
-        out.setdefault(r.reason or "(no reason recorded)", []).append(k)
-    return out
 
 
 @dataclass

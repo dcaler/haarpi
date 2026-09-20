@@ -218,17 +218,14 @@ def _run(argv: list[str] | None = None) -> int:
                      help="move an item back from quarantine to this project's collection "
                           "(a Zotero item key or an Author-Year label)")
     aud.add_argument("--retire", nargs="+", default=None, metavar="KEY",
-                     help="take papers out of the corpus because the THREAD they served was "
-                          "cut from the current draft — a scope decision, not a word-sense "
-                          "verdict. They stay in Zotero and refs.bib, and audit never judges "
-                          "them again. Requires --as")
-    aud.add_argument("--as", dest="as_thread", default="", metavar="THREAD",
-                     help="why the thread was cut — the label that restores it as a unit")
-    aud.add_argument("--restore", default=None, metavar="KEY|THREAD",
-                     help="put retired papers back: one item key, or a thread label to bring "
-                          "the whole thread back at once")
-    aud.add_argument("--threads", action="store_true",
-                     help="list what has been retired, grouped by the thread it served")
+                     help="take papers out of the corpus because they are no longer in scope "
+                          "— a scope decision, not a word-sense verdict. They stay in Zotero "
+                          "and refs.bib, and audit never judges them again. Requires --as")
+    aud.add_argument("--as", dest="as_reason", default="", metavar="REASON",
+                     help="why they are out — recorded on each row")
+    aud.add_argument("--restore", default=None, metavar="KEY",
+                     help="put one retired paper back (retiring locks the row, so this is "
+                          "how a mislabel is corrected)")
     _review_arg(aud)
 
     chr_ = sub.add_parser("chroma",
@@ -346,9 +343,8 @@ def _run(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=False)          # brain + Zotero; no pandoc
         from . import audit
         return audit.run(args.dir, dry_run=args.dry_run, release=args.release,
-                         retire=args.retire, as_thread=args.as_thread,
-                         restore=args.restore, threads=args.threads,
-                         brain_override=args.brain)
+                         retire=args.retire, as_reason=args.as_reason,
+                         restore=args.restore, brain_override=args.brain)
 
     parser.print_help()
     return 1

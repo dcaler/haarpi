@@ -214,9 +214,8 @@ each source:
   transfer — so it is re-judged every run, contestable, and `--release` locks your
   override. **`retired`** is a scope decision *you* made: the thread this source
   served was cut from the current draft. It is still the project's, still cited by
-  the earlier draft, and `audit` never judges it again. It carries the reason, and
-  the reason is load-bearing — a cut thread comes back as a thread, with
-  `audit --restore "<thread>"`, not one item key at a time.
+  the earlier draft, and `audit` never judges it again. It records *why*, which is
+  the point: the false reason is what the report was publishing.
 
 Those are different questions — provenance against disposition — and keeping them
 in one field cost the provenance: quarantining a methods paper made the ledger
@@ -243,7 +242,7 @@ reporting which sources still lack a PDF.
 | `gather` | searches, ranks and curates candidates into the collect-list; each reviewer ask gets its own queries and its own yield line |
 | `collect` | *(human)* adds each real source to Zotero **with its PDF** |
 | `ingest` | pulls reviewer-supplied references into the corpus |
-| `audit` | quarantines lexical false-friends by word sense — reversibly; `--retire`/`--restore` take a cut thread out and bring it back, without a verdict |
+| `audit` | quarantines lexical false-friends by word sense — reversibly; `--retire` marks out-of-scope sources so they are never judged |
 | `build` | embeds the audited corpus (candidates, citekeys, ChromaDB, notes) |
 | `report` | generates the first review — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
 | `revise` | answers every comment in kind (see the table above) |
