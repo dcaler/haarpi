@@ -692,8 +692,16 @@ def _pending_corrections(paths) -> list[dict]:
     return []
 
 
-def _planned_sections(paths) -> dict[str, dict]:
-    """The sections `haarpi next` planned for this cycle, keyed by the ask that produced each.
+def _planned_sections(paths) -> dict[str, list]:
+    """The sections `haarpi next` planned for this cycle, grouped by the ask that produced each.
+
+    A LIST per ask, because one comment routinely plans more than one section and this used to
+    be ``{s["ask"]: s}`` — a dict comprehension keyed by the ask, so the second section for a
+    comment silently overwrote the first. elephantRoom cycle 8 planned five sections from three
+    comments; two were destroyed by that collision before anything read them. The reviewer asked
+    for household-level distributional impacts, which was planned as "Household heterogeneity in
+    ABM", and got "Distributional equity of CBAM" — a section about trade between countries —
+    because it happened to come second in the plan.
 
     Read from the plan ledger for the same reason the corrections are: the planner already
     decided what each ask becomes, and it decided BEFORE the gather so the search could be aimed
@@ -713,8 +721,11 @@ def _planned_sections(paths) -> dict[str, dict]:
     for plan in reversed(plans):
         if (plan or {}).get("stage") != "litreview" or plan.get("type") not in (None, "plan"):
             continue
-        return {s["ask"]: s for s in (plan.get("sections") or [])
-                if s.get("ask") and s.get("heading")}
+        out: dict[str, list] = {}
+        for sec in (plan.get("sections") or []):
+            if sec.get("ask") and sec.get("heading"):
+                out.setdefault(sec["ask"], []).append(sec)
+        return out
     return {}
 
 
@@ -742,13 +753,15 @@ def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
     for anchor, texts in section_asks:
         ask = " ".join(texts)
         ids = [str(i) for i in anchor["ids"]]
-        pre = planned.get(ask)
-        seed = ([_graft.Section(heading=pre["heading"], claim=pre["claim"], ask=ask)]
-                if pre else None)
+        pre = planned.get(ask) or []
+        seed = [_graft.Section(heading=p["heading"], claim=p["claim"], ask=ask) for p in pre]
         try:
+            # max_new follows the PLAN. It was pinned at 1, so even without the dict collision
+            # above only the first of a comment's sections could ever have been drafted.
             new = _graft.draft_sections(brain, cfg, existing, [ask], compact, full,
                                         set(citekeys.values()), corpus_size=len(corpus),
-                                        max_new=1, tag="revise/graft", planned=seed)
+                                        max_new=max(1, len(seed)), tag="revise/graft",
+                                        planned=seed or None)
         except Exception as e:  # noqa: BLE001 — a failed graft must not lose the edits beside it
             print(f"  [warn] could not draft the section for {ask[:60]!r} ({e})",
                   file=sys.stderr)
@@ -757,22 +770,38 @@ def _graft_edits(brain: Brain, cfg, docx: Path, section_asks: list, corpus,
             # The planner found nothing to add for this ask: the review already covers it.
             outcomes.update({i: "section_covered" for i in ids})
             continue
-        sec = new[0]
-        if sec.unsupported:
-            # Distinct from "already covered", and the distinction is the whole point: one says
-            # the review has this ground, the other says the corpus does not. They call for
-            # opposite next moves, and the reviewer is the one who decides which.
-            outcomes.update({i: f"unsupported:{sec.unsupported}" for i in ids})
-            continue
-        paras = [t for t in sec.text.split("\n\n") if t.strip()]
-        if not paras:
+        # EVERY section this ask planned, not just the first. A comment that planned two and
+        # received one used to report the one it received and stay silent about the other.
+        drafted, declined, empty = [], [], []
+        at_para = anchor["para"]
+        for sec in new:
+            if sec.unsupported:
+                # Distinct from "already covered", and the distinction is the whole point: one
+                # says the review has this ground, the other says the corpus does not. They call
+                # for opposite next moves, and the reviewer is the one who decides which.
+                declined.append({"heading": sec.heading, "missing": sec.unsupported,
+                                 "claim": sec.claim, "ask": ask})
+                continue
+            paras = [t for t in sec.text.split("\n\n") if t.strip()]
+            if not paras:
+                empty.append(sec.heading)
+                continue
+            out.append({"para": at_para, "op": "insert_section",
+                        "heading": sec.heading, "paras": paras})
+            grafted_at[at_para] = sec.heading
+            drafted.append(sec.heading)
+        if len(seed) > len(new):
+            # A planned section that came back as nothing at all. Say so — the whole failure
+            # this replaces was two sections disappearing with no line anywhere naming them.
+            lost = [p["heading"] for p in pre][len(new):]
+            print(f"  [warn] {len(lost)} planned section(s) were not returned by the drafter: "
+                  f"{', '.join(repr(h) for h in lost)}", file=sys.stderr)
+            empty.extend(lost)
+        if not drafted and not declined:
             outcomes.update({i: "section_covered" for i in ids})
             continue
-        at_para = anchor["para"]
-        out.append({"para": at_para, "op": "insert_section",
-                    "heading": sec.heading, "paras": paras})
-        grafted_at[at_para] = sec.heading
-        outcomes.update({i: f"grafted:{sec.heading}" for i in ids})
+        payload = json.dumps({"grafted": drafted, "unsupported": declined, "covered": empty})
+        outcomes.update({i: f"sections:{payload}" for i in ids})
         existing.append(sec)     # the next ask cannot re-plan the section just written
         print(f"  {runlog.stamp()}Grafting {sec.heading!r} after the section at para "
               f"{at_para} — the comment's own anchor", flush=True)
@@ -1066,26 +1095,53 @@ def _reply_to_comments(out_docx: Path, outcomes: dict[str, str], routing: dict) 
                   "table yourself, or ask for the numbers to be restated in the prose."),
         "section": section_msg,
     }
+    def _graft_reply(headings: list) -> str:
+        if len(headings) == 1:
+            what = f"a new section, \u201c{headings[0]}\u201d,"
+        else:
+            named = ", ".join(f"\u201c{h}\u201d" for h in headings[:-1])
+            what = f"{len(headings)} new sections, {named} and \u201c{headings[-1]}\u201d,"
+        return (f"rabbitHole: drafted {what} and inserted "
+                f"{'it' if len(headings) == 1 else 'them'} as a tracked change at the end of "
+                "the section this comment sits in — where you left the note is where the ask "
+                "belongs. Every other paragraph is untouched; reject the insertion to drop "
+                f"{'it' if len(headings) == 1 else 'them'}, or move "
+                f"{'it' if len(headings) == 1 else 'them'} if that reads better elsewhere.")
+
+    def _declined_reply(missing: str) -> str:
+        return (f"rabbitHole: did not draft this section — the corpus cannot carry it. It is "
+                f"missing {missing}. Nothing was written rather than assembling it from the "
+                f"sources that merely ranked nearest, which would have read as a real section. "
+                f"A `gather` for exactly this has been recorded, and the next cycle searches "
+                f"for it and drafts the section without you restating the ask.")
+
     replies: dict[str, str] = {}
     for cid, outcome in outcomes.items():
+        if outcome.startswith("sections:"):
+            # One comment can plan several sections, and they can land differently — two
+            # drafted, one declined. The reply says what happened to each rather than
+            # reporting whichever the old single-valued outcome happened to hold.
+            try:
+                payload = json.loads(outcome.split(":", 1)[1])
+            except Exception:  # noqa: BLE001
+                payload = {}
+            parts = []
+            if payload.get("grafted"):
+                parts.append(_graft_reply(payload["grafted"]))
+            for d in payload.get("unsupported") or []:
+                parts.append(_declined_reply(d["missing"] if isinstance(d, dict) else d))
+            if payload.get("covered") and not parts:
+                parts.append("rabbitHole: read this as a request for a new section, but the "
+                             "review already covers that ground, so nothing was added.")
+            replies[cid] = "\n\n".join(parts) if parts else section_msg
+            continue
         if outcome == "edited":
             replies[cid] = ("rabbitHole: revised the paragraph above as a tracked change to "
                             "address this comment.")
         elif outcome.startswith("grafted:"):
-            heading = outcome.split(":", 1)[1]
-            replies[cid] = (f"rabbitHole: drafted a new section, \u201c{heading}\u201d, and "
-                            "inserted it as a tracked change at the end of the section this "
-                            "comment sits in — where you left the note is where the ask "
-                            "belongs. Every other paragraph is untouched; reject the insertion "
-                            "to drop it, or move it if it reads better elsewhere.")
+            replies[cid] = _graft_reply([outcome.split(":", 1)[1]])
         elif outcome.startswith("unsupported:"):
-            missing = outcome.split(":", 1)[1]
-            replies[cid] = (
-                f"rabbitHole: did not draft this section — the corpus cannot carry it. It is "
-                f"missing {missing}. Nothing was written rather than assembling it from the "
-                f"sources that merely ranked nearest, which would have read as a real section. "
-                f"Add the literature to the Zotero collection, or re-run the cycle so `gather` "
-                f"searches for it, and the section will be drafted then.")
+            replies[cid] = _declined_reply(outcome.split(":", 1)[1])
         elif outcome == "section_covered":
             replies[cid] = ("rabbitHole: read this as a request for a new section, but the "
                             "review already covers that ground in an existing section, so "
@@ -1242,16 +1298,57 @@ def run(directory: str = ".", brain_override: str | None = None,
         # revised" and nothing else — the largest thing it did was the one thing it did not
         # mention, and the document read as finished for three days.
         outs = summary.get("comment_outcomes", {}) or {}
-        grafted = sorted({o.split(":", 1)[1] for o in outs.values()
-                          if o.startswith("grafted:")})
-        for h in grafted:
+        grafted, declined, covered, needs_gather = set(), [], set(), []
+        for o in outs.values():
+            if o.startswith("sections:"):
+                try:
+                    payload = json.loads(o.split(":", 1)[1])
+                except Exception:  # noqa: BLE001
+                    continue
+                grafted.update(payload.get("grafted") or [])
+                declined.extend(d["missing"] if isinstance(d, dict) else d
+                                for d in (payload.get("unsupported") or []))
+                needs_gather.extend(d for d in (payload.get("unsupported") or [])
+                                    if isinstance(d, dict))
+                covered.update(payload.get("covered") or [])
+            elif o.startswith("grafted:"):
+                grafted.add(o.split(":", 1)[1])
+            elif o.startswith("unsupported:"):
+                declined.append(o.split(":", 1)[1])
+        for h in sorted(grafted):
             print(f"  Section drafted and spliced in: {h}")
-        declined = [o.split(":", 1)[1] for o in outs.values() if o.startswith("unsupported:")]
+        for h in sorted(covered):
+            print(f"  Section planned but not returned by the drafter: {h}")
         for d in declined:
             print(f"  Section NOT drafted — corpus cannot carry it: missing {d}")
         if declined:
-            print(f"  [!] {len(declined)} requested section(s) went unwritten. The reviewer's "
-                  f"comment carries the reason; gather for these topics before the next revise.")
+            # THE DECLINE IS ALREADY A SEARCH BRIEF. It used to be written into a docx reply and
+            # left there: the reviewer's comment stayed unresolved, the next gate re-planned the
+            # same ask, and `revise` declined it again — a loop with a human as its only exit,
+            # holding a query the tool had already written. Recording it hands `haarpi next` the
+            # topics; the queueing stays at the gate, where routing belongs.
+            recorded = 0
+            if paths is not None and needs_gather:
+                try:
+                    from haarpi import project as _hproject
+                    _hproject.record_plan(paths.root.parent, {
+                        "type": "needs_gather", "stage": "litreview",
+                        "sections": [{"heading": d.get("heading", ""),
+                                      "claim": d.get("claim", ""),
+                                      "ask": d.get("ask", ""),
+                                      "missing": d.get("missing", "")}
+                                     for d in needs_gather],
+                    })
+                    recorded = len(needs_gather)
+                except Exception as e:  # noqa: BLE001 — never lose the document over a ledger write
+                    print(f"  [warn] could not record the gather for the declined section(s) "
+                          f"({e}); the reason is still in the reply.", file=sys.stderr)
+            print(f"  [!] {len(declined)} requested section(s) went unwritten — the corpus "
+                  f"could not carry them.")
+            if recorded:
+                print(f"      Recorded {recorded} gather topic(s) for the next cycle. "
+                      f"`haarpi next` queues the search and re-drafts these sections; you do "
+                      f"not need to restate the ask.")
         if "bib_entries" in summary:
             print(f"  Annotated bibliography regenerated: "
                   f"{summary['bib_entries']} entr(y/ies) re-located.")

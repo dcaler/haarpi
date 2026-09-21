@@ -753,7 +753,13 @@ def _shortlist(brain: Brain, sections: list[Section], compact: dict[str, str],
     print(f"  {_stamp()}Embedding {len(keys)} sources and {len(sections)} section ideas...",
           flush=True)
     src_vecs = brain.embed_batch([compact[k] for k in keys])
-    sec_vecs = brain.embed_batch([f"{s.heading}. {s.claim}" for s in sections])
+    # The ASK too, not just the planner's compression of it. A heading is six words chosen to
+    # name a section; the reviewer's sentence is what they actually want, and retrieving on the
+    # heading alone is how a request for household-level impacts drew a shortlist about trade
+    # between countries.
+    sec_vecs = brain.embed_batch(
+        [". ".join(x for x in (s.heading, s.claim, getattr(s, "ask", "")) if x)
+         for s in sections])
 
     matrix: list[list[float]] = []
     for sec, sv in zip(sections, sec_vecs):

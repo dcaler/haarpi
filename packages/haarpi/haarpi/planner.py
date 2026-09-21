@@ -1172,6 +1172,41 @@ def _promote_explicit_cites(tasks: list[dict]) -> list[dict]:
     return kept
 
 
+def carried_declines(root) -> list[dict]:
+    """Sections a previous `revise` could not draft, waiting to be searched for and re-drafted.
+
+    `revise` records a `needs_gather` entry when the corpus cannot carry a planned section. The
+    entry already holds a formed search brief — "Evidence linking household consumption
+    smoothing behavior to a reduction in firm-level investment" — which used to be written into
+    a docx reply and left for a person to retype. Without this the reviewer's comment stayed
+    unresolved, the next gate re-planned the identical ask, and `revise` declined it again: a
+    loop whose only exit was somebody noticing.
+
+    Entries are consumed once, marked by a `needs_gather_consumed` watermark, so a section that
+    has been re-queued is not re-queued forever.
+    """
+    plans = project.list_plans(root)
+    seen = max((int(e.get("upto") or 0) for e in plans
+                if (e or {}).get("type") == "needs_gather_consumed"), default=0)
+    out = []
+    for e in plans:
+        if (e or {}).get("type") != "needs_gather" or int(e.get("seq") or 0) <= seen:
+            continue
+        for sec in (e.get("sections") or []):
+            if sec.get("heading") and sec.get("missing"):
+                out.append(sec)
+    return out
+
+
+def consume_declines(root) -> None:
+    """Mark every `needs_gather` entry recorded so far as queued."""
+    plans = project.list_plans(root)
+    top = max((int(e.get("seq") or 0) for e in plans
+               if (e or {}).get("type") == "needs_gather"), default=0)
+    if top:
+        project.record_plan(root, {"type": "needs_gather_consumed", "upto": top})
+
+
 def chain_from_tasks(tasks: list[dict]) -> dict:
     """Derive the litreview rework chain, its instructions, and a summary tier FROM the tasks.
 
@@ -2348,11 +2383,27 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                                                  " ".join(t["comments"]), cfg)
                 if not t["wrong"]:
                     t["need"] = "edit"      # unidentifiable: the reviser answers it in place
+        # AUTOMATIC RE-RUN OF A DECLINED SECTION. A synthetic `section` task, so the chain it
+        # implies (gather -> collect -> audit -> build -> revise) is derived by the same rule as
+        # any other section ask, and the decline's own brief becomes the gather query.
+        carried = carried_declines(root)
+        for c in carried:
+            tasks.append({"comments": [c.get("ask") or c["heading"]],
+                          "need": "section", "query": c["missing"]})
         built = chain_from_tasks(tasks)
+        built["carried"] = carried
         # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
         # it was asked for. Replaces each section ask in `gather_topics` with its heading and
         # claim; the ask itself is kept for any that could not be planned.
         built["sections"] = _plan_sections(str(root), markup, cfg, built["section_focus"])
+        # Carried sections keep the heading and claim they were planned with. Re-planning them
+        # would invent a different compression of the same ask, and the whole point is that the
+        # section the reviewer was promised is the section that gets written.
+        if carried:
+            have = {s.get("heading") for s in (built["sections"] or [])}
+            built["sections"] = (built["sections"] or []) + [
+                {"heading": c["heading"], "claim": c.get("claim", ""), "ask": c.get("ask", "")}
+                for c in carried if c["heading"] not in have]
         if built["sections"]:
             planned = {s["ask"] for s in built["sections"]}
             steer = ([f"{s['heading']}. {s['claim']}" for s in built["sections"]]
@@ -2393,6 +2444,11 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
     for s in (plan.get("sections") or []):
         summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
+    if built and built.get("carried"):
+        summary.append(f"  carried forward: {len(built['carried'])} section(s) a previous "
+                       f"revise could not draft — searched for and re-drafted without the "
+                       f"reviewer restating them: "
+                       + ", ".join(repr(c["heading"]) for c in built["carried"]))
     if dry_run:
         print("\n".join(["[dry-run]"] + summary))
         return 0
@@ -2402,6 +2458,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     steer_config = _write_litreview_steering(str(root), built) if built else None
     if steer_config:
         summary.append(f"  steering config: {steer_config}")
+    # Past the dry-run return, so inspecting a plan never burns the carried entries.
+    if built and built.get("carried"):
+        consume_declines(root)
     # CORRECT: a factual correction is applied to the project's own statements of itself before
     # anything else in the chain reads them. Deterministic, so it happens here rather than
     # becoming a task nobody can verify ran.

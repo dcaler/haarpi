@@ -108,6 +108,58 @@ _SUPPORT_SYS = (
     'sources do not provide", "instead": "what these sources are actually about"}.')
 
 
+# Words too common in any academic corpus to be evidence that a source is ON the ask.
+_STOP = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "their", "there", "these",
+    "those", "would", "could", "should", "about", "which", "while", "level", "levels",
+    "impact", "impacts", "effect", "effects", "section", "add", "also", "like", "want",
+    "model", "models", "modeling", "modelling", "analysis", "study", "studies", "paper",
+    "research", "using", "based", "between", "within", "through", "across", "more", "than",
+}
+
+
+def _ask_terms(sec: Section) -> list[str]:
+    """The distinctive words of the ask and its claim — what a source must actually be about."""
+    import re as _re
+    text = f"{sec.ask} {sec.claim} {sec.heading}".lower()
+    seen, out = set(), []
+    for w in _re.findall(r"[a-z][a-z\-]{4,}", text):
+        w = w.strip("-")
+        if w in _STOP or w in seen:
+            continue
+        seen.add(w)
+        out.append(w)
+    return out
+
+
+def _lexical_witnesses(sec: Section, full: dict[str, str], shortlisted: set[str],
+                       min_terms: int = 3, limit: int = 8) -> list[str]:
+    """Sources the SHORTLIST MISSED that nonetheless match the ask on its own distinctive words.
+
+    A decline is a claim about the CORPUS, and it was being made from an eighteen-source
+    ranking. elephantRoom's 'Domestic production reshapes labor markets' was declined for
+    "missing evidence linking reshoring to labor market dynamics" while the corpus held
+    Firooz 2025, *Reshoring, automation, and labor markets under trade uncertainty* — indexed
+    by the same run, never in the window.
+
+    Cheap on purpose: substring counting over digest lines, no embedding and no model call, so
+    it can afford to look at everything the shortlist did not.
+    """
+    terms = _ask_terms(sec)
+    if len(terms) < min_terms:
+        return []
+    hits = []
+    for key, line in full.items():
+        if key in shortlisted:
+            continue
+        low = line.lower()
+        n = sum(1 for t in terms if t in low)
+        if n >= min_terms:
+            hits.append((n, key))
+    hits.sort(reverse=True)
+    return [k for _, k in hits[:limit]]
+
+
 def _corpus_supports(brain: Brain, cfg, sec: Section, full: dict[str, str],
                      tag: str = "graft") -> bool:
     """Whether the shortlisted sources support ``sec``, or merely rank nearest to it.
@@ -145,6 +197,40 @@ def _corpus_supports(brain: Brain, cfg, sec: Section, full: dict[str, str],
         return True
     if "UNSUPPORTED" not in str(data.get("verdict", "")).upper():
         return True
+
+    # A NO from an eighteen-source window is not a fact about 233 sources. Before accepting it,
+    # look at what the ranking did not show the judge — and if the corpus plainly holds the ask,
+    # re-put the question with those sources in front of it instead of declining.
+    witnesses = _lexical_witnesses(sec, full, set(sec.candidates))
+    if witnesses:
+        print(f"  {runlog.stamp()}[{tag}] {sec.heading!r}: the shortlist said no, but "
+              f"{len(witnesses)} source(s) it never showed match the ask on its own terms — "
+              f"re-asking with {', '.join(witnesses[:4])}"
+              + (" …" if len(witnesses) > 4 else ""), flush=True)
+        widened = [full.get(k, "") for k in witnesses]
+        widened = [ln for ln in widened if ln.strip()]
+        second = (f"Review topic: {cfg.topic}\n\n"
+                  f"Proposed section: {sec.heading}\n"
+                  f"What it would argue: {sec.claim}\n"
+                  f"What the reviewer asked for, in their words: {sec.ask}\n\n"
+                  f"These sources were NOT in the first shortlist. Judge them on their own:\n"
+                  + "\n".join(f"  - {ln[:300]}" for ln in widened) + "\n\nVerdict JSON:")
+        try:
+            raw2 = brain.coordinator(second, _SUPPORT_SYS, num_ctx=8192, think=False)
+            m2 = re.search(r"\{.*\}", raw2, re.DOTALL)
+            data2 = json.loads(m2.group(0)) if m2 else {}
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] [{tag}] second-look check failed ({e}); drafting anyway",
+                  file=sys.stderr)
+            data2 = {"verdict": "SUPPORTED"}
+        if "UNSUPPORTED" not in str(data2.get("verdict", "")).upper():
+            # Promote the witnesses into the evidence set — declining would have thrown away
+            # the only sources that were actually on the ask.
+            sec.candidates = witnesses + [k for k in sec.candidates if k not in set(witnesses)]
+            print(f"  {runlog.stamp()}[{tag}] {sec.heading!r}: SUPPORTED on the second look; "
+                  f"drafting from {len(sec.candidates)} source(s).", flush=True)
+            return True
+
     missing = str(data.get("missing", "")).strip() or "sources on this specific topic"
     instead = str(data.get("instead", "")).strip()
     print(f"  {runlog.stamp()}[{tag}] {sec.heading!r}: NOT SUPPORTED by the corpus — "
