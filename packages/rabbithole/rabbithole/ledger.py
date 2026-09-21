@@ -72,6 +72,68 @@ def near_miss_keys(cited: set[str], known: set[str]) -> dict[str, list[str]]:
     return out
 
 
+def _stem_year(key: str) -> tuple[str, str]:
+    m = re.search(r"(19|20)\d{2}$", key)
+    return (key[:m.start()], m.group(0)) if m else (key, "")
+
+
+def repair_map(cited: set[str], known: set[str]) -> tuple[dict, list]:
+    """Unknown citekeys that resolve to EXACTLY ONE known key, and those that resolve to none.
+
+    A model asked to cite from a list writes the keys from memory, and the mistakes are
+    systematic rather than random. elephantRoom's minted review carried eight keys refs.bib had
+    never heard of, ~7% of everything it cited, and six were mangled versions of real ones:
+
+        amendolaEnergy                          -> amendolaEnergy2024      (year dropped)
+        hoekstraCreatingAgentBasedEnergy2017    -> hoekstraCreating2017    (title words added)
+
+    Those six are mechanically recoverable and there is no reason to ship them broken. The
+    other two matched nothing at all and are not repairable by any rule — they are returned
+    separately, because a fabricated citation is a different problem from a mistyped one and
+    only a person can decide what the sentence should have rested on.
+
+    ONLY UNAMBIGUOUS MATCHES ARE REPAIRED. Two real papers by one author can share a stem, and
+    a silently rewritten citation pointing at the wrong paper is worse than a flagged broken
+    one — which is why `near_miss_keys` reports rather than rewrites. A single candidate is
+    not that case.
+    """
+    by_stem: dict[str, list[str]] = {}
+    by_lower: dict[str, list[str]] = {}
+    for k in known:
+        by_stem.setdefault(_year_stem(k), []).append(k)
+        by_lower.setdefault(k.lower(), []).append(k)
+
+    fixes: dict[str, str] = {}
+    unmatched: list[str] = []
+    for bad in sorted(cited - known):
+        stem, year = _stem_year(bad)
+        cands = set(by_stem.get(stem, []))            # same stem, any year
+        cands |= set(by_lower.get(bad.lower(), []))   # case only
+        if not cands:
+            # One stem is a prefix of the other AND the years agree: a key written with more
+            # (or fewer) title words than Better BibTeX chose. The year has to match, or
+            # `grimaudClimate2011` would capture `grimaudClimate2019`.
+            for k in known:
+                kstem, kyear = _stem_year(k)
+                if not year or kyear != year:
+                    continue
+                if kstem.lower().startswith(stem.lower()) or stem.lower().startswith(kstem.lower()):
+                    cands.add(k)
+        cands.discard(bad)
+        if len(cands) == 1:
+            fixes[bad] = cands.pop()
+        elif not cands:
+            unmatched.append(bad)
+    return fixes, unmatched
+
+
+def apply_repairs(text: str, fixes: dict) -> str:
+    """Rewrite `[@bad]` to `[@good]`. Only inside a citation tag — never bare prose."""
+    for bad, good in fixes.items():
+        text = re.sub(r"\[@" + re.escape(bad) + r"\]", f"[@{good}]", text)
+    return text
+
+
 @dataclass
 class Reconciliation:
     """How the narrative, the corpus and refs.bib line up. All three, not two."""

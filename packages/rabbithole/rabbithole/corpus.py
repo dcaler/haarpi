@@ -178,7 +178,59 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
         c = _corpus_item_from_zotero(zc, it, idx, paths)
         if c is not None:
             corpus.append(c)
-    return corpus
+    return dedupe_corpus(corpus)
+
+
+def dedupe_corpus(corpus: list[Candidate]) -> list[Candidate]:
+    """Collapse the same paper appearing twice. One row per work, keeping the usable one.
+
+    `filters.dedupe` has always run inside `gather`, and nothing ran here — a Zotero collection
+    holding one paper under two items produced two corpus entries, and since they are the same
+    paper they take the same citekey. Which of the two the bibliography then prints is
+    arbitrary: elephantRoom carried three such pairs (Branger 2014, Rosenbloom 2020 and
+    Sanna-Randaccio 2014), each flagged by `duplicate_citekeys` as something to go and fix by
+    hand every run.
+
+    Not `filters.dedupe`: its richness score knows nothing about full text or a downloaded PDF,
+    so it could keep the metadata-rich twin and discard the only one that can be read. Full
+    text wins first here, and everything else is a tiebreak under it.
+    """
+    def _usable(c: Candidate) -> tuple:
+        return (bool(c.fulltext), len(c.fulltext or ""), bool(c.pdf_path),
+                bool(c.doi), bool(c.citekey), bool(c.abstract))
+
+    best: dict[str, Candidate] = {}
+    merged: list[tuple[str, str]] = []
+    order: list[str] = []
+    for c in corpus:
+        key = c.dedup_key
+        if not key:
+            order.append(f"\x00{len(order)}")      # no identity to merge on: keep as-is
+            best[order[-1]] = c
+            continue
+        if key not in best:
+            best[key] = c
+            order.append(key)
+            continue
+        keep, drop = ((best[key], c) if _usable(best[key]) >= _usable(c) else (c, best[key]))
+        # Back-fill so the surviving row is not poorer than the pair it replaces.
+        keep.doi = keep.doi or drop.doi
+        keep.abstract = keep.abstract or drop.abstract
+        keep.citekey = keep.citekey or drop.citekey
+        keep.pdf_path = keep.pdf_path or drop.pdf_path
+        keep.fulltext = keep.fulltext or drop.fulltext
+        keep.venue = keep.venue or drop.venue
+        keep.publisher = keep.publisher or drop.publisher
+        best[key] = keep
+        merged.append((keep.first_author_last, keep.title))
+    if merged:
+        print(f"  Merged {len(merged)} duplicate record(s) — the same paper held twice in the "
+              f"collection, which would otherwise take one citekey between them:")
+        for au, title in merged[:6]:
+            print(f"    - {au}: {title[:66]}")
+        if len(merged) > 6:
+            print(f"    … and {len(merged) - 6} more")
+    return [best[k] for k in order]
 
 
 def persist(paths, corpus: list[Candidate]) -> None:
@@ -370,7 +422,7 @@ def ingest_from_folder(paths) -> list[Candidate]:
         c.pdf_path = str(fp)
         c.fulltext = text
         corpus.append(c)
-    return corpus
+    return dedupe_corpus(corpus)
 
 
 def _candidate_from_pdf(fp: Path, text: str) -> Candidate:

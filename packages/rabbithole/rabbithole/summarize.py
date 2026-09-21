@@ -995,6 +995,22 @@ def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] section revision failed ({e}); keeping current.", file=sys.stderr)
             break
+    # LAST WORD, AND A DETERMINISTIC ONE. `unresolved_keys` is one of the guards above, so a
+    # bad key is already being reported to the model every round — and after the last round
+    # whatever it did not fix simply ships. elephantRoom's minted review cited eight keys its
+    # own refs.bib never defined; six were recoverable by rule. Asking is not a mechanism.
+    fixes, unmatched = ledger.repair_map(set(guards.all_citekeys(text)), corpus_keys)
+    if fixes:
+        text = ledger.apply_repairs(text, fixes)
+        shown = ", ".join(f"[@{b}]->[@{g}]" for b, g in sorted(fixes.items())[:4])
+        print(f"    [guard] §{i + 1} repaired {len(fixes)} citekey(s): {shown}"
+              + (" …" if len(fixes) > 4 else ""), flush=True)
+    if unmatched:
+        # Not repairable by any rule: these match no source in the corpus at all. Said loudly
+        # here, beside the section that invented them, rather than only in the run's tail.
+        print(f"    [guard] §{i + 1} {len(unmatched)} citekey(s) match NO corpus source and "
+              f"could not be repaired — the claim they support has no evidence behind it: "
+              + ", ".join(f"[@{k}]" for k in unmatched[:6]), file=sys.stderr)
     return text
 
 
