@@ -531,14 +531,15 @@ looking for the most recently modified one whose trailing suffix is *not* `ra`.
 ```bash
 git clone https://github.com/dcaler/haarpi.git
 cd haarpi
-uv sync            # one venv, all six CLIs
+uv sync            # one venv, all seven CLIs
 ```
 
 Each tool remains individually installable (`pip install -e packages/<tool>`)
 and individually usable — the monorepo shares machinery, not opinions.
 
 You will also need [Ollama](https://ollama.com) for the local models, `pandoc`
-for document rendering, `graphviz` for the figures, and a Zotero library with
+for document rendering, `graphviz` with its neato layout engine for the figures
+(a separate package on recent Ubuntu: `libgvplugin-neato-layout8`), and a Zotero library with
 API access for the literature stage. Configuration lives in
 `~/.config/haarpi/config.toml`.
 

@@ -21,3 +21,6 @@ include = ["ramus*"]
 
 [tool.setuptools.package-data]
 ramus = ["templates/*.tmpl"]
+
+[tool.uv.sources]
+haarpi = { workspace = true }
