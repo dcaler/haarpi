@@ -179,12 +179,26 @@ class ZoteroClient:
         return r.json()
 
     def pdf_attachment_key(self, item_key: str) -> str:
+        att = self.pdf_attachment(item_key)
+        return att["key"] if att else ""
+
+    def pdf_attachment(self, item_key: str) -> dict | None:
+        """The item's first PDF attachment as {"key", "md5"}. `md5` is Zotero's hash of the
+        stored file ("" for a linked file, which has none), so a caller can tell whether a
+        copy it already holds is current without downloading it again."""
         for ch in self.item_children(item_key):
             data = ch.get("data", {})
             if data.get("itemType") == "attachment" and \
                data.get("contentType") == "application/pdf":
-                return ch["key"]
-        return ""
+                return {"key": ch["key"], "md5": data.get("md5") or ""}
+        return None
+
+    def fetch_attachment(self, attachment_key: str) -> bytes | None:
+        try:
+            r = self._client.get(f"{self.prefix}/items/{attachment_key}/file")
+        except Exception:  # noqa: BLE001
+            return None
+        return r.content if r.status_code == 200 else None
 
     def download_attachment(self, attachment_key: str, dest: Path) -> bool:
         try:

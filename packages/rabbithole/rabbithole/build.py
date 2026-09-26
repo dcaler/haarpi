@@ -25,6 +25,8 @@ def run(directory: str = ".", *, from_folder: bool = False, refresh_notes: bool 
 
     print(f"rabbitHole build — {cfg.project_name}")
     print(f"  {corpus_mod.zotero_status(cfg, gc)}")
+    print("  plan: build the corpus (ingest, citekeys, index) → read papers (notes)")
+    print()
     built = summarize.build_corpus(cfg, gc, paths, brain,
                                    from_folder=from_folder, refresh_notes=refresh_notes)
     if built is None:

@@ -9,12 +9,13 @@ Metadata is enriched from gather's candidates.json where possible.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 
-from . import config, corpus_ledger
+from . import config, corpus_ledger, pdfs
 from .models import Author, Candidate, norm_doi
 from .pdfs import extract_text, looks_like_fulltext
 
@@ -88,7 +89,7 @@ def _enrich(c: Candidate, idx: dict[str, Candidate]) -> Candidate:
 
 
 def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
-                             quiet: bool = False) -> Candidate | None:
+                             quiet: bool = False, progress: str = "") -> Candidate | None:
     """Turn one Zotero collection item into a full-text Candidate, or None if it is
     an attachment/note or has no usable full text.
 
@@ -109,21 +110,71 @@ def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
     if data.get("itemType") in ("attachment", "note"):
         return None          # Zotero plumbing, not a source
     c = _enrich(_zotero_item_to_candidate(data), idx)
-    att = zc.pdf_attachment_key(it["key"])
-    text, n_pages = "", 0
+    if progress and not quiet:
+        # named BEFORE the network work, so a stalled download is the item on screen
+        print(f"    {progress} {it['key']} {c.title[:50]} … ", end="", flush=True)
+    t0 = time.monotonic()
+    att = zc.pdf_attachment(it["key"])
+    text, n_pages, got = "", 0, "no PDF"
     if att:
         dest = paths.pdfs / f"{it['key']}.pdf"
-        if zc.download_attachment(att, dest):
+        got = _fetch_zotero_pdf(zc, att, dest)
+        if got:
             c.pdf_path = str(dest)
             text, n_pages = extract_text(dest)
+        else:
+            got = "download failed"
         if not text:
             text = zc.fulltext(att)
+            got += ", Zotero full text" if text else ""
+    took = f"{time.monotonic() - t0:.1f}s"
     if not text or not looks_like_fulltext(text, n_pages):
-        if not quiet:
+        if progress and not quiet:
+            print(f"[skip] no usable full text ({got}), {took}", flush=True)
+        elif not quiet:
             print(f"    [skip] no usable full text: {c.title[:60]}")
         return None
+    if progress and not quiet:
+        print(f"{got}, {n_pages} pages, {took}", flush=True)
     c.fulltext = text
     return c
+
+
+def _fetch_zotero_pdf(zc, att: dict, dest: Path) -> str:
+    """Put the attachment's PDF at `dest`, downloading only when Zotero's copy has changed.
+
+    Returns how it was got — "cached" (Zotero's md5 matches the copy fetched last time, so no
+    download), "downloaded", or "changed" (re-downloaded because Zotero's copy is newer) — or
+    "" when there is no usable file. Downloads go to `dest` once and seed the local SSD copy
+    from the same bytes, so an unchanged corpus costs one `stat` per paper over the network."""
+    rec_fp = pdfs.CACHE_ROOT / "zotero" / f"{att['key']}.json"
+    try:
+        rec = json.loads(rec_fp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rec = {}
+    if att.get("md5") and rec.get("md5") == att["md5"] and rec.get("dest") == str(dest) \
+            and dest.exists():
+        return "cached"
+    data = zc.fetch_attachment(att["key"])
+    if not data or len(data) <= 2048:
+        return ""
+    verified = bool(att.get("md5")) and hashlib.md5(data).hexdigest() == att["md5"]
+    try:
+        same = verified and dest.stat().st_size == len(data)
+    except OSError:
+        same = False
+    if not same:              # the NAS already holds this file: don't push it over WiFi again
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+    pdfs.adopt(dest, data)
+    if verified:
+        try:
+            rec_fp.parent.mkdir(parents=True, exist_ok=True)
+            rec_fp.write_text(json.dumps({"md5": att["md5"], "dest": str(dest)}),
+                              encoding="utf-8")
+        except OSError:
+            pass
+    return f"{'changed' if rec else 'downloaded'} {len(data) / 1e6:.1f} MB"
 
 
 def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
@@ -175,8 +226,8 @@ def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
         print(f"  Zotero collection has {len(items)} top-level items.")
 
     corpus: list[Candidate] = []
-    for it in items:
-        c = _corpus_item_from_zotero(zc, it, idx, paths)
+    for i, it in enumerate(items, 1):
+        c = _corpus_item_from_zotero(zc, it, idx, paths, progress=f"[{i}/{len(items)}]")
         if c is not None:
             corpus.append(c)
     return dedupe_corpus(corpus)

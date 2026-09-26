@@ -1995,6 +1995,9 @@ def build_corpus(cfg, gc, paths, brain, *, from_folder: bool = False,
     (`rabbitHole build`): the corpus is embedded ONCE, from the already-audited collection, and
     both `report` and `revise` draft from what it leaves behind. `report` still calls it directly,
     so a standalone `report` is unchanged."""
+    print(f"{_stamp()}Building the corpus: ingest every source's full text (PDFs cached on "
+          f"the local SSD at {corpus_mod.pdfs.CACHE_ROOT}), then citekeys and the index...",
+          flush=True)
     corpus = corpus_mod.build(cfg, gc, paths, from_folder=from_folder)
     if not corpus:
         return None
@@ -2036,6 +2039,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"  brain: {brain.backend} "
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
     print(f"  {corpus_mod.zotero_status(cfg, gc)}")
+    print("  plan: build the corpus (ingest, citekeys, index) → [1/3] read papers (notes) → "
+          "[2/3] synthesise the review → [3/3] locate claims, bibliography, render")
     print()
 
     # Train style profile if needed before anything else.
