@@ -12,6 +12,9 @@ this API.
 
 from __future__ import annotations
 
+import os
+import re
+import time
 from pathlib import Path
 
 import httpx
@@ -19,6 +22,76 @@ import httpx
 from .config import GlobalConfig
 
 API = "https://api.zotero.org"
+
+# Connect fast and let the retry loop handle a dead link; read generously, since a PDF
+# download can pause between chunks. A 60 s connect timeout was how one item took 182 s.
+_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=60.0, pool=15.0)
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_BACKOFF_SECS = (5, 10, 20, 40, 60)          # then 60 s apart until the outage deadline
+
+
+def outage_wait_secs() -> int:
+    """How long one Zotero request keeps retrying through a network outage."""
+    v = os.environ.get("HAARPI_ZOTERO_OUTAGE_WAIT")
+    return int(v) if v else 1800
+
+
+class _ResilientClient:
+    """httpx.Client with retries, so a WiFi blip costs a pause instead of the run.
+
+    oddjob reaches the internet over a USB WiFi dongle whose link drops out in bursts —
+    hundreds of connection timeouts in a bad hour. A single failed request used to end a
+    whole Zotero ingest (DigiPros and elephantRoom, 26 Sep, both on one DNS failure).
+
+    GET is retried on any transport error and on 429/5xx. POST and PATCH are retried only
+    when the request never left (connect errors) or on 429/503, so a reply lost in transit
+    can never create a collection twice. Retry-After is honoured."""
+
+    def __init__(self, client: httpx.Client):
+        self._c = client
+
+    def get(self, url, **kw):
+        return self._send("GET", url, kw)
+
+    def post(self, url, **kw):
+        return self._send("POST", url, kw)
+
+    def patch(self, url, **kw):
+        return self._send("PATCH", url, kw)
+
+    def _send(self, method: str, url: str, kw: dict):
+        idempotent = method == "GET"
+        deadline = time.monotonic() + outage_wait_secs()
+        attempt = 0
+        while True:
+            why, retry_after = "", 0.0
+            try:
+                r = self._c.request(method, url, **kw)
+            except httpx.TransportError as e:
+                sent = not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+                if sent and not idempotent:
+                    raise
+                why, r = type(e).__name__, None
+                last_exc = e
+            else:
+                retryable = r.status_code in (_RETRY_STATUS if idempotent else {429, 503})
+                if not retryable:
+                    return r
+                why = f"HTTP {r.status_code}"
+                try:
+                    retry_after = float(r.headers.get("Retry-After") or 0)
+                except ValueError:
+                    retry_after = 0.0
+            wait = max(_BACKOFF_SECS[min(attempt, len(_BACKOFF_SECS) - 1)], retry_after)
+            attempt += 1
+            if time.monotonic() + wait > deadline:
+                if r is not None:
+                    return r                      # the caller's status handling decides
+                raise last_exc
+            path = re.sub(r"^/(users|groups)/[^/]+", "", url.removeprefix(API))
+            print(f"[zotero] {method} {path}: {why} — retry {attempt} in {wait:.0f}s",
+                  flush=True)
+            time.sleep(wait)
 
 
 class ZoteroClient:
@@ -30,8 +103,8 @@ class ZoteroClient:
             "Zotero-API-Version": "3",
             "Zotero-API-Key": gc.zotero_api_key,
         }
-        self._client = httpx.Client(timeout=60, headers=self.headers,
-                                    follow_redirects=True)
+        self._client = _ResilientClient(httpx.Client(timeout=_TIMEOUT, headers=self.headers,
+                                                     follow_redirects=True))
 
     # ── collections ──────────────────────────────────────────────────────
     def create_collection(self, name: str) -> str:

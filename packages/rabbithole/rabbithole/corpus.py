@@ -129,7 +129,10 @@ def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
             got += ", Zotero full text" if text else ""
     took = f"{time.monotonic() - t0:.1f}s"
     if not text or not looks_like_fulltext(text, n_pages):
-        if progress and not quiet:
+        if progress and not quiet and got.startswith("download failed"):
+            print(f"[WARN] DROPPED from the corpus: the download failed and there is no copy "
+                  f"in pdfs/ ({got}), {took}", flush=True)
+        elif progress and not quiet:
             print(f"[skip] no usable full text ({got}), {took}", flush=True)
         elif not quiet:
             print(f"    [skip] no usable full text: {c.title[:60]}")
@@ -157,7 +160,13 @@ def _fetch_zotero_pdf(zc, att: dict, dest: Path) -> str:
         return "cached"
     data = zc.fetch_attachment(att["key"])
     if not data or len(data) <= 2048:
-        return ""
+        # The network failed us even after retries. A copy from an earlier run is a far
+        # better answer than dropping the paper from the corpus.
+        try:
+            have = dest.stat().st_size > 2048
+        except OSError:
+            have = False
+        return "download failed, using the copy already in pdfs/" if have else ""
     verified = bool(att.get("md5")) and hashlib.md5(data).hexdigest() == att["md5"]
     try:
         same = verified and dest.stat().st_size == len(data)
