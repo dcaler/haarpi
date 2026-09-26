@@ -111,6 +111,28 @@ def test_the_stamper_does_not_double_stamp():
     assert buf.getvalue().count("[") == 1, buf.getvalue()
 
 
+def test_the_run_log_file_is_stamped_too(tmp_path, monkeypatch):
+    """The CLI installs the stamper and THEN tees to the run-log file, so the tee sat outside
+    the stamper: the terminal was stamped and .haarpi/runlog/*.log was not. DigiPros' report
+    log went eight minutes silent in PDF extraction with no way to tell slow from hung."""
+    import io as _io
+    import sys as _sys
+    monkeypatch.setattr(_sys, "stdout", _io.StringIO())
+    monkeypatch.setattr(_sys, "stderr", _io.StringIO())
+    monkeypatch.setattr(runlog, "_STAMPING", False)
+    runlog.stamp_output()                                  # the CLI's order: stamper first …
+    fp = runlog.to_file(tmp_path, "report")                # … then the file tee
+    print("Ingesting from ./pdfs/ folder...")
+    print(f"{runlog.stamp()}already stamped")
+    print("partial ", end="")
+    print("line")
+    _sys.stdout._sink.flush()
+    lines = [l for l in fp.read_text(encoding="utf-8").splitlines() if l]
+    assert len(lines) == 3, lines
+    assert all(re.match(r"^\[\d{2}:\d{2}:\d{2}\] \S", l) for l in lines), lines
+    assert lines[1].count("[") == 1                        # not double-stamped
+
+
 @pytest.mark.parametrize("pkg", ["haarpi", "rabbithole", "raconteur", "raster",
                                  "rayleigh", "razzle"])
 def test_every_cli_installs_the_line_stamper(pkg):

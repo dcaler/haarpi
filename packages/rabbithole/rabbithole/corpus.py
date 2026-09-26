@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from . import config, corpus_ledger
@@ -409,11 +410,21 @@ def ingest_from_folder(paths) -> list[Candidate]:
     pdfs = sorted(paths.pdfs.glob("*.pdf"))
     print(f"  ./pdfs/ has {len(pdfs)} files.")
     corpus: list[Candidate] = []
-    for fp in pdfs:
+    for i, fp in enumerate(pdfs, 1):
+        # Named BEFORE extraction, so a file that hangs on a slow NFS read is the one on
+        # screen: this loop once ran eight minutes without a line.
+        try:
+            size = f"{fp.stat().st_size / 1e6:.1f} MB"
+        except OSError:
+            size = "? MB"
+        print(f"    [{i}/{len(pdfs)}] {fp.name} ({size}) … ", end="", flush=True)
+        t0 = time.monotonic()
         text, n_pages = extract_text(fp)
+        took = f"{time.monotonic() - t0:.1f}s"
         if not text or not looks_like_fulltext(text, n_pages):
-            print(f"    [skip] no usable full text: {fp.name}")
+            print(f"[skip] no usable full text, {took}", flush=True)
             continue
+        print(f"{n_pages} pages, {took}", flush=True)
         c = idx.get(fp.name)
         if c is None:
             c = _candidate_from_pdf(fp, text)
@@ -443,6 +454,23 @@ def _candidate_from_pdf(fp: Path, text: str) -> Candidate:
     return Candidate(title=title or fp.stem, source="folder")
 
 
+def _missing_zotero_settings(gc) -> list[str]:
+    return [name for name, v in (("ZOTERO_API_KEY", gc.zotero_api_key),
+                                 ("ZOTERO_LIBRARY_ID", gc.zotero_library_id)) if not v]
+
+
+def zotero_status(cfg, gc) -> str:
+    """One line for a verb's header: where this run's corpus will come from, and why."""
+    key = cfg.zotero.get("collection_key")
+    missing = _missing_zotero_settings(gc)
+    if key and not missing:
+        return f"zotero: collection {key}"
+    if key:
+        return (f"zotero: NOT configured ({', '.join(missing)} unset) — collection {key} "
+                f"will be IGNORED and the corpus rebuilt from ./pdfs/")
+    return "zotero: no collection for this project — corpus from ./pdfs/"
+
+
 def build(cfg, gc, paths, from_folder: bool) -> list[Candidate]:
     use_zotero = (not from_folder) and gc.have_zotero and cfg.zotero.get("collection_key")
     if use_zotero:
@@ -450,7 +478,13 @@ def build(cfg, gc, paths, from_folder: bool) -> list[Candidate]:
         corpus = ingest_from_zotero(cfg, gc, paths)
     else:
         if not from_folder and not gc.have_zotero:
-            print("[note] No Zotero configured — ingesting from ./pdfs/ instead.")
+            # A runner inherits its environment from the shell that started it; after a
+            # machine rebuild that shell lacked the Zotero exports, and a report quietly
+            # replaced a Zotero corpus with a folder one, citekeys and all.
+            print(f"  [WARN] Zotero is not configured ({', '.join(_missing_zotero_settings(gc))} "
+                  f"unset: environment or ~/.config/haarpi/config.toml). Ingesting from ./pdfs/ "
+                  f"instead — work/corpus.json will be rebuilt from the folder, with generated "
+                  f"citekeys for anything Zotero would have keyed.", flush=True)
         print("Ingesting from ./pdfs/ folder...")
         corpus = ingest_from_folder(paths)
     persist(paths, corpus)  # slim metadata (no full text) for inspection / resume

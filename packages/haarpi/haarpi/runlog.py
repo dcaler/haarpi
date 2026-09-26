@@ -137,13 +137,18 @@ def to_file(root, verb: str) -> "Path | None":
     afterwards, because the lines that explained them had aged out of a 5.8KB tail.
 
     Best-effort: a log that cannot be opened is not a reason to refuse to run.
+
+    The file side is stamped by its own stamper. The CLI installs :func:`stamp_output` BEFORE
+    calling this, so the tee sits outside the terminal's stamper and receives raw text: the
+    terminal was stamped and the file was not, and DigiPros' September report log could not
+    say whether eight silent minutes of PDF extraction were slow or hung.
     """
     from pathlib import Path
     try:
         d = Path(root) / ".haarpi" / "runlog"
         d.mkdir(parents=True, exist_ok=True)
         fp = d / f"{datetime.now():%y%m%d_%H%M%S}_{re.sub(r'[^A-Za-z0-9_-]', '', verb)}.log"
-        sink = fp.open("a", encoding="utf-8", errors="replace")
+        sink = _LineStamper(fp.open("a", encoding="utf-8", errors="replace"))
     except (OSError, ValueError):
         return None
     for name in ("stdout", "stderr"):

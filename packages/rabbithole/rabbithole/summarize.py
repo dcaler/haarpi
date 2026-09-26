@@ -2035,6 +2035,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"rabbitHole report — {cfg.project_name}")
     print(f"  brain: {brain.backend} "
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
+    print(f"  {corpus_mod.zotero_status(cfg, gc)}")
     print()
 
     # Train style profile if needed before anything else.

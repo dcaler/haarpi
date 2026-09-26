@@ -11,7 +11,7 @@ sources, audit quarantines lexical false-friends, then build embeds only the sur
 """
 from __future__ import annotations
 
-from . import config, runlog, summarize
+from . import config, corpus as corpus_mod, runlog, summarize
 from .brain import Brain
 
 
@@ -24,6 +24,7 @@ def run(directory: str = ".", *, from_folder: bool = False, refresh_notes: bool 
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
 
     print(f"rabbitHole build — {cfg.project_name}")
+    print(f"  {corpus_mod.zotero_status(cfg, gc)}")
     built = summarize.build_corpus(cfg, gc, paths, brain,
                                    from_folder=from_folder, refresh_notes=refresh_notes)
     if built is None:
