@@ -24,10 +24,20 @@ Retry policy, both philosophies kept: the transport default is retries=0 —
 for expensive build tasks the right retry re-composes the prompt at the task
 level rather than resending it blind. The Brain role methods pass retries=3,
 the judgement-call default the litreview/paper loops have always used.
+
+An outage is not a failure of the request, so it spends no retry. oddjob's GPU
+watchdog stops ollama outright when a card reaches 82 °C and restarts it only
+once every card is back under 70 °C — five minutes and more of refused
+connections, or a stream cut off mid-answer. A call that meets one waits for
+/api/version to answer and resends the same request (ride_out_outage). Only an
+unreachable server counts: an HTTP error, an {"error": …} object or a read
+timeout from a running ollama is an answer about the request, and keeps the
+retry policy above exactly.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
@@ -64,6 +74,71 @@ MAX_NUM_CTX = _env_int("MAX_NUM_CTX", 32768)
 
 _RETRY_BACKOFF_SECS = 5
 _RESERVE_FRACTION = 0.35   # explicit-num_ctx budget: leave room for the answer
+
+OUTAGE_POLL_SECS = 15
+MAX_OUTAGES_PER_CALL = 6   # a server that keeps dying mid-call is not waited on forever
+
+
+def outage_wait_secs() -> int:
+    """How long one call waits for an unreachable ollama to come back. Read per call, so
+    HAARPI_OLLAMA_OUTAGE_WAIT=0 in a runner's environment switches the wait off."""
+    return _env_int("OLLAMA_OUTAGE_WAIT", 1800)
+
+
+class OllamaOutage(ConnectionError):
+    """ollama stopped answering. Says nothing about the request, so the request is resent."""
+
+
+def is_outage(e: BaseException) -> bool:
+    """True when ollama was unreachable or dropped the connection, as opposed to answering.
+
+    Timeouts are excluded: a read timeout is the per-chunk gap on a live server, and its
+    handling stays with the retry policy."""
+    if isinstance(e, urllib.error.HTTPError):
+        return False                      # a running ollama answered with a status
+    if isinstance(e, urllib.error.URLError):
+        e = e.reason if isinstance(e.reason, BaseException) else e
+        if isinstance(e, urllib.error.URLError):
+            return False
+    if isinstance(e, TimeoutError):
+        return False
+    return isinstance(e, (ConnectionError, http.client.HTTPException))
+
+
+def wait_for_ollama(url: str, deadline_secs: float) -> bool:
+    """Poll GET /api/version until ollama answers (True) or the deadline passes (False)."""
+    probe = f"{normalize_host(url).rstrip('/')}/api/version"
+    end = time.monotonic() + deadline_secs
+    while True:
+        try:
+            with urllib.request.urlopen(probe, timeout=10) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:  # noqa: BLE001 — anything but an answer means still down
+            pass
+        left = end - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(OUTAGE_POLL_SECS, left))
+
+
+def ride_out_outage(url: str, err: BaseException, outages: int, what: str,
+                    tool: str = "haarpi") -> bool:
+    """Wait out an ollama outage. True means ollama is back and the caller should resend
+    the same request without counting it as a retry; False means fall through to the
+    caller's ordinary failure handling (wait disabled, cap reached, or it never came back)."""
+    wait = outage_wait_secs()
+    if wait <= 0 or outages >= MAX_OUTAGES_PER_CALL:
+        return False
+    log(f"  [ollama unreachable] {what}: {err} — waiting up to {fmt_secs(wait)} for it "
+        f"to come back (outage {outages + 1}/{MAX_OUTAGES_PER_CALL} for this call)", tool)
+    t0 = time.monotonic()
+    if wait_for_ollama(url, wait):
+        log(f"  [ollama back] after {fmt_secs(time.monotonic() - t0)} — resending {what}", tool)
+        return True
+    log(f"  [ollama still unreachable] after {fmt_secs(time.monotonic() - t0)} — "
+        f"giving up on {what}", tool)
+    return False
 
 
 def estimate_tokens(chars: int) -> int:
@@ -180,6 +255,10 @@ def _stream_once(host: str, model: str, payload: dict, label: str, tool: str,
             if obj.get("done"):
                 final = obj
                 break
+    if not final:
+        # a killed ollama can close the socket cleanly; what arrived is a fragment
+        raise OllamaOutage(f"ollama stream ended before done "
+                           f"({sum(len(c) for c in chunks)} chars received)")
     text = "".join(chunks)
     dur = time.monotonic() - start
     n_tok = final.get("eval_count")
@@ -229,17 +308,20 @@ def chat(host: str, model: str, messages: list, *, label: str = "",
         payload["think"] = think
         log(f"  ollama {model}: think={think}", tool)
 
-    last: Exception | None = None
-    for attempt in range(1, max(retries, 0) + 2):
+    attempt = outages = 0
+    while True:
         try:
             return _stream_once(host, model, payload, label, tool, timeout)
         except Exception as e:  # noqa: BLE001
-            last = e
+            if is_outage(e) and ride_out_outage(host, e, outages, f"{model} {label}".strip(),
+                                                tool):
+                outages += 1
+                continue
+            attempt += 1
             if attempt > retries:
                 raise
             log(f"  [retry {attempt}/{retries}] ollama {model}: {e}", tool)
             time.sleep(_RETRY_BACKOFF_SECS * attempt)
-    raise RuntimeError(f"ollama call failed: {last}")  # unreachable; keeps type-checkers calm
 
 
 # ── the roles layer ──────────────────────────────────────────────────────────
@@ -335,6 +417,7 @@ class Brain:
             raise ValueError("embed() called with empty text")
         limit = max(1, min(max_chars, len(text)))
         transient = 0  # retries for model-loading / network blips
+        outages = 0    # waited out, not retried: embed_batch would store [] for a failure
         while True:
             body = json.dumps({"model": self.embed_model,
                                "prompt": text[:limit]}).encode()
@@ -355,7 +438,11 @@ class Brain:
                     time.sleep(3 * transient)
                     continue
                 raise RuntimeError(f"embedding failed ({e.code}): {detail[:200]}") from None
-            except (urllib.error.URLError, OSError) as e:
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                if is_outage(e) and ride_out_outage(self.url, e, outages,
+                                                    f"embed {self.embed_model}", self.tool):
+                    outages += 1
+                    continue
                 transient += 1
                 if transient <= 4:
                     time.sleep(3 * transient)

@@ -21,9 +21,19 @@ from pathlib import Path
 
 import httpx
 
+from haarpi.brain import OllamaOutage, ride_out_outage
+
 from .config import BrainConfig, GlobalConfig
 
 _OLLAMA_TIMEOUT = httpx.Timeout(2400.0, connect=60.0)  # 60s connect tolerates cold model loads
+
+
+def _is_outage(e: BaseException) -> bool:
+    """ollama unreachable or gone mid-stream (the watchdog stops it at 82 °C), as opposed to
+    ollama answering. Timeouts stay with the retry loop, as in haarpi.brain.is_outage."""
+    if isinstance(e, OllamaOutage):
+        return True
+    return isinstance(e, httpx.TransportError) and not isinstance(e, httpx.TimeoutException)
 
 
 class Brain:
@@ -103,12 +113,18 @@ class Brain:
             raise ValueError("embed() called with empty text")
         limit = max(1, min(max_chars, len(text)))
         transient = 0  # retries for model-loading / network blips
+        outages = 0    # waited out, not retried: embed_batch would store [] for a failure
         while True:
             try:
                 r = httpx.post(f"{self.gc.ollama_url}/api/embeddings",
                                json={"model": self.cfg.embed_model, "prompt": text[:limit]},
                                timeout=120)
             except httpx.HTTPError as e:
+                if _is_outage(e) and ride_out_outage(self.gc.ollama_url, e, outages,
+                                                     f"embed {self.cfg.embed_model}",
+                                                     "rabbithole"):
+                    outages += 1
+                    continue
                 transient += 1
                 if transient <= 4:
                     time.sleep(3 * transient)
@@ -213,9 +229,11 @@ class Brain:
         payload = {"model": model, "messages": messages, "stream": True, "think": think,
                    "options": {"temperature": temperature, "num_ctx": num_ctx}}
         last = None
-        for attempt in range(1, retries + 1):
+        attempt = outages = 0
+        while attempt < retries:
             try:
                 parts: list[str] = []
+                done = False
                 with httpx.stream("POST", f"{self.gc.ollama_url}/api/chat",
                                   json=payload, timeout=_OLLAMA_TIMEOUT) as r:
                     r.raise_for_status()
@@ -225,10 +243,20 @@ class Brain:
                         chunk = _json.loads(line)
                         parts.append(chunk.get("message", {}).get("content", ""))
                         if chunk.get("done"):
+                            done = True
                             break
+                if not done:
+                    # a killed ollama can close the socket cleanly; what arrived is a fragment
+                    raise OllamaOutage(f"ollama stream ended before done "
+                                       f"({sum(len(p) for p in parts)} chars received)")
                 return "".join(parts).strip()
             except Exception as e:  # noqa: BLE001
+                if _is_outage(e) and ride_out_outage(self.gc.ollama_url, e, outages, model,
+                                                     "rabbithole"):
+                    outages += 1
+                    continue
                 last = e
+                attempt += 1
                 print(f"  [retry {attempt}/{retries}] ollama {model}: {e}", file=sys.stderr)
                 time.sleep(5 * attempt)
         raise RuntimeError(f"ollama call failed after {retries} attempts: {last}")
