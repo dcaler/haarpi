@@ -442,6 +442,8 @@ def backfill_citekeys(cfg, gc, paths, corpus: list[Candidate]) -> int:
     if not coll:
         return 0
     from . import zotero
+    print(f"  {len(missing)} source(s) without a citekey — fetching the collection's BibTeX "
+          f"export from Zotero to recover Better BibTeX keys...", flush=True)
     try:
         zc = zotero.ZoteroClient(gc)
         bib_text = zc.collection_bibtex(coll)

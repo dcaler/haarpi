@@ -16,13 +16,17 @@ correctly no matter who called it.
 from __future__ import annotations
 
 import io
+import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 _T0: float | None = None          # start()/fmt_dt() run total (not used by stamp)
 _IMPORT_T0 = time.monotonic()     # log() clock (runs from import)
+_LAST_OUTPUT = time.monotonic()   # when the stamped streams last carried anything
 
 
 def start() -> float:
@@ -77,8 +81,10 @@ class _LineStamper(io.TextIOBase):
         self._at_line_start = True
 
     def write(self, s: str) -> int:                       # noqa: D102
+        global _LAST_OUTPUT
         if not s:
             return 0
+        _LAST_OUTPUT = time.monotonic()
         out = []
         for part in s.splitlines(keepends=True):
             body = part.rstrip("\r\n")
@@ -158,8 +164,9 @@ def to_file(root, verb: str) -> "Path | None":
     return fp
 
 
-def stamp_output() -> None:
-    """Route stdout and stderr through the line stamper. Call once, at CLI entry.
+def stamp_output(heartbeat: bool = True) -> None:
+    """Route stdout and stderr through the line stamper, and start the silence heartbeat.
+    Call once, at CLI entry.
 
     Idempotent, and a no-op when the stream is not a text stream (pytest's capture replaces it).
     """
@@ -171,9 +178,82 @@ def stamp_output() -> None:
         if stream is not None and hasattr(stream, "write"):
             setattr(sys, name, _LineStamper(stream))
     _STAMPING = True
+    if heartbeat:
+        start_heartbeat()
 
 
 _STAMPING = False
+
+
+# ── the silence heartbeat ──────────────────────────────────────────────────────
+# Announcing each long step is a convention, and conventions leak: elephantRoom's 26 Sep build
+# printed "Ready" and then nothing for 57 minutes while it copied its index to the NAS, and
+# the same run had already sat silent for 20 minutes copying it down. So, as with the stamps,
+# the stream enforces it: after HAARPI_HEARTBEAT_SECS of no output a line says so and names
+# where the main thread is, which answers "slow or hung, and doing what?" without `ps`.
+
+_HEARTBEAT_STARTED = False
+
+
+def heartbeat_secs() -> int:
+    v = os.environ.get("HAARPI_HEARTBEAT_SECS")
+    return int(v) if v else 300
+
+
+def where_now(thread_id: int | None = None) -> str:
+    """The innermost frame of our own code on the main thread: `file.py:123 in func()`."""
+    tid = thread_id if thread_id is not None else threading.main_thread().ident
+    frame = sys._current_frames().get(tid)
+    best = None
+    while frame is not None:
+        fn = frame.f_code.co_filename
+        if "/packages/" in fn and not fn.endswith("runlog.py"):
+            best = frame
+            break
+        frame = frame.f_back
+    if best is None:
+        return "outside HAARPi code (a library call)"
+    return f"{Path(best.f_code.co_filename).name}:{best.f_lineno} in {best.f_code.co_name}()"
+
+
+def _silence_line(idle: float) -> str:
+    return f"[still working] no output for {fmt_dt(idle)} — now in {where_now()}"
+
+
+def _at_line_start(stream) -> bool:
+    """Whether the stamper under `stream` (through any tee) is at the start of a line, so a
+    heartbeat does not land in the middle of a `[37/196] ITEM … ` progress line."""
+    for _ in range(5):
+        if isinstance(stream, _LineStamper):
+            return stream._at_line_start
+        stream = getattr(stream, "_w", None)
+        if stream is None:
+            break
+    return True
+
+
+def _heartbeat_loop(interval: float, stop: threading.Event | None = None) -> None:
+    stop = stop or threading.Event()
+    while not stop.wait(min(30.0, interval)):
+        idle = time.monotonic() - _LAST_OUTPUT
+        if idle < interval:
+            continue
+        try:
+            lead = "" if _at_line_start(sys.stdout) else "\n"
+            print(f"{lead}{_silence_line(idle)}", file=sys.stdout, flush=True)
+        except Exception:  # noqa: BLE001 — a heartbeat must never take a run down
+            pass
+
+
+def start_heartbeat() -> None:
+    """Start the heartbeat thread (once). HAARPI_HEARTBEAT_SECS=0 disables it."""
+    global _HEARTBEAT_STARTED
+    interval = heartbeat_secs()
+    if _HEARTBEAT_STARTED or interval <= 0:
+        return
+    threading.Thread(target=_heartbeat_loop, args=(interval,), daemon=True,
+                     name="haarpi-heartbeat").start()
+    _HEARTBEAT_STARTED = True
 
 
 def log(msg: str, tool: str = "haarpi") -> None:

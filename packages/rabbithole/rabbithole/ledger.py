@@ -237,6 +237,7 @@ def export_bibtex(cfg, gc, paths, citekeys: dict[int, str], corpus: list) -> Pat
     if not collection_key:
         return None
     from . import zotero as _zotero
+    print("  Exporting the collection's BibTeX from Zotero for refs.bib...", flush=True)
     try:
         zc = _zotero.ZoteroClient(gc)
         bib_text = zc.collection_bibtex(collection_key)

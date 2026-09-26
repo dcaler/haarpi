@@ -863,6 +863,9 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
         print(f"\n[warn] Zotero unavailable ({e}); listing all candidates.")
         return "", ranked, 0, 0
 
+    print(f"  {runlog.stamp()}Reading the project's Zotero collection, then your whole library "
+          f"(page by page, 100 items a request) to spot candidates you already hold...",
+          flush=True)
     collection = _ZoteroIndex()
     for it in zc.collection_items(coll):
         collection.add(it)

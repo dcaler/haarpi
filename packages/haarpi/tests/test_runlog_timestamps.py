@@ -120,7 +120,7 @@ def test_the_run_log_file_is_stamped_too(tmp_path, monkeypatch):
     monkeypatch.setattr(_sys, "stdout", _io.StringIO())
     monkeypatch.setattr(_sys, "stderr", _io.StringIO())
     monkeypatch.setattr(runlog, "_STAMPING", False)
-    runlog.stamp_output()                                  # the CLI's order: stamper first …
+    runlog.stamp_output(heartbeat=False)                   # the CLI's order: stamper first …
     fp = runlog.to_file(tmp_path, "report")                # … then the file tee
     print("Ingesting from ./pdfs/ folder...")
     print(f"{runlog.stamp()}already stamped")
@@ -139,3 +139,72 @@ def test_every_cli_installs_the_line_stamper(pkg):
     """One call per tool is what makes the rule hold for code nobody has written yet."""
     src = (_PKGS / pkg / pkg / "cli.py").read_text(encoding="utf-8")
     assert "stamp_output()" in src, f"{pkg}/cli.py never installs the line stamper"
+
+
+# ── the silence heartbeat ────────────────────────────────────────────────────
+# elephantRoom's 26 Sep build printed "Ready", then nothing for 57 minutes while it copied its
+# index to the NAS. Announcing long steps is a convention; the heartbeat is the backstop.
+
+def _busy_in_our_code(seconds: float) -> None:
+    import time as _t
+    _t.sleep(seconds)
+
+
+def test_silence_is_reported_with_where_the_run_is(monkeypatch):
+    import io as _io
+    import sys as _sys
+    import threading
+    import time as _t
+    buf = _io.StringIO()
+    monkeypatch.setattr(_sys, "stdout", runlog._LineStamper(buf))
+    monkeypatch.setattr(runlog, "_LAST_OUTPUT", _t.monotonic())
+    stop = threading.Event()
+    th = threading.Thread(target=runlog._heartbeat_loop, args=(0.3, stop), daemon=True)
+    th.start()
+    try:
+        _busy_in_our_code(1.0)
+    finally:
+        stop.set()
+        th.join(2)
+    lines = [l for l in buf.getvalue().splitlines() if "[still working]" in l]
+    assert lines, buf.getvalue()
+    assert re.match(r"^\[\d{2}:\d{2}:\d{2}\] \[still working\] no output for ", lines[0])
+    assert "in _busy_in_our_code()" in lines[0]
+
+
+def test_output_resets_the_silence_clock(monkeypatch):
+    import io as _io
+    import sys as _sys
+    import threading
+    import time as _t
+    buf = _io.StringIO()
+    monkeypatch.setattr(_sys, "stdout", runlog._LineStamper(buf))
+    stop = threading.Event()
+    th = threading.Thread(target=runlog._heartbeat_loop, args=(0.5, stop), daemon=True)
+    th.start()
+    try:
+        for _ in range(8):
+            print("progress")
+            _t.sleep(0.15)
+    finally:
+        stop.set()
+        th.join(2)
+    assert "[still working]" not in buf.getvalue()
+
+
+def test_a_heartbeat_never_lands_inside_a_progress_line(monkeypatch):
+    import io as _io
+    import sys as _sys
+    buf = _io.StringIO()
+    st = runlog._LineStamper(buf)
+    st.write("    [37/196] ITEM1 A paper … ")
+    assert runlog._at_line_start(st) is False
+    tee = runlog._Tee(st, _io.StringIO())
+    assert runlog._at_line_start(tee) is False, "seen through the run-log tee too"
+
+
+def test_the_heartbeat_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("HAARPI_HEARTBEAT_SECS", "0")
+    monkeypatch.setattr(runlog, "_HEARTBEAT_STARTED", False)
+    runlog.start_heartbeat()
+    assert runlog._HEARTBEAT_STARTED is False
