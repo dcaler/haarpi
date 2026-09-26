@@ -76,10 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     trace before, 2h24m after the collision that caused it.
     """
     from .chroma import ChromaBusy
+    from .corpus import ZoteroNotConfigured
     try:
         return _run(argv)
     except ChromaBusy as e:
         print(f"\n[busy] {e}", file=sys.stderr)
+        return 1
+    except ZoteroNotConfigured as e:
+        print(f"\n[error] {e}", file=sys.stderr)
         return 1
 
 

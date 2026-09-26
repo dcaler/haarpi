@@ -3,7 +3,8 @@
 DigiPros, September: the runners came back up after a machine rebuild without the shell's
 Zotero exports. `report` printed one `[note]`, then nothing for eight minutes while it pulled
 209 PDFs over NFS, then replaced the Zotero corpus with a folder one — every citekey
-regenerated. Nothing in the log made either the fallback or the progress visible.
+regenerated. Zotero is a requirement of the workflow now: without it a run stops, loudly,
+before touching anything; `--from-folder` is the deliberate way to build from ./pdfs/.
 """
 
 from types import SimpleNamespace
@@ -63,30 +64,46 @@ def test_status_names_the_collection_when_zotero_is_configured():
     assert corpus.zotero_status(_cfg("ABCD1234"), gc) == "zotero: collection ABCD1234"
 
 
-def test_status_says_a_collection_will_be_ignored_and_names_what_is_missing():
+def test_status_names_what_is_missing():
     gc = GlobalConfig(zotero_api_key="", zotero_library_id="1")
     s = corpus.zotero_status(_cfg("ABCD1234"), gc)
     assert "NOT configured" in s and "ZOTERO_API_KEY" in s
     assert "ZOTERO_LIBRARY_ID" not in s
-    assert "IGNORED" in s and "./pdfs/" in s
 
 
-def test_status_for_a_project_that_never_had_a_collection():
-    gc = GlobalConfig()
-    assert "no collection" in corpus.zotero_status(_cfg(""), gc)
+def test_status_for_a_deliberate_folder_run():
+    assert "--from-folder" in corpus.zotero_status(_cfg(""), GlobalConfig(), from_folder=True)
 
 
-def test_the_fallback_is_a_warning_that_says_the_corpus_will_be_rebuilt(folder, monkeypatch,
-                                                                        capsys):
+def test_without_zotero_the_run_stops_before_ingesting_anything(folder, monkeypatch):
+    """Zotero is part of the workflow. No silent fallback to ./pdfs/, and work/corpus.json
+    is left exactly as it was."""
+    touched = []
+    monkeypatch.setattr(corpus, "persist", lambda paths, c: touched.append("persist"))
+    monkeypatch.setattr(corpus, "ingest_from_folder", lambda p: touched.append("folder"))
+    with pytest.raises(corpus.ZoteroNotConfigured,
+                       match="ZOTERO_API_KEY, ZOTERO_LIBRARY_ID unset"):
+        corpus.build(_cfg("ABCD1234"), GlobalConfig(), folder, from_folder=False)
+    assert touched == []
+
+
+def test_a_project_with_no_collection_key_still_needs_zotero(folder):
+    with pytest.raises(corpus.ZoteroNotConfigured):
+        corpus.build(_cfg(""), GlobalConfig(), folder, from_folder=False)
+
+
+def test_from_folder_is_the_deliberate_way_round(folder, monkeypatch, capsys):
     monkeypatch.setattr(corpus, "persist", lambda paths, c: None)
-    corpus.build(_cfg("ABCD1234"), GlobalConfig(), folder, from_folder=False)
-    out = capsys.readouterr().out
-    assert "[WARN] Zotero is not configured" in out
-    assert "ZOTERO_API_KEY, ZOTERO_LIBRARY_ID unset" in out
-    assert "work/corpus.json will be rebuilt" in out
+    out = corpus.build(_cfg(""), GlobalConfig(), folder, from_folder=True)
+    assert [c.title for c in out] == ["A", "C"]
+    assert "(--from-folder)" in capsys.readouterr().out
 
 
-def test_an_explicit_from_folder_run_is_not_warned_about(folder, monkeypatch, capsys):
-    monkeypatch.setattr(corpus, "persist", lambda paths, c: None)
-    corpus.build(_cfg(""), GlobalConfig(), folder, from_folder=True)
-    assert "[WARN]" not in capsys.readouterr().out
+def test_the_cli_turns_it_into_one_error_line(monkeypatch, capsys):
+    from rabbithole import cli
+
+    def boom(argv=None):
+        raise corpus.ZoteroNotConfigured("Zotero is not configured: ZOTERO_API_KEY unset")
+    monkeypatch.setattr(cli, "_run", boom)
+    assert cli.main([]) == 1
+    assert "[error] Zotero is not configured" in capsys.readouterr().err

@@ -2038,7 +2038,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     print(f"rabbitHole report — {cfg.project_name}")
     print(f"  brain: {brain.backend} "
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
-    print(f"  {corpus_mod.zotero_status(cfg, gc)}")
+    print(f"  {corpus_mod.zotero_status(cfg, gc, from_folder)}")
+    corpus_mod.require_zotero(gc, from_folder)     # before style training or any GPU work
     print("  plan: build the corpus (ingest, citekeys, index) → [1/3] read papers (notes) → "
           "[2/3] synthesise the review → [3/3] locate claims, bibliography, render")
     print()

@@ -510,33 +510,47 @@ def _missing_zotero_settings(gc) -> list[str]:
                                  ("ZOTERO_LIBRARY_ID", gc.zotero_library_id)) if not v]
 
 
-def zotero_status(cfg, gc) -> str:
-    """One line for a verb's header: where this run's corpus will come from, and why."""
-    key = cfg.zotero.get("collection_key")
+class ZoteroNotConfigured(RuntimeError):
+    """The corpus comes from Zotero, and this run cannot reach it. Not a fallback case."""
+
+
+def zotero_status(cfg, gc, from_folder: bool = False) -> str:
+    """One line for a verb's header: where this run's corpus will come from."""
+    if from_folder:
+        return "zotero: not used (--from-folder) — corpus from ./pdfs/"
     missing = _missing_zotero_settings(gc)
-    if key and not missing:
-        return f"zotero: collection {key}"
-    if key:
-        return (f"zotero: NOT configured ({', '.join(missing)} unset) — collection {key} "
-                f"will be IGNORED and the corpus rebuilt from ./pdfs/")
-    return "zotero: no collection for this project — corpus from ./pdfs/"
+    if missing:
+        return f"zotero: NOT configured ({', '.join(missing)} unset)"
+    key = cfg.zotero.get("collection_key")
+    return f"zotero: collection {key}" if key else \
+        f"zotero: collection found by name ('{cfg.project_name}')"
+
+
+def require_zotero(gc, from_folder: bool = False) -> None:
+    """Zotero is part of the workflow, so a run without it stops, loudly, before any work.
+
+    It used to fall back to ./pdfs/. A runner inherits its environment from the shell that
+    started it; after a machine rebuild that shell lacked the Zotero exports, and DigiPros'
+    report quietly replaced its Zotero corpus with a folder one, every citekey regenerated.
+    `--from-folder` remains the deliberate way to build from ./pdfs/."""
+    missing = _missing_zotero_settings(gc)
+    if from_folder or not missing:
+        return
+    raise ZoteroNotConfigured(
+        f"Zotero is not configured: {', '.join(missing)} unset (environment, or [zotero] in "
+        f"~/.config/haarpi/config.toml). The corpus comes from Zotero, so nothing was "
+        f"ingested and work/corpus.json is untouched. A runner takes its environment from "
+        f"the shell that started it — restart it from a shell that has the exports. To "
+        f"build from ./pdfs/ on purpose, pass --from-folder.")
 
 
 def build(cfg, gc, paths, from_folder: bool) -> list[Candidate]:
-    use_zotero = (not from_folder) and gc.have_zotero and cfg.zotero.get("collection_key")
-    if use_zotero:
+    require_zotero(gc, from_folder)
+    if not from_folder:
         print("Ingesting from Zotero collection...")
         corpus = ingest_from_zotero(cfg, gc, paths)
     else:
-        if not from_folder and not gc.have_zotero:
-            # A runner inherits its environment from the shell that started it; after a
-            # machine rebuild that shell lacked the Zotero exports, and a report quietly
-            # replaced a Zotero corpus with a folder one, citekeys and all.
-            print(f"  [WARN] Zotero is not configured ({', '.join(_missing_zotero_settings(gc))} "
-                  f"unset: environment or ~/.config/haarpi/config.toml). Ingesting from ./pdfs/ "
-                  f"instead — work/corpus.json will be rebuilt from the folder, with generated "
-                  f"citekeys for anything Zotero would have keyed.", flush=True)
-        print("Ingesting from ./pdfs/ folder...")
+        print("Ingesting from ./pdfs/ folder (--from-folder)...")
         corpus = ingest_from_folder(paths)
     persist(paths, corpus)  # slim metadata (no full text) for inspection / resume
     return corpus
