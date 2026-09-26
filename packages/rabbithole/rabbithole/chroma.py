@@ -76,12 +76,13 @@ def get_collection(chroma_dir, writable: bool = False):
     one was lost and `chromadb.errors.InternalError: database is locked` ended an hour-long
     run at paper 7 of 48.
 
-    So the store is staged to local disk, worked on there, and copied back. The canonical copy
-    stays on the share, where it is synced and backed up with the rest of the project.
+    So the store lives on local disk and is worked on there. It is canonical on this machine
+    and kept between runs; the project copy on the share is refreshed only by
+    `rabbitHole chroma --push` (see the section above `_stage_in` for why).
 
-    ``writable`` says whether this caller INDEXES. Readers (locate, the bibliography passes)
-    stage in and never copy back, which is faster and removes any chance of a reader's stale
-    copy overwriting a writer's work.
+    ``writable`` says whether this caller INDEXES. Writers open the local store under the write
+    lock; readers (locate, the bibliography passes) open a private snapshot of it, so a writer
+    running at the same time cannot change files underneath them.
 
     Falls back to working directly on the share if staging cannot be set up: a cache that does
     not work is not a reason for the tool not to run.
@@ -252,82 +253,201 @@ def _release(remote: Path) -> None:
         _lock_path(remote).unlink(missing_ok=True)
 
 
+# ── the local store is canonical; the project copy is pushed on request ──────────
+#
+# The store used to be copied down from the share at the start of every run and back up at the
+# end, "the share is the truth". Over oddjob's WiFi that cost elephantRoom's 26 Sep build 20.6
+# minutes down (275 MB) and 57 minutes up (282 MB), announced only when each had finished — an
+# hour of log silence after a line saying "Ready". The runners all live on this machine, so the
+# SSD copy is now the store, kept between runs; the project copy is refreshed by
+# `rabbitHole chroma --push`, and every run says when that last happened.
+
+_MARKER = ".haarpi-local.json"          # inside a local store: what it is and when pushed
+_PROGRESS_SECS = 60
+
+
+def _read_marker(local: Path) -> dict | None:
+    try:
+        return json.loads((local / _MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_marker(local: Path, **fields) -> None:
+    marker = _read_marker(local) or {"created": datetime.now().isoformat(timespec="seconds")}
+    marker.update(fields)
+    (local / _MARKER).write_text(json.dumps(marker), encoding="utf-8")
+
+
+def _manifest(root: Path) -> dict[str, tuple[int, int]]:
+    """{relative path: (size, mtime_ns)} — enough to tell two copies of a store apart
+    without reading either. Copies here preserve mtimes, so a faithful copy matches."""
+    out = {}
+    for f in root.rglob("*"):
+        if f.is_file() and f.name != _MARKER:
+            st = f.stat()
+            out[str(f.relative_to(root))] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def _copy_tree(src: Path, dst: Path, what: str) -> None:
+    """Copy a store, saying what is about to happen BEFORE it starts and how far it has got
+    while it runs. Preserves mtimes (see _manifest)."""
+    files = [f for f in src.rglob("*") if f.is_file() and f.name != _MARKER]
+    total = sum(f.stat().st_size for f in files)
+    print(f"  {runlog.stamp()}chroma: {what} — {total / 1e6:.0f} MB in {len(files)} files. "
+          f"Over the network this is slow; progress every {_PROGRESS_SECS}s.", flush=True)
+    t0 = last = time.monotonic()
+    done = 0
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        out = dst / f.relative_to(src)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with f.open("rb") as fin, out.open("wb") as fout:
+            while chunk := fin.read(1 << 20):
+                fout.write(chunk)
+                done += len(chunk)
+                now = time.monotonic()
+                if now - last >= _PROGRESS_SECS:
+                    print(f"  {runlog.stamp()}  … {done / 1e6:.0f}/{total / 1e6:.0f} MB, "
+                          f"{runlog.fmt_dt(now - t0)}", flush=True)
+                    last = now
+        shutil.copystat(f, out)
+    print(f"  {runlog.stamp()}chroma: done — {total / 1e6:.0f} MB in "
+          f"{runlog.fmt_dt(time.monotonic() - t0)}", flush=True)
+
+
+def _ensure_local(remote: Path) -> Path:
+    """The canonical local store for `remote`, seeding it from the project copy only when this
+    machine has none. Seeding goes to a temporary name and is renamed into place, so two runs
+    seeding at once cannot interleave their files."""
+    local = _WORK_ROOT / _slug(remote)
+    if _read_marker(local) is not None:
+        return local
+    has_remote = remote.exists() and any(remote.iterdir())
+    if local.exists():
+        # Left by the old copy-down/copy-up code (or restored from a backup). Adopt it only if
+        # it is file-for-file the project copy; anything else could be older than the project.
+        if has_remote and _manifest(local) == _manifest(remote):
+            print(f"  {runlog.stamp()}chroma: the local copy at {local} matches the project "
+                  f"copy — adopting it as this machine's index (no copy needed)", flush=True)
+            _write_marker(local, seeded_from=str(remote),
+                          pushed=datetime.now().isoformat(timespec="seconds"))
+            return local
+        shutil.rmtree(local)
+    local.parent.mkdir(parents=True, exist_ok=True)
+    seed = local.with_name(f"{local.name}.seed-{os.getpid()}")
+    if seed.exists():
+        shutil.rmtree(seed)
+    if has_remote:
+        _copy_tree(remote, seed, f"this machine has no local index yet; copying the project's "
+                                 f"down from {remote}")
+    else:
+        seed.mkdir(parents=True)
+    _write_marker(seed, seeded_from=str(remote),
+                  pushed=datetime.now().isoformat(timespec="seconds") if has_remote else None)
+    try:
+        seed.rename(local)
+    except OSError:                     # another run finished seeding first: use theirs
+        shutil.rmtree(seed, ignore_errors=True)
+    return local
+
+
+def _pushed_words(local: Path) -> str:
+    pushed = (_read_marker(local) or {}).get("pushed")
+    return f"last pushed to the project {pushed}" if pushed else "never pushed to the project"
+
+
 def _stage_in(remote: Path, writable: bool) -> Path:
-    """Copy the store down to local disk and return the local path (or ``remote`` on failure)."""
+    """The store to open: the canonical local copy for a writer, a private snapshot of it for a
+    reader (so a concurrent writer cannot change files under it), or ``remote`` if the local
+    store cannot be set up at all."""
     if writable:
         _acquire(remote)                # raises ChromaBusy rather than dropping to the share
     try:
-        local = _WORK_ROOT / _slug(remote)
-        if local.exists():
-            shutil.rmtree(local)        # never trust a leftover: the share is the truth
-        local.parent.mkdir(parents=True, exist_ok=True)
-        if remote.exists() and any(remote.iterdir()):
-            t0 = time.time()
-            shutil.copytree(remote, local)
-            print(f"  {runlog.stamp()}chroma staged to local disk "
-                  f"({_size_mb(local):.0f} MB in {time.time() - t0:.0f}s)", flush=True)
-        else:
-            local.mkdir(parents=True, exist_ok=True)
+        local = _ensure_local(remote)
         if writable:
             _staged[remote] = local
             _install_hooks()
-        return local
+            print(f"  {runlog.stamp()}chroma: indexing into the local store {local} "
+                  f"({_pushed_words(local)})", flush=True)
+            return local
+        snap = _WORK_ROOT / "readers" / f"{local.name}-{os.getpid()}-{len(_snapshots)}"
+        if snap.exists():
+            shutil.rmtree(snap)
+        shutil.copytree(local, snap)    # SSD to SSD: about a second for a few hundred MB
+        _snapshots.append(snap)
+        _install_hooks()
+        return snap
     except Exception as e:  # noqa: BLE001
-        print(f"  [warn] could not stage chroma to local disk ({e}); working on the share",
+        print(f"  [warn] could not set up the local chroma store ({e}); working on the share",
               file=sys.stderr)
         if writable:
             _release(remote)            # we hold a lock for staging we are not doing
         return remote
 
 
-def sync_back() -> None:
-    """Copy every staged writable store back to the share. Safe to call more than once."""
+_snapshots: list[Path] = []
+
+
+def finish() -> None:
+    """End of run: release our locks, drop reader snapshots, and say where the index is.
+    Nothing is copied to the project — see push(). Safe to call more than once."""
     for remote, local in list(_staged.items()):
         try:
-            if not local.exists():
-                continue
-            t0 = time.time()
-            staging = remote.with_name(remote.name + ".new")
-            if staging.exists():
-                shutil.rmtree(staging)
-            shutil.copytree(local, staging)
-            # Two renames rather than a copy over the live store: an interruption leaves the
-            # previous store recoverable beside it instead of a half-written one in its place.
-            previous = remote.with_name(remote.name + ".old")
-            if previous.exists():
-                shutil.rmtree(previous)
-            if remote.exists():
-                remote.rename(previous)
-            staging.rename(remote)
-            if previous.exists():
-                shutil.rmtree(previous, ignore_errors=True)
-            print(f"  {runlog.stamp()}chroma written back to the project "
-                  f"({_size_mb(remote):.0f} MB in {time.time() - t0:.0f}s)", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] could not write the chroma index back to {remote} ({e}). The "
-                  f"local copy is at {local} — the index is derived data and will be rebuilt "
-                  f"on the next run, but nothing is lost by keeping it.", file=sys.stderr)
+            print(f"  {runlog.stamp()}chroma: index kept in the local store {local} "
+                  f"({_pushed_words(local)}). To refresh the project copy: "
+                  f"rabbitHole chroma --push", flush=True)
         finally:
             _release(remote)
             _staged.pop(remote, None)
+    while _snapshots:
+        shutil.rmtree(_snapshots.pop(), ignore_errors=True)
+
+
+def push(chroma_dir) -> Path:
+    """Copy this machine's store up to the project, under the write lock. Two renames rather
+    than a copy over the live store: an interruption leaves the previous project copy
+    recoverable beside it instead of a half-written one in its place."""
+    remote = Path(chroma_dir)
+    local = _WORK_ROOT / _slug(remote)
+    if _read_marker(local) is None:
+        raise FileNotFoundError(f"no local chroma store for {remote} on this machine "
+                                f"(expected {local})")
+    _acquire(remote)
+    try:
+        staging = remote.with_name(remote.name + ".new")
+        if staging.exists():
+            shutil.rmtree(staging)
+        _copy_tree(local, staging, f"pushing the local index up to {remote}")
+        previous = remote.with_name(remote.name + ".old")
+        if previous.exists():
+            shutil.rmtree(previous)
+        if remote.exists():
+            remote.rename(previous)
+        staging.rename(remote)
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+        _write_marker(local, pushed=datetime.now().isoformat(timespec="seconds"))
+        return remote
+    finally:
+        _release(remote)
 
 
 def _install_hooks() -> None:
-    """Copy back on normal exit, on an unhandled exception, and on SIGTERM.
-
-    SIGTERM matters: it is how the runner stops a task, and without a handler the default
-    disposition would end the process with the run's indexing still only on local disk.
-    """
+    """Release the lock (and drop snapshots) on normal exit, on an unhandled exception, and on
+    SIGTERM — how the runner stops a task. The index itself needs no saving: it already lives
+    on local disk, where the run wrote it."""
     global _hooks_installed
     if _hooks_installed:
         return
-    atexit.register(sync_back)
+    atexit.register(finish)
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             previous = signal.getsignal(sig)
 
             def _handler(signum, frame, _prev=previous):
-                sync_back()
+                finish()
                 if callable(_prev):
                     _prev(signum, frame)
                 else:

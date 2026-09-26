@@ -1,14 +1,14 @@
-"""The chroma store is worked on locally and written back to the project.
+"""The chroma store lives on local disk, is kept between runs, and is pushed to the project
+only on request.
 
-Why: the store is SQLite, the project tree is an NFSv3 mount, and on this box NFS reaches the
-server over WiFi. SQLite locking on NFS is a round trip per operation through the server's lock
-manager — reliable almost always, and "almost" is a per-operation probability. A `report` over
-48 papers makes thousands of them; on 2026-09-08 one was lost and "database is locked" ended an
-hour-long run at paper 7 of 48.
+Why local at all: the store is SQLite, the project tree is an NFSv3 mount, and on this box NFS
+reaches the server over WiFi. SQLite locking on NFS is a round trip per operation; on 2026-09-08
+one was lost and "database is locked" ended an hour-long run at paper 7 of 48.
 
-The property that matters most is the one staging could REGRESS: today's incremental writes go
-straight to the share, so a crash keeps what was indexed. Staging must keep that — hence the
-write-back on exception and on SIGTERM, not only on a clean return.
+Why kept, not copied down and back up each run: over the same WiFi that cost elephantRoom's
+26 Sep build 20.6 minutes down and 57 minutes up, for a 280 MB store nobody else had touched,
+and neither copy said it was starting. The runners all live on this machine, so its SSD copy is
+the store; `rabbitHole chroma --push` refreshes the project copy.
 
 Runnable two ways:
     pytest tests/test_chroma_staging.py
@@ -42,6 +42,7 @@ def _isolate(tmp_path, monkeypatch):
     """Each test gets its own local work root and a clean staging registry."""
     monkeypatch.setattr(chroma, "_WORK_ROOT", tmp_path / "local")
     monkeypatch.setattr(chroma, "_staged", {})
+    monkeypatch.setattr(chroma, "_snapshots", [])
     monkeypatch.setattr(chroma, "_hooks_installed", True)   # don't touch real signal handlers
     yield
 
@@ -57,117 +58,146 @@ def _count(store: Path) -> int:
     return len(client.get_or_create_collection("papers").get(include=[])["ids"])
 
 
-# ── the store is worked on locally ───────────────────────────────────────────
+# ── the store is worked on locally, and kept ─────────────────────────────────
+
+def _remote(tmp_path, *docs):
+    remote = tmp_path / "p" / "l" / "w" / "chroma"
+    remote.mkdir(parents=True)
+    if docs:
+        col = chromadb.PersistentClient(path=str(remote)).get_or_create_collection("papers")
+        for d in docs:
+            _add(col, d)
+    return remote
+
 
 def test_a_writer_works_on_local_disk_not_the_project(tmp_path):
-    remote = tmp_path / "project" / "litReview" / "work" / "chroma"
-    remote.mkdir(parents=True)
+    remote = _remote(tmp_path)
     chroma.get_collection(remote, writable=True)
     local = chroma._staged.get(remote)
     assert local is not None and local != remote
     assert (tmp_path / "local") in local.parents
 
 
-def test_a_reader_stages_in_but_is_never_written_back(tmp_path):
-    """A reader that copied back could overwrite a writer's work with a stale snapshot, and
-    has nothing of its own to save."""
-    remote = tmp_path / "project" / "litReview" / "work" / "chroma"
-    remote.mkdir(parents=True)
-    chroma.get_collection(remote, writable=False)
-    assert chroma._staged == {}
-
-
-def test_existing_content_is_carried_down_to_the_local_copy(tmp_path):
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
-    _add(chromadb.PersistentClient(path=str(remote)).get_or_create_collection("papers"), "a")
+def test_the_first_run_seeds_from_the_project_and_says_so_first(tmp_path, capsys):
+    remote = _remote(tmp_path, "a")
     col = chroma.get_collection(remote, writable=True)
-    assert len(col.get(include=[])["ids"]) == 1, "the staged copy holds what the project held"
+    assert len(col.get(include=[])["ids"]) == 1, "the local store holds what the project held"
+    out = capsys.readouterr().out
+    assert out.index("copying the project's down") < out.index("chroma: done")
+    assert " MB in " in out and "progress every" in out
 
 
-# ── and written back ─────────────────────────────────────────────────────────
-
-def test_work_done_locally_reaches_the_project(tmp_path):
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+def test_a_later_run_reuses_the_local_store_without_touching_the_project(tmp_path, monkeypatch):
+    remote = _remote(tmp_path, "a")
+    _add(chroma.get_collection(remote, writable=True), "indexed-locally")
+    chroma.finish()
+    copies = []
+    monkeypatch.setattr(chroma, "_copy_tree", lambda *a: copies.append(a))
     col = chroma.get_collection(remote, writable=True)
-    _add(col, "written-while-staged")
-    chroma.sync_back()
-    assert _count(remote) == 1
+    assert copies == [], "no copy down when this machine already has the store"
+    assert len(col.get(include=[])["ids"]) == 2, "and it still holds the local work"
 
 
-def test_sync_back_is_idempotent(tmp_path):
-    """It runs from atexit AND from the signal handler; the second must not undo the first."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+def test_nothing_is_copied_up_at_the_end_of_a_run(tmp_path, capsys):
+    remote = _remote(tmp_path)
     _add(chroma.get_collection(remote, writable=True), "x")
-    chroma.sync_back()
-    chroma.sync_back()
-    assert _count(remote) == 1
+    chroma.finish()
+    assert _count(remote) == 0, "the project copy changes only on --push"
+    assert "rabbitHole chroma --push" in capsys.readouterr().out
 
 
-def test_the_previous_store_is_not_left_beside_the_new_one(tmp_path):
-    """The swap goes through .new/.old; neither may survive a successful write-back."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+def test_push_copies_the_local_store_up_and_records_when(tmp_path):
+    remote = _remote(tmp_path)
     _add(chroma.get_collection(remote, writable=True), "x")
-    chroma.sync_back()
-    siblings = {p.name for p in remote.parent.iterdir()}
-    assert siblings == {"chroma"}, siblings
+    chroma.finish()
+    chroma.push(remote)
+    assert _count(remote) == 1
+    local = chroma._WORK_ROOT / chroma._slug(remote)
+    assert chroma._read_marker(local)["pushed"]
+    assert {p.name for p in remote.parent.iterdir()} == {"chroma"}, "no .new/.old/.lock left"
 
 
-def test_indexing_survives_an_exception(tmp_path):
-    """The property staging could have cost. Writes used to land on the share as they happened,
-    which is why a crashed run kept its six indexed papers."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+def test_push_without_a_local_store_refuses(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        chroma.push(_remote(tmp_path))
+
+
+def test_a_crash_loses_nothing_because_the_store_is_already_local(tmp_path):
+    """The property copy-back existed to protect: a crashed run keeps what it indexed."""
+    remote = _remote(tmp_path)
     col = chroma.get_collection(remote, writable=True)
     _add(col, "indexed-before-the-crash")
-    try:
-        raise RuntimeError("database is locked")   # the 2026-09-08 failure
-    except RuntimeError:
-        chroma.sync_back()                          # what the atexit hook does
-    assert _count(remote) == 1
+    chroma.finish()                                  # what atexit / SIGTERM do
+    assert len(chroma.get_collection(remote, writable=True).get(include=[])["ids"]) == 1
 
 
-# ── never at the cost of running at all ──────────────────────────────────────
-
-def test_a_store_that_cannot_be_staged_falls_back_to_the_share(tmp_path, monkeypatch):
-    """A cache that does not work is not a reason for the tool not to run."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
-
-    def _boom(*a, **kw):
-        raise OSError("no space left on device")
-
-    monkeypatch.setattr(chroma.shutil, "copytree", _boom)
-    _add(chromadb.PersistentClient(path=str(remote)).get_or_create_collection("papers"), "a")
-    assert chroma._stage_in(remote, writable=True) == remote
-    assert chroma._staged == {}, "nothing to write back when nothing was staged"
-
-
-def test_a_failed_write_back_keeps_the_local_copy(tmp_path, monkeypatch):
-    """The index is derived data, so losing it costs re-embedding — but the run says where it
-    is rather than deleting it out from under a recovery."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+def test_finish_is_idempotent_and_releases_the_lock(tmp_path):
+    remote = _remote(tmp_path)
     chroma.get_collection(remote, writable=True)
-    local = chroma._staged[remote]
-    monkeypatch.setattr(chroma.shutil, "copytree",
-                        lambda *a, **kw: (_ for _ in ()).throw(OSError("share gone")))
-    chroma.sync_back()
-    assert local.exists(), "the only copy of the work is not deleted on a failed write-back"
+    assert chroma._lock_path(remote).exists()
+    chroma.finish()
+    chroma.finish()
+    assert not chroma._lock_path(remote).exists()
 
 
-def test_a_stale_local_copy_is_discarded_not_reused(tmp_path):
-    """The share is the truth. A leftover from a killed run could be older than the project."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
+# ── readers ──────────────────────────────────────────────────────────────────
+
+def test_a_reader_gets_a_private_snapshot_that_is_cleaned_up(tmp_path):
+    remote = _remote(tmp_path, "a")
+    col = chroma.get_collection(remote, writable=False)
+    assert len(col.get(include=[])["ids"]) == 1
+    assert chroma._staged == {} and len(chroma._snapshots) == 1
+    snap = chroma._snapshots[0]
+    assert snap != chroma._WORK_ROOT / chroma._slug(remote)
+    chroma.finish()
+    assert not snap.exists()
+
+
+def test_a_readers_writes_never_reach_the_local_store(tmp_path):
+    remote = _remote(tmp_path, "a")
+    _add(chroma.get_collection(remote, writable=False), "reader-scribble")
+    chroma.finish()
+    assert len(chroma.get_collection(remote, writable=True).get(include=[])["ids"]) == 1
+
+
+# ── leftovers from the old copy-down/copy-up code ─────────────────────────────
+
+def test_a_leftover_identical_to_the_project_copy_is_adopted_without_copying(tmp_path,
+                                                                             monkeypatch):
+    remote = _remote(tmp_path, "a")
+    leftover = chroma._WORK_ROOT / chroma._slug(remote)
+    leftover.parent.mkdir(parents=True)
+    import shutil
+    shutil.copytree(remote, leftover)                # copy2: mtimes preserved, as rsync -a
+    copies = []
+    monkeypatch.setattr(chroma, "_copy_tree", lambda *a: copies.append(a))
+    chroma.get_collection(remote, writable=True)
+    assert copies == [] and chroma._read_marker(leftover) is not None
+
+
+def test_a_leftover_that_differs_from_the_project_is_discarded(tmp_path):
+    """Unmarked and different: it could be older than the project, so it is not trusted."""
+    remote = _remote(tmp_path, "a")
     stale = chroma._WORK_ROOT / chroma._slug(remote)
     stale.mkdir(parents=True)
     (stale / "leftover.txt").write_text("from a previous run")
     chroma._stage_in(remote, writable=True)
     assert not (stale / "leftover.txt").exists()
+
+
+# ── never at the cost of running at all ──────────────────────────────────────
+
+def test_a_store_that_cannot_be_set_up_falls_back_to_the_share(tmp_path, monkeypatch):
+    """A cache that does not work is not a reason for the tool not to run."""
+    remote = _remote(tmp_path, "a")
+
+    def _boom(*a, **kw):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(chroma, "_copy_tree", _boom)
+    assert chroma._stage_in(remote, writable=True) == remote
+    assert chroma._staged == {}, "nothing staged"
+    assert not chroma._lock_path(remote).exists(), "and the lock is not left behind"
 
 
 def test_two_projects_get_separate_local_stores(tmp_path):
@@ -328,26 +358,6 @@ def test_another_hosts_lock_is_believed(tmp_path):
         chroma._acquire(remote, wait_s=0)
 
 
-def test_the_lock_is_released_after_the_write_back(tmp_path):
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
-    chroma.get_collection(remote, writable=True)
-    assert chroma._lock_path(remote).exists()
-    chroma.sync_back()
-    assert not chroma._lock_path(remote).exists()
-
-
-def test_the_lock_is_released_even_when_the_write_back_fails(tmp_path, monkeypatch):
-    """Otherwise one failed run leaves the project locked against every later one."""
-    remote = tmp_path / "p" / "l" / "w" / "chroma"
-    remote.mkdir(parents=True)
-    chroma.get_collection(remote, writable=True)
-    monkeypatch.setattr(chroma.shutil, "copytree",
-                        lambda *a, **kw: (_ for _ in ()).throw(OSError("share gone")))
-    chroma.sync_back()
-    assert not chroma._lock_path(remote).exists()
-
-
 def test_a_reader_takes_no_lock(tmp_path):
     """Readers never write back, so they cannot clobber and must not block a writer."""
     remote = tmp_path / "p" / "l" / "w" / "chroma"
@@ -395,6 +405,7 @@ if __name__ == "__main__":
         with tempfile.TemporaryDirectory() as td:
             mp.setattr(chroma, "_WORK_ROOT", Path(td) / "local")
             mp.setattr(chroma, "_staged", {})
+            mp.setattr(chroma, "_snapshots", [])
             mp.setattr(chroma, "_hooks_installed", True)
             try:
                 n = fn.__code__.co_argcount

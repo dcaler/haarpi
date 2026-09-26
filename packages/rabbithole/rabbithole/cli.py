@@ -231,9 +231,13 @@ def _run(argv: list[str] | None = None) -> int:
     _review_arg(aud)
 
     chr_ = sub.add_parser("chroma",
-                          help="inspect or release the vector store's write lock")
+                          help="inspect or release the vector store's write lock, or push the "
+                               "local store to the project")
     chr_.add_argument("--unlock", action="store_true",
                       help="release the lock held by an abandoned run (shows the holder first)")
+    chr_.add_argument("--push", action="store_true",
+                      help="copy this machine's index up to the project's litReview/work/chroma "
+                           "(runs never do this on their own)")
     _review_arg(chr_)
 
     args = parser.parse_args(argv)
@@ -293,6 +297,14 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "chroma":
         from . import chroma as _chroma, config as _c
         store = _c.project_paths(args.dir).work / "chroma"
+        if args.push:
+            try:
+                _chroma.push(store)
+            except FileNotFoundError as e:
+                print(f"[error] {e}", file=sys.stderr)
+                return 1
+            print(f"Pushed. The project copy at {store} now matches this machine's index.")
+            return 0
         held = _chroma._holder(store)
         if not held:
             print(f"No write lock on {store}.")
@@ -307,8 +319,8 @@ def _run(argv: list[str] | None = None) -> int:
                   "a suspended run that is later resumed will write into the store.")
             return 0
         _chroma.unlock(store)
-        print("  lock released. The index is derived data — the next build rebuilds "
-              "whatever the interrupted run had not written back.")
+        print("  lock released. The index lives on this machine's local disk, so whatever the "
+              "interrupted run indexed is still there; the next build adds anything missing.")
         return 0
 
     if args.command == "graft":
