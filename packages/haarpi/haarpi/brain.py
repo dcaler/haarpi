@@ -34,16 +34,10 @@ unreachable server counts: an HTTP error, an {"error": …} object or a read
 timeout from a running ollama is an answer about the request, and keeps the
 retry policy above exactly.
 
-Back is not the same as ready. The watchdog restarts ollama the moment every card
-is under 70 °C, and a loaded P40 climbs from 70 °C to the stop line in under two
-minutes — so a resend at 70 °C dies again, over and over (DigiPros, 2026-09-28:
-seven stops on one planning call, every resend cut after ~1m45s). When the cards
-are local, a resend therefore also waits for them to cool (wait_for_cool), which
-gives it the whole thermal window a cold start gets. A call that then dies from a
-cooled card needs more GPU time than one window holds; resending it again only
-repeats that, so it is given up after MAX_COOL_START_OUTAGES and says why.
-Startup checks (ensure_ollama) wait the same way instead of failing a task that
-the runner happened to start during a stop.
+Startup checks (ensure_ollama) wait the same way, instead of failing a task that
+the runner happened to start during a stop. When to resume is the watchdog's
+call: ollama answering is the signal, and HAARPi keeps no temperature rule of
+its own.
 """
 
 from __future__ import annotations
@@ -51,9 +45,6 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -91,8 +82,6 @@ _RESERVE_FRACTION = 0.35   # explicit-num_ctx budget: leave room for the answer
 
 OUTAGE_POLL_SECS = 15
 MAX_OUTAGES_PER_CALL = 6   # a server that keeps dying mid-call is not waited on forever
-MAX_COOL_START_OUTAGES = 2  # deaths after a cool-down: the call outlasts the thermal window
-GPU_PLATEAU_SECS = 180      # cooling this long without a degree gained is as cool as it gets
 
 
 def outage_wait_secs() -> int:
@@ -101,66 +90,9 @@ def outage_wait_secs() -> int:
     return _env_int("OLLAMA_OUTAGE_WAIT", 1800)
 
 
-def gpu_resume_temp() -> int:
-    """°C the hottest card must fall to before a resend after an outage. The watchdog
-    restarts ollama at 70 °C; resending there leaves no thermal runway. Read per call, so
-    HAARPI_GPU_RESUME_TEMP=0 in a runner's environment switches the cool-down off."""
-    return _env_int("GPU_RESUME_TEMP", 50)
-
-
-def _is_local(url: str) -> bool:
-    host = urlsplit(normalize_host(url)).hostname or ""
-    return host in ("localhost", "127.0.0.1", "::1", socket.gethostname())
-
-
-def gpu_temps(url: str) -> list[int] | None:
-    """Card temperatures from nvidia-smi, or None when ollama is not on this box or they
-    cannot be read (then the cool-down and its outage cap simply do not apply)."""
-    if not _is_local(url) or not shutil.which("nvidia-smi"):
-        return None
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=temperature.gpu",
-                              "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=10, check=True).stdout
-        return [int(t) for t in out.split()] or None
-    except Exception:  # noqa: BLE001 — no reading means no gate, never a failure
-        return None
-
-
-def wait_for_cool(url: str, deadline_secs: float, what: str, tool: str = "haarpi") -> None:
-    """Hold until the hottest card is at or below gpu_resume_temp(), it stops cooling
-    (GPU_PLATEAU_SECS without a degree gained: a hot room), or the deadline passes."""
-    target = gpu_resume_temp()
-    temps = gpu_temps(url) if target > 0 else None
-    if not temps or max(temps) <= target:
-        return
-    hot = max(temps)
-    log(f"  [gpu cooling] hottest card {hot} °C — holding {what} until it is at "
-        f"{target} °C, so it starts with the whole thermal window", tool)
-    t0 = best_at = time.monotonic()
-    best = hot
-    while True:
-        now = time.monotonic()
-        if now - t0 >= deadline_secs:
-            break
-        time.sleep(min(OUTAGE_POLL_SECS, max(deadline_secs - (now - t0), 0)))
-        temps = gpu_temps(url)
-        if not temps:
-            break
-        hot = max(temps)
-        if hot <= target:
-            break
-        if hot < best:
-            best, best_at = hot, time.monotonic()
-        elif time.monotonic() - best_at >= GPU_PLATEAU_SECS:
-            break
-    log(f"  [gpu cool] {hot} °C after {fmt_secs(time.monotonic() - t0)} — sending {what}",
-        tool)
-
-
 def ensure_ollama(url: str, tool: str = "haarpi") -> bool:
     """Startup check. A task the runner starts during a watchdog stop waits for ollama
-    (and the cards) like any call would, instead of failing in its first second."""
+    like any call would, instead of failing in its first second."""
     if wait_for_ollama(url, 0):
         return True
     wait = outage_wait_secs()
@@ -173,7 +105,6 @@ def ensure_ollama(url: str, tool: str = "haarpi") -> bool:
         log(f"  [ollama still unreachable] after {fmt_secs(time.monotonic() - t0)}", tool)
         return False
     log(f"  [ollama back] after {fmt_secs(time.monotonic() - t0)}", tool)
-    wait_for_cool(url, wait, "the first call", tool)
     return True
 
 
@@ -220,25 +151,13 @@ def ride_out_outage(url: str, err: BaseException, outages: int, what: str,
     the same request without counting it as a retry; False means fall through to the
     caller's ordinary failure handling (wait disabled, cap reached, or it never came back)."""
     wait = outage_wait_secs()
-    if wait <= 0:
-        return False
-    # With a cool-down every resend starts cold, so repeat deaths are the call's own
-    # length, not bad luck: the first outage is free, then MAX_COOL_START_OUTAGES more.
-    thermal = gpu_resume_temp() > 0 and gpu_temps(url) is not None
-    cap = 1 + MAX_COOL_START_OUTAGES if thermal else MAX_OUTAGES_PER_CALL
-    if outages >= cap:
-        if thermal:
-            log(f"  [ollama outage] {what} has been cut off {outages + 1} times, the last "
-                f"{outages} after the cards had cooled — it needs more GPU time than one "
-                f"thermal window holds. Giving up: re-queueing will not help until the "
-                f"cards run cooler or the prompt is smaller.", tool)
+    if wait <= 0 or outages >= MAX_OUTAGES_PER_CALL:
         return False
     log(f"  [ollama unreachable] {what}: {err} — waiting up to {fmt_secs(wait)} for it "
-        f"to come back (outage {outages + 1}/{cap} for this call)", tool)
+        f"to come back (outage {outages + 1}/{MAX_OUTAGES_PER_CALL} for this call)", tool)
     t0 = time.monotonic()
     if wait_for_ollama(url, wait):
-        log(f"  [ollama back] after {fmt_secs(time.monotonic() - t0)}", tool)
-        wait_for_cool(url, wait, f"the resend of {what}", tool)
+        log(f"  [ollama back] after {fmt_secs(time.monotonic() - t0)} — resending {what}", tool)
         return True
     log(f"  [ollama still unreachable] after {fmt_secs(time.monotonic() - t0)} — "
         f"giving up on {what}", tool)

@@ -118,12 +118,6 @@ def server():
     srv.shutdown()
 
 
-@pytest.fixture(autouse=True)
-def no_gpus(monkeypatch):
-    """Tests never read this box's real cards; the thermal tests fake them."""
-    monkeypatch.setattr(brain, "gpu_temps", lambda url: None)
-
-
 @pytest.fixture()
 def fast_outages(monkeypatch):
     """Outage waits short enough for a test; the wait itself stays on (the default)."""
@@ -359,57 +353,6 @@ def test_embedding_waits_out_an_outage_instead_of_storing_an_empty_vector(late_s
     assert b.embed_batch(["one", "two"]) == [[0.1, 0.2, 0.3]] * 2
 
 
-# ── thermal runway: a resend waits for the cards, not just for ollama ───────
-
-def _temps(monkeypatch, *readings):
-    """Fake card temperatures: each read takes the next reading, the last one repeats."""
-    seq = list(readings)
-    monkeypatch.setattr(brain, "gpu_temps", lambda url: [seq.pop(0) if len(seq) > 1 else seq[0]])
-
-
-def test_a_resend_waits_for_the_cards_to_cool(server, url, fast_outages, monkeypatch, capsys):
-    """ollama is back at 70 °C, but a resend there is cut off again within two minutes."""
-    _temps(monkeypatch, 40, 88, 70, 58, 49)
-    server.truncate_fails = 1
-    assert brain.chat(url, "truncate", _msgs()) == "Hello"
-    assert len(server.requests) == 2
-    out = capsys.readouterr().out
-    assert "[gpu cooling] hottest card 88 °C" in out and "[gpu cool] 49 °C" in out
-
-
-def test_cooling_that_stalls_is_not_waited_on_forever(server, url, fast_outages, monkeypatch,
-                                                      capsys):
-    monkeypatch.setattr(brain, "GPU_PLATEAU_SECS", 0.2)
-    _temps(monkeypatch, 66)                                     # a hot room: never reaches 50
-    server.truncate_fails = 1
-    assert brain.chat(url, "truncate", _msgs()) == "Hello"
-    assert "[gpu cool] 66 °C" in capsys.readouterr().out
-
-
-def test_deaths_after_a_cool_down_are_capped_and_explained(server, url, fast_outages,
-                                                          monkeypatch, capsys):
-    """Every resend starts cold, so a call that keeps dying is too long for the window;
-    more resends only repeat that. The first outage is free (it may have started warm)."""
-    _temps(monkeypatch, 40)
-    server.truncate_fails = 99
-    with pytest.raises(brain.OllamaOutage):
-        brain.chat(url, "truncate", _msgs())
-    assert len(server.requests) == 2 + brain.MAX_COOL_START_OUTAGES
-    assert "needs more GPU time than one thermal window" in capsys.readouterr().out
-
-
-def test_resume_temp_zero_switches_the_cool_down_off(server, url, fast_outages, monkeypatch,
-                                                     capsys):
-    monkeypatch.setenv("HAARPI_GPU_RESUME_TEMP", "0")
-    monkeypatch.setattr(brain, "MAX_OUTAGES_PER_CALL", 4)
-    _temps(monkeypatch, 90)
-    server.truncate_fails = 99
-    with pytest.raises(brain.OllamaOutage):
-        brain.chat(url, "truncate", _msgs())
-    assert len(server.requests) == 5                            # the plain count cap again
-    assert "[gpu cooling]" not in capsys.readouterr().out
-
-
 # ── startup: a task started during a watchdog stop waits, it does not fail ──
 
 def test_ensure_ollama_is_immediate_when_ollama_answers(server, url, fast_outages, capsys):
@@ -417,15 +360,12 @@ def test_ensure_ollama_is_immediate_when_ollama_answers(server, url, fast_outage
     assert "[ollama unreachable]" not in capsys.readouterr().out
 
 
-def test_ensure_ollama_waits_for_a_stopped_ollama_and_the_cards(late_server, fast_outages,
-                                                                 monkeypatch, capsys):
+def test_ensure_ollama_waits_for_a_stopped_ollama(late_server, fast_outages, capsys):
     url, start, _box = late_server
-    _temps(monkeypatch, 72, 60, 45)
     start(0.4)
     assert brain.ensure_ollama(url) is True
     out = capsys.readouterr().out
     assert "[ollama unreachable] at startup" in out and "[ollama back]" in out
-    assert "[gpu cool] 45 °C" in out
 
 
 def test_ensure_ollama_gives_up_at_the_deadline(late_server, fast_outages, monkeypatch):

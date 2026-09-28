@@ -9,11 +9,6 @@ from rabbithole.brain import Brain
 from rabbithole.config import BrainConfig, GlobalConfig
 
 
-@pytest.fixture(autouse=True)
-def no_gpus(monkeypatch):
-    monkeypatch.setattr(hbrain, "gpu_temps", lambda url: None)
-
-
 @pytest.fixture()
 def server(monkeypatch):
     monkeypatch.setattr(hbrain, "OUTAGE_POLL_SECS", 0.05)
