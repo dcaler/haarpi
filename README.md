@@ -248,7 +248,7 @@ reporting which sources still lack a PDF.
 | `refresh` | recomputes the load-bearing block on an existing draft |
 | `mindmap` | regenerates the contribution map beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
-| `chroma` | shows who holds the vector store's write lock, and releases an abandoned one |
+| `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |
 
 Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
 `revise` reads a cached corpus and never embeds, so every rework chain that changes the
@@ -487,7 +487,9 @@ The [haarpi](packages/haarpi) package is what the tools have in common:
 - **run logging** — every line stamped, and every run teed to
   `.haarpi/runlog/<stamp>_<verb>.log` in the project. A verb that runs for hours
   leaves a record of what it decided; the task queue keeps only a few kilobytes
-  of tail, which is not enough to reconstruct a cycle afterwards.
+  of tail, which is not enough to reconstruct a cycle afterwards. After five
+  minutes without output, a heartbeat line says so and names where the run is
+  (`HAARPI_HEARTBEAT_SECS`, 0 turns it off).
 
 The context window is **sized to the prompt, never the other way round**. Ollama
 answers an over-length prompt by silently discarding the beginning of it — no
@@ -502,13 +504,27 @@ sized for a one-line focus string, and when the question became the author's
 full research prompt it printed that warning once per paper for 154 papers while
 judging every one of them against a question it could no longer see.
 
-The vector index is **worked on from local disk and written back**. It is a
-SQLite store, project trees live on a network share, and SQLite's locking there
-is a round trip per operation through the server's lock manager — reliable
-almost always, and indexing a corpus makes thousands of those operations. Only
-the indexing pass stages and writes back; the read-only passes stage and never
-do. An advisory lock beside the store keeps two writers from overwriting each
-other, and a refused writer works on the share instead of failing.
+The vector index **lives on the runner's local disk**. It is a SQLite store,
+project trees live on a network share, and SQLite's locking there is a round trip
+per operation through the server's lock manager; indexing a corpus makes
+thousands of those operations. Copying it down and back up each run was no
+better: over WiFi one build spent more than an hour just moving it. So the local
+copy is the store, kept between runs, and seeded from the project only when the
+machine has none. The project copy changes only on `rabbitHole chroma --push`.
+Readers open a private snapshot. An advisory lock keeps two writers apart, and a
+refused writer stops with an instruction instead of working over the share. PDFs
+get the same treatment: one copy on the local SSD, trusted while the share's file
+is unchanged, with its extracted text cached beside it. Zotero is asked again
+only when an attachment's checksum changes.
+
+Runs **wait out outages instead of failing**. oddjob's GPU watchdog stops ollama
+when a card overheats and restarts it once the cards have cooled. A call that
+meets a stop, or a task the runner starts during one, waits for ollama to answer
+and then resends. It spends no retry, because an outage says nothing about the
+request. A stream cut off mid-answer is never returned as if it were the whole
+answer. Zotero requests retry through network outages the same way. Both waits
+default to 30 minutes (`HAARPI_OLLAMA_OUTAGE_WAIT`, `HAARPI_ZOTERO_OUTAGE_WAIT`;
+0 turns them off).
 
 ### The document revision chain
 
@@ -540,8 +556,9 @@ and individually usable — the monorepo shares machinery, not opinions.
 You will also need [Ollama](https://ollama.com) for the local models, `pandoc`
 for document rendering, `graphviz` with its neato layout engine for the figures
 (a separate package on recent Ubuntu: `libgvplugin-neato-layout8`), and a Zotero library with
-API access for the literature stage. Configuration lives in
-`~/.config/haarpi/config.toml`.
+API access for the literature stage. `report` and `build` stop before doing any
+work if Zotero isn't configured; `--from-folder` builds from `./pdfs/` only when
+you ask for it. Configuration lives in `~/.config/haarpi/config.toml`.
 
 ## Use
 
