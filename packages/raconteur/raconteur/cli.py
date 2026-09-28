@@ -22,12 +22,9 @@ def _line_buffer_output() -> None:
 
 
 def _check_ollama(url: str) -> bool:
-    try:
-        import httpx
-        r = httpx.get(f"{url}/api/tags", timeout=5)
-        return r.status_code == 200
-    except Exception:
-        return False
+    """Reachable, or back within the outage wait — a watchdog stop does not fail the task."""
+    from haarpi.brain import ensure_ollama
+    return ensure_ollama(url, "raconteur")
 
 
 def _check_python() -> None:

@@ -9,6 +9,11 @@ from rabbithole.brain import Brain
 from rabbithole.config import BrainConfig, GlobalConfig
 
 
+@pytest.fixture(autouse=True)
+def no_gpus(monkeypatch):
+    monkeypatch.setattr(hbrain, "gpu_temps", lambda url: None)
+
+
 @pytest.fixture()
 def server(monkeypatch):
     monkeypatch.setattr(hbrain, "OUTAGE_POLL_SECS", 0.05)
@@ -55,3 +60,16 @@ def test_embed_waits_out_a_stopped_ollama(late_server, monkeypatch):
     start(0.4)
     b = Brain(BrainConfig(embed_model="e"), GlobalConfig(ollama_url=url))
     assert b.embed_batch(["one", "two"]) == [[0.1, 0.2, 0.3]] * 2
+
+
+def test_the_startup_check_waits_out_a_stopped_ollama(late_server, monkeypatch):
+    """The runner can start a task seconds after the watchdog stopped ollama (elephantRoom
+    revise, 2026-09-28: failed in under a second). The check waits instead."""
+    from rabbithole import cli, config
+    monkeypatch.setattr(hbrain, "OUTAGE_POLL_SECS", 0.05)
+    monkeypatch.setenv("HAARPI_OLLAMA_OUTAGE_WAIT", "5")
+    monkeypatch.setattr(hbrain.time, "sleep", _short_sleep)
+    url, start, _box = late_server
+    monkeypatch.setattr(config, "load_global", lambda: GlobalConfig(ollama_url=url))
+    start(0.4)
+    cli._check_env()                                  # returns rather than sys.exit(1)

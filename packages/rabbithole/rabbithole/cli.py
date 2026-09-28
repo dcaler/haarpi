@@ -23,7 +23,7 @@ from haarpi import runlog
 
 def _check_env(need_pandoc: bool = False) -> None:
     """Warn early about missing external dependencies."""
-    import httpx
+    from haarpi.brain import ensure_ollama
     from . import config as _config
 
     # Python version
@@ -31,12 +31,9 @@ def _check_env(need_pandoc: bool = False) -> None:
         print(f"[warn] Python 3.11+ required; you have {sys.version.split()[0]}.",
               file=sys.stderr)
 
-    # Ollama reachability
+    # Ollama reachability — waits out a watchdog stop rather than failing the task
     gc = _config.load_global()
-    try:
-        r = httpx.get(f"{gc.ollama_url}/api/tags", timeout=5)
-        r.raise_for_status()
-    except Exception:
+    if not ensure_ollama(gc.ollama_url, "rabbithole"):
         print(f"[error] Cannot reach Ollama at {gc.ollama_url}.\n"
               f"        Start Ollama or set OLLAMA_URL and try again.",
               file=sys.stderr)
