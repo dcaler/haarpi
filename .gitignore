@@ -16,8 +16,8 @@ venv/
 @eaDir/
 
 # generated figure pool — per-project diagram artifacts, rebuilt from source, not tracked.
-# The two ARCHITECTURE figures are the exception: the README embeds them, so they ship with
-# the source they were rendered from (see the README-check SOP — a stale figure in the README
+# The two ARCHITECTURE figures and the logo are the exception: the README embeds them, so the
+# figures ship with the source they were rendered from (see the README-check SOP — a stale figure in the README
 # is worse than no figure).
 /figures/*
 !/figures/agentDrilldown.svg
@@ -27,6 +27,8 @@ venv/
 /figures/panels/__pycache__/
 !/figures/paperInflow.png
 !/figures/paperInflow.svg
+!/figures/haarpi_logo*.png
+!/figures/haarpi_social_preview.png
 
 # Word lock files
 ~$*

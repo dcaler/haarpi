@@ -1,4 +1,7 @@
-# HAARPi
+<p align="center">
+  <img src="figures/haarpi_logo_transparent.png" alt="HAARPi — a harpy perched on books" width="200">
+</p>
+<h1 align="center">HAARPi</h1>
 
 **Human Authored Agentic Research Pipeline** — a monorepo bundling the `ra*`
 research tools, which carry a research idea from literature review through
@@ -583,7 +586,7 @@ packages/
   raster/       model building
   raconteur/    the manuscript
   razzle/       presentation decks
-figures/        the two architecture figures above, with their .dot sources
+figures/        the two architecture figures above (built from panels/), and the logo
 ```
 
 ### Keeping the figures true
