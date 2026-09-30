@@ -106,3 +106,123 @@ def test_render_pptx_pdf_returns_the_pdf_on_success(tmp_path, monkeypatch):
     monkeypatch.setattr(planner.subprocess, "run", fake_run)
     out = planner._render_pptx_pdf(pptx)
     assert out == pptx.with_suffix(".pdf") and out.is_file()
+
+
+# ── razzle's illustration note: a tool's comment holds the mint but is not the author's review ──
+
+def _write_deck_by(path: Path, comments: list[tuple[str, str, bool]]) -> None:
+    """[(author, text, resolved)] — authors as they would be signed in PowerPoint."""
+    names = sorted({a for a, _, _ in comments})
+    ids = {a: f"A{i}" for i, a in enumerate(names)}
+    authors = (f'<p188:authorLst xmlns:p188="{_P188}">'
+               + "".join(f'<p188:author id="{ids[a]}" name="{a}" initials="x"/>' for a in names)
+               + "</p188:authorLst>")
+    cms = "".join(_cm(f"C{i}", t, resolved=r).replace('authorId="A1"', f'authorId="{ids[a]}"')
+                  for i, (a, t, r) in enumerate(comments))
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("ppt/authors.xml", authors)
+        z.writestr("ppt/comments/modernComment_1_0.xml",
+                   f'<p188:cmLst xmlns:p188="{_P188}" xmlns:a="{_A}">{cms}</p188:cmLst>')
+        z.writestr("ppt/slides/_rels/slide1.xml.rels",
+                   '<Relationships><Relationship Id="rId1" '
+                   'Target="../comments/modernComment_1_0.xml"/></Relationships>')
+
+
+def _deck(tmp_path):
+    m = _deck_project(tmp_path)
+    return m, tmp_path / "slides" / "shorttalk" / naming.major_name("demo", "pptx", infix="deck")
+
+
+def _brief_and_pick(deck_dir: Path, *, placed: bool = False) -> None:
+    from razzle import illustrate
+    spec = [{"role": "title", "title": "T"},
+            {"role": "content", "title": "C", "illustration": "a lighthouse in fog",
+             "illustration_kind": "pictorial"}]
+    illustrate.prepare(deck_dir, spec)
+    key = illustrate.briefs(spec)[0]["key"]
+    (illustrate.home(deck_dir) / key).mkdir(parents=True, exist_ok=True)
+    (illustrate.home(deck_dir) / key / illustrate.CHOSEN).write_bytes(b"png")
+    if placed:
+        ill = illustrate.prepare(deck_dir, spec)
+        illustrate.record_placed(deck_dir, ill["placements"], ill["briefs"])
+
+
+def test_razzles_open_note_alone_is_not_the_author_having_reviewed(tmp_path):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", False)])
+    assert planner.find_finished_markup(tmp_path, m) is None
+
+
+def test_resolving_razzles_note_is_the_authors_act(tmp_path):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", True)])
+    assert planner.find_finished_markup(tmp_path, m) == ("deck", deck)
+
+
+def test_a_pick_not_yet_on_the_deck_is_the_authors_act(tmp_path):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", False)])
+    _brief_and_pick(deck.parent)
+    assert planner.find_finished_markup(tmp_path, m) == ("deck", deck)
+
+
+def test_a_pick_already_on_the_deck_is_not(tmp_path):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", False)])
+    _brief_and_pick(deck.parent, placed=True)
+    assert planner.find_finished_markup(tmp_path, m) is None
+
+
+def _route(tmp_path, monkeypatch, m, deck):
+    queued = []
+    monkeypatch.setattr(planner.trundlr, "TrundlrClient", lambda *a, **k: object())
+    monkeypatch.setattr(planner, "queue_chain",
+                        lambda client, pid, stage, steps, tr_cfg, **kw:
+                        queued.append((stage, steps, kw.get("venue"))) or
+                        {"tasks": [{"title": s} for s in steps]})
+    out = planner._route_deck(tmp_path, m, deck, "shorttalk", redline.gate_check(deck),
+                              {}, True, False, "")
+    return out, queued
+
+
+def test_the_authors_comments_are_what_the_classifier_reads(tmp_path, monkeypatch):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", False),
+                          ("D. Cale Reeves", "cut slide 4", False)])
+    out, queued = _route(tmp_path, monkeypatch, m, deck)
+    assert [c["text"] for c in out["unresolved"]] == ["cut slide 4"]
+    assert not out["clean"] and queued == []
+
+
+def test_picks_not_on_the_deck_re_render_it_rather_than_mint(tmp_path, monkeypatch):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", True)])   # even resolved
+    _brief_and_pick(deck.parent)
+    out, queued = _route(tmp_path, monkeypatch, m, deck)
+    assert out is None
+    assert queued == [("deck", ["place", "comment"], "shorttalk")]
+
+
+def test_only_razzles_note_open_hands_the_deck_back_to_the_author(tmp_path, monkeypatch):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", False),
+                          ("D. Cale Reeves", "fine", True)])
+    out, queued = _route(tmp_path, monkeypatch, m, deck)
+    assert out is None
+    assert queued == [("deck", ["comment"], "shorttalk")]
+
+
+def test_nothing_open_and_nothing_to_place_goes_to_the_gate(tmp_path, monkeypatch):
+    m, deck = _deck(tmp_path)
+    _write_deck_by(deck, [("razzle", "Illustrations pending.", True)])
+    _brief_and_pick(deck.parent, placed=True)
+    out, queued = _route(tmp_path, monkeypatch, m, deck)
+    assert out["clean"] and queued == []
+
+
+def test_the_deck_chain_draws_before_the_author_reviews():
+    assert planner.STAGE_STEPS["deck"]["illustrate"].resource == "gpu"
+    assert planner.STAGE_STEPS["deck"]["place"].command == "haarpi razzle render"
+    assert planner.STAGE_TIERS["deck"]["revise"] == ["deck_session", "illustrate", "comment"]
+    assert planner._venued("haarpi razzle illustrate", "css2026").endswith("--venue css2026")
+    assert planner._venued("haarpi razzle render", "css2026").endswith("--venue css2026")

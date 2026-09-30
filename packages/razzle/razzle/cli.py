@@ -1,9 +1,11 @@
-"""razzle CLI — `razzle <deck|render>`.
+"""razzle CLI — `razzle <deck|render|illustrate>`.
 
-`deck`   gathers a project's inputs (the one-pager, figures, claims, logos), sizes to a presentation
-         FORMAT, and launches an interactive authoring session (or prints the manual path) to write
-         the deck spec — `slides/{fmt}/spec.json`.
-`render` renders that spec against the neutral house master into the branded `.pptx`.
+`deck`       gathers a project's inputs (the one-pager, figures, claims, logos), sizes to a
+             presentation FORMAT, and launches an interactive authoring session (or prints the
+             manual path) to write the deck spec — `slides/{fmt}/spec.json`.
+`render`     renders that spec against the neutral house master into the branded `.pptx`.
+`illustrate` draws candidate pictures for the spec's pictorial briefs with `imagine` (a GPU task);
+             the author picks one per slide and the next render places it (razzle.illustrate).
 
 The spec is the durable artifact; render is deterministic and re-runnable.
 """
@@ -21,7 +23,7 @@ from pathlib import Path
 from haarpi import figure as _figure
 from haarpi import naming as _naming
 
-from razzle import assets, compose, formats, gather, render
+from razzle import assets, compose, formats, gather, illustrate, render
 from haarpi import runlog
 
 
@@ -46,7 +48,9 @@ DECK_PROMPT = (
     "the pool is THIS paper's own work, so a slide showing one carries NO `citation` — that would "
     "misattribute our own result; cite only on a slide with no figure, as a bare source ref. NO "
     "speaker notes: what does not fit is spoken. A `content` slide may instead carry "
-    "`illustration` — one line briefing a picture that does not exist yet, for whoever draws it. "
+    "`illustration` — one line briefing a picture that does not exist yet, for whoever draws it — "
+    "with `illustration_kind`: `pictorial` (a scene, an object, a metaphor: something a picture "
+    "generator can draw) or `schematic` (a diagram, a chart, a worked example: a person draws it). "
     "Do not write a title slide title, a byline or an acknowledgements slide: razzle stamps those "
     "from the paper and the deck config. Bullets go under `body` (a JSON array of strings) — that "
     "is the key the renderer reads. Write ONLY that one file and then stop: razzle renders it "
@@ -93,11 +97,19 @@ def run_render(args) -> int:
     spec = gather.apply_acknowledgements(spec, gather.acknowledgements(root, fmt))
     # The `_ra` chain draft — the author reviews it in place; `haarpi next` mints it (the format is
     # carried by the folder, so the filename infix is just `deck`).
-    out = gather.deck_dir(root, fmt) / _naming.major_name(short, "pptx", infix="deck")
+    ddir = gather.deck_dir(root, fmt)
+    out = ddir / _naming.major_name(short, "pptx", infix="deck")
+    ill = illustrate.prepare(ddir, spec)
     render.render_deck(spec, desc["master_path"], desc, out,
                        figures=_figures_for(root, short, spec),
                        logos=gather.logo_entries(root, fmt),
-                       furniture=gather.furniture(root, fmt, spec))
+                       furniture=gather.furniture(root, fmt, spec),
+                       illustrations=ill["placements"], note=ill["note"],
+                       note_author=(illustrate.AUTHOR, illustrate.INITIALS))
+    illustrate.record_placed(ddir, ill["placements"], ill["briefs"])
+    if ill["briefs"]:
+        print(f"razzle render: {len(ill['briefs'])} pictorial brief(s), "
+              f"{len(ill['placements'])} placed from the author's picks")
     print(f"razzle render: wrote {out.relative_to(root)}  ({len(spec)} slides)")
     return 0
 
@@ -138,6 +150,11 @@ def _author_headless(args, root: Path, fmt: str, prompt: str) -> int:
         return 1
     print(f"[razzle deck] authored {spec_path.relative_to(root)}; rendering …")
     return run_render(argparse.Namespace(dir=str(root), format=fmt, master=args.master))
+
+
+def run_illustrate(args) -> int:
+    root = Path(args.dir).resolve() if args.dir else Path.cwd()
+    return illustrate.run(gather.deck_dir(root, args.format), count=args.count, size=args.size)
 
 
 def run_deck(args) -> int:
@@ -229,7 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="razzle", description="Author + render venue-specific decks.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, help_ in (("deck", "gather inputs + author the deck spec (interactive)"),
-                        ("render", "render slides/<fmt>/spec.json to the branded .pptx")):
+                        ("render", "render slides/<fmt>/spec.json to the branded .pptx"),
+                        ("illustrate", "draw candidate pictures for the deck's pictorial "
+                                       "illustration briefs (imagine; a GPU task)")):
         p = sub.add_parser(name, help=help_)
         p.add_argument("--dir", help="project root (default: cwd)")
         p.add_argument("--format", default="longtalk",
@@ -238,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="the venue this deck is for — resolves to whichever configured "
                             "format targets it (what the queued commands use)")
         p.add_argument("--master", default="default", help="house master name (neutral)")
+        if name == "illustrate":
+            p.add_argument("--count", type=int, default=illustrate.COUNT,
+                           help="candidates per brief")
+            p.add_argument("--size", type=int, default=illustrate.SIZE,
+                           help="square image size in px (a multiple of 64)")
         if name == "deck":
             p.add_argument("--no-launch", action="store_true",
                            help="gather + print the manual path instead of launching claude")
@@ -276,6 +300,8 @@ def main(argv=None) -> int:
     rc = _resolve_venue(args)
     if rc:
         return rc
+    if args.cmd == "illustrate":
+        return run_illustrate(args)
     return run_deck(args) if args.cmd == "deck" else run_render(args)
 
 

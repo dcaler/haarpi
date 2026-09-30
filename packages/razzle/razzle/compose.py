@@ -17,7 +17,9 @@ WHAT THE NOTES PANE IS FOR INSTEAD. A talk always has more slides than the paper
 bullet slides that result are the deck's weakest. So a slide with nothing to show may name what it
 WOULD show: an `illustration`, one line briefing a picture that does not exist yet — a schematic, a
 diagram, a musical example, a photograph. It renders into the notes as a production TODO for whoever
-draws it, never as a sentence for the speaker. It is a request for art, not a script.
+draws it, never as a sentence for the speaker. It is a request for art, not a script. A brief is
+tagged `pictorial` or `schematic`: a pictorial one can be drawn by the local image generator
+(razzle.illustrate); a schematic one is always a person's job.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import json
 import re
 
 from razzle import formats as _formats
+from razzle import illustrate as _illustrate
 
 # `split` is text and a figure side by side — the workhorse, because it lets a slide make its
 # point AND show the evidence for it instead of alternating between the two.
@@ -69,7 +72,8 @@ Output ONLY JSON:
   {{"role": "title",   "title": "...", "subtitle": "..."}},
   {{"role": "figure",  "title": "...", "figure": "<id>"}},
   {{"role": "split",   "title": "...", "bullets": ["...", "..."], "figure": "<id>"}},
-  {{"role": "content", "title": "...", "bullets": ["...", "..."], "illustration": "..."}}
+  {{"role": "content", "title": "...", "bullets": ["...", "..."], "illustration": "...",
+    "illustration_kind": "pictorial"}}
 ]}}
 
 HOW TO BUILD IT — these are budgets, not suggestions. A slide that breaks them is a worse slide.
@@ -116,6 +120,9 @@ picture WOULD carry it, add `illustration`: one line describing the picture to d
 a diagram, a worked example, a photograph. Concrete enough to hand to an illustrator ("a piano roll
 with the target phrase above a scrambled one"), and never a chart of data we do not have. Omit it
 where a picture genuinely would not help. It is a request for art, not a sentence to be spoken.
+Tag it with `illustration_kind`: "pictorial" for a scene, an object or a visual metaphor that an
+image generator could draw ("a crowded street market seen from above"), "schematic" for anything
+with structure, labels or data (a diagram, a chart, a worked example) — a person draws those.
 
 There are NO speaker notes. Do not emit a `notes` field. What does not fit on the slide is what
 the speaker says; it is not written down anywhere."""
@@ -193,7 +200,7 @@ def normalise(slides, figure_ids: set[str]) -> list[dict]:
             continue
         role = s.get("role") if s.get("role") in _ROLES else "content"
         slide = {"role": role, "title": str(s.get("title", "")).strip()}
-        for k in ("subtitle", "citation", "illustration"):
+        for k in ("subtitle", "citation", "illustration", "illustration_kind"):
             if s.get(k):
                 slide[k] = str(s[k]).strip()
         # `bullets` is what the prompt asks a model for; `body` is what the renderer reads and
@@ -220,6 +227,10 @@ def normalise(slides, figure_ids: set[str]) -> list[dict]:
                 slide["role"] = "content"
         if slide.get("figure"):
             slide.pop("illustration", None)     # it already shows something
+        if slide.get("illustration"):
+            slide["illustration_kind"] = _illustrate.kind_of(slide)
+        else:
+            slide.pop("illustration_kind", None)
         _drop_echoed_bullets(slide)
         slide["title"] = _signs(slide["title"])
         if slide.get("body"):

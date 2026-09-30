@@ -18,7 +18,7 @@ from pathlib import Path
 from haarpi import figure as _figure
 from haarpi import naming as _naming
 
-from razzle import assets, compose, formats, gather, render
+from razzle import assets, compose, formats, gather, illustrate, render
 
 
 def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
@@ -59,6 +59,10 @@ def build_deck(root: Path, fmt: str, brain, *, master: str = "default",
                 fig_paths[fid] = str(png)
 
     out = out or (slides_dir / _naming.major_name(b["short_title"], "pptx", infix="deck"))
+    ill = illustrate.prepare(slides_dir, spec)      # the prompt list, and any picks to place
     render.render_deck(spec, desc["master_path"], desc, out, figures=fig_paths, logos=b["logos"],
-                       furniture=gather.furniture(root, fmt, spec))
+                       furniture=gather.furniture(root, fmt, spec),
+                       illustrations=ill["placements"], note=ill["note"],
+                       note_author=(illustrate.AUTHOR, illustrate.INITIALS))
+    illustrate.record_placed(slides_dir, ill["placements"], ill["briefs"])
     return {"spec": spec, "pptx": out}

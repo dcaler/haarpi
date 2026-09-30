@@ -445,6 +445,28 @@ slides than the paper has figures, so a slide with nothing to show may carry an
 rendered into the notes as a production TODO for whoever draws it. A request for
 art, not a script.
 
+Some of those pictures can be drawn locally. The composer tags each brief
+**pictorial** (a scene, an object, a visual metaphor) or **schematic** (a diagram,
+a chart, a worked example). A brief that names a diagram or chart is schematic
+whatever it was tagged, because an image generator draws a convincing chart of
+data nobody has. Schematic briefs stay as notes. Pictorial ones go into
+`slides/<venue>/illustrations/prompts.json`, and an `illustrate` step on the GPU
+lane, between authoring and your review, runs `imagine` (local Stable Diffusion)
+to draw three candidates of each. Nothing drawn reaches a slide until you choose it:
+copy the candidate you want to `chosen.png` in its folder. The next render puts
+it beside the slide's bullets on the `split` layout, and the notes record that the
+picture was generated. Illustrations never enter the figure pool, so they can't be
+mistaken for this paper's results.
+
+razzle keeps you informed through the deck itself. While any pictorial brief is
+unsettled, the deck carries one comment **signed by razzle**. Because a tool
+wrote it, it doesn't count as your review, but while it's open the deck can't be
+released. Leave it open after picking and `haarpi next` re-renders the deck with
+your picks in place (a `razzle render`, no model) and hands it back. Resolve it
+once the pictures are right, or to go without them. Any picks not yet on the
+deck are always placed before a release, so the released deck shows what you
+chose.
+
 What the composer is not allowed to write, razzle stamps: the **paper's title**
 on the title slide (a talk is the paper, so its name is read, not invented — and
 the footer is built from it), every **author** credited with exactly one contact
@@ -559,7 +581,9 @@ and individually usable — the monorepo shares machinery, not opinions.
 You will also need [Ollama](https://ollama.com) for the local models, `pandoc`
 for document rendering, `graphviz` with its neato layout engine for the figures
 (a separate package on recent Ubuntu: `libgvplugin-neato-layout8`), and a Zotero library with
-API access for the literature stage. `report` and `build` stop before doing any
+API access for the literature stage. The deck's illustrations need an `imagine` command on the GPU
+runner's PATH (local Stable Diffusion); without it the `illustrate` step fails, saying why, and the
+briefs stay as notes. `report` and `build` stop before doing any
 work if Zotero isn't configured; `--from-folder` builds from `./pdfs/` only when
 you ask for it. Configuration lives in `~/.config/haarpi/config.toml`.
 

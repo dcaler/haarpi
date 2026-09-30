@@ -215,10 +215,27 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "author":  Step("haarpi razzle deck", 1.5,
                         "Author the deck spec from the one-pager's spine plus the real figures "
                         "and numbers, and render it to the branded .pptx.", resource="gpu"),
-        "comment": Step(None, 0.25, "Review the rendered deck and annotate it.", resource="human"),
+        # Draws candidate pictures for the spec's PICTORIAL illustration briefs with `imagine`
+        # (local Stable Diffusion). Booked on the GPU lane like any model call — that booking is
+        # what gets it a card free of Ollama. Nothing it draws reaches a slide until the author
+        # picks it at `comment`.
+        "illustrate": Step("haarpi razzle illustrate", 0.25,
+                           "Draw candidate pictures for the deck's pictorial illustration "
+                           "briefs (imagine) into slides/<venue>/illustrations/.", resource="gpu"),
+        "comment": Step(None, 0.25,
+                        "Review the rendered deck and annotate it. If razzle's comment says "
+                        "illustrations are pending, pick one per slide by copying it to "
+                        "chosen.png in its folder and leave that comment OPEN — the deck is "
+                        "re-rendered with them in place. Resolve it once they are right (or to "
+                        "go without).", resource="human"),
         "deck_session": Step("haarpi razzle deck", 1.0,
                              "Re-author the deck spec to address the PowerPoint comments and "
                              "re-render the .pptx.", resource="gpu"),
+        # Re-render only — the spec is untouched, the author's picks go in. Queued by the deck's
+        # own routing in `run_next`, never by the classifier (it is not a rework tier).
+        "place": Step("haarpi razzle render", 0.1,
+                      "Re-render the deck with the illustrations the author picked in place.",
+                      resource="cpu"),
     },
 }
 
@@ -259,10 +276,10 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
     "build": {
         "revise": ["build_session"],
     },
-    # Any unresolved deck comment re-opens the attended deck session (one tier — the deck is
-    # authored interactively; every rework is "re-run it and re-render").
+    # Any unresolved deck comment re-opens the deck session (one tier — every rework is "re-run
+    # it and re-render"), then draws any new pictorial briefs and hands the deck back for review.
     "deck": {
-        "revise": ["deck_session"],
+        "revise": ["deck_session", "illustrate", "comment"],
     },
 }
 
@@ -809,7 +826,7 @@ def next_cycle(titles: list[str], stage: str, venue: str = "") -> int:
 # deck that presents it. A deck lives in `slides/<venue>/` for the same reason a manuscript lives
 # in `paper/<venue>/`: the venue is what the work is FOR, and the presentation format is a property
 # of the talk rather than a way to find it.
-_VENUE_AWARE = re.compile(r"(raconteur (outline|draft|paper|package)|razzle deck)\b")
+_VENUE_AWARE = re.compile(r"(raconteur (outline|draft|paper|package)|razzle (deck|render|illustrate))\b")
 
 
 def _venued(command: str | None, venue: str) -> str | None:
@@ -1843,17 +1860,81 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
                         best = (t, stage, p)
             # A deck (.pptx) is reviewed IN PLACE — PowerPoint comments live in the same file the
             # tool drafted (`…_deck_ra.pptx`); there is no rename to a reviewer's initials. So the
-            # "a human went last" signal is the presence of a comment, not the chain tail. A draft
-            # nobody has commented on is not finished markup; a release (bare chain) is never markup.
+            # "a human went last" signal is a HUMAN's comment, not the chain tail. razzle's own
+            # illustration note is a tool's comment and says nothing about the author — unless the
+            # author resolved it, which is theirs. Choosing an illustration is theirs too. A draft
+            # nobody has touched is not finished markup; a release (bare chain) is never markup.
             for p in d.glob("*.pptx"):
                 parsed = naming.parse(p, m.short_title)
                 if not parsed or naming.is_release(parsed[1]):
                     continue
-                if redline.pptx_comment_threads(p):
-                    t = p.stat().st_mtime
+                touched = any(not redline.is_tool_author(c["author"]) or c["resolved"]
+                              for c in redline.pptx_comment_threads(p))
+                to_place, picked_at = _deck_picks(p.parent)
+                if touched or to_place:
+                    t = max(p.stat().st_mtime, picked_at)
                     if best is None or t > best[0]:
                         best = (t, stage, p)
     return (best[1], best[2]) if best else None
+
+
+def _deck_picks(deck_dir: Path) -> tuple[list[str], float]:
+    """The author's illustration picks the deck does not show yet, and when they last picked.
+
+    razzle owns the layout (razzle.illustrate); a stack without razzle has no picks to place."""
+    try:
+        from razzle import illustrate
+    except ImportError:
+        return [], 0.0
+    return illustrate.needs_placing(deck_dir), illustrate.last_pick_time(deck_dir)
+
+
+def _route_deck(root: Path, m: project.Manifest, markup: Path, venue: str, check: dict,
+                tr_cfg: dict, queueing: bool, dry_run: bool, skipped: str) -> dict | None:
+    """The deck's own routing, ahead of the gate. Returns the check the gate should read — the
+    AUTHOR's comments only — or None when this has already decided what happens.
+
+    razzle's illustration note is a tool's comment: unresolved, it holds the mint (the gate still
+    sees it), but it is never an ask for the classifier to plan, and nothing it says is the author's.
+
+      * the author's own comments open → the usual rework, classified on theirs alone;
+      * none, but picks the deck does not show → re-render (`place`) and hand it back;
+      * none, and only razzle's note open → waiting on the author: another review step;
+      * nothing open → the gate mints it.
+
+    A pick the deck does not show yet always re-renders before a mint — even with the note
+    resolved — so what is released is what the author chose.
+    """
+    human = [c for c in check["unresolved"] if not redline.is_tool_author(c["author"])]
+    notes = [c for c in check["unresolved"] if redline.is_tool_author(c["author"])]
+    if human:
+        return {**check, "unresolved": human}
+    to_place, _ = _deck_picks(markup.parent)
+    if to_place:
+        steps, why = ["place", "comment"], (f"{len(to_place)} illustration pick(s) not yet on the "
+                                            f"deck — re-render with them in place")
+    elif notes:
+        steps, why = ["comment"], ("the only open comment is razzle's illustration note — pick "
+                                   "(copy a candidate to chosen.png) or resolve it to go without")
+    else:
+        return check
+    print(f"  deck      {why}")
+    if dry_run:
+        print(f"[dry-run] would queue: {' -> '.join(steps)} -> next")
+        return None
+    note = skipped
+    if queueing:
+        try:
+            client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
+            q = queue_chain(client, m.trundlr_project_id, "deck", steps, tr_cfg,
+                            description=why, venue=venue)
+            note = f"; queued {' -> '.join(t['title'] for t in q['tasks'])}"
+        except trundlr.TrundlrError as e:
+            note = f"; [trundlr] queueing failed ({e}) — queue it manually"
+    project.record_plan(root, {"type": "deck_route", "stage": "deck", "venue": venue,
+                               "markup": markup.name, "steps": steps})
+    print(f"haarpi next: deck ({venue}) not ready to release{note}")
+    return None
 
 
 def _release_dir(root: Path, m: project.Manifest, stage: str, markup: Path) -> Path:
@@ -2030,7 +2111,8 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
 
 
 def _queue_deck_formats(root: Path, m: project.Manifest, client, tr_cfg: dict) -> list[str]:
-    """One authoring chain per configured deck format — author -> comment -> `haarpi next`.
+    """One authoring chain per configured deck format — author -> illustrate -> comment ->
+    `haarpi next`.
 
     This is the deck's answer to a problem no other stage has: WHICH deliverables exist is itself
     a human choice, made in the interview, so the stage cannot queue its own work when it opens.
@@ -2058,7 +2140,8 @@ def _queue_deck_formats(root: Path, m: project.Manifest, client, tr_cfg: dict) -
         venue = str(((m.decks or {}).get(fmt) or {}).get("venue") or "").strip()
         if (root / "slides" / (venue or fmt) / "spec.json").is_file():
             continue                                        # already authored
-        queue_chain(client, m.trundlr_project_id, "deck", ["author", "comment"], tr_cfg,
+        queue_chain(client, m.trundlr_project_id, "deck", ["author", "illustrate", "comment"],
+                    tr_cfg,
                     description=f"Deck configured for {venue or fmt} ({fmt}): author it.",
                     venue=venue or fmt)
         project.record_plan(root, {"type": "deck_queued", "format": fmt, "venue": venue})
@@ -2215,6 +2298,10 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
           f"{check['reviewer_changes']} reviewer edit(s)")
     if stage == "paper":
         print(f"  ladder    {_ladder_line(root, m, venue, deliverable)}")
+    if stage == "deck":
+        check = _route_deck(root, m, markup, venue, check, tr_cfg, queueing, dry_run, skipped)
+        if check is None:
+            return 0
 
     # A CLEAN DESIGN MARKUP DOES NOT MINT WHILE ITS METHODS REVIEW IS OUTSTANDING. The
     # preregistration fixes the analytical approach, and approving one whose methodological

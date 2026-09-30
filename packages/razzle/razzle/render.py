@@ -16,16 +16,24 @@ A deck carries no SPEAKER notes — what does not fit on the slide is spoken, no
 pane is used for one other thing entirely: a slide with no figure may carry an `illustration`, a one
 line brief for a picture that does not exist yet. That is a production TODO addressed to whoever
 builds the artwork, not a script addressed to the speaker, which is why it may live there when a
-sentence may not.
+sentence may not. Once the author has CHOSEN a generated picture for it (razzle.illustrate), the
+slide renders as a `split` with that picture beside its bullets, and the note says it was generated.
 """
 
 from __future__ import annotations
 
 import copy
 import math
+import uuid
+import zlib
+from datetime import datetime, timezone
 from pathlib import Path
+from xml.sax.saxutils import escape
 
+from lxml import etree
 from pptx import Presentation
+from pptx.opc.package import Part
+from pptx.opc.packuri import PackURI
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
@@ -232,10 +240,95 @@ def _add_slide_number(slide, layout) -> None:
             return
 
 
-def _set_illustration_note(slide, brief: str) -> None:
+def _set_illustration_note(slide, brief: str, generated: bool = False) -> None:
     """The ONE thing the notes pane carries: a brief for a picture this slide wants and does not
-    have. Nothing a speaker would read aloud ever goes here."""
-    slide.notes_slide.notes_text_frame.text = f"ILLUSTRATION: {brief}"
+    have — or, once one was generated and chosen, where the picture on it came from. Nothing a
+    speaker would read aloud ever goes here."""
+    tag = "ILLUSTRATION (generated)" if generated else "ILLUSTRATION"
+    slide.notes_slide.notes_text_frame.text = f"{tag}: {brief}"
+
+
+# ── a tool's comment (PowerPoint "modern" comments) ─────────────────────────
+# A deck is reviewed in place with comments, so a tool that needs the author to do something says
+# so the same way — signed as the tool, which is what keeps it from reading as the author's review
+# (redline.TOOL_AUTHORS). python-pptx has no comment API, so the parts are written directly.
+_P188 = "http://schemas.microsoft.com/office/powerpoint/2018/8/main"
+_P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+_PC = "http://schemas.microsoft.com/office/powerpoint/2013/main/command"
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_RT_AUTHORS = "http://schemas.microsoft.com/office/2018/10/relationships/authors"
+_RT_COMMENTS = "http://schemas.microsoft.com/office/2018/10/relationships/comments"
+_CT_AUTHORS = "application/vnd.ms-powerpoint.authors+xml"
+_CT_COMMENTS = "application/vnd.ms-powerpoint.comments+xml"
+_EXT_CREATION = "{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}"
+_EXT_COMMENTREL = "{6950BFC3-D8DA-4A85-94F7-54DA5524770B}"
+
+
+def _guid() -> str:
+    return "{" + str(uuid.uuid4()).upper() + "}"
+
+
+def _slide_ext(slide, uri: str):
+    """The slide's `p:ext` for `uri`, created (with its `p:extLst`) when absent."""
+    sld = slide._element
+    lst = sld.find(qn("p:extLst"))
+    if lst is None:
+        lst = etree.SubElement(sld, qn("p:extLst"))       # extLst is always the last child
+    for ext in lst.findall(qn("p:ext")):
+        if ext.get("uri") == uri:
+            return ext
+    ext = etree.SubElement(lst, qn("p:ext"))
+    ext.set("uri", uri)
+    return ext
+
+
+def _creation_id(slide) -> int:
+    """The slide's p14:creationId — what a modern comment anchors to — minted if it has none."""
+    ext = _slide_ext(slide, _EXT_CREATION)
+    el = ext.find(f"{{{_P14}}}creationId")
+    if el is None:
+        el = etree.SubElement(ext, f"{{{_P14}}}creationId", nsmap={"p14": _P14})
+        el.set("val", str(zlib.crc32(uuid.uuid4().bytes) or 1))
+    return int(el.get("val"))
+
+
+def _author_id(prs, name: str, initials: str) -> str:
+    part = next((r.target_part for r in prs.part.rels.values() if r.reltype == _RT_AUTHORS), None)
+    if part is None:
+        root = etree.Element(f"{{{_P188}}}authorLst", nsmap={"a": _A, "r": _R, "p188": _P188})
+        part = Part(PackURI("/ppt/authors.xml"), _CT_AUTHORS, prs.part.package)
+        prs.part.relate_to(part, _RT_AUTHORS)
+    else:
+        root = etree.fromstring(part.blob)
+    for au in root.findall(f"{{{_P188}}}author"):
+        if au.get("name") == name:
+            return au.get("id")
+    aid = _guid()
+    etree.SubElement(root, f"{{{_P188}}}author", id=aid, name=name, initials=initials,
+                     userId=name, providerId="None")
+    part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return aid
+
+
+def add_tool_comment(prs, slide, text: str, *, author: str, initials: str) -> None:
+    """Attach one unresolved comment, signed `author`, to `slide`."""
+    aid = _author_id(prs, author, initials)
+    cid = _creation_id(slide)
+    when = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000")
+    xml = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           f'<p188:cmLst xmlns:a="{_A}" xmlns:r="{_R}" xmlns:p188="{_P188}">'
+           f'<p188:cm id="{_guid()}" authorId="{aid}" created="{when}">'
+           f'<pc:sldMkLst xmlns:pc="{_PC}"><pc:docMk/>'
+           f'<pc:sldMk cId="{cid}" sldId="{slide.slide_id}"/></pc:sldMkLst>'
+           f'<p188:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" dirty="0"/>'
+           f'<a:t>{escape(text)}</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>')
+    name = PackURI(f"/ppt/comments/modernComment_{slide.slide_id:X}_{cid:08X}.xml")
+    part = Part(name, _CT_COMMENTS, prs.part.package, xml.encode("utf-8"))
+    rid = slide.part.relate_to(part, _RT_COMMENTS)
+    ext = _slide_ext(slide, _EXT_COMMENTREL)
+    rel = etree.SubElement(ext, f"{{{_P188}}}commentRel", nsmap={"p188": _P188})
+    rel.set(f"{{{_R}}}id", rid)
 
 
 def _place_picture(slide, ph, img: Path) -> None:
@@ -303,7 +396,8 @@ def _place_logo_strip(slide, box: dict, items: list[dict]) -> None:
 
 def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path, *,
                 figures: dict | None = None, logos: list | None = None,
-                furniture: dict | None = None) -> Path:
+                furniture: dict | None = None, illustrations: dict | None = None,
+                note: str | None = None, note_author: tuple[str, str] = ("razzle", "ra")) -> Path:
     """Render the deck spec onto the branded master.
 
     `figures` maps a slide's figure-id → an image path. `logos` is the ordered list of logo image
@@ -315,6 +409,11 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
     A slide with an `illustration` and no figure gets that brief in its notes pane — the only thing
     notes ever hold. The opening slide carries no page number, as a title page never does.
 
+    `illustrations` maps a slide's INDEX in the spec → the picture the author chose for its brief.
+    Such a slide renders on the `split` layout, the picture beside its bullets; illustrations are
+    kept apart from `figures`, which hold only this paper's own results. `note`, when given, is
+    attached to the opening slide as one unresolved comment signed `note_author` (name, initials).
+
     A missing figure or logo is simply skipped (the box stays empty) — never a crash.
     """
     prs = Presentation(str(master))
@@ -323,8 +422,14 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
     figures = figures or {}
     furniture = furniture or {}
     items = _logo_items(logos)
+    illustrations = illustrations or {}
     for n, slide in enumerate(spec):
-        rdef = roles.get(slide.get("role", "figure"))
+        drawn = (illustrations.get(n)
+                 if slide.get("illustration") and not slide.get("figure") else None)
+        if drawn and "split" not in roles:
+            drawn = None                  # nowhere to put it: the brief stays a TODO
+        role = "split" if drawn else slide.get("role", "figure")
+        rdef = roles.get(role)
         if rdef is None:
             continue
         layout = prs.slide_layouts[rdef["layout"]]
@@ -349,7 +454,7 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
             strip.sort(key=lambda m: _STRIP_SLOTS.index(m[0]))
             _fit_strip([(ph, val) for _, ph, val, _ in strip], min(m[3] for m in strip))
         for slot, idx in (rdef.get("picture") or {}).items():
-            img = figures.get(slide.get(slot))
+            img = drawn or figures.get(slide.get(slot))
             if img and idx in phs:
                 _place_picture(s, phs[idx], Path(img))
                 filled.add(idx)
@@ -361,10 +466,12 @@ def render_deck(spec: list[dict], master: str, descriptor: dict, out_path: Path,
         if rdef.get("logo_strip"):    # after the strip, so it is not swept up as unfilled
             _place_logo_strip(s, rdef["logo_strip"], items)
         if slide.get("illustration") and not slide.get("figure"):
-            _set_illustration_note(s, str(slide["illustration"]))
+            _set_illustration_note(s, str(slide["illustration"]), generated=bool(drawn))
         if n:      # the OPENING slide is never numbered — by position, not by role. Keying on
                    # the role dropped the number from a closing "thank you" slide the composer
                    # had also written as a title, so the deck skipped from 12 to 14.
             _add_slide_number(s, layout)
+    if note and len(prs.slides):
+        add_tool_comment(prs, prs.slides[0], note, author=note_author[0], initials=note_author[1])
     prs.save(str(out_path))
     return out_path

@@ -54,7 +54,7 @@ _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 # Everyone else is a human. The tools sign their tracked changes and their comments, and
 # that signature is the only thing separating what the machine wrote from what the author
 # did. It decides which spans are editable and which are not.
-TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "haarpi", "the tool")
+TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "razzle", "haarpi", "the tool")
 
 
 def is_tool_author(author: str | None, tool_authors=TOOL_AUTHORS) -> bool:
@@ -818,7 +818,7 @@ from lxml import etree
 _W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 _W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 
-TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "haarpi", "the tool")
+TOOL_AUTHORS = ("rabbitHole", "raconteur", "raster", "rayleigh", "razzle", "haarpi", "the tool")
 
 
 def _zip_parts(path: Path) -> dict[str, bytes]:
