@@ -22,6 +22,32 @@ explicitly-optional, human-invoked deviations (an A/B coordinator swap in
 rabbitHole; the interactive design sessions in ramus, raster and rayleigh; razzle's
 `deck --claude`), never as shared plumbing and never on an automated path.
 
+## HAARPi, trundlr and raDash
+
+HAARPi is the front door, but it is one of three projects built to work
+together. Each is its own repository because each runs somewhere different, and
+none of them imports another's code. They meet through a task queue and through
+files on disk.
+
+| | What it is | Where it runs | How it meets HAARPi |
+|---|---|---|---|
+| **HAARPi** (this repo) | the `ra*` research tools and the planner that chains them | the GPU machine, as commands trundlr's runners call | — |
+| **[trundlr](https://github.com/dcaler/trundlr)** | task and resource scheduler: a board of tasks, and lanes for human, CPU, GPU and Claude time | a small server of its own; its runners live on the GPU machine | `haarpi next` queues every chain on it, and its runners execute HAARPi's commands. **Required** for anything to run unattended |
+| **[raDash](https://github.com/dcaler/radash)** | a read-only observatory of your research portfolio: where your reading, your writing and the literature stand relative to one another | a Docker container on any machine that can see your project folders | reads each project's `haarpi.yaml` and `.haarpi/corpus_ledger.json`, and trundlr's board, and never writes to any of them. **Optional** |
+
+The loop they make: raDash shows you where your work sits against your reading
+and the field, and hands you a read-in brief or a corpus fill list. You carry
+that into HAARPi by hand, as a project brief or as sources for the literature
+review. That copy is deliberate, so nothing gets set in motion by a score nobody
+has checked. HAARPi plans the work and queues it on trundlr, and trundlr's
+runners do it. You review what comes back, and raDash reads the result on its
+next refresh.
+
+Because raDash reads `haarpi.yaml` and the corpus ledger, **those two formats
+have a reader outside this repo.** raDash tolerates drift, and a field it cannot
+find turns up on its dashboard as a finding, not a crash. Even so, rename or
+remove a field and a dashboard somewhere goes quiet about it.
+
 ## The pipeline
 
 | Stage | Tool | Works in | Produces |
@@ -577,6 +603,13 @@ uv sync            # one venv, all seven CLIs
 
 Each tool remains individually installable (`pip install -e packages/<tool>`)
 and individually usable — the monorepo shares machinery, not opinions.
+
+**trundlr** is installed separately, from [its own repo](https://github.com/dcaler/trundlr).
+You can drive any tool here by hand without it (`haarpi <tool> <verb>`), but the
+loop that feeds itself, where every chain ends in a queued `haarpi next`, runs on
+trundlr. Its URL and resource ids go in the `[trundlr]` table of the config.
+**raDash** is optional, runs as its own Docker container, and needs only read
+access to your project folders; see [its README](https://github.com/dcaler/radash).
 
 You will also need [Ollama](https://ollama.com) for the local models, `pandoc`
 for document rendering, `graphviz` with its neato layout engine for the figures

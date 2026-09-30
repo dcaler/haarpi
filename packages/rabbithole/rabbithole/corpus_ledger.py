@@ -29,6 +29,11 @@ and nothing silently disappears.
 `locked` records that a human overruled the machine — `--release` sets it, and `audit` must
 not re-quarantine a locked row. Without it a release does not survive the next audit, which
 is how the verb behaved for as long as quarantine was a move.
+
+THE FILE HAS A READER OUTSIDE THIS REPO. raDash (github.com/dcaler/radash), the read-only
+portfolio observatory, reads `version` and each item's `key` to know which Zotero items a
+project has admitted. It flags a version it has not seen rather than failing, so a format
+change will not crash it — bump `version` when the shape changes, and say so in raDash.
 """
 from __future__ import annotations
 

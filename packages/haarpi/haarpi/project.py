@@ -10,6 +10,13 @@ Stage contracts implement the agreed edge rule: presence of a RELEASE unlocks,
 the latest release binds, a newer release than the one a consumer recorded
 means stale. Unattended consumers bind only releases; attended ones (design
 sessions) may bind in-flight work, recorded as ungated provenance.
+
+`haarpi.yaml` HAS A READER OUTSIDE THIS REPO. raDash (github.com/dcaler/radash), the
+read-only portfolio observatory, parses it on every refresh: `name`, `short_title`,
+`brief`, `trundlr_project_id`, `trundlr_priority`, and per stage `dir`, `tool` and
+`attended`. It tolerates drift, so a renamed field will not crash it; it will quietly
+stop showing what that field fed. Rename or drop one of those on purpose, and say so
+in raDash.
 """
 
 from __future__ import annotations
