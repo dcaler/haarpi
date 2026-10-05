@@ -455,10 +455,13 @@ def replace_top_sources(path: Path, block_md: str) -> dict:
                 "error": "no narrative heading to insert before"}
 
     n = 0
+    counting = True             # the coverage list rides in this block; its bullets are not sources
     for line in block_md.splitlines():
         line = line.strip()
         if not line:
             continue
+        if line.startswith("**Coverage against the brief"):
+            counting = False
         if line.startswith("## "):
             par = doc.add_paragraph()
             if heading_style is not None:
@@ -469,7 +472,7 @@ def replace_top_sources(path: Path, block_md: str) -> dict:
             if body_style is not None:
                 par.style = body_style
             par.add_run("\u2022  " + _strip_md(line[2:]))
-            n += 1
+            n += counting
         else:
             par = doc.add_paragraph()
             if body_style is not None:

@@ -45,7 +45,7 @@ def run(directory: str = ".", brain_override: str | None = None,
               file=sys.stderr)
         return 1
 
-    from .revise import _load_corpus
+    from .revise import _load_corpus, _load_notes
     from .summarize import _make_citekeys, top_sources_block
     corpus = _load_corpus(paths)
     if not corpus:
@@ -60,7 +60,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     # it now stands, including anything a redline or a graft added.
     narrative = redline.accepted_body_text(docx)
     print(f"  {runlog.stamp()}[refresh] ranking the load-bearing sources...", flush=True)
-    block = top_sources_block(brain, cfg, narrative, corpus, citekeys)
+    block = top_sources_block(brain, cfg, narrative, corpus, citekeys,
+                              notes=_load_notes(paths, corpus, citekeys))
     if not block.strip():
         print("[refresh] nothing is cited in this draft — no block to write.", file=sys.stderr)
         return 1

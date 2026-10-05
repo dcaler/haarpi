@@ -65,6 +65,12 @@ _LOCK_POLL_S = 5.0
 _LOCATE_CANDIDATES = 3    # chunks fetched per claim, so a collision can fall through to the next
 
 
+def _cos(a, b) -> float:
+    num = sum(x * y for x, y in zip(a, b))
+    den = (sum(x * x for x in a) * sum(y * y for y in b)) ** 0.5
+    return num / den if den else 0.0
+
+
 def get_collection(chroma_dir, writable: bool = False):
     """The project's collection, worked on from LOCAL disk rather than over the share.
 
@@ -617,14 +623,22 @@ def locate_direct(collection, brain, citekey: str, statements: str) -> list[dict
         seen_chunks.add(meta.get("chunk_idx", 0))
         page = meta.get("page", "?")
         quote = _best_sentence(chunk, claim)
-        results.append({
+        item = {
             # Stored WHOLE. The store is not the place to lose information; the annotated
             # bibliography truncates for display (see summarize.bibliography), where the cut
             # lands on a word boundary and says so with an ellipsis.
             "claim": claim,
             "location": f"p.{page}",
             "quote": quote,
-        })
+        }
+        # How well the quote supports the claim: the cosine of their embeddings. The quote is
+        # chosen by word overlap inside the nearest chunk and was never checked; the bibliography
+        # labels a low score so the reader verifies it (see summarize._WEAK_SUPPORT).
+        try:
+            item["support"] = round(_cos(q_emb, brain.embed(quote)), 3) if quote else 0.0
+        except Exception:  # noqa: BLE001
+            pass                                   # unscored, never dropped
+        results.append(item)
     return results
 
 

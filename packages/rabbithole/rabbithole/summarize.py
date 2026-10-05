@@ -93,6 +93,12 @@ _MAP_CHUNK_CHARS = 14000
 _DIRECT_CHARS = 20000
 _LOCATE_FALLBACK_CHARS = 24000  # used only when ChromaDB is unavailable
 _CLAIM_DISPLAY_CHARS = 600      # annotated-bibliography bullet cap — display only, never the store
+# Below this claim–quote cosine (mxbai-embed-large) a bullet is labelled weak. Calibrated on 200
+# DigiPros pairs, 2026-10-05: it flags 7% of real pairs — and those were genuinely wrong (an SSRN
+# header, a numbers table, the burn-in paragraph for a clustering result) — and 63% of deliberately
+# mismatched ones. A quote on the right topic that does not support the claim scores above it;
+# this catches gross misses, not subtle ones.
+_WEAK_SUPPORT = 0.55
 _LOCATE_TOP_K = 4               # chunks to retrieve per claim via ChromaDB
 
 
@@ -927,8 +933,38 @@ section whose empirical claims rest on an unnamed framework is missing its found
 
 Carry the "what this means for the project" point INSIDE the evidence-bearing paragraphs.
 Never end with a citation-free conclusion.
-
+{established}
 Do NOT write the "## " heading — output only the paragraphs of this section."""
+
+_ESTABLISHED_CHARS = 3_000   # the earlier-sections block in a drafting prompt
+
+
+def _established(sections: list[Section], i: int) -> str:
+    """What earlier sections already said about THIS section's candidate sources.
+
+    Handed to the drafter so a source can be cited again for what it adds here without its
+    point being re-explained — DigiPros 261005 restated Edmonds 2015's three-stage framework
+    in five of six sections. Empty when nothing earlier cites a candidate.
+    """
+    keys = set(sections[i].candidates)
+    lines: list[str] = []
+    used = 0
+    for j in range(i):
+        for s in guards.sentence_units(sections[j].text or ""):
+            hit = sorted(keys & set(guards.all_citekeys(s)))
+            if not hit:
+                continue
+            line = f"- §{j + 1} {' '.join(s.split())[:220]}"
+            if used + len(line) > _ESTABLISHED_CHARS:
+                break
+            lines.append(line)
+            used += len(line)
+    if not lines:
+        return ""
+    return ("\nALREADY ESTABLISHED in earlier sections. Cite these sources again wherever they "
+            "bear on this section — a source may serve several sections — but do NOT re-explain "
+            "these points or repeat their numbers. Refer back briefly and say what each adds "
+            "HERE:\n" + "\n".join(lines) + "\n")
 
 _SECTION_REVISE_PROMPT = """\
 Review topic: {topic}
@@ -986,11 +1022,13 @@ def _draft_section(brain: Brain, cfg, sections: list[Section], i: int,
         _DRAFT_PROMPT.format(
             topic=cfg.topic, focus=cfg.focus or "", outline=_outline(sections, i),
             heading=sec.heading, claim=sec.claim, transition=transition,
-            candidates=_candidate_block(sec, full, extra)),
+            candidates=_candidate_block(sec, full, extra),
+            established=_established(sections, i)),
         sys_prompt, num_ctx=16384))
 
 
-def _section_guards(sec: Section, text: str, corpus_keys: set[str]) -> list[guards.Finding]:
+def _section_guards(sec: Section, text: str, corpus_keys: set[str],
+                    extra=None) -> list[guards.Finding]:
     """The deterministic batteries, applied to one section in isolation.
 
     `thin_sections` and the disposition ledger are deliberately absent: they are properties
@@ -1004,12 +1042,37 @@ def _section_guards(sec: Section, text: str, corpus_keys: set[str]) -> list[guar
             + guards.short_sections(paras)
             + guards.accretion_violations(paras)
             + guards.triangulation_violations(paras)
-            + guards.sparse_paragraphs(paras))
+            + guards.sparse_paragraphs(paras)
+            + (list(extra(text)) if extra else []))
+
+
+def _self_text(note: dict) -> str:
+    """What a source says about itself: its note, minus the two fields written AGAINST the brief.
+
+    "relevance" is the bridge to the project, the very thing `unsupported_bridges` must not
+    count as the source's own words. "gaps" names brief terms to say the paper LACKS them ("does
+    not address ... trajectory archetypes") — counting it made 21 DigiPros sources look like
+    they discuss trajectory archetypes, when 2 do.
+    """
+    parts = [str(note.get(f) or "") for f in ("argument", "methods", "findings",
+                                              "limitations")]
+    return " ".join(parts + [str(t) for t in (note.get("themes") or [])])
+
+
+def _attribution_guards(sections: list[Section], i: int, terms: list[str],
+                        self_text: dict[str, str]):
+    """Section i's guards on what its sources are made to say: brief vocabulary they never
+    used, and points an earlier section already made from them."""
+    def run(text: str) -> list[guards.Finding]:
+        earlier = [(j, sections[j].text) for j in range(i) if sections[j].text]
+        return (guards.unsupported_bridges(text, terms, self_text, section=i)
+                + guards.repeated_facts(text, earlier, section=i))
+    return run
 
 
 def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
                     full: dict[str, str], sys_prompt: str, corpus_keys: set[str],
-                    rounds: int | None = None) -> str:
+                    rounds: int | None = None, extra=None) -> str:
     """Critique -> re-draft, scoped to one section.
 
     Deterministic guards first (they decide precisely, and cost nothing), then the two LLM
@@ -1021,7 +1084,7 @@ def _polish_section(brain: Brain, cfg, sections: list[Section], i: int,
     sec = sections[i]
     text = sec.text
     for r in range(1, rounds + 1):
-        findings = _section_guards(sec, text, corpus_keys)
+        findings = _section_guards(sec, text, corpus_keys, extra)
         try:
             lint = brain.coordinator(_LINT_PROMPT.format(heading=sec.heading, narrative=text),
                                      _LINT_SYS, num_ctx=16384, think=False)
@@ -1554,6 +1617,10 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
               f"{', '.join(sorted(foundational)[:6])}"
               f"{' …' if len(foundational) > 6 else ''}", flush=True)
 
+    terms = guards.focus_terms(cfg.focus or "")
+    self_text = {citekeys[i]: _self_text(n) for i, n in enumerate(notes)
+                 if i in citekeys and n}
+
     sys_prompt = SYNTH_SYS
     if style_profile:
         sys_prompt = (sys_prompt.rstrip()
@@ -1596,7 +1663,8 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] drafting §{i + 1} failed ({e}); section dropped.", file=sys.stderr)
             continue
-        sec.text = _polish_section(brain, cfg, sections, i, full, sys_prompt, corpus_keys)
+        sec.text = _polish_section(brain, cfg, sections, i, full, sys_prompt, corpus_keys,
+                                   extra=_attribution_guards(sections, i, terms, self_text))
         prev_tail = _tail_sentence(sec.text)
 
     sections = [s for s in sections if s.text.strip()]
@@ -1683,7 +1751,8 @@ def _claim_sentences(narrative: str, citekey: str) -> str:
 #       with "; ", the splitter only breaks after [.!?] + whitespace, so ".; " never split and
 #       relevance+findings+argument became ONE claim, cut at the display cap — 85 of 119 curated
 #       entries in DigiPros 261005 ended mid-sentence in "…".
-_LOCATED_VERSION = 2
+#   v3 (2026-10-05): each claim carries "support", the claim–quote embedding cosine.
+_LOCATED_VERSION = 3
 
 
 def _located_items(cached) -> list:
@@ -1923,6 +1992,8 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
                     line += f" — *{loc}*"
                 if quote:
                     line += f': "{quote}"'
+                if isinstance(cl.get("support"), (int, float)) and cl["support"] < _WEAK_SUPPORT:
+                    line += " *(weak support — verify against the source)*"
                 lines.append(line)
         else:
             lines.append("- *(no supporting passage found in this source's full text "
@@ -2030,12 +2101,89 @@ def top_sources(narrative: str, corpus: list[Candidate], citekeys: dict[int, str
     return ranked[:top_source_count(len(corpus), quantile)]
 
 
+# Coverage against the brief. A source is CLOSE to a focus item when the embedding of its own
+# note (`_self_text`) is at least this similar to the item's text. Calibrated on DigiPros 261005
+# (mxbai-embed-large): the closest source per item ranged 0.69–0.85, and a specific item such as
+# "designing extraction instruments against a model's action structure" had none at 0.70 —
+# which matched a reading of the corpus.
+_COVERAGE_CLOSE = 0.70
+_THIN_BELOW = 3                 # fewer close sources than this, and the item is thin
+
+
+def focus_items(focus: str) -> list[str]:
+    return [x.strip() for x in (focus or "").split(";") if x.strip()]
+
+
+def coverage_lines(brain: Brain, focus: str, narrative: str, corpus: list[Candidate],
+                   notes: list[dict], citekeys: dict[int, str]) -> list[str]:
+    """One line per focus item: how much of the corpus addresses it in its own words.
+
+    The narrative can only ever answer the coverage question yes — it is written to connect every
+    source to the brief, and where nothing does, the drafter writes the connection in. This is the
+    no: per item, how many sources sit close to it, which of its terms any source's own notes
+    use, and how many review sentences put those terms in the mouth of sources that never use
+    them. Returns [] when the brief has no focus items or no notes.
+    """
+    items = focus_items(focus)
+    self_text = {citekeys[i]: _self_text(n) for i, n in enumerate(notes or [])
+                 if i in citekeys and n and _self_text(n).strip()}
+    if not items or not self_text:
+        return []
+    label = {citekeys[i]: c.author_year() for i, c in enumerate(corpus) if i in citekeys}
+    norm = {k: f" {' '.join(guards._tokens(v))} " for k, v in self_text.items()}
+    emb: dict[str, list[float]] = {}
+    try:
+        for k, v in self_text.items():
+            emb[k] = brain.embed(v)
+        item_emb = [brain.embed(it) for it in items]
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] coverage embeddings failed ({e}); reporting term use only.",
+              file=sys.stderr)
+        emb, item_emb = {}, [None] * len(items)
+    all_terms = guards.focus_terms(focus)
+    bridged = guards.unsupported_bridges(narrative or "", all_terms, self_text)
+
+    out: list[str] = []
+    for it, ie in zip(items, item_emb):
+        terms = guards.focus_terms(it)
+        uses = {t: sum(1 for v in norm.values() if f" {t} " in v) for t in terms}
+        n_bridged = sum(1 for f in bridged if any(repr(t) in f.imperative for t in terms))
+        close: list[tuple[float, str]] = []
+        if ie is not None and emb:
+            close = sorted(((_cosine(ie, e), k) for k, e in emb.items()), reverse=True)
+        n_close = sum(1 for sim, _ in close if sim >= _COVERAGE_CLOSE)
+        thin = (bool(close) and n_close < _THIN_BELOW) or any(n == 0 for n in uses.values())
+        parts = [f"**{'THIN' if thin else 'Covered'}** — *{it}*."]
+        if close:
+            nearest = ", ".join(f"{label.get(k, k)} {sim:.2f}" for sim, k in close[:3])
+            parts.append(f"{n_close} source(s) close to it (nearest: {nearest}).")
+        if uses:
+            parts.append("In sources' own notes: "
+                         + ", ".join(f"“{t}” {n}" for t, n in uses.items()) + ".")
+        if n_bridged:
+            parts.append(f"{n_bridged} review sentence(s) attribute these terms to sources "
+                         f"that never use them.")
+        out.append("- " + " ".join(parts))
+    return out
+
+
 def top_sources_block(brain: Brain, cfg, narrative: str, corpus: list[Candidate],
-                      citekeys: dict[int, str], quantile: float = 0.05) -> str:
-    """The markdown block that opens the review. Empty string when there is nothing to rank."""
+                      citekeys: dict[int, str], quantile: float = 0.05,
+                      notes: list[dict] | None = None) -> str:
+    """The markdown block that opens the review. Empty string when there is nothing to rank.
+
+    With `notes`, it also carries the coverage-against-the-brief list. That list lives INSIDE
+    this block, under a bold label rather than a heading, because `redline.replace_top_sources`
+    rebuilds the block up to the next heading: everything that re-ranks the sources (render,
+    revise, redline, refresh) then re-checks coverage too, and nothing can leave a stale copy.
+    """
     top = top_sources(narrative, corpus, citekeys, quantile)
-    if not top:
+    coverage = coverage_lines(brain, cfg.focus or "", narrative, corpus, notes, citekeys) \
+        if notes else []
+    if not top and not coverage:
         return ""
+    if not top:
+        return "\n".join(_TOP_HEADER(quantile, len(corpus)) + _coverage_part(coverage))
     from .mindmap import citation_evidence
     ev = citation_evidence(narrative)
     papers = "\n".join(
@@ -2050,17 +2198,31 @@ def top_sources_block(brain: Brain, cfg, narrative: str, corpus: list[Candidate]
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] load-bearing rationales failed ({e}); listing without them.",
               file=sys.stderr)
-    pct = f"{quantile * 100:g}%"
-    out = [f"## Most load-bearing sources (top {pct} of {len(corpus)})", "",
-           "*The sources this review rests on most, by the amount of its argument each carries — "
-           "the same ranking as the contribution map's innermost ring. Read this first to judge "
-           "whether the corpus is right.*", ""]
+    out = _TOP_HEADER(quantile, len(corpus))
     for k, c, w in top:
         why = reasons.get(k, "").strip()
         out.append(f"- **{c.author_year()}** [@{k}] — {why}" if why
                    else f"- **{c.author_year()}** [@{k}] — carries {w} words of the review's argument.")
     out.append("")
-    return "\n".join(out)
+    return "\n".join(out + _coverage_part(coverage))
+
+
+def _TOP_HEADER(quantile: float, n: int) -> list[str]:
+    pct = f"{quantile * 100:g}%"
+    return [f"## Most load-bearing sources (top {pct} of {n})", "",
+            "*The sources this review rests on most, by the amount of its argument each carries — "
+            "the same ranking as the contribution map's innermost ring. Read this first to judge "
+            "whether the corpus is right.*", ""]
+
+
+def _coverage_part(lines: list[str]) -> list[str]:
+    if not lines:
+        return []
+    return ["**Coverage against the brief**", "",
+            f"*Each focus item, and how much of the corpus addresses it in its own words. THIN "
+            f"means fewer than {_THIN_BELOW} sources sit close to it, or one of its terms appears "
+            f"in no source's own notes. The narrative always connects its sources to the brief; "
+            f"this is where a gap in the corpus shows.*", ""] + lines + [""]
 
 
 def citation_check(narrative: str, citekeys: dict[int, str]) -> list[str]:
@@ -2280,7 +2442,7 @@ def run(directory: str = ".", brain_override: str | None = None,
     out_md, out_docx = render.write_review(
         cfg, paths, brain.backend, narrative, biblio, corpus, unmatched,
         metrics_line=guards.metrics(narrative, set(citekeys.values()), rejected).line(),
-        top_block=top_sources_block(brain, cfg, narrative, corpus, citekeys))
+        top_block=top_sources_block(brain, cfg, narrative, corpus, citekeys, notes=notes))
 
     elapsed = time.time() - t0
     print("\n" + "=" * 60)

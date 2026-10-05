@@ -988,7 +988,7 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         from .summarize import top_sources_block
         narrative = redline.accepted_body_text(out_docx)
         print(f"  {runlog.stamp()}Re-ranking the load-bearing sources...", flush=True)
-        block = top_sources_block(brain, cfg, narrative, corpus, citekeys)
+        block = top_sources_block(brain, cfg, narrative, corpus, citekeys, notes=notes)
         summary.update(redline.replace_top_sources(out_docx, block))
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] could not refresh the load-bearing sources block ({e}); "
@@ -1427,7 +1427,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     # load-bearing list is only true of the draft it was computed from.
     md_text = build_markdown(cfg, brain.backend, narrative, biblio, corpus, unmatched,
                              metrics_line,
-                             top_sources_block(brain, cfg, narrative, corpus, citekeys))
+                             top_sources_block(brain, cfg, narrative, corpus, citekeys,
+                                               notes=notes))
     out_md.write_text(md_text, encoding="utf-8")
     # No citeproc: the [@citekeys] stay as written, and the annotated bibliography that
     # names each one is already in the document. See render.write_review.

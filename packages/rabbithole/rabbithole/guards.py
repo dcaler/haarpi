@@ -528,3 +528,138 @@ def as_critique(findings: list[Finding], header: str) -> str:
         return ""
     body = "\n".join(f"- {f.imperative}" for f in findings)
     return f"{header}\n{body}"
+
+
+# ── what a source actually says, and what the review has already said ─────────
+# Two failures the structural guards cannot see. A sentence can be cited, triangulated and
+# accreted and still put the PROJECT's vocabulary in a source's mouth ("a framework for handling
+# incomplete simulation outputs [@akokaConceptual2022]" — a prosopography database paper). And a
+# section can re-explain a fact an earlier section already established, so the same point lands
+# under five headings (Edmonds 2015's three-stage framework in DigiPros 261005). Citing a source
+# again in another section is NOT a defect and is never flagged; restating what it said is.
+
+_STOP = frozenset(
+    "a an the of to in and or for on by with as at from that this these those is are was were be "
+    "been it its their which while into than more most can may not no such also both each per via "
+    "over under between only how what when where who whom whose across against among s".split())
+
+
+_TERM_VERBS = frozenset("applied apply applying designing design using use building build "
+                        "making make making extracting".split())
+
+
+def _stem(w: str) -> str:
+    w = w.replace("behaviour", "behavior").replace("modelling", "modeling")
+    return w[:-1] if len(w) > 4 and w.endswith("s") and not w.endswith("ss") else w
+
+
+def _tokens(text: str) -> list[str]:
+    text = re.sub(r"\[@[^\]]+\]", " ", text.lower()).replace("’", "'")
+    text = re.sub(r"'s\b", " ", text)
+    return [_stem(w) for w in re.findall(r"[a-z]+", text)]
+
+
+def _content(text: str) -> set[str]:
+    return {w for w in _tokens(text) if w not in _STOP and len(w) > 2}
+
+
+def focus_terms(focus: str) -> list[str]:
+    """The brief's two-word terms: adjacent content words within one focus clause.
+
+    "trajectory archetypes", "simulation output", "action structure". Single words are too
+    broad to say anything about attribution; a bigram is specific enough that a source whose
+    notes never use it is unlikely to have said it.
+    """
+    out: list[str] = []
+    # A possessive ends a term ("a model's action structure" must not yield "model action"),
+    # and a verb never starts or ends one ("applied to", "designing extraction").
+    for clause in re.split(r"[;,]|'s\b|’s\b", focus or ""):
+        toks = [t for t in _tokens(clause)]
+        toks = ["" if t in _TERM_VERBS else t for t in toks]
+        for a, b in zip(toks, toks[1:]):
+            if a and b and a not in _STOP and b not in _STOP and len(a) > 2 and len(b) > 2:
+                term = f"{a} {b}"
+                if term not in out:
+                    out.append(term)
+    return out
+
+
+def _has_term(text_tokens: str, term: str) -> bool:
+    return f" {term} " in text_tokens
+
+
+def unsupported_bridges(text: str, terms: list[str], source_text: dict[str, str],
+                        section: int | None = None) -> list[Finding]:
+    """A sentence that attributes a brief term to sources whose own notes never use it.
+
+    `source_text` maps citekey -> what the source says about itself (its note's argument,
+    methods, findings — NOT its relevance line, which was written against the brief and is
+    the bridge itself). A sentence is flagged for a term only when EVERY source it cites is
+    known and none of them uses the term: one source that does is enough to carry it.
+    """
+    norm = {k: f" {' '.join(_tokens(v))} " for k, v in source_text.items()}
+    out: list[Finding] = []
+    for s in sentence_units(text):
+        keys = set(all_citekeys(s))
+        if not keys or not keys <= norm.keys():
+            continue
+        st = f" {' '.join(_tokens(s))} "
+        missing = [t for t in terms if _has_term(st, t)
+                   and not any(_has_term(norm[k], t) for k in keys)]
+        if missing:
+            cited = ", ".join(f"[@{k}]" for k in sorted(keys))
+            snippet = " ".join(s.split())[:200]
+            out.append(Finding(
+                "unsupported-bridge", f"section {section}" if section is not None else "review",
+                f'"{snippet}" attributes {", ".join(repr(t) for t in missing)} to {cited}, but '
+                f'nothing those sources say uses it. Attribute to them only what they say, and '
+                f'state the link to this project as the review\'s own inference in an uncited '
+                f'sentence — or cite a source that does address it. If no source does, say the '
+                f'link is untested: that gap is a finding.', section=section))
+    return out
+
+
+_NUM = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)*%?")
+_RESTATED = 0.45   # overlap coefficient of content words; calibrated on DigiPros 261005, where
+                   # every same-source pair at or above it was the same point restated
+
+
+def _facts(text: str) -> list[tuple[str, set[str], set[str]]]:
+    """(sentence, citekeys, numbers) for each cited sentence; years and bare digits are not facts."""
+    out = []
+    for s in sentence_units(text):
+        keys = set(all_citekeys(s))
+        if not keys:
+            continue
+        nums = {n for n in _NUM.findall(re.sub(r"\[@[^\]]+\]", " ", s))
+                if not re.fullmatch(r"(1[5-9]|20)\d\d", n) and not re.fullmatch(r"\d", n)}
+        out.append((s, keys, nums))
+    return out
+
+
+def repeated_facts(text: str, earlier: list[tuple[int, str]],
+                   section: int | None = None) -> list[Finding]:
+    """Sentences in `text` that restate, for the same source, a point an earlier section made.
+
+    Restated means: same citekey AND (a shared reported number, or content-word overlap at or
+    above `_RESTATED` of the shorter sentence). `earlier` is [(section index, its text)].
+    """
+    prior = [(si, s, k, n, _content(s)) for si, t in earlier for s, k, n in _facts(t)]
+    out: list[Finding] = []
+    for s, keys, nums in _facts(text):
+        words = _content(s)
+        for si, ps, pkeys, pnums, pwords in prior:
+            shared = keys & pkeys
+            if not shared:
+                continue
+            overlap = len(words & pwords) / max(1, min(len(words), len(pwords)))
+            if (nums & pnums) or overlap >= _RESTATED:
+                k = sorted(shared)[0]
+                out.append(Finding(
+                    "repeated-fact", f"section {section}" if section is not None else "review",
+                    f'"{" ".join(s.split())[:160]}" restates what §{si + 1} already established '
+                    f'from [@{k}] ("{" ".join(ps.split())[:120]}"). Keep citing [@{k}] here if it '
+                    f'bears on this section, but say what it adds HERE; do not re-explain the '
+                    f'point or repeat its numbers.', section=section))
+                break
+    return out
