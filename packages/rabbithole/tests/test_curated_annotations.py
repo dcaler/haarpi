@@ -150,6 +150,75 @@ def test_a_cut_off_reply_is_retried_once_and_the_complete_one_kept(tmp_path):
     assert notes[0]["findings"] == "f" and "_salvaged" not in notes[0]
 
 
+# ── fix 3: the self-exclusion screen does not overrule the audit or the person ──
+
+def _screen_fixture(tmp_path, monkeypatch, verdicts, rows):
+    from rabbithole import corpus_ledger
+    out = tmp_path / "output"
+    out.mkdir()
+    (out / "audit_cache.json").write_text(json.dumps({"verdicts": verdicts}))
+    monkeypatch.setattr(corpus_ledger, "load", lambda path=".": rows)
+    return SimpleNamespace(root=tmp_path, output=out, work=tmp_path / "work")
+
+
+def _row(key, citekey, locked=False, status="corpus"):
+    from rabbithole.corpus_ledger import Row
+    return Row(key=key, citekey=citekey, locked=locked, status=status)
+
+
+_IRRELEVANT = [{"claim": "This book is largely irrelevant to the review focus.",
+                "location": "p.1", "quote": "q"}]
+
+
+def test_a_named_transfer_survives_an_irrelevant_annotation(tmp_path, monkeypatch):
+    paths = _screen_fixture(
+        tmp_path, monkeypatch,
+        verdicts={"NAMIER": {"kind": "transfer", "term": "prosopography"},
+                  "WIND": {"kind": "transfer", "term": "None"}},
+        rows={"NAMIER": _row("NAMIER", "namier1929"), "WIND": _row("WIND", "wind2026")})
+    citekeys = {0: "namier1929", 1: "wind2026"}
+    corpus = [Candidate(title="Structure of Politics", year=1929),
+              Candidate(title="Wind farms", year=2026)]
+    exempt = summarize.screening_exempt(paths, corpus, [{}, {}], citekeys)
+    assert exempt == {0}                      # a term-less default transfer earns nothing
+    md = summarize.bibliography(corpus, {0: _IRRELEVANT, 1: _IRRELEVANT}, cited_indices=set(),
+                                exempt=exempt)
+    screened = md.split("### Screened out")[1]
+    assert "Wind farms" in screened and "Structure of Politics" not in screened
+
+
+def test_a_locked_corpus_row_is_exempt_but_a_bare_no_numbers_note_is_not(tmp_path, monkeypatch):
+    paths = _screen_fixture(tmp_path, monkeypatch, verdicts={},
+                            rows={"K1": _row("K1", "kept2020", locked=True),
+                                  "K2": _row("K2", "quar2020", locked=True, status="quarantine")})
+    # "No quantitative findings" alone makes a note `is_foundational`; a news piece says it too.
+    notes = [{}, {}, {"findings": "The paper provides no quantitative findings."}]
+    corpus = [Candidate(title=t) for t in ("a", "b", "c")]
+    exempt = summarize.screening_exempt(paths, corpus, notes,
+                                        {0: "kept2020", 1: "quar2020", 2: "f2020"})
+    assert exempt == {0}
+
+
+def test_missing_audit_and_ledger_exempt_nothing(tmp_path):
+    paths = SimpleNamespace(root=tmp_path, output=tmp_path / "nope", work=tmp_path)
+    assert summarize.screening_exempt(paths, [Candidate(title="a")], [{}], {0: "a2020"}) == set()
+
+
+def test_a_ledger_row_without_a_citekey_matches_by_pdf_or_title(tmp_path, monkeypatch):
+    # The real ledger often has no citekey; DigiPros's Namier rows had none, and matching
+    # by citekey alone exempted nothing.
+    from rabbithole.corpus_ledger import Row
+    paths = _screen_fixture(
+        tmp_path, monkeypatch,
+        verdicts={"D3K7": {"kind": "transfer", "term": "prosopography"},
+                  "F9IP": {"kind": "transfer", "term": "prosopography"}},
+        rows={"D3K7": Row(key="D3K7"),
+              "F9IP": Row(key="F9IP", title="The House of Commons, 1754–1790")})
+    corpus = [Candidate(title="The Structure of Politics", pdf_path="/x/pdfs/D3K7.pdf"),
+              Candidate(title="The House of Commons, 1754-1790")]
+    assert summarize.screening_exempt(paths, corpus, [{}, {}], {}) == {0, 1}
+
+
 if __name__ == "__main__":
     import sys
     import tempfile

@@ -51,6 +51,7 @@ from .summarize import (
     _make_citekeys, _compact_lines, _full_lines, bibliography, citation_check,
     locate_claims, SYNTH_SYS, _enforce_paragraph_citations, _is_ok,
     _HAVE_CHROMA, _cited_indices, _legacy_notes_by_paper, _located_filename, Section,
+    screening_exempt,
 )
 
 
@@ -953,7 +954,8 @@ def _redline_revise(brain: Brain, cfg, paths, docx: Path,
         located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
                                 collection=collection, citekeys=citekeys, scope="all")
         biblio_md = bibliography(corpus, located,
-                                 cited_indices=set(_cited_indices(narrative, citekeys)))
+                                 cited_indices=set(_cited_indices(narrative, citekeys)),
+                                 exempt=screening_exempt(paths, corpus, notes, citekeys))
         bib_summary = redline.replace_bibliography(out_docx, biblio_md)
         summary.update(bib_summary)
     except Exception as e:  # noqa: BLE001
@@ -1404,7 +1406,8 @@ def run(directory: str = ".", brain_override: str | None = None,
     located = locate_claims(brain, narrative, corpus, notes, cfg, paths,
                             collection=collection, citekeys=citekeys, scope="all")
     biblio = bibliography(corpus, located,
-                          cited_indices=set(_cited_indices(narrative, citekeys)))
+                          cited_indices=set(_cited_indices(narrative, citekeys)),
+                          exempt=screening_exempt(paths, corpus, notes, citekeys))
     unmatched = citation_check(narrative, citekeys)
     if unmatched:
         print(f"\n[citation check] {len(unmatched)} unmatched citekey(s): "

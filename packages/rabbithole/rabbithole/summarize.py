@@ -328,6 +328,12 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
         if len(text) > _DIRECT_CHARS:
             if collection is not None:
                 queries = [
+                    # Topic-neutral first: what the work says it is about, in its own terms.
+                    # Every other query is phrased in the brief's vocabulary, so a long text
+                    # from another field (Namier's 700-page House of Commons) was read only
+                    # through the passages that looked like the brief, and its note judged
+                    # it irrelevant.
+                    "introduction preface scope purpose of this work what this book is about",
                     f"{cfg.topic} {cfg.focus} main argument contribution hypothesis",
                     "methodology research design data collection analysis",
                     "results findings outcomes evidence limitations",
@@ -1836,9 +1842,60 @@ def _bullet_safe(text: str) -> str:
     return flat.strip()
 
 
+def screening_exempt(paths, corpus: list[Candidate], notes: list[dict],
+                     citekeys: dict[int, str]) -> set[int]:
+    """Sources the bibliography's self-exclusion screen may not drop.
+
+    The screen reads one phrase in a note written against the whole brief; the corpus audit
+    and the person have made a better-informed call, and theirs stands:
+      * the audit judged it a TRANSFER on a NAMED shared term — a positive finding that the
+        paper's sense of a brief term carries over (Namier 1929/1964 on "prosopography" were
+        screened as "irrelevant" in DigiPros 261005 despite exactly that verdict). A transfer
+        with no term is only the audit's default for "found nothing to object to", and is not
+        a judgement that the paper belongs;
+      * a person locked it into the corpus (`rabbitHole audit --release`, `--status`).
+    `is_foundational` is deliberately NOT an exemption: a note that only declares "no
+    quantitative findings" qualifies, and in DigiPros that let a wind-farm news piece through.
+    Every input is optional: a missing or unreadable file exempts nothing.
+
+    Audit verdicts and ledger rows are keyed by Zotero item key, which a Candidate does not
+    carry. A row is matched to the corpus by citekey when the ledger has one (it often does
+    not), else by the PDF the ingest saved as `<item key>.pdf`, else by normalised title.
+    """
+    from . import corpus_ledger
+    exempt: set[int] = set()
+    by_citekey = {ck: i for i, ck in (citekeys or {}).items() if ck}
+    by_pdf = {Path(c.pdf_path).stem: i for i, c in enumerate(corpus) if c.pdf_path}
+    by_title = {c.title_key: i for i, c in enumerate(corpus) if c.title_key}
+    try:
+        verdicts = json.loads((paths.output / "audit_cache.json").read_text(
+            encoding="utf-8")).get("verdicts") or {}
+    except Exception:  # noqa: BLE001
+        verdicts = {}
+    try:
+        rows = corpus_ledger.load(paths.root)
+    except Exception:  # noqa: BLE001
+        rows = {}
+    for key, row in rows.items():
+        i = by_citekey.get(row.citekey) if row.citekey else None
+        if i is None:
+            i = by_pdf.get(key)
+        if i is None and row.title:
+            i = by_title.get(Candidate(title=row.title).title_key)
+        if i is None:
+            continue
+        v = verdicts.get(key) or {}
+        term = str(v.get("term") or "").strip()
+        if (v.get("kind") == "transfer" and term and term.lower() != "none") \
+                or (row.locked and row.status == corpus_ledger.CORPUS):
+            exempt.add(i)
+    return exempt
+
+
 def bibliography(corpus: list[Candidate], located: dict[int, list],
                  cited_indices: set[int] | None = None,
-                 screen_curated: bool = True) -> str:
+                 screen_curated: bool = True,
+                 exempt: set[int] = frozenset()) -> str:
     """Annotated bibliography as markdown.
 
     When ``cited_indices`` is given, entries split into two tiers: **Cited in the review**
@@ -1893,7 +1950,7 @@ def bibliography(corpus: list[Candidate], located: dict[int, list],
     if screen_curated:
         keep = set()
         for i in extra:
-            if why := self_disqualified(located.get(i) or []):
+            if i not in exempt and (why := self_disqualified(located.get(i) or [])):
                 dropped.append((i, why))
             else:
                 keep.add(i)
@@ -2196,7 +2253,8 @@ def run(directory: str = ".", brain_override: str | None = None,
                             collection=collection, citekeys=citekeys, scope="all")
 
     biblio = bibliography(corpus, located,
-                          cited_indices=set(_cited_indices(narrative, citekeys)))
+                          cited_indices=set(_cited_indices(narrative, citekeys)),
+                          exempt=screening_exempt(paths, corpus, notes, citekeys))
     unmatched = citation_check(narrative, citekeys)
     if unmatched:
         print(f"\n[citation check] {len(unmatched)} citekey(s) not matched to a source: "
