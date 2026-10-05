@@ -46,16 +46,21 @@ def _extract_citekey(data: dict) -> str:
 
 
 def _zotero_item_to_candidate(data: dict) -> Candidate:
-    authors = []
+    authors, editors = [], []
     for cr in data.get("creators", []):
-        if cr.get("creatorType") not in (None, "author"):
+        kind = cr.get("creatorType")
+        if kind in (None, "author"):
+            into = authors
+        elif kind == "editor":
+            into = editors
+        else:
             continue
         if cr.get("name"):
             from .sources import _split_name
-            authors.append(_split_name(cr["name"]))
+            into.append(_split_name(cr["name"]))
         else:
-            authors.append(Author(family=cr.get("lastName", ""),
-                                  given=cr.get("firstName", "")))
+            into.append(Author(family=cr.get("lastName", ""),
+                               given=cr.get("firstName", "")))
     year = None
     m = re.search(r"(\d{4})", data.get("date", "") or "")
     if m:
@@ -63,6 +68,7 @@ def _zotero_item_to_candidate(data: dict) -> Candidate:
     return Candidate(
         title=data.get("title", "") or "",
         authors=authors,
+        editors=editors,
         year=year,
         venue=data.get("publicationTitle", "") or data.get("bookTitle", "") or "",
         doi=data.get("DOI", "") or "",

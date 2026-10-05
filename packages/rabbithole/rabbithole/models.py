@@ -54,6 +54,10 @@ class Candidate:
     # Set by ranking; it is what lets each ask claim a share of the LLM re-rank head.
     best_query: str = ""
     citekey: str = ""            # Better BibTeX citation key from Zotero (Extra field), if any
+    # Editors, kept apart from authors: an edited volume with no author creators used to print as
+    # "Anon (2016)". Display falls back to them; generated citekeys do NOT, so adding them never
+    # renames a source an existing draft already cites.
+    editors: list = field(default_factory=list)   # list[Author]
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:
     pdf_path: str = ""
@@ -75,14 +79,15 @@ class Candidate:
     # ── display helpers ──────────────────────────────────────────────────
     @property
     def first_author_last(self) -> str:
-        if self.authors:
-            return self.authors[0].family or self.authors[0].display
+        people = self.authors or self.editors
+        if people:
+            return people[0].family or people[0].display
         return "Anon"
 
     def author_year(self) -> str:
         """In-text author-year tag, e.g. 'Smith & Jones, 2021'."""
         yr = self.year or "n.d."
-        names = [a.family or a.display for a in self.authors]
+        names = [a.family or a.display for a in (self.authors or self.editors)]
         if not names:
             return f"Anon, {yr}"
         if len(names) == 1:
@@ -101,16 +106,18 @@ class Candidate:
         return " ".join(parts).rstrip(".") + "." + doi
 
     def _format_authors_full(self) -> str:
+        people = self.authors or self.editors
         out = []
-        for a in self.authors:
+        for a in people:
             fam = a.family or a.display
             init = "".join(f"{p[0]}." for p in a.given.split() if p) if a.given else ""
             out.append(f"{fam}, {init}".strip().rstrip(","))
         if not out:
             return "Anon"
-        if len(out) == 1:
-            return out[0]
-        return ", ".join(out[:-1]) + ", & " + out[-1]
+        names = out[0] if len(out) == 1 else ", ".join(out[:-1]) + ", & " + out[-1]
+        if not self.authors:
+            names += " (Ed.)" if len(out) == 1 else " (Eds.)"
+        return names
 
     # ── (de)serialisation ────────────────────────────────────────────────
     def to_dict(self) -> dict:
@@ -124,4 +131,5 @@ class Candidate:
         known = {f.name for f in dataclasses.fields(cls)}
         d = {k: v for k, v in d.items() if k in known}
         d["authors"] = [Author(**a) for a in d.get("authors", [])]
+        d["editors"] = [Author(**a) for a in d.get("editors", [])]
         return cls(**d)

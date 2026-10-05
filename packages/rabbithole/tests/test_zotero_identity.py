@@ -122,3 +122,32 @@ class TestCrossrefSubtitleJoin:
 
     def test_trailing_colon_is_not_doubled(self):
         assert _full_title("A Title:", "The Subtitle") == "A Title: The Subtitle"
+
+
+# ── an edited volume is not anonymous ─────────────────────────────────────────
+
+def test_an_editor_only_item_is_cited_by_its_editors_without_changing_its_generated_key():
+    """Elsenbroich et al. (2016) has editors and no authors; it printed as "Anon (2016)"."""
+    from rabbithole.corpus import _zotero_item_to_candidate
+    from rabbithole.models import Candidate
+    from rabbithole.summarize import _make_citekeys
+    data = {"title": "Social Dimensions of Organised Crime", "date": "2016", "itemType": "book",
+            "creators": [{"creatorType": "editor", "lastName": "Elsenbroich",
+                          "firstName": "Corinna"},
+                         {"creatorType": "editor", "lastName": "Anzola", "firstName": "David"},
+                         {"creatorType": "translator", "lastName": "Nobody", "firstName": "N"}]}
+    c = _zotero_item_to_candidate(data)
+    assert c.authors == [] and [e.family for e in c.editors] == ["Elsenbroich", "Anzola"]
+    assert c.full_citation().startswith("Elsenbroich, C., & Anzola, D. (Eds.) (2016).")
+    assert c.author_year() == "Elsenbroich & Anzola, 2016"
+    assert c.first_author_last == "Elsenbroich"
+    assert _make_citekeys([c])[0] == "anon2016"          # the generated key did not move
+    assert Candidate.from_dict(c.to_dict()).editors[0].family == "Elsenbroich"
+
+
+def test_authors_still_win_over_editors():
+    from rabbithole.corpus import _zotero_item_to_candidate
+    c = _zotero_item_to_candidate({"title": "Ch", "date": "2020", "creators": [
+        {"creatorType": "author", "lastName": "Smith", "firstName": "A"},
+        {"creatorType": "editor", "lastName": "Jones", "firstName": "B"}]})
+    assert c.full_citation().startswith("Smith, A. (2020).") and "(Ed" not in c.full_citation()

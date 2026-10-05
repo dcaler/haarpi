@@ -44,7 +44,10 @@ def _make_citekeys(corpus: list[Candidate]) -> dict[int, str]:
     against every key already in use so it never collides with a real one.
     """
     def _base(c: Candidate) -> str:
-        last = re.sub(r"[^a-z0-9]", "", c.first_author_last.lower())
+        # Authors only, never the editor fallback `first_author_last` now has: a generated key
+        # must not change under a draft that already cites it.
+        first = (c.authors[0].family or c.authors[0].display) if c.authors else "Anon"
+        last = re.sub(r"[^a-z0-9]", "", first.lower())
         return f"{last}{c.year}" if c.year else f"{last}nd"
 
     keys: dict[int, str] = {}
