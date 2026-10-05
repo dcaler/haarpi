@@ -78,7 +78,7 @@ of the review as a last resort that is always reported rather than taken quietly
 |---|---|---|
 | **1. Read** | Per-paper notes (argument/methods/findings/themes). ChromaDB indexes each paper; long papers retrieved via 3-query semantic retrieval rather than brute-force condensing. Incremental — resumes from `work/annotations/`. | coordinator × N papers |
 | **2. Synthesise** | Sectioned — see below. | coordinator × (1 + ~4 per section) |
-| **3. Locate** | For each curated source: embed claim sentences → retrieve the best chunk not already quoted → extract quote + page location. Claims are stored **whole** (the bibliography truncates for display); a claim is never dropped for colliding on a chunk. No LLM call — pure embedding arithmetic. Incremental — resumes from `work/located/`. | none (embedding only) |
+| **3. Locate** | For each curated source: embed claim sentences → retrieve the best chunk not already quoted → extract quote + page location, and score the quote against the claim (embedding cosine; under 0.55 the bullet is labelled *weak support*). An uncited source is grounded from its note's fields, each its own statement. Claims are stored **whole** (the bibliography truncates for display); a claim is never dropped for colliding on a chunk. No LLM call — pure embedding arithmetic. Incremental — resumes from `work/located/`, which carries a version so a change to what is located re-grounds the cache. | none (embedding only) |
 
 ### The annotated bibliography's three tiers
 
@@ -90,6 +90,28 @@ makes that claim false. Uncited sources that disqualify themselves in their own 
 named list. They stay in the corpus and in Zotero: the tier records a judgement, it deletes
 nothing. The test is deliberately literal and few; anything subtler is a judgement the rejection
 ledger already demands a reason for.
+
+The screen never overrules a better-informed call. A source the corpus audit judged a
+*transfer* on a named shared term (Namier on "prosopography"), or one a person locked into the
+corpus, is not screened, whatever its note says. A transfer with no term is only the audit's
+default and exempts nothing. `is_foundational` is deliberately not an exemption: a note that
+only says "no quantitative findings" qualifies, and so does a news piece.
+
+### Coverage against the brief
+
+The narrative can only ever answer the coverage question *yes*: it is written to connect every
+source to the brief, and where nothing does, the drafter writes the connection in. So the
+load-bearing block ends with the *no*. For each focus item (the brief's `;`-separated clauses)
+it reports how many sources sit close to it (embedding of the source's own note ≥ 0.70), which
+of the item's two-word terms any source's own notes use, and how many review sentences attribute
+those terms to sources that never use them. An item with fewer than 3 close sources, or a term
+no source uses, is **THIN**.
+
+A source's *own* notes are its argument, methods, findings, limitations and themes. Its
+relevance and gaps lines are left out because both are written against the brief: a gaps line
+names a brief term to say the paper lacks it. The list rides inside the load-bearing block under
+a bold label, not a heading, because `redline.replace_top_sources` rebuilds that block up to the
+next heading: every path that re-ranks the sources re-checks coverage, and none strands a copy.
 
 ### Synthesise, section by section
 
@@ -110,7 +132,11 @@ nothing in the log said so. No prompt could have fixed that.
 
 Section count follows the material, never the corpus size. A section **re-cites freely** —
 foundational work belongs in several, so the shortlist is retrieval with overlap, not a
-partition. The shortlist is deliberately recall-biased (18 offered, ~12 used): cosine on a
+partition. What it must not do is **re-explain**: each draft is handed what earlier sections
+already said about its candidates, and the repeated-fact guard catches what slips through.
+Citing a source again for what it adds here is never flagged; the paper stage needs to know
+every role a source can play, but each fact once. Importance (`mindmap.evidence_weight`) applies
+the same test, so a restated sentence earns its source no weight. The shortlist is deliberately recall-biased (18 offered, ~12 used): cosine on a
 six-word heading is a weak signal, so retrieval over-offers and drafting prunes.
 
 `brain._check_context` now warns, loudly and with the call site, whenever a prompt would be
@@ -126,6 +152,7 @@ imperative; only what code cannot decide reaches the LLM.
 |---|---|---|
 | **Verifiability** | uncited paragraph · unresolved citekey · author-year prose · dropped citekey · dropped/invented equation · duplicate citekey | every path |
 | **Breadth** | disposition (cited-or-rejected) · short section · accretion · triangulation · sparse paragraph · thin section | **synthesis only** |
+| **Attribution** | unsupported bridge (a brief term put to sources whose own notes never use it) · repeated fact (a number or point an earlier section already made from the same source) | **synthesis only** |
 | **Minimality** | touched sentences ⊆ the sentences the comment anchors to | **redline only** |
 
 Breadth guards must never run on the redline path: a comment like *"explain consonance"*

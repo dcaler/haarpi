@@ -182,8 +182,12 @@ than read through.
 
 It opens with the **most load-bearing sources** — the top 5% of the corpus by
 how much of the review's argument each one carries, with a sentence on what the
-project relies on it for. Below that sits an annotated bibliography where every
-claim is page-located in its source, and beside it a **contribution map** that
+project relies on it for — and then **coverage against the brief**, which marks
+each focus item covered or THIN by how much of the corpus addresses it in its own
+words. That is the one place the document can say the corpus falls short; the
+prose always connects its sources to the brief. Below that sits an annotated
+bibliography where every claim is page-located in its source, a quote that does
+not match its claim is labelled weak support, and beside it a **contribution map** that
 bands the same sources at the 5% / 25% / 50% marks, so the map's innermost ring
 and the opening list are one ranking seen two ways. The prose carries the
 through line that organizes those facts — the same structure the map draws
@@ -274,7 +278,7 @@ reporting which sources still lack a PDF.
 | `report` | generates the first review — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
 | `revise` | answers every comment in kind (see the table above) |
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
-| `refresh` | recomputes the load-bearing block on an existing draft |
+| `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
 | `mindmap` | regenerates the contribution map beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |

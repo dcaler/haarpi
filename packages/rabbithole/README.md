@@ -112,9 +112,14 @@ Three-stage pipeline:
    Incremental: re-running skips papers already annotated.
 2. **Synthesise** — the coordinator writes a thematic narrative with author-year
    citations from the notes digest.
-3. **Locate** — for each source the narrative actually cites, ChromaDB retrieves
-   the most relevant passage and extracts the supporting quote and page location.
-   This produces the annotated bibliography entries.
+3. **Locate** — for every curated source, ChromaDB retrieves the most relevant
+   passage and extracts the supporting quote and page location; a quote that
+   scores low against its claim is labelled *weak support*. This produces the
+   annotated bibliography entries.
+
+The review opens with the most load-bearing sources and **coverage against the
+brief**: each focus item marked covered or THIN by how much of the corpus
+addresses it in its own words.
 
 Output:
 ```
