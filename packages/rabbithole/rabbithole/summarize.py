@@ -133,6 +133,61 @@ def _parse_json_obj(raw: str) -> dict:
             "limitations": "", "relevance": "", "themes": []}
 
 
+_NOTE_FIELDS = ("argument", "methods", "findings", "limitations", "relevance", "gaps")
+_JSON_STR_FIELD = re.compile(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*(?=[,}\n])')
+_JSON_THEMES = re.compile(r'"themes"\s*:\s*\[([^\]]*)\]')
+
+
+def _salvage_note(raw: str) -> dict:
+    """The COMPLETE fields of a note whose JSON did not parse — usually output cut off mid-field.
+
+    A field counts only if its string closed: a half-written "findings" is dropped, never kept
+    as a fragment. Returns {} when nothing complete survives.
+    """
+    note: dict = {}
+    for k, v in _JSON_STR_FIELD.findall(raw or ""):
+        if k in _NOTE_FIELDS and k not in note:
+            try:
+                note[k] = json.loads(f'"{v}"')
+            except json.JSONDecodeError:
+                continue
+    if m := _JSON_THEMES.search(raw or ""):
+        note["themes"] = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+    return note
+
+
+def _parse_note(raw: str) -> dict | None:
+    """A read-notes JSON object, salvaged field-by-field if truncated, or None.
+
+    Unlike `_parse_json_obj`, a failed parse never becomes a note whose "argument" is the raw
+    reply: that put a `{ "argument": ...` JSON dump into the annotated bibliography (Zhang 2011
+    and Deffuant 2000 in DigiPros 261005).
+    """
+    m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+    if m:
+        try:
+            v = json.loads(m.group(0))
+            if isinstance(v, dict):
+                return v
+        except json.JSONDecodeError:
+            pass
+    salvaged = _salvage_note(raw)
+    if not salvaged.get("argument") and not salvaged.get("findings"):
+        return None
+    missing = [k for k in _NOTE_FIELDS if k not in salvaged]
+    for k in _NOTE_FIELDS:
+        salvaged.setdefault(k, "")
+    salvaged.setdefault("themes", [])
+    if missing:
+        salvaged["_salvaged"] = missing
+    return salvaged
+
+
+def _is_broken_note(note: dict) -> bool:
+    """A cached note written by the old fallback: its "argument" IS the unparsed JSON reply."""
+    return str(note.get("argument") or "").lstrip().startswith("{")
+
+
 def _parse_json_list(raw: str) -> list:
     m = re.search(r"\[.*\]", raw, re.DOTALL)
     if m:
@@ -254,7 +309,8 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             # unversioned note (no _v) predates versioning and counts as stale, so an
             # extraction-prompt fix re-reads the existing corpus instead of silently
             # applying only to papers added later. --no-refresh-notes keeps stale notes.
-            if not refresh_notes or cached.get("_v", 0) >= _NOTES_VERSION:
+            if (not refresh_notes or cached.get("_v", 0) >= _NOTES_VERSION) \
+                    and not _is_broken_note(cached):
                 notes[i] = cached
                 done += 1
                 continue
@@ -285,9 +341,19 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
         try:
             # think=False: extraction, not judgement. The paper says what it says; a
             # scratchpad only re-narrates it at 3 tok/s before the JSON arrives.
-            raw = brain.coordinator(_read_prompt(c, cfg.topic, cfg.focus, text),
-                                    READ_SYS, think=False)
-            note = _parse_json_obj(raw)
+            prompt = _read_prompt(c, cfg.topic, cfg.focus, text)
+            note = _parse_note(brain.coordinator(prompt, READ_SYS, think=False))
+            if note is None or note.get("_salvaged"):
+                # One retry: a cut-off reply is usually a one-off. Keep the better of the two.
+                retry = _parse_note(brain.coordinator(prompt, READ_SYS, think=False))
+                if retry is not None and (note is None or not retry.get("_salvaged")
+                                          or len(retry["_salvaged"]) < len(note["_salvaged"])):
+                    note = retry
+            if note is None:
+                raise ValueError("no usable JSON in the reply")
+            if note.get("_salvaged"):
+                print(f"  [warn] {c.first_author_last} {c.year or ''}: reply cut off; kept the "
+                      f"complete fields, missing {', '.join(note['_salvaged'])}", file=sys.stderr)
             note["_paper"] = c.author_year()
             note["_v"] = _NOTES_VERSION
             fp.write_text(json.dumps(note, indent=2, ensure_ascii=False),

@@ -87,6 +87,69 @@ def test_a_pre_versioned_located_cache_is_relocated(tmp_path):
     assert stored["_v"] == summarize._LOCATED_VERSION and stored["items"][0]["claim"] == "Grants raise R&D"
 
 
+# ── fix 2: a cut-off note reply never becomes a JSON dump in the bibliography ──
+
+_CUT = ('{\n  "argument": "The paper unifies the checkerboard and tipping models.",\n'
+        '  "methods": "Game theory plus a 30 \u00d7 30 lattice of 900 agents.",\n'
+        '  "findings": "In the simulation, ')
+
+
+def test_a_cut_off_note_keeps_only_its_complete_fields():
+    note = summarize._parse_note(_CUT)
+    assert note["argument"] == "The paper unifies the checkerboard and tipping models."
+    assert note["methods"].startswith("Game theory plus a 30 \u00d7 30")
+    assert note["findings"] == ""                       # half-written field dropped, not kept
+    assert "findings" in note["_salvaged"]
+    assert not summarize._is_broken_note(note)
+
+
+def test_a_reply_with_nothing_usable_is_not_a_note():
+    assert summarize._parse_note("I could not read this paper.") is None
+    assert summarize._parse_note('{"themes": ["a"], "argument": "cut') is None
+
+
+def test_a_cached_json_dump_note_is_reread(tmp_path):
+    from rabbithole.models import Candidate
+    d = tmp_path / "annotations"
+    d.mkdir()
+    paths = SimpleNamespace(annotations_dir=d, work=tmp_path)
+    corpus = [Candidate(title="Tipping", year=2011, abstract="Short abstract.")]
+    (d / f"{summarize._located_filename('zhang2011')}.json").write_text(json.dumps(
+        {"argument": _CUT[:120], "findings": "", "_v": summarize._NOTES_VERSION, "_paper": "x"}))
+
+    class _Brain:
+        calls = 0
+
+        def coordinator(self, prompt, system="", **kw):
+            self.calls += 1
+            return json.dumps({"argument": "Unified model.", "methods": "m", "findings": "f",
+                               "limitations": "l", "relevance": "r", "gaps": "", "themes": []})
+
+    brain = _Brain()
+    cfg = SimpleNamespace(topic="t", focus="f")
+    notes = summarize.read_notes(brain, corpus, cfg, paths, citekeys={0: "zhang2011"})
+    assert brain.calls == 1 and notes[0]["argument"] == "Unified model."
+
+
+def test_a_cut_off_reply_is_retried_once_and_the_complete_one_kept(tmp_path):
+    d = tmp_path / "annotations"
+    d.mkdir()
+    paths = SimpleNamespace(annotations_dir=d, work=tmp_path)
+    corpus = [Candidate(title="Tipping", year=2011, abstract="Short abstract.")]
+    full = json.dumps({"argument": "A.", "methods": "m", "findings": "f", "limitations": "l",
+                       "relevance": "r", "gaps": "", "themes": []})
+
+    class _Brain:
+        replies = [_CUT, full]
+
+        def coordinator(self, prompt, system="", **kw):
+            return self.replies.pop(0)
+
+    notes = summarize.read_notes(_Brain(), corpus, SimpleNamespace(topic="t", focus="f"), paths,
+                                 citekeys={0: "zhang2011"})
+    assert notes[0]["findings"] == "f" and "_salvaged" not in notes[0]
+
+
 if __name__ == "__main__":
     import sys
     import tempfile
