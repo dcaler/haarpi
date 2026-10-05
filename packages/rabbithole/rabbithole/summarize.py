@@ -1605,6 +1605,41 @@ def _claim_sentences(narrative: str, citekey: str) -> str:
         if citekey in _all_citekeys(s))
 
 
+# Bump whenever the statements fed to locate, or the shape of what it stores, change in a way
+# that should re-ground sources already cached. Re-locating is embedding-only (minutes, not hours).
+#   v2 (2026-10-05): an uncited source's note fields are separate statements. They were joined
+#       with "; ", the splitter only breaks after [.!?] + whitespace, so ".; " never split and
+#       relevance+findings+argument became ONE claim, cut at the display cap — 85 of 119 curated
+#       entries in DigiPros 261005 ended mid-sentence in "…".
+_LOCATED_VERSION = 2
+
+
+def _located_items(cached) -> list:
+    """The claims in a located-cache file, or [] when it predates `_LOCATED_VERSION`.
+
+    A bare list is the pre-versioned format: treated as stale, so it is re-located rather than
+    trusted. [] means 're-locate', which is what an empty cache already meant.
+    """
+    if isinstance(cached, dict) and cached.get("_v", 0) >= _LOCATED_VERSION:
+        return cached.get("items") or []
+    return []
+
+
+def _note_statements(note: dict) -> str:
+    """An uncited source's own note, as statements the sentence splitter will keep apart.
+
+    Each field is closed with terminal punctuation and the fields are space-joined, so
+    `chroma.locate_direct`'s `(?<=[.!?])\\s+` split lands between them — one field never
+    swallows the next.
+    """
+    parts = []
+    for field in ("relevance", "findings", "argument"):
+        text = " ".join((note.get(field) or "").split()).rstrip(" ;,")
+        if text:
+            parts.append(text if text[-1] in ".!?" else text + ".")
+    return " ".join(parts)
+
+
 def _locate_prompt(c: Candidate, statements: str, body: str) -> str:
     return (f"Cited paper: {c.title} ({c.author_year()})\n\n"
             f"Statements the review makes citing this paper:\n{statements}\n\n"
@@ -1640,8 +1675,8 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
         # the narrative actually cites with.
         fp = located_dir / f"{_located_filename(ck)}.json"
         if fp.exists():
-            cached = json.loads(fp.read_text(encoding="utf-8"))
-            if cached:                       # only a NON-EMPTY cache is authoritative
+            cached = _located_items(json.loads(fp.read_text(encoding="utf-8")))
+            if cached:                       # only a NON-EMPTY, CURRENT cache is authoritative
                 located[i] = cached
                 continue
             # An empty cache means 'not yet grounded' — it is written when locate ran before this
@@ -1651,9 +1686,7 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
         statements = _claim_sentences(narrative, citekeys.get(i, ""))
         if not statements:
             n = notes[i] if i < len(notes) and notes[i] else {}
-            statements = "; ".join(x for x in (n.get("relevance", ""),
-                                               n.get("findings", ""),
-                                               n.get("argument", "")) if x)
+            statements = _note_statements(n)
         label = f"{c.first_author_last} {c.year or ''}".strip()
         if collection is not None:
             if not _chroma.is_paper_indexed(collection, ck):
@@ -1674,7 +1707,8 @@ def locate_claims(brain: Brain, narrative: str, corpus: list[Candidate],
                       file=sys.stderr)
                 items = []
         if items:                            # cache only a grounded result; retry an empty one later
-            fp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+            fp.write_text(json.dumps({"_v": _LOCATED_VERSION, "items": items}, indent=2,
+                                     ensure_ascii=False), encoding="utf-8")
         located[i] = items
     print(f"  locate complete: {len(located)} papers  [{_fmt_dt(time.time() - t_step)}]")
     return located
