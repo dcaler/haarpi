@@ -624,16 +624,19 @@ _RESTATED = 0.45   # overlap coefficient of content words; calibrated on DigiPro
                    # every same-source pair at or above it was the same point restated
 
 
+def fact_numbers(sentence: str) -> set[str]:
+    """The reported numbers in a sentence; years and bare single digits are not facts."""
+    return {n for n in _NUM.findall(re.sub(r"\[@[^\]]+\]", " ", sentence))
+            if not re.fullmatch(r"(1[5-9]|20)\d\d", n) and not re.fullmatch(r"\d", n)}
+
+
 def _facts(text: str) -> list[tuple[str, set[str], set[str]]]:
-    """(sentence, citekeys, numbers) for each cited sentence; years and bare digits are not facts."""
+    """(sentence, citekeys, numbers) for each cited sentence."""
     out = []
     for s in sentence_units(text):
         keys = set(all_citekeys(s))
-        if not keys:
-            continue
-        nums = {n for n in _NUM.findall(re.sub(r"\[@[^\]]+\]", " ", s))
-                if not re.fullmatch(r"(1[5-9]|20)\d\d", n) and not re.fullmatch(r"\d", n)}
-        out.append((s, keys, nums))
+        if keys:
+            out.append((s, keys, fact_numbers(s)))
     return out
 
 

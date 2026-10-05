@@ -186,11 +186,23 @@ def evidence_weight(md: str) -> dict[str, int]:
     to the paper (summed over every sentence that cites it). A load-bearing paper earns paragraphs
     and sits central; a perfunctory one-clause citation earns few words and drifts to the rim, so the
     radius surfaces where the review actually invests its argument. A sentence citing several papers
-    credits its words to each (co-cited papers are genuinely discussed together)."""
+    credits its words to each (co-cited papers are genuinely discussed together).
+
+    A sentence that RESTATES what an earlier sentence already said for the same paper earns that
+    paper nothing (`guards.repeated_facts`' test: a shared number, or content-word overlap at
+    `guards._RESTATED`). Repetition is not investment: DigiPros 261005 re-explained one framework
+    in five sections and its paper topped the ranking on the strength of saying it again."""
     out: Counter = Counter()
+    said: dict[str, list[tuple[set[str], set[str]]]] = defaultdict(list)
     for keys, clean in _review_sentences(md):
         wc = len(clean.split())
+        words = guards._content(clean)
+        nums = guards.fact_numbers(clean)
         for k in keys:
+            if any((nums & pn) or len(words & pw) / max(1, min(len(words), len(pw)))
+                   >= guards._RESTATED for pw, pn in said[k]):
+                continue
+            said[k].append((words, nums))
             out[k] += wc
     return dict(out)
 

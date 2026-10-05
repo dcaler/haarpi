@@ -237,6 +237,21 @@ def test_coverage_rides_inside_the_load_bearing_block():
                                        narrative, corpus, citekeys).find("Coverage") == -1
 
 
+# ── importance ranking: restating earns nothing ───────────────────────────────
+
+def test_a_restated_point_adds_no_weight_but_a_new_point_does():
+    from rabbithole import mindmap
+    once = ("## A\n\nA three-stage framework decomposes narrative data into context, scope, and "
+            "narrative elements [@edmonds2015].\n")
+    again = once + ("\n## B\n\nA three-stage structure covering context, scope, and narrative "
+                    "elements decomposes narrative data [@edmonds2015].\n")
+    new = once + ("\n## B\n\nEdmonds also sets the unit for matching archetypes across "
+                  "simulation runs [@edmonds2015].\n")
+    w1 = mindmap.evidence_weight(once)["edmonds2015"]
+    assert mindmap.evidence_weight(again)["edmonds2015"] == w1
+    assert mindmap.evidence_weight(new)["edmonds2015"] > w1
+
+
 if __name__ == "__main__":
     import sys
     failed = 0
