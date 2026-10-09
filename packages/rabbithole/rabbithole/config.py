@@ -155,6 +155,11 @@ class ProjectConfig:
     # it came from, grouped by focus item and theme with short synthesis bullets, and no prose.
     # Opt-in per project while it is tested (DigiPros, 2026-10-09).
     report_format: str = "narrative"
+    # The fact base's TOPICS: single subjects, approved by a person, each mapped to the research
+    # questions (1-based focus items) it serves — [{"name": ..., "serves": [1, 3]}, ...]. Every
+    # fact is scored 0-3 against every topic. Unlike `gather_topics` (this cycle's search asks,
+    # replaced each cycle) this is the review's standing list.
+    topics: list = field(default_factory=list)
 
     def to_yaml(self) -> str:
         d = asdict(self)

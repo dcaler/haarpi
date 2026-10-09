@@ -11,7 +11,7 @@ import json
 from types import SimpleNamespace
 
 from rabbithole import config, facts, mindmap
-from rabbithole.facts import Fact, FactBase, Theme
+from rabbithole.facts import Fact, FactBase, Theme, Topic
 from rabbithole.models import Author, Candidate
 
 _MARKED = ("[p.1]\nIntroduction. Careers were coded as sequences of positions.\n\n"
@@ -126,63 +126,89 @@ def test_a_fact_links_to_its_page_in_zotero_or_falls_back_to_the_doi():
     assert facts.page_link(_cand(doi="10.1086/229495"), 7, gc) == "https://doi.org/10.1086/229495"
 
 
-def test_weight_counts_well_grounded_facts_that_bear_on_the_brief():
-    fs = {"a": [Fact(id="a#1", citekey="a", text="t", focus=[1], verified=True),
-                Fact(id="a#2", citekey="a", text="t", focus=[], verified=True),
-                Fact(id="a#3", citekey="a", text="t", focus=[2], support=0.3)],
-          "b": [Fact(id="b#1", citekey="b", text="t", focus=[2], support=0.8)]}
-    assert facts.fact_weight(fs) == {"a": 1, "b": 1}
+def test_weight_sums_the_best_score_of_well_grounded_useful_facts():
+    fs = {"a": [Fact(id="a#1", citekey="a", text="t", scores=[3, 0], verified=True),
+                Fact(id="a#2", citekey="a", text="t", scores=[1, 1], verified=True),
+                Fact(id="a#3", citekey="a", text="t", scores=[0, 2], support=0.3)],
+          "b": [Fact(id="b#1", citekey="b", text="t", scores=[0, 2], support=0.8)]}
+    assert facts.fact_weight(fs) == {"a": 3, "b": 2}
+
+
+_TOPICS = [Topic(name="Sequence analysis", serves=[1]), Topic(name="Factoid model", serves=[2])]
 
 
 def _base():
     f1 = Fact(id="abbott1990#1", citekey="abbott1990", text="Optimal matching found 20 types.",
-              kind="finding", focus=[1], page=2, quote="identified 20 ideal-type career patterns",
-              verified=True)
+              kind="finding", scores=[3, 0], page=2,
+              quote="identified 20 ideal-type career patterns", verified=True)
     f2 = Fact(id="abbott1990#2", citekey="abbott1990", text="Careers were coded as sequences.",
-              kind="method", focus=[], page=4, quote="coded", support=0.3)
-    f3 = Fact(id="zed2020#1", citekey="zed2020", text="Wind farms divide towns.", focus=[])
+              kind="method", scores=[2, 0], page=4, quote="coded", support=0.3)
+    f3 = Fact(id="zed2020#1", citekey="zed2020", text="Wind farms divide towns.", scores=[1, 0])
     return FactBase(focus=["trajectory archetypes", "factoid model"],
                     facts={"abbott1990": [f1, f2], "zed2020": [f3]},
-                    themes=[Theme(item=1, name="Sequence typologies", fact_ids=[f1.id],
-                                  synthesis=["Abbott anchors the typology [@abbott1990]."])])
+                    themes=[Theme(item=1, name="Sequence typologies", fact_ids=[f1.id, f2.id],
+                                  synthesis=["Abbott anchors the typology [@abbott1990]."])],
+                    topics=list(_TOPICS))
 
 
 def test_the_map_is_built_from_themes_facts_and_fact_weight():
     threads, evidence, weight = facts.map_inputs(_base())
     assert [(t.theme, t.citekeys) for t in threads] == [("Sequence typologies", ["abbott1990"])]
-    assert evidence["abbott1990"] == ["Optimal matching found 20 types."]
-    assert weight == {"abbott1990": 1, "zed2020": 0}
+    assert evidence["abbott1990"][0] == "Optimal matching found 20 types."
+    assert weight == {"abbott1990": 3, "zed2020": 0}       # f2 is located weakly: not counted
 
 
-def test_the_document_links_every_fact_and_says_what_was_not_verbatim(tmp_path):
+def test_coverage_is_built_per_question_from_its_topics():
+    base = _base()
+    lines = facts.coverage(base)
+    assert lines[0].startswith("- **THIN** — *Q1: trajectory archetypes*. 1 sources.")
+    assert "T1 Sequence analysis: 1 central, 1 useful facts from 1 sources" in lines[0]
+    assert "T2 Factoid model: 0 central, 0 useful facts from 0 sources" in lines[1]
+    base.topics = [Topic(name="Sequence analysis", serves=[1])]
+    assert facts.coverage(base)[1] == ("- **THIN** — *Q2: factoid model*. No topic serves this "
+                                       "question.")
+
+
+def test_the_document_links_every_fact_and_shows_scores(tmp_path):
     corpus = [_cand(attachment_key="ATT1"), Candidate(title="Wind", year=2020,
                                                      authors=[Author(family="Zed")])]
     cfg = SimpleNamespace(topic="t", project_name="DigiPros", focus="trajectory archetypes; "
                           "factoid model")
     gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
     png = tmp_path / "261009_DigiPros_litmap_ra.png"
-    md = facts.build_markdown(cfg, "qwen", _base(), corpus, {0: "abbott1990", 1: "zed2020"},
-                              gc, ["- **THIN** — *factoid model*."], png)
+    base = _base()
+    md = facts.build_markdown(cfg, "qwen", base, corpus, {0: "abbott1990", 1: "zed2020"},
+                              gc, facts.coverage(base), png)
     assert mindmap.is_fact_base(md)
     assert "![Contribution map](261009_DigiPros_litmap_ra.png)" in md
+    assert "- **T1. Sequence analysis** — serves Q1; 1 central, 1 useful facts" in md
     assert ("- Optimal matching found 20 types. [@abbott1990] — "
             "[p.2](zotero://open-pdf/library/items/ATT1?page=2): "
-            "“identified 20 ideal-type career patterns”") in md
+            "“identified 20 ideal-type career patterns” **(central)**") in md
     assert "weak support — verify" in md                         # f2, located by search, 0.3
-    assert "*No fact in the corpus bears on this item.*" in md   # item 2 has no theme
+    assert "## T2. Factoid model (Q2)" in md
+    assert "*No fact in the corpus scores useful or central on this topic.*" in md
     bib = md.split("## Annotated Bibliography (by publication)")[1]
-    assert "**Zed (2020). Wind.** [@zed2020] *(no fact bears on the brief)*" in bib
-    tail = bib.split("### Sources with no fact bearing on the brief")[1]
+    assert "*[finding; T1:3]*" in bib
+    assert "**Zed (2020). Wind.** [@zed2020] *(no fact is useful to a topic)*" in bib
+    tail = bib.split("### Sources with no fact useful to a topic")[1]
     assert "- Zed (2020). Wind. [@zed2020]" in tail and "Wind farms divide" not in tail
-    assert "## Annotated Bibliography (by publication)" in md
     # the map's thread parse stops at the bibliography and never sees the per-source view twice
-    assert all(t.theme != "Sources with no fact bearing on the brief"
-               for t in mindmap.parse_threads(md))
+    assert all("Sources with no fact" not in t.theme for t in mindmap.parse_threads(md))
 
 
 def test_narrative_stays_the_default_format():
     assert config.ProjectConfig().report_format == "narrative"
+    assert config.ProjectConfig().topics == []
     assert not mindmap.is_fact_base("# Literature Review: x\n\n## Narrative Review\n")
+
+
+def test_topics_come_from_the_config_or_fall_back_to_the_questions():
+    cfg = SimpleNamespace(focus="a; b", topics=[{"name": "Factoid model", "serves": [1, "2"]},
+                                                "ODD protocol", {"name": " "}])
+    assert facts.resolve_topics(cfg) == [Topic("Factoid model", [1, 2]), Topic("ODD protocol", [])]
+    assert facts.resolve_topics(SimpleNamespace(focus="a; b", topics=[])) == \
+        [Topic("a", [1]), Topic("b", [2])]
 
 
 def test_the_sidecar_round_trips(tmp_path):
@@ -192,9 +218,47 @@ def test_the_sidecar_round_trips(tmp_path):
     facts.save_sidecar(paths, _base(), corpus, {0: "abbott1990", 1: "zed2020"}, gc)
     blob = json.loads((tmp_path / "facts.json").read_text())
     assert blob["facts"][0]["link"] == "zotero://open-pdf/library/items/ATT1?page=2"
+    assert blob["topics"][0] == {"name": "Sequence analysis", "serves": [1]}
     back = facts.load_sidecar(paths)
     assert back.focus == _base().focus and back.themes[0].name == "Sequence typologies"
-    assert back.by_id()["abbott1990#1"].verified
+    assert back.topics == _TOPICS and back.by_id()["abbott1990#1"].scores == [3, 0]
+
+
+# ── scoring ───────────────────────────────────────────────────────────────────
+
+def test_scores_parse_strictly_and_clip_to_the_scale():
+    assert facts._parse_scores('{"F1": [3, 0], "F2": [5, -1]}', 2, 2) == [[3, 0], [3, 0]]
+    assert facts._parse_scores('{"F1": [3, 0]}', 2, 2) is None          # a fact missing
+    assert facts._parse_scores('{"F1": [3], "F2": [1, 1]}', 2, 2) is None   # wrong width
+    assert facts._parse_scores("no.", 1, 2) is None
+
+
+def test_scoring_is_cached_until_the_topics_change(tmp_path):
+    paths = SimpleNamespace(work=tmp_path)
+    fs = {"abbott1990": [Fact(id="abbott1990#1", citekey="abbott1990", text="t1"),
+                         Fact(id="abbott1990#2", citekey="abbott1990", text="t2")]}
+    calls = []
+
+    class _B:
+        def coordinator(self, prompt, system="", **kw):
+            calls.append(prompt)
+            n = prompt.count("\nT")
+            return json.dumps({"F1": [3] + [0] * (n - 1), "F2": [0] * n})
+    corpus = [_cand()]
+    facts.score(_B(), fs, _TOPICS, corpus, {0: "abbott1990"}, paths)
+    assert fs["abbott1990"][0].scores == [3, 0] and len(calls) == 1
+    facts.score(_B(), fs, _TOPICS, corpus, {0: "abbott1990"}, paths)
+    assert len(calls) == 1                                               # cached
+    facts.score(_B(), fs, _TOPICS + [Topic("ODD")], corpus, {0: "abbott1990"}, paths)
+    assert len(calls) == 2 and fs["abbott1990"][0].scores == [3, 0, 0]   # topics changed
+
+
+def test_a_fact_bears_on_the_questions_its_useful_topics_serve():
+    fs = {"a": [Fact(id="a#1", citekey="a", text="t", scores=[2, 1]),
+                Fact(id="a#2", citekey="a", text="t", scores=[0, 3])]}
+    topics = [Topic("Sequence", [1, 3]), Topic("Factoid", [2])]
+    facts.derive_focus(fs, topics)
+    assert fs["a"][0].focus == [1, 3] and fs["a"][1].focus == [2]
 
 
 # ── the whole report, with a fake brain ───────────────────────────────────────
@@ -211,7 +275,9 @@ def test_the_fact_base_report_runs_end_to_end(tmp_path, monkeypatch):
     citekeys = {0: "abbott1990", 1: "zed2020"}
     cfg = config.ProjectConfig(project_name="DigiPros", topic="t",
                                focus="trajectory archetypes; factoid model",
-                               report_format="facts")
+                               report_format="facts",
+                               topics=[{"name": "Sequence analysis", "serves": [1]},
+                                       {"name": "Factoid model", "serves": [2]}])
 
     class _Brain:
         backend = "ollama"
@@ -219,12 +285,13 @@ def test_the_fact_base_report_runs_end_to_end(tmp_path, monkeypatch):
         def coordinator(self, prompt, system="", **kw):
             if "Paper: Measuring" in prompt:
                 return json.dumps([{"fact": "Optimal matching found 20 career types.",
-                                    "kind": "finding", "focus": [1], "page": 2,
+                                    "kind": "finding", "page": 2,
                                     "quote": "identified 20 ideal-type career patterns"}])
             if "Paper: Wind" in prompt:
                 return json.dumps([{"fact": "Wind farms divide rural towns.", "kind": "finding",
-                                    "focus": [], "page": 1, "quote": "Wind farms divide rural "
-                                    "towns, a survey"}])
+                                    "page": 1, "quote": "Wind farms divide rural towns, a survey"}])
+            if "Research topics:" in prompt:
+                return json.dumps({"F1": [3, 0] if "Abbott" in prompt else [0, 0]})
             return json.dumps({"name": "Sequence typologies",
                                "synthesis": ["Abbott anchors it [@abbott1990]."]})
 
@@ -243,25 +310,26 @@ def test_the_fact_base_report_runs_end_to_end(tmp_path, monkeypatch):
     md = next(out.glob("*_DigiPros_litreview_ra.md")).read_text()
     assert "[p.2](zotero://open-pdf/library/items/ATT1?page=2)" in md
     assert "### Sequence typologies" in md and "*Abbott anchors it [@abbott1990].*" in md
-    assert "### Sources with no fact bearing on the brief" in md
+    assert "### Sources with no fact useful to a topic" in md
+    assert "- **THIN** — *Q2: factoid model*." in md
     blob = json.loads((work / "facts.json").read_text())
-    assert {f["id"]: f["verified"] for f in blob["facts"]} == {"abbott1990#1": True,
-                                                                "zed2020#1": True}
-    # cached: a second run extracts nothing
+    assert {f["id"]: f["scores"] for f in blob["facts"]} == {"abbott1990#1": [3, 0],
+                                                              "zed2020#1": [0, 0]}
+    # cached: a second run neither extracts nor scores
     calls = []
     b = _Brain()
     orig = b.coordinator
     b.coordinator = lambda p, s="", **k: (calls.append(p), orig(p, s, **k))[1]
     facts.report(cfg, gc, paths, b, corpus, [{}, {}], citekeys, None)
-    assert not any("--- PAPER TEXT ---" in p for p in calls)
+    assert not any("--- PAPER TEXT ---" in p or "Research topics:" in p for p in calls)
 
 
 # ── dialling in: salvage, failures, names, ranking, sidecar, map date ─────────
 
 def test_one_broken_element_no_longer_costs_the_paper_its_facts():
-    raw = ('[{"fact": "A holds.", "kind": "finding", "focus": [1], "page": 1, "quote": "q"},\n'
+    raw = ('[{"fact": "A holds.", "kind": "finding", "page": 1, "quote": "q"},\n'
            ' {"fact": "B holds.", "quote": "an "unescaped" quote"},\n'
-           ' {"fact": "C holds.", "kind": "method", "focus": [], "page": 2, "quote": "r"}]')
+           ' {"fact": "C holds.", "kind": "method", "page": 2, "quote": "r"}]')
     fs = facts._parse_facts(raw, "k", 5)
     assert [f.text for f in fs] == ["A holds.", "C holds."]
 
@@ -282,12 +350,12 @@ def test_a_paper_with_no_facts_leaves_its_replies_for_diagnosis(tmp_path):
 
 
 def test_a_repeated_theme_name_is_made_distinct():
-    fs1 = [Fact(id=f"a{i}#1", citekey=f"abbott199{i}", text="x", focus=[1]) for i in range(2)]
-    fs2 = [Fact(id=f"b{i}#1", citekey=f"kreuter200{i}", text="y", focus=[1]) for i in range(2)]
+    fs1 = [Fact(id=f"a{i}#1", citekey=f"abbott199{i}", text="x") for i in range(2)]
+    fs2 = [Fact(id=f"b{i}#1", citekey=f"kreuter200{i}", text="y") for i in range(2)]
 
     class _B:
         def coordinator(self, prompt, system="", **kw):
-            assert "Other themes under this item, already named:" in prompt
+            assert "Other themes under this topic, already named:" in prompt
             return json.dumps({"name": "Trajectory archetypes", "synthesis": []})
     vecs = {f.id: ([1.0, 0.0] if f in fs1 else [0.0, 1.0]) for f in fs1 + fs2}
     out = facts.themes_for(_B(), 1, "trajectory archetypes", fs1 + fs2, vecs)
@@ -295,10 +363,11 @@ def test_a_repeated_theme_name_is_made_distinct():
     assert len(set(names)) == len(names) and all(n != "trajectory archetypes" for n in names)
 
 
-def test_breadth_across_the_brief_outranks_a_full_fact_count_on_one_item():
-    narrow = [Fact(id=f"n#{i}", citekey="n", text="t", focus=[1], verified=True)
+def test_breadth_across_topics_outranks_a_deep_score_on_one():
+    narrow = [Fact(id=f"n#{i}", citekey="n", text="t", scores=[3, 0, 0], verified=True)
               for i in range(10)]
-    broad = [Fact(id=f"b#{i}", citekey="b", text="t", focus=[i % 3 + 1], verified=True)
+    broad = [Fact(id=f"b#{i}", citekey="b", text="t",
+                  scores=[2 if j == i % 3 else 0 for j in range(3)], verified=True)
              for i in range(6)]
     assert facts.rank_key(broad) < facts.rank_key(narrow)
 

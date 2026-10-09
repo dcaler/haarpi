@@ -123,8 +123,9 @@ addresses it in its own words.
 
 **Fact base (on test).** With `report_format: facts` in the project's
 `litrev*.yaml`, `report` writes no prose. It extracts each source's salient
-facts, checks every quote verbatim against its page, and groups the facts by
-focus item and theme with short synthesis bullets. Each fact links to its page:
+facts, checks every quote verbatim against its page, scores every fact 0–3
+against the review's approved `topics:` (each mapped to the research questions it
+serves), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
 the link opens the PDF in Zotero at that page. The contribution map is embedded
 in the document, and `work/facts.json` holds the same facts for tools.
 

@@ -7,15 +7,19 @@ paper stage read a 12,000-character prefix of that prose and never reached the a
 bibliography, which is where the facts were. A fact base drops the prose and keeps the facts:
 
   extract   one coordinator call per paper: up to `_MAX_FACTS` atomic facts, each with its
-            kind, the focus items it bears on, the page it is on and a verbatim quote
+            kind, the page it is on and a verbatim quote
   verify    the quote is searched for in the paper's own page-marked text. Found, the fact is
             VERBATIM and its page is the page the quote is on. Not found, the fact is located
             by embedding search instead and carries a support score, labelled when weak
-  group     facts by focus item, then into themes by embedding; one short call per theme names
-            it and writes 2-4 synthesis bullets that may cite only that theme's facts
-  render    coverage against the brief, the contribution map (embedded), the load-bearing
-            sources, the facts by focus item and theme, and every source's facts in full —
-            each fact linked to its page in Zotero. `work/facts.json` holds the same, for tools
+  score     one call per paper scores every fact 0-3 against every TOPIC — a human-approved list
+            of single subjects, each mapped to the research questions it serves. Tagging facts
+            against the compound research questions themselves was unstable: read strictly it
+            dropped core sources, read loosely everything drifted to the broadest question
+  group     facts by topic (score 2+), then into themes by embedding; one short call per theme
+            names it and writes 2-4 synthesis bullets that may cite only that theme's facts
+  render    coverage per research question (from its topics), the contribution map (embedded),
+            the load-bearing sources, the facts by topic and theme, and every source's facts in
+            full — each fact linked to its page in Zotero. `work/facts.json` holds the same
 
 Opt-in per project (`report_format: facts`) while it is tested; nothing else changes.
 """
@@ -38,8 +42,9 @@ _MAX_FACTS = 10
 FACT_KINDS = ("finding", "method", "definition", "argument", "limitation")
 _MIN_QUOTE_WORDS = 5            # shorter than this, a "verbatim" match proves nothing
 _THEME_TARGET = 10              # facts per theme, roughly
-_MAX_THEMES = 8                 # per focus item
+_MAX_THEMES = 8                 # per topic
 _TOP_QUANTILE = 0.05
+_THIN_SOURCES = 3               # a question whose topics hold useful facts from fewer is THIN
 
 _SYS = """\
 You extract the most salient facts a paper establishes, for a researcher who will check every
@@ -48,7 +53,6 @@ one against the paper itself. Respond with ONLY a JSON array, no other text:
 [
   {"fact": "one self-contained sentence stating what the paper establishes",
    "kind": "finding | method | definition | argument | limitation",
-   "focus": [numbers of the focus items this fact bears on; [] if none],
    "page": the N of the [p.N] marker the supporting passage sits under,
    "quote": "a passage copied EXACTLY from the text, 8-30 words, that supports the fact"}
 ]
@@ -60,25 +64,23 @@ Rules:
 - Reproduce reported quantities EXACTLY (numbers, units, statistics). Never round them away.
 - The quote must be copied character for character from the text, not paraphrased, and must
   not span a [p.N] marker.
-- Tag a focus item only when the fact itself bears on it. Do not stretch a fact to fit the
-  brief; an untagged fact is fine.
 - Base everything strictly on the provided text. Do not invent."""
 
 _THEME_SYS = """\
 You organise a literature review's facts. Respond with ONLY a JSON object, no other text."""
 
 _THEME_PROMPT = """\
-Focus item: {item}
-Other themes under this item, already named: {taken}
+Topic: {item}
+Other themes under this topic, already named: {taken}
 
 These facts were grouped together. Each begins with the [@citekey] of its source:
 {facts}
 
 Return:
 {{"name": "what THESE facts share that the other themes do not, at most 6 words. Never restate
-           the focus item, and never reuse or paraphrase another theme's name",
+           the topic, and never reuse or paraphrase another theme's name",
   "synthesis": ["2-4 bullets. Each says where these sources AGREE, where they are in TENSION,
-                 or what GAP they leave for the focus item — and cites the [@citekey]s of the
+                 or what GAP they leave for the topic — and cites the [@citekey]s of the
                  facts it rests on. Use ONLY the facts above; add nothing they do not say."]}}"""
 
 
@@ -95,11 +97,12 @@ class Fact:
     quote: str = ""
     verified: bool = False                         # the quote is on that page, verbatim
     support: float | None = None                   # embedding cosine, when located by search
+    scores: list = field(default_factory=list)     # 0-3 per topic, in topic order
 
 
 @dataclass
 class Theme:
-    item: int                                      # 1-based focus item
+    item: int                                      # 1-based topic number
     name: str
     fact_ids: list = field(default_factory=list)
     synthesis: list = field(default_factory=list)
@@ -107,6 +110,41 @@ class Theme:
 
 def focus_items(focus: str) -> list[str]:
     return [x.strip() for x in (focus or "").split(";") if x.strip()]
+
+
+@dataclass
+class Topic:
+    name: str
+    serves: list = field(default_factory=list)     # 1-based research questions (focus items)
+
+
+def resolve_topics(cfg) -> list[Topic]:
+    """The approved topics from the review's config (`topics:`), each a name and the research
+    questions it serves. Without any, each focus item stands in as its own topic — the compound
+    questions are a poor scoring target, which is why the config list exists, but a review that
+    has none still renders."""
+    out: list[Topic] = []
+    for t in getattr(cfg, "topics", None) or []:
+        if isinstance(t, str) and t.strip():
+            out.append(Topic(name=t.strip()))
+        elif isinstance(t, dict) and str(t.get("name") or "").strip():
+            out.append(Topic(name=str(t["name"]).strip(),
+                             serves=sorted({int(x) for x in (t.get("serves") or [])
+                                            if str(x).strip().isdigit()})))
+    if out:
+        return out
+    return [Topic(name=q, serves=[n]) for n, q in enumerate(focus_items(cfg.focus), 1)]
+
+
+def best(f: Fact) -> int:
+    return max(f.scores) if f.scores else 0
+
+
+def derive_focus(facts: dict[str, list[Fact]], topics: list[Topic]) -> None:
+    """A fact bears on a research question when it scores 2+ on a topic serving that question."""
+    for fs in facts.values():
+        for f in fs:
+            f.focus = sorted({q for t, sc in zip(topics, f.scores) if sc >= 2 for q in t.serves})
 
 
 # ── extraction and verification ─────────────────────────────────────────────────
@@ -301,6 +339,105 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
     return out
 
 
+# ── scoring against the approved topics ────────────────────────────────────────
+
+_SCORE_SYS = "You score how useful each fact is to each research topic. Respond with ONLY a JSON object."
+
+_SCORE_PROMPT = """\
+Research topics:
+{topics}
+
+Facts from one source ({label}):
+{facts}
+
+Score each fact against EVERY topic:
+  0 = no use for this topic
+  1 = background: worth knowing, not something to build on
+  2 = useful: a method, definition or finding a researcher on this topic would likely cite
+  3 = central: the fact is directly about this topic
+Judge each topic on its own; a fact can score high on several or on none.
+
+Return {{"F1": [{n} scores in topic order], "F2": [...], ...}}"""
+
+
+def topics_signature(topics: list[Topic]) -> str:
+    import hashlib
+    return hashlib.sha1("\n".join(t.name for t in topics).encode()).hexdigest()[:12]
+
+
+def _parse_scores(raw: str, n_facts: int, n_topics: int) -> list[list[int]] | None:
+    m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+    try:
+        obj = json.loads(m.group(0)) if m else None
+    except json.JSONDecodeError:
+        obj = None
+    if not isinstance(obj, dict):
+        return None
+    out = []
+    for j in range(1, n_facts + 1):
+        row = obj.get(f"F{j}")
+        if not isinstance(row, list) or len(row) != n_topics:
+            return None
+        try:
+            out.append([min(3, max(0, int(x))) for x in row])
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
+def score(brain, facts: dict[str, list[Fact]], topics: list[Topic], corpus, citekeys,
+          paths) -> None:
+    """Every fact's 0-3 score against every topic, one call per source. Cached per citekey and
+    keyed by the topic list, so editing the topics re-scores and nothing else does. Measured on
+    12 DigiPros sources scored twice: 93% of scores identical, all within one point."""
+    from .summarize import _located_filename
+    d = paths.work / "facts" / "scores"
+    d.mkdir(parents=True, exist_ok=True)
+    sig = topics_signature(topics)
+    listing = "\n".join(f"T{i}. {t.name}" for i, t in enumerate(topics, 1))
+    label = {citekeys[i]: c.author_year() for i, c in enumerate(corpus) if i in citekeys}
+    t0, done, cached, failed = time.time(), 0, 0, 0
+    for ck, fs in facts.items():
+        if not fs:
+            continue
+        fp = d / f"{_located_filename(ck)}.json"
+        try:
+            blob = json.loads(fp.read_text(encoding="utf-8"))
+            if blob.get("sig") == sig and set(blob.get("scores", {})) == {f.id for f in fs}:
+                for f in fs:
+                    f.scores = blob["scores"][f.id]
+                cached += 1
+                continue
+        except (OSError, ValueError):
+            pass
+        prompt = _SCORE_PROMPT.format(topics=listing, label=label.get(ck, ck), n=len(topics),
+                                      facts="\n".join(f"F{j}. {f.text}"
+                                                      for j, f in enumerate(fs, 1)))
+        rows = None
+        for _attempt in (1, 2):
+            try:
+                rows = _parse_scores(brain.coordinator(prompt, _SCORE_SYS, think=False,
+                                                       num_ctx=8192), len(fs), len(topics))
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] scoring failed for {ck}: {e}", file=sys.stderr)
+            if rows:
+                break
+        if not rows:
+            failed += 1
+            print(f"  [warn] {ck}: facts not scored (shown unscored; retried next run)",
+                  file=sys.stderr)
+            for f in fs:
+                f.scores = [0] * len(topics)
+            continue
+        for f, row in zip(fs, rows):
+            f.scores = row
+        fp.write_text(json.dumps({"sig": sig, "scores": {f.id: f.scores for f in fs}},
+                                 indent=1), encoding="utf-8")
+        done += 1
+    print(f"  {runlog.stamp()}scores ready: {done} scored, {cached} cached, {failed} failed  "
+          f"[{runlog.fmt_dt(time.time() - t0)}]", flush=True)
+
+
 # ── grouping ────────────────────────────────────────────────────────────────────
 
 def cluster(vectors: list[list[float]], k: int) -> list[int]:
@@ -383,7 +520,7 @@ def themes_for(brain, item_no: int, item: str, facts: list[Fact],
         out.append(Theme(item=item_no, name=name, fact_ids=[f.id for f in fs],
                          synthesis=synthesis))
     if dropped:
-        print(f"  {runlog.stamp()}  item {item_no}: dropped {dropped} synthesis bullet(s) that "
+        print(f"  {runlog.stamp()}  T{item_no}: dropped {dropped} synthesis bullet(s) that "
               f"cited outside their theme or cited nothing", flush=True)
     return out
 
@@ -396,20 +533,23 @@ def _good(f: Fact) -> bool:
 
 
 def fact_weight(facts: dict[str, list[Fact]]) -> dict[str, int]:
-    """Importance to THIS review: a source's well-grounded facts that bear on the brief."""
-    return {ck: sum(1 for f in fs if f.focus and _good(f)) for ck, fs in facts.items()}
+    """Importance to THIS review: the best topic score of each well-grounded fact that scores
+    2+ somewhere, summed — a central fact counts 3, a useful one 2, background nothing."""
+    return {ck: sum(best(f) for f in fs if best(f) >= 2 and _good(f))
+            for ck, fs in facts.items()}
 
 
 def rank_key(fs: list[Fact]) -> tuple:
-    """Load-bearing order: breadth across the brief first, then well-grounded facts on it, then
-    verbatim ones. Counting facts alone tied 74 DigiPros sources at the 10-fact cap."""
-    on = [f for f in fs if f.focus and _good(f)]
-    return (-len({n for f in on for n in f.focus}), -len(on),
-            -sum(1 for f in on if f.verified))
+    """Load-bearing order: breadth across the topics first, then weight, then verbatim facts.
+    Counting facts alone tied 74 DigiPros sources at the 10-fact cap."""
+    on = [f for f in fs if best(f) >= 2 and _good(f)]
+    topics = {i for f in on for i, sc in enumerate(f.scores) if sc >= 2}
+    return (-len(topics), -sum(best(f) for f in on), -sum(1 for f in on if f.verified))
 
 
 def on_brief(fs: list[Fact]) -> bool:
-    return any(f.focus for f in fs)
+    """Does any fact score useful (2) or central (3) on any topic?"""
+    return any(best(f) >= 2 for f in fs)
 
 
 def page_link(c: Candidate, page: int | None, gc) -> str:
@@ -456,6 +596,7 @@ class FactBase:
     focus: list
     facts: dict                                   # citekey -> [Fact]
     themes: list                                  # [Theme]
+    topics: list = field(default_factory=list)    # [Topic]
 
     def by_id(self) -> dict[str, Fact]:
         return {f.id: f for fs in self.facts.values() for f in fs}
@@ -466,6 +607,7 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
     blob = {
         "version": _FACTS_VERSION, "generated": date.today().isoformat(),
         "focus_items": base.focus,
+        "topics": [asdict(t) for t in base.topics],
         "facts": [dict(asdict(f), link=page_link(by_key[f.citekey], f.page, gc)
                        if f.citekey in by_key else "")
                   for fs in base.facts.values() for f in fs],
@@ -492,7 +634,8 @@ def load_sidecar(paths) -> FactBase | None:
         d = {k: v for k, v in d.items() if k != "link"}
         facts.setdefault(d["citekey"], []).append(Fact(**d))
     return FactBase(focus=blob.get("focus_items", []), facts=facts,
-                    themes=[Theme(**t) for t in blob.get("themes", [])])
+                    themes=[Theme(**t) for t in blob.get("themes", [])],
+                    topics=[Topic(**t) for t in blob.get("topics", [])])
 
 
 def map_inputs(base: FactBase):
@@ -507,19 +650,51 @@ def map_inputs(base: FactBase):
                 keys.setdefault(by_id[fid].citekey, None)
         if keys:
             threads.append(mindmap.Thread(theme=t.name, citekeys=list(keys)))
-    evidence = {ck: [f.text for f in fs if f.focus][:2] or [f.text for f in fs][:2]
+    evidence = {ck: [f.text for f in sorted(fs, key=lambda f: -best(f))][:2]
                 for ck, fs in base.facts.items()}
     return threads, evidence, fact_weight(base.facts)
 
 
+def coverage(base: FactBase) -> list[str]:
+    """One line per research question, built from the topics that serve it.
+
+    A question with no topic, or whose topics hold useful-or-better facts from fewer than
+    `_THIN_SOURCES` sources, is THIN. Listing each topic's count shows which half of a
+    two-subject question is missing, which the per-question view alone cannot."""
+    lines: list[str] = []
+    all_facts = [f for fs in base.facts.values() for f in fs]
+    for q, question in enumerate(base.focus, 1):
+        serving = [(i, t) for i, t in enumerate(base.topics) if q in t.serves]
+        if not serving:
+            lines.append(f"- **THIN** — *Q{q}: {question}*. No topic serves this question.")
+            continue
+        parts, srcs = [], set()
+        for i, t in serving:
+            central = [f for f in all_facts if len(f.scores) > i and f.scores[i] == 3]
+            useful = [f for f in all_facts if len(f.scores) > i and f.scores[i] == 2]
+            s_t = {f.citekey for f in central + useful}
+            srcs |= s_t
+            parts.append(f"T{i + 1} {t.name}: {len(central)} central, {len(useful)} useful "
+                         f"facts from {len(s_t)} sources")
+        verdict = "THIN" if len(srcs) < _THIN_SOURCES else "Covered"
+        lines.append(f"- **{verdict}** — *Q{q}: {question}*. {len(srcs)} sources. "
+                     + "; ".join(parts) + ".")
+    return lines
+
+
+def _scores_tag(f: Fact, base: FactBase) -> str:
+    hits = [f"T{i + 1}:{sc}" for i, sc in enumerate(f.scores) if sc >= 2]
+    return ", ".join(hits)
+
+
 def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], citekeys,
-                   gc, coverage: list[str], map_png: Path | None) -> str:
+                   gc, cover: list[str], map_png: Path | None) -> str:
     by_key = {citekeys[i]: c for i, c in enumerate(corpus) if i in citekeys}
     by_id = base.by_id()
     all_facts = [f for fs in base.facts.values() for f in fs]
     n_src = sum(1 for fs in base.facts.values() if fs)
     n_ver = sum(f.verified for f in all_facts)
-    n_tag = sum(1 for f in all_facts if f.focus)
+    n_on = sum(1 for f in all_facts if best(f) >= 2)
     pct = (lambda a: f"{100 * a / len(all_facts):.0f}%") if all_facts else (lambda a: "0%")
     parts = [
         f"# Literature Review: {cfg.topic}", "",
@@ -532,17 +707,28 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
     if cfg.focus:
         parts.append(f"*Focus:* {cfg.focus}  ")
     parts += [f"*Foundation:* {len(all_facts)} facts from {n_src} sources · quoted verbatim "
-              f"{pct(n_ver)} · bearing on the brief {pct(n_tag)}  ", ""]
+              f"{pct(n_ver)} · useful or central to a topic {pct(n_on)}  ", ""]
     parts += ["*How to read this: every fact links to its page — the link opens the PDF in "
               "Zotero at that page. A plain quote was found verbatim on that page; anything "
-              "located by search instead says so.*", ""]
+              "located by search instead says so. Each fact is scored against the approved "
+              "topics: 3 central, 2 useful, 1 background.*", ""]
     if map_png is not None:
         parts += [f"![Contribution map]({map_png.name})", ""]
-    if coverage:
+
+    parts += ["## Topics", "",
+              "*The subjects every fact was scored against, and the research questions each "
+              "serves.*", ""]
+    for i, t in enumerate(base.topics, 1):
+        qs = ", ".join(f"Q{q}" for q in t.serves) or "no question"
+        n3 = sum(1 for f in all_facts if len(f.scores) >= i and f.scores[i - 1] == 3)
+        n2 = sum(1 for f in all_facts if len(f.scores) >= i and f.scores[i - 1] == 2)
+        parts.append(f"- **T{i}. {t.name}** — serves {qs}; {n3} central, {n2} useful facts")
+    parts.append("")
+    if cover:
         parts += ["## Coverage against the brief", "",
-                  "*Each focus item, and how much of the corpus addresses it in its own words. "
-                  "THIN means fewer than 3 sources sit close to it, or one of its terms appears "
-                  "in no source's own notes.*", ""] + coverage + [""]
+                  f"*Each research question, from the topics that serve it. THIN means no topic "
+                  f"serves it, or its topics hold useful-or-central facts from fewer than "
+                  f"{_THIN_SOURCES} sources.*", ""] + cover + [""]
 
     weight = fact_weight(base.facts)
     from .summarize import top_source_count
@@ -551,49 +737,59 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
                         len(corpus), _TOP_QUANTILE)]
     if ranked:
         parts += [f"## Most load-bearing sources (top {_TOP_QUANTILE * 100:g}% of {len(corpus)})",
-                  "", "*The sources with the most well-grounded facts bearing on the brief — the "
-                  "same ranking as the contribution map's innermost ring.*", ""]
+                  "", "*The sources whose well-grounded facts score highest across the topics — "
+                  "the same ranking as the contribution map's innermost ring.*", ""]
         for ck in ranked:
-            fs = [f for f in base.facts[ck] if f.focus and _good(f)]
-            items = sorted({n for f in fs for n in f.focus})
-            parts.append(f"- **{by_key[ck].author_year()}** [@{ck}] — {weight[ck]} facts on "
-                         f"item(s) {', '.join(map(str, items))}; e.g. {guards_safe(fs[0].text)}")
+            fs = sorted((f for f in base.facts[ck] if best(f) >= 2 and _good(f)),
+                        key=lambda f: -best(f))
+            tops = sorted({i + 1 for f in fs for i, sc in enumerate(f.scores) if sc >= 2})
+            parts.append(f"- **{by_key[ck].author_year()}** [@{ck}] — topics "
+                         f"{', '.join(f'T{n}' for n in tops)}; e.g. {guards_safe(fs[0].text)}")
         parts.append("")
 
-    parts += ["## Facts by focus item", ""]
-    for n, item in enumerate(base.focus, 1):
-        themes = [t for t in base.themes if t.item == n]
-        parts += [f"## {n}. {item}", ""]
+    parts += ["## Facts by topic", "",
+              "*Facts scoring useful (2) or central (3) on the topic, central first. Background "
+              "facts appear only in the by-publication list below.*", ""]
+    for n, t in enumerate(base.topics, 1):
+        themes = [th for th in base.themes if th.item == n]
+        qs = ", ".join(f"Q{q}" for q in t.serves)
+        parts += [f"## T{n}. {t.name}" + (f" ({qs})" if qs else ""), ""]
         if not themes:
-            parts += ["*No fact in the corpus bears on this item.*", ""]
+            parts += ["*No fact in the corpus scores useful or central on this topic.*", ""]
             continue
-        for t in themes:
-            fs = [by_id[fid] for fid in t.fact_ids if fid in by_id]
-            parts += [f"### {t.name}", ""]
-            if t.synthesis:
-                parts += [f"- *{guards_safe(b)}*" for b in t.synthesis] + [""]
-            parts += [_fact_line(f, by_key[f.citekey], gc) for f in fs
-                      if f.citekey in by_key] + [""]
+        for th in themes:
+            fs = sorted((by_id[fid] for fid in th.fact_ids if fid in by_id),
+                        key=lambda f: -(f.scores[n - 1] if len(f.scores) >= n else 0))
+            parts += [f"### {th.name}", ""]
+            if th.synthesis:
+                parts += [f"- *{guards_safe(b)}*" for b in th.synthesis] + [""]
+            parts += [_fact_line(f, by_key[f.citekey], gc)
+                      + (" **(central)**" if len(f.scores) >= n and f.scores[n - 1] == 3 else "")
+                      for f in fs if f.citekey in by_key] + [""]
 
-    untagged = [ck for ck, fs in base.facts.items() if fs and not on_brief(fs)]
+    off = [ck for ck, fs in base.facts.items() if fs and not on_brief(fs)]
     parts += ["## Annotated Bibliography (by publication)", "",
-              "*Every source and all of its facts, the untagged ones included. A source none of "
-              "whose facts bears on the brief is marked, and listed again at the end.*", ""]
+              "*Every source and all of its facts, background ones included, with each fact's "
+              "useful-or-central topics. A source with no such fact is marked, and listed again "
+              "at the end.*", ""]
     for ck in sorted((k for k in base.facts if k in by_key),
                      key=lambda k: by_key[k].first_author_last.lower()):
         c = by_key[ck]
-        mark = " *(no fact bears on the brief)*" if ck in untagged else ""
+        mark = " *(no fact is useful to a topic)*" if ck in off else ""
         parts += [f"**{c.full_citation()}** [@{ck}]{mark}", ""]
         fs = base.facts[ck]
-        parts += ([f"{_fact_line(f, c, gc, with_key=False)} *[{f.kind}"
-                   + (f"; item {', '.join(map(str, f.focus))}" if f.focus else "") + "]*"
-                   for f in fs] if fs else ["- *(no facts extracted — re-run report)*"]) + [""]
-    if untagged:
-        parts += ["### Sources with no fact bearing on the brief", "",
-                  "*A source is listed here when none of its facts was tagged to a focus item. "
-                  "Its facts are above. Candidates for the next audit — nothing is deleted.*", ""]
+        lines = []
+        for f in fs:
+            tag = _scores_tag(f, base)
+            lines.append(f"{_fact_line(f, c, gc, with_key=False)} *[{f.kind}"
+                         + (f"; {tag}" if tag else "") + "]*")
+        parts += (lines or ["- *(no facts extracted — re-run report)*"]) + [""]
+    if off:
+        parts += ["### Sources with no fact useful to a topic", "",
+                  "*None of their facts scores 2 or more on any topic. Their facts are above. "
+                  "Candidates for the next audit — nothing is deleted.*", ""]
         parts += [f"- {by_key[ck].full_citation()} [@{ck}]"
-                  for ck in sorted(untagged, key=lambda k: by_key[k].first_author_last.lower()
+                  for ck in sorted(off, key=lambda k: by_key[k].first_author_last.lower()
                                    if k in by_key else k) if ck in by_key] + [""]
     return "\n".join(parts)
 
@@ -601,39 +797,43 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
 # ── the report ─────────────────────────────────────────────────────────────────
 
 def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
-    """The fact-base `report`: extract → group → map → render. Returns 0 on success."""
+    """The fact-base `report`: extract → score → group → map → render. Returns 0 on success."""
     from .render import _paged_reference
-    from .summarize import _export_bibtex, coverage_lines
+    from .summarize import _export_bibtex
     t0 = time.time()
     items = focus_items(cfg.focus)
-    print(f"\n{runlog.stamp()}[2/3] Extracting facts (up to {_MAX_FACTS} per paper, each "
+    topics = resolve_topics(cfg)
+    if not getattr(cfg, "topics", None):
+        print("  [note] no approved topics in the config — scoring against the research "
+              "questions themselves, which is unstable; add `topics:` to the review's config.",
+              file=sys.stderr)
+    print(f"\n{runlog.stamp()}[2/4] Extracting facts (up to {_MAX_FACTS} per paper, each "
           f"checked against its page)...", flush=True)
     facts = extract(brain, corpus, cfg, paths, collection, citekeys)
 
-    print(f"\n{runlog.stamp()}[3/3] Grouping facts by focus item and theme...", flush=True)
+    print(f"\n{runlog.stamp()}[3/4] Scoring facts against {len(topics)} topics...", flush=True)
+    score(brain, facts, topics, corpus, citekeys, paths)
+    derive_focus(facts, topics)
+
+    print(f"\n{runlog.stamp()}[4/4] Grouping facts by topic and theme...", flush=True)
     vectors: dict[str, list[float]] = {}
     for fs in facts.values():
         for f in fs:
-            if f.focus:
+            if best(f) >= 2:
                 try:
                     vectors[f.id] = brain.embed(f.text)
                 except Exception as e:  # noqa: BLE001
                     print(f"  [warn] embed failed for {f.id} ({e})", file=sys.stderr)
     themes: list[Theme] = []
-    for n, item in enumerate(items, 1):
-        fs = [f for f_list in facts.values() for f in f_list if n in f.focus and f.id in vectors]
-        print(f"  {runlog.stamp()}item {n}: {len(fs)} facts from "
+    for n, t in enumerate(topics, 1):
+        fs = [f for f_list in facts.values() for f in f_list
+              if len(f.scores) >= n and f.scores[n - 1] >= 2 and f.id in vectors]
+        print(f"  {runlog.stamp()}T{n} {t.name[:50]}: {len(fs)} facts from "
               f"{len({f.citekey for f in fs})} sources", flush=True)
-        themes += themes_for(brain, n, item, fs, vectors)
-    base = FactBase(focus=items, facts=facts, themes=themes)
+        themes += themes_for(brain, n, t.name, fs, vectors)
+    base = FactBase(focus=items, facts=facts, themes=themes, topics=topics)
     save_sidecar(paths, base, corpus, citekeys, gc)
-
-    coverage = coverage_lines(brain, cfg.focus or "", "", corpus, notes, citekeys)
-    for n, line in enumerate(coverage, 1):
-        fs = [f for f_list in facts.values() for f in f_list if n in f.focus]
-        coverage[n - 1] = (line + f" **{len(fs)} facts** from "
-                           f"{len({f.citekey for f in fs})} sources "
-                           f"({sum(f.verified for f in fs)} quoted verbatim).")
+    cover = coverage(base)
 
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
     map_png = None
@@ -652,7 +852,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
 
     model = (cfg.brain.claude_model if brain.backend == "claude"
              else cfg.brain.coordinator_model)
-    md = build_markdown(cfg, model, base, corpus, citekeys, gc, coverage, map_png)
+    md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_png)
     stem = f"{date.today().strftime('%y%m%d')}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
@@ -669,6 +869,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     if map_png:
         print(f"  Map (embedded): {map_png}")
     print(f"  Facts: {len(all_facts)} from {sum(1 for fs in facts.values() if fs)} sources | "
-          f"verbatim {sum(f.verified for f in all_facts)} | themes {len(themes)} | "
+          f"verbatim {sum(f.verified for f in all_facts)} | useful-or-central "
+          f"{sum(1 for f in all_facts if best(f) >= 2)} | themes {len(themes)} | "
           f"sidecar work/facts.json")
     return 0

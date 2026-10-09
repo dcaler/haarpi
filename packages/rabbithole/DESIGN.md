@@ -122,10 +122,23 @@ only a 12,000-character prefix of the result, never the bibliography where the f
 
 | Step | What happens | LLM |
 |---|---|---|
-| **extract** | up to 10 atomic facts per paper: the fact, its kind, the focus items it bears on, its page, a verbatim quote | coordinator × N papers (cached in `work/facts/`, versioned) |
+| **extract** | up to 10 atomic facts per paper: the fact, its kind, its page, a verbatim quote | coordinator × N papers (cached in `work/facts/`, versioned) |
 | **verify** | the quote is searched for in the paper's own page-marked text (case, whitespace, ligatures, line hyphenation and quote marks ignored). Found → **verbatim**, and the page is where it was found. Not found → located by embedding search, with a support score | none |
-| **group** | facts by focus item, then cosine k-means into themes (~10 facts each, ≤8 per item) | 1 short call per theme: a name and 2–4 synthesis bullets |
-| **render** | coverage, the contribution map (embedded), load-bearing sources, facts by focus item and theme, every source's facts in full | none |
+| **score** | every fact scored 0–3 against every approved **topic** (0 none, 1 background, 2 useful, 3 central) | 1 call per paper (cached in `work/facts/scores/`, keyed by the topic list) |
+| **group** | facts scoring 2+ on a topic, then cosine k-means into themes (~10 facts each, ≤8 per topic) | 1 short call per theme: a name and 2–4 synthesis bullets |
+| **render** | topics, coverage per research question, the contribution map (embedded), load-bearing sources, facts by topic and theme, every source's facts in full | none |
+
+**Topics, not research questions, are what facts are scored against.** The review's config holds
+`topics:`, a person-approved list of single subjects, each with the research questions (focus
+items) it serves. Tagging facts against the research questions themselves failed: several are
+compound ("the factoid model *applied to simulation output*"), and read strictly the model dropped
+core sources (Pasin & Bradley went from 10 tagged facts to 0) while read loosely everything drifted
+to the broadest question. Scoring against single subjects was stable: on 12 DigiPros sources
+scored twice, 93% of scores were identical and every difference was one point. Coverage per
+research question is built from its topics, so a two-subject question shows which half is missing;
+a question no topic serves is THIN by definition. Without `topics:`, each focus item stands in as
+its own topic, with a warning. The topic list is meant to be approved before `gather` (it is what
+gets searched for); that review step is not yet in the pipeline.
 
 **Each fact links to its page:** `zotero://open-pdf/library/items/<attachment key>?page=N` (or
 `groups/<id>/…`) opens Zotero's own copy at that page; a source with no PDF in Zotero falls back
@@ -136,9 +149,10 @@ that reaches outside is dropped and counted in the log, so a bridge to a source 
 it is impossible here rather than flagged. The matcher was checked on 487 quotes already taken
 verbatim from DigiPros' papers: 483 found on the recorded page; the 4 misses were fragments.
 
-Importance (load-bearing list and map rings) is a source's facts that bear on the brief and are
-verbatim or well supported. A source none of whose facts bears on the brief is listed last, by
-its own reading — this replaces the self-exclusion screen. `work/facts.json` carries every fact
+Importance (load-bearing list and map rings) sums the best topic score of each source's useful or
+central facts that are verbatim or well supported; the list ranks breadth across topics first. A
+source with no fact scoring 2+ on any topic is listed last, as citations only — this replaces the
+self-exclusion screen. `work/facts.json` carries every fact
 with its link, for tools; `mindmap` reads it when the draft says `*Format:* fact base`.
 
 Not yet done, pending the test: `revise` and the rework tiers still assume a narrative, and
