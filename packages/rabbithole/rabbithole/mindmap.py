@@ -940,15 +940,45 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
           f"(coordinator={cfg.brain.coordinator_model})", flush=True)
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     review_md, refs_bib = _read_review(review), refs.read_text()
-    # Compose the findings phrases (grounded in the review's citing sentences).
-    m = compose(brain, parse_threads(review_md), bib_keys(refs_bib),
-                evidence=citation_evidence(review_md))
+    if is_fact_base(review_md):
+        from . import facts as _facts
+        base = _facts.load_sidecar(paths)
+        if base is None:
+            print(f"[mindmap] {review.name} is a fact base but work/facts.json is missing — "
+                  "re-run report.", file=sys.stderr)
+            return 1
+        threads, evidence, weight = _facts.map_inputs(base)
+    else:
+        threads, evidence = parse_threads(review_md), citation_evidence(review_md)
+        weight = evidence_weight(review_md)
+    make_map(brain, gc, paths.output, short, threads, refs_bib, evidence, weight, fig_id=fig_id)
+    return 0
+
+
+# The fact-base review says so in its front matter, so every reader of a draft can tell which
+# kind it holds without guessing from its shape.
+FACT_BASE_MARK = "*Format:* fact base"
+
+
+def is_fact_base(md: str) -> bool:
+    return FACT_BASE_MARK in (md or "")[:4000]
+
+
+def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bib: str,
+             evidence: dict[str, list[str]], weight: dict[str, int], *,
+             fig_id: str = "litmap") -> dict:
+    """Compose, rank, rank-band and render the contribution map; returns `emit`'s result.
+
+    Its inputs are what differ between review formats: a narrative review supplies its ## threads,
+    citing sentences and words of prose per source; a fact base supplies its themes, facts and
+    well-supported fact counts. Everything from composition on is the same map."""
+    # Compose the findings phrases (grounded in the evidence sentences).
+    m = compose(brain, threads, bib_keys(refs_bib), evidence=evidence)
     if not m.papers:
         print("[mindmap] the brain returned no grounded papers — wrote a stub; re-run or check "
               "the review.", file=sys.stderr)
-    # Node channels: importance-to-this-review (prose weight) pulls a paper toward the centre;
-    # OpenAlex citation counts size each blob; the real citation graph draws the faded arrows.
-    weight = evidence_weight(review_md)
+    # Node channels: importance-to-this-review pulls a paper toward the centre; OpenAlex
+    # citation counts size each blob; the real citation graph draws the faded arrows.
     edges, world = citation_graph(m.papers, bib_dois(refs_bib), gc.contact_email)
     for p in m.papers:
         p.cited_by = world.get(p.key, 0)
@@ -963,9 +993,9 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
                          corpus_size=len(bib_keys(refs_bib)))
     print(f"  {runlog.stamp()}[mindmap] rendering...", flush=True)
-    res = emit(paths.output, short, spec)          # into litReview/output, NOT the figures pool
+    res = emit(outdir, short, spec)                # into litReview/output, NOT the figures pool
     print(f"  {runlog.stamp()}[mindmap] {spec.provenance['papers']} papers, "
           f"{spec.provenance['edges']} citation edges, rings at "
           f"{spec.provenance['cuts']} of {spec.provenance['corpus_size']}  ->  "
           f"{res.get('svg') or res.get('source')}", flush=True)
-    return 0
+    return res

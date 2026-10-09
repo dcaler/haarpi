@@ -150,6 +150,11 @@ class ProjectConfig:
     style_paper_keys: list = field(default_factory=list)  # Zotero item keys confirmed in init
     # trundlr task-queue binding (resolved by `haarpi next`; matched by project_name).
     trundlr_project_id: int | None = None
+    # What `report` writes. "narrative": the sectioned prose review with an annotated
+    # bibliography. "facts": a fact base — each source's salient facts, each linked to the page
+    # it came from, grouped by focus item and theme with short synthesis bullets, and no prose.
+    # Opt-in per project while it is tested (DigiPros, 2026-10-09).
+    report_format: str = "narrative"
 
     def to_yaml(self) -> str:
         d = asdict(self)

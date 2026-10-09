@@ -121,6 +121,13 @@ The review opens with the most load-bearing sources and **coverage against the
 brief**: each focus item marked covered or THIN by how much of the corpus
 addresses it in its own words.
 
+**Fact base (on test).** With `report_format: facts` in the project's
+`litrev*.yaml`, `report` writes no prose. It extracts each source's salient
+facts, checks every quote verbatim against its page, and groups the facts by
+focus item and theme with short synthesis bullets. Each fact links to its page:
+the link opens the PDF in Zotero at that page. The contribution map is embedded
+in the document, and `work/facts.json` holds the same facts for tools.
+
 Output:
 ```
 litReview/output/<project>_litreview_<brain>.md

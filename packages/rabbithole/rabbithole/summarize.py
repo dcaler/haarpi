@@ -257,6 +257,32 @@ def _condense(brain: Brain, text: str) -> str:
     return "\n\n".join(parts)
 
 
+def reading_text(brain: Brain, c: Candidate, cfg, collection, ck: str,
+                 text: str | None = None) -> str:
+    """What the model reads of one paper: all of it when it fits, else retrieved passages.
+
+    Shared by the notes and the fact extraction so both see a paper the same way. Retrieved
+    chunks keep their [p.N] markers, so a page the model cites can be checked.
+    """
+    text = _paper_text(c) if text is None else text
+    if len(text) <= _DIRECT_CHARS:
+        return text
+    if collection is None:
+        return _condense(brain, text)
+    queries = [
+        # Topic-neutral first: what the work says it is about, in its own terms. Every other
+        # query is phrased in the brief's vocabulary, so a long text from another field
+        # (Namier's 700-page House of Commons) was read only through the passages that looked
+        # like the brief, and its note judged it irrelevant.
+        "introduction preface scope purpose of this work what this book is about",
+        f"{cfg.topic} {cfg.focus} main argument contribution hypothesis",
+        "methodology research design data collection analysis",
+        "results findings outcomes evidence limitations",
+    ]
+    got = _chroma.query_paper_multi(collection, brain, ck, queries, n_per_query=3)
+    return got or _condense(brain, _paper_text(c))
+
+
 def _legacy_notes_by_paper(d: Path) -> dict[str, dict]:
     """Index-keyed notes (``057.json``) from before the cache was keyed by citekey.
 
@@ -334,25 +360,7 @@ def read_notes(brain: Brain, corpus: list[Candidate], cfg, paths,
             n_chunks = _chroma.index_paper(collection, brain, ck, text)
             print(f"  ({n_chunks} chunks indexed)", end="", flush=True)
         print(flush=True)
-        if len(text) > _DIRECT_CHARS:
-            if collection is not None:
-                queries = [
-                    # Topic-neutral first: what the work says it is about, in its own terms.
-                    # Every other query is phrased in the brief's vocabulary, so a long text
-                    # from another field (Namier's 700-page House of Commons) was read only
-                    # through the passages that looked like the brief, and its note judged
-                    # it irrelevant.
-                    "introduction preface scope purpose of this work what this book is about",
-                    f"{cfg.topic} {cfg.focus} main argument contribution hypothesis",
-                    "methodology research design data collection analysis",
-                    "results findings outcomes evidence limitations",
-                ]
-                text = _chroma.query_paper_multi(collection, brain, ck, queries,
-                                                 n_per_query=3)
-                if not text:
-                    text = _condense(brain, _paper_text(c))  # fallback
-            else:
-                text = _condense(brain, text)
+        text = reading_text(brain, c, cfg, collection, ck, text)
         try:
             # think=False: extraction, not judgement. The paper says what it says; a
             # scratchpad only re-narrates it at 3 tok/s before the JSON arrives.
@@ -2385,6 +2393,9 @@ def run(directory: str = ".", brain_override: str | None = None,
         return 1
     corpus, notes, citekeys, collection = built
     t0 = runlog.start()
+    if (cfg.report_format or "narrative") == "facts":
+        from . import facts as _facts
+        return _facts.report(cfg, gc, paths, brain, corpus, notes, citekeys, collection)
 
     print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""

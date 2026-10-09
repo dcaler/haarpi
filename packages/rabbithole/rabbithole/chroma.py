@@ -585,6 +585,13 @@ def locate_direct(collection, brain, citekey: str, statements: str) -> list[dict
     Returns the same [{claim, location, quote}] structure as the LLM locate path.
     """
     claim_sents = [s.strip() for s in re.split(r'(?<=[.!?])\s+', statements) if s.strip()]
+    return locate_list(collection, brain, citekey, claim_sents)
+
+
+def locate_list(collection, brain, citekey: str, claim_sents: list[str]) -> list[dict]:
+    """`locate_direct` for claims that are already one per item — a fact is a single statement
+    even when it contains "U.S." or "p < .05", which a sentence splitter would cut."""
+    claim_sents = [c for c in claim_sents if c and c.strip()]
     if not claim_sents:
         return []
     total = _paper_chunk_count(collection, citekey)

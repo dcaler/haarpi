@@ -193,6 +193,12 @@ and the opening list are one ranking seen two ways. The prose carries the
 through line that organizes those facts — the same structure the map draws
 radially.
 
+A second format is on test, per project (`report_format: facts`): a **fact
+base** with no prose. Each source's salient facts are extracted, every quote is
+checked verbatim against its page, and each fact links to that page in Zotero.
+Facts are grouped by focus item and theme with short synthesis bullets, and the
+contribution map is embedded in the document.
+
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 

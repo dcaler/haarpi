@@ -58,6 +58,10 @@ class Candidate:
     # "Anon (2016)". Display falls back to them; generated citekeys do NOT, so adding them never
     # renames a source an existing draft already cites.
     editors: list = field(default_factory=list)   # list[Author]
+    # Zotero identity, recorded at ingest so a fact can link to the page it came from
+    # (zotero://open-pdf/library/items/<attachment_key>?page=N). Empty for folder-only sources.
+    zotero_key: str = ""
+    attachment_key: str = ""
     relevance: float = 0.0       # filled by ranking
     # Set during report ingest:
     pdf_path: str = ""

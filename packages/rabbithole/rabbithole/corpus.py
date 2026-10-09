@@ -122,7 +122,9 @@ def _corpus_item_from_zotero(zc, it: dict, idx: dict[str, Candidate], paths,
     t0 = time.monotonic()
     att = zc.pdf_attachment(it["key"])
     text, n_pages, got = "", 0, "no PDF"
+    c.zotero_key = it["key"]
     if att:
+        c.attachment_key = att["key"]
         dest = paths.pdfs / f"{it['key']}.pdf"
         got = _fetch_zotero_pdf(zc, att, dest)
         if got:

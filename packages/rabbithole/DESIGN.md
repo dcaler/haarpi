@@ -113,6 +113,37 @@ names a brief term to say the paper lacks it. The list rides inside the load-bea
 a bold label, not a heading, because `redline.replace_top_sources` rebuilds that block up to the
 next heading: every path that re-ranks the sources re-checks coverage, and none strands a copy.
 
+### The fact base (`report_format: facts`, on test)
+
+An opt-in alternative to the narrative, per project (DigiPros first, 2026-10-09). The narrative
+spent ~4 of its ~4.5 hours drafting and polishing prose; the polish fought itself (guards asked for
+more sources and the reviser re-cited familiar ones with their numbers), and the paper stage read
+only a 12,000-character prefix of the result, never the bibliography where the facts were.
+
+| Step | What happens | LLM |
+|---|---|---|
+| **extract** | up to 10 atomic facts per paper: the fact, its kind, the focus items it bears on, its page, a verbatim quote | coordinator × N papers (cached in `work/facts/`, versioned) |
+| **verify** | the quote is searched for in the paper's own page-marked text (case, whitespace, ligatures, line hyphenation and quote marks ignored). Found → **verbatim**, and the page is where it was found. Not found → located by embedding search, with a support score | none |
+| **group** | facts by focus item, then cosine k-means into themes (~10 facts each, ≤8 per item) | 1 short call per theme: a name and 2–4 synthesis bullets |
+| **render** | coverage, the contribution map (embedded), load-bearing sources, facts by focus item and theme, every source's facts in full | none |
+
+**Each fact links to its page:** `zotero://open-pdf/library/items/<attachment key>?page=N` (or
+`groups/<id>/…`) opens Zotero's own copy at that page; a source with no PDF in Zotero falls back
+to its DOI. Pages are the PDF's physical page index, as the `[p.N]` markers are.
+
+**A synthesis bullet may cite only facts in its own theme**, and must cite something. A bullet
+that reaches outside is dropped and counted in the log, so a bridge to a source that never said
+it is impossible here rather than flagged. The matcher was checked on 487 quotes already taken
+verbatim from DigiPros' papers: 483 found on the recorded page; the 4 misses were fragments.
+
+Importance (load-bearing list and map rings) is a source's facts that bear on the brief and are
+verbatim or well supported. A source none of whose facts bears on the brief is listed last, by
+its own reading — this replaces the self-exclusion screen. `work/facts.json` carries every fact
+with its link, for tools; `mindmap` reads it when the draft says `*Format:* fact base`.
+
+Not yet done, pending the test: `revise` and the rework tiers still assume a narrative, and
+raconteur still reads the prose prefix.
+
 ### Synthesise, section by section
 
 **No call ever sees more evidence than its context can hold.** One-shot whole-corpus synthesis
@@ -187,6 +218,7 @@ rabbithole/
   chroma.py     ChromaDB helpers: index paper chunks, semantic retrieval, locate_direct
   brain.py      LLM backend: coordinator/worker, embeddings, parallel worker_map
   summarize.py  report pipeline: read_notes → synthesize → locate_claims → bibliography
+  facts.py      fact-base report (report_format: facts): extract → verify → group → render
   render.py     assemble Markdown + pandoc → .docx
   notify.py     optional email notifications via local mail program (SLURM MailProg)
 ```
@@ -202,6 +234,8 @@ litReview/
   work/annotations/NNN.json      per-paper read notes (resumable)
   work/disposition.json          every curated source: cited / rejected (with reason) / unplaced
   work/located/NNN.json          per-paper located claims (resumable)
+  work/facts/<citekey>.json      fact base: per-paper grounded facts (resumable, versioned)
+  work/facts.json                fact base: every fact with its page link, and the themes
   work/chroma/                   ChromaDB chunk index (persistent across runs)
   pdfs/                          PDFs for --from-folder mode
   output/<project>_litreview_<brain>.{md,docx}   the review
