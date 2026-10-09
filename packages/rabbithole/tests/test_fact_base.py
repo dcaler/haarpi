@@ -170,7 +170,10 @@ def test_the_document_links_every_fact_and_says_what_was_not_verbatim(tmp_path):
             "“identified 20 ideal-type career patterns”") in md
     assert "weak support — verify" in md                         # f2, located by search, 0.3
     assert "*No fact in the corpus bears on this item.*" in md   # item 2 has no theme
-    assert md.index("### Sources with no fact bearing on the brief") < md.index("Zed")
+    bib = md.split("## Annotated Bibliography (by publication)")[1]
+    assert "**Zed (2020). Wind.** [@zed2020] *(no fact bears on the brief)*" in bib
+    tail = bib.split("### Sources with no fact bearing on the brief")[1]
+    assert "- Zed (2020). Wind. [@zed2020]" in tail and "Wind farms divide" not in tail
     assert "## Annotated Bibliography (by publication)" in md
     # the map's thread parse stops at the bibliography and never sees the per-source view twice
     assert all(t.theme != "Sources with no fact bearing on the brief"
@@ -251,6 +254,69 @@ def test_the_fact_base_report_runs_end_to_end(tmp_path, monkeypatch):
     b.coordinator = lambda p, s="", **k: (calls.append(p), orig(p, s, **k))[1]
     facts.report(cfg, gc, paths, b, corpus, [{}, {}], citekeys, None)
     assert not any("--- PAPER TEXT ---" in p for p in calls)
+
+
+# ── dialling in: salvage, failures, names, ranking, sidecar, map date ─────────
+
+def test_one_broken_element_no_longer_costs_the_paper_its_facts():
+    raw = ('[{"fact": "A holds.", "kind": "finding", "focus": [1], "page": 1, "quote": "q"},\n'
+           ' {"fact": "B holds.", "quote": "an "unescaped" quote"},\n'
+           ' {"fact": "C holds.", "kind": "method", "focus": [], "page": 2, "quote": "r"}]')
+    fs = facts._parse_facts(raw, "k", 5)
+    assert [f.text for f in fs] == ["A holds.", "C holds."]
+
+
+def test_a_paper_with_no_facts_leaves_its_replies_for_diagnosis(tmp_path):
+    from rabbithole import summarize
+    paths = SimpleNamespace(work=tmp_path, root=tmp_path)
+    corpus = [Candidate(title="Opaque", year=2020, fulltext="[p.1]\nSome text.")]
+    cfg = SimpleNamespace(topic="t", focus="a; b")
+
+    class _B:
+        def coordinator(self, prompt, system="", **kw):
+            return "I would rather not."
+    out = facts.extract(_B(), corpus, cfg, paths, None, {0: "opaque2020"})
+    assert out == {"opaque2020": []}
+    failed = tmp_path / "facts" / f"{summarize._located_filename('opaque2020')}.failed.txt"
+    assert failed.read_text().count("I would rather not.") == 2
+
+
+def test_a_repeated_theme_name_is_made_distinct():
+    fs1 = [Fact(id=f"a{i}#1", citekey=f"abbott199{i}", text="x", focus=[1]) for i in range(2)]
+    fs2 = [Fact(id=f"b{i}#1", citekey=f"kreuter200{i}", text="y", focus=[1]) for i in range(2)]
+
+    class _B:
+        def coordinator(self, prompt, system="", **kw):
+            assert "Other themes under this item, already named:" in prompt
+            return json.dumps({"name": "Trajectory archetypes", "synthesis": []})
+    vecs = {f.id: ([1.0, 0.0] if f in fs1 else [0.0, 1.0]) for f in fs1 + fs2}
+    out = facts.themes_for(_B(), 1, "trajectory archetypes", fs1 + fs2, vecs)
+    names = [t.name for t in out]
+    assert len(set(names)) == len(names) and all(n != "trajectory archetypes" for n in names)
+
+
+def test_breadth_across_the_brief_outranks_a_full_fact_count_on_one_item():
+    narrow = [Fact(id=f"n#{i}", citekey="n", text="t", focus=[1], verified=True)
+              for i in range(10)]
+    broad = [Fact(id=f"b#{i}", citekey="b", text="t", focus=[i % 3 + 1], verified=True)
+             for i in range(6)]
+    assert facts.rank_key(broad) < facts.rank_key(narrow)
+
+
+def test_the_sidecar_says_which_sources_are_on_brief(tmp_path):
+    paths = SimpleNamespace(work=tmp_path)
+    corpus = [_cand(attachment_key="ATT1"), Candidate(title="Wind", year=2020)]
+    gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
+    facts.save_sidecar(paths, _base(), corpus, {0: "abbott1990", 1: "zed2020"}, gc)
+    src = json.loads((tmp_path / "facts.json").read_text())["sources"]
+    assert src["abbott1990"]["on_brief"] and not src["zed2020"]["on_brief"]
+    assert src["abbott1990"] == {"on_brief": True, "facts": 2, "verbatim": 1}
+    assert facts.load_sidecar(paths).facts["zed2020"][0].text == "Wind farms divide towns."
+
+
+def test_the_map_carries_its_drafts_datestamp():
+    assert mindmap._draft_datestamp("261009_DigiPros_litreview_ra") == "261009"
+    assert mindmap._draft_datestamp("digipros_litreview_ra") is None
 
 
 if __name__ == "__main__":

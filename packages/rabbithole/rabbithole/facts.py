@@ -69,12 +69,14 @@ You organise a literature review's facts. Respond with ONLY a JSON object, no ot
 
 _THEME_PROMPT = """\
 Focus item: {item}
+Other themes under this item, already named: {taken}
 
 These facts were grouped together. Each begins with the [@citekey] of its source:
 {facts}
 
 Return:
-{{"name": "the shared subject of these facts, at most 6 words",
+{{"name": "what THESE facts share that the other themes do not, at most 6 words. Never restate
+           the focus item, and never reuse or paraphrase another theme's name",
   "synthesis": ["2-4 bullets. Each says where these sources AGREE, where they are in TENSION,
                  or what GAP they leave for the focus item — and cites the [@citekey]s of the
                  facts it rests on. Use ONLY the facts above; add nothing they do not say."]}}"""
@@ -149,12 +151,34 @@ def find_quote(quote: str, pages: dict[int, str], hint: int | None = None) -> in
     return None
 
 
-def _parse_facts(raw: str, citekey: str, n_items: int) -> list[Fact]:
+def _json_objects(raw: str) -> list:
+    """The reply's JSON array, or — when the array does not parse — every complete `{...}` object
+    in it. One malformed element (an unescaped quote mark inside a verbatim quote, a reply cut
+    off at the end) used to cost the paper all of its facts: 20 of DigiPros' 194 got none."""
     m = re.search(r"\[.*\]", raw or "", re.DOTALL)
-    try:
-        items = json.loads(m.group(0)) if m else []
-    except json.JSONDecodeError:
-        items = []
+    if m:
+        try:
+            v = json.loads(m.group(0))
+            if isinstance(v, list):
+                return v
+        except json.JSONDecodeError:
+            pass
+    dec, out, i = json.JSONDecoder(), [], 0
+    text = raw or ""
+    while (i := text.find("{", i)) != -1:
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i += 1
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+        i = end
+    return out
+
+
+def _parse_facts(raw: str, citekey: str, n_items: int) -> list[Fact]:
+    items = _json_objects(raw)
     out: list[Fact] = []
     for d in items if isinstance(items, list) else []:
         if not isinstance(d, dict) or not str(d.get("fact") or "").strip():
@@ -240,19 +264,28 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
                   f"Paper: {c.title} ({c.author_year()})\n\n"
                   f"--- PAPER TEXT ---\n{text}\n--- END ---\n\nJSON array:")
         facts: list[Fact] = []
+        replies: list[str] = []
         for attempt in (1, 2):                    # one retry: a cut-off reply is usually a one-off
             try:
-                facts = _parse_facts(brain.coordinator(prompt, sys_prompt, think=False,
-                                                       num_ctx=16384), ck, len(items))
+                raw = brain.coordinator(prompt, sys_prompt, think=False, num_ctx=16384)
+                replies.append(raw or "")
+                facts = _parse_facts(raw, ck, len(items))
             except Exception as e:  # noqa: BLE001
+                replies.append(f"[exception] {e}")
                 print(f"  [warn] fact extraction failed for {label}: {e}", file=sys.stderr)
             if facts:
                 break
+        failed = d / f"{_located_filename(ck)}.failed.txt"
         if not facts:
-            print(f"  [warn] {label}: no facts extracted (will retry on the next run)",
-                  file=sys.stderr)
+            # Kept so the next failure is diagnosed rather than guessed at.
+            failed.write_text(f"# {label} — {len(text):,} chars read\n\n"
+                              + "\n\n----- next attempt -----\n\n".join(replies),
+                              encoding="utf-8")
+            print(f"  [warn] {label}: no facts extracted (will retry on the next run; "
+                  f"replies in work/facts/{failed.name})", file=sys.stderr)
             out[ck] = []
             continue
+        failed.unlink(missing_ok=True)
         locate = None
         if collection is not None:
             locate = lambda texts, _ck=ck: _chroma.locate_list(collection, brain, _ck, texts)  # noqa: E731
@@ -305,6 +338,18 @@ def _synthesis_ok(bullet: str, allowed: set[str]) -> bool:
     return bool(keys) and keys <= allowed
 
 
+def _same_name(a: str, b: str) -> bool:
+    norm = lambda x: " ".join(re.findall(r"[a-z0-9]+", x.lower()))   # noqa: E731
+    return norm(a) == norm(b)
+
+
+def _distinguisher(fs: list[Fact]) -> str:
+    """A deterministic tiebreak for a theme name the model repeated: its main sources."""
+    from collections import Counter
+    top = [ck for ck, _ in Counter(f.citekey for f in fs).most_common(2)]
+    return ", ".join(re.sub(r"\d{4}$", "", ck) for ck in top)
+
+
 def themes_for(brain, item_no: int, item: str, facts: list[Fact],
                vectors: dict[str, list[float]]) -> list[Theme]:
     if not facts:
@@ -320,12 +365,15 @@ def themes_for(brain, item_no: int, item: str, facts: list[Fact],
         allowed = {f.citekey for f in fs}
         lines = "\n".join(f"- [@{f.citekey}] {f.text}" for f in fs)
         name, synthesis = f"Theme {n}", []
+        taken = "; ".join(t.name for t in out) or "(none yet)"
         try:
-            raw = brain.coordinator(_THEME_PROMPT.format(item=item, facts=lines), _THEME_SYS,
-                                    think=False, num_ctx=16384)
+            raw = brain.coordinator(_THEME_PROMPT.format(item=item, taken=taken, facts=lines),
+                                    _THEME_SYS, think=False, num_ctx=16384)
             m = re.search(r"\{.*\}", raw or "", re.DOTALL)
             obj = json.loads(m.group(0)) if m else {}
             name = " ".join(str(obj.get("name") or name).split())[:80] or name
+            if _same_name(name, item) or any(_same_name(name, t.name) for t in out):
+                name = f"{name} ({_distinguisher(fs)})"
             bullets = [" ".join(str(b).split()) for b in (obj.get("synthesis") or [])
                        if str(b).strip()]
             synthesis = [b for b in bullets if _synthesis_ok(b, allowed)]
@@ -350,6 +398,18 @@ def _good(f: Fact) -> bool:
 def fact_weight(facts: dict[str, list[Fact]]) -> dict[str, int]:
     """Importance to THIS review: a source's well-grounded facts that bear on the brief."""
     return {ck: sum(1 for f in fs if f.focus and _good(f)) for ck, fs in facts.items()}
+
+
+def rank_key(fs: list[Fact]) -> tuple:
+    """Load-bearing order: breadth across the brief first, then well-grounded facts on it, then
+    verbatim ones. Counting facts alone tied 74 DigiPros sources at the 10-fact cap."""
+    on = [f for f in fs if f.focus and _good(f)]
+    return (-len({n for f in on for n in f.focus}), -len(on),
+            -sum(1 for f in on if f.verified))
+
+
+def on_brief(fs: list[Fact]) -> bool:
+    return any(f.focus for f in fs)
 
 
 def page_link(c: Candidate, page: int | None, gc) -> str:
@@ -410,6 +470,11 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
                        if f.citekey in by_key else "")
                   for fs in base.facts.values() for f in fs],
         "themes": [asdict(t) for t in base.themes],
+        # Per source: does any of its facts bear on the brief? A clean list of off-brief
+        # sources tells a drafter what not to reach for.
+        "sources": {ck: {"on_brief": on_brief(fs), "facts": len(fs),
+                         "verbatim": sum(f.verified for f in fs)}
+                    for ck, fs in base.facts.items()},
     }
     fp = paths.work / "facts.json"
     fp.write_text(json.dumps(blob, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -482,8 +547,8 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
     weight = fact_weight(base.facts)
     from .summarize import top_source_count
     ranked = sorted((ck for ck in weight if weight[ck] > 0 and ck in by_key),
-                    key=lambda ck: (-weight[ck], ck))[:top_source_count(len(corpus),
-                                                                       _TOP_QUANTILE)]
+                    key=lambda ck: (rank_key(base.facts[ck]), ck))[:top_source_count(
+                        len(corpus), _TOP_QUANTILE)]
     if ranked:
         parts += [f"## Most load-bearing sources (top {_TOP_QUANTILE * 100:g}% of {len(corpus)})",
                   "", "*The sources with the most well-grounded facts bearing on the brief — the "
@@ -510,30 +575,26 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
             parts += [_fact_line(f, by_key[f.citekey], gc) for f in fs
                       if f.citekey in by_key] + [""]
 
-    untagged = [ck for ck, fs in base.facts.items() if fs and not any(f.focus for f in fs)]
+    untagged = [ck for ck, fs in base.facts.items() if fs and not on_brief(fs)]
     parts += ["## Annotated Bibliography (by publication)", "",
               "*Every source and all of its facts, the untagged ones included. A source none of "
-              "whose facts bears on the brief is listed last.*", ""]
-    order = sorted((ck for ck in base.facts if ck in by_key and ck not in untagged),
-                   key=lambda ck: by_key[ck].first_author_last.lower())
-    for ck in order:
+              "whose facts bears on the brief is marked, and listed again at the end.*", ""]
+    for ck in sorted((k for k in base.facts if k in by_key),
+                     key=lambda k: by_key[k].first_author_last.lower()):
         c = by_key[ck]
-        parts += [f"**{c.full_citation()}** [@{ck}]", ""]
+        mark = " *(no fact bears on the brief)*" if ck in untagged else ""
+        parts += [f"**{c.full_citation()}** [@{ck}]{mark}", ""]
         fs = base.facts[ck]
         parts += ([f"{_fact_line(f, c, gc, with_key=False)} *[{f.kind}"
                    + (f"; item {', '.join(map(str, f.focus))}" if f.focus else "") + "]*"
                    for f in fs] if fs else ["- *(no facts extracted — re-run report)*"]) + [""]
     if untagged:
         parts += ["### Sources with no fact bearing on the brief", "",
-                  "*They stay in the corpus and in Zotero; this records the reading, it deletes "
-                  "nothing.*", ""]
-        for ck in sorted(untagged, key=lambda k: by_key[k].first_author_last.lower()
-                         if k in by_key else k):
-            if ck in by_key:
-                c = by_key[ck]
-                parts += [f"**{c.full_citation()}** [@{ck}]", ""]
-                parts += [_fact_line(f, c, gc, with_key=False) + f" *[{f.kind}]*"
-                          for f in base.facts[ck]] + [""]
+                  "*A source is listed here when none of its facts was tagged to a focus item. "
+                  "Its facts are above. Candidates for the next audit — nothing is deleted.*", ""]
+        parts += [f"- {by_key[ck].full_citation()} [@{ck}]"
+                  for ck in sorted(untagged, key=lambda k: by_key[k].first_author_last.lower()
+                                   if k in by_key else k) if ck in by_key] + [""]
     return "\n".join(parts)
 
 
@@ -580,7 +641,8 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
         try:
             threads, evidence, weight = map_inputs(base)
             res = mindmap.make_map(brain, gc, paths.output, cfg.project_name, threads,
-                                   Path(bib_path).read_text(), evidence, weight)
+                                   Path(bib_path).read_text(), evidence, weight,
+                                   datestamp=date.today().strftime("%y%m%d"))
             svg = res.get("svg")
             png = Path(svg).with_suffix(".png") if svg else None
             map_png = png if png and png.is_file() else None

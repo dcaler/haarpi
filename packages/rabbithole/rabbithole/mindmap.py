@@ -854,14 +854,17 @@ def _renders(dot: str) -> bool:
     return r.returncode == 0 and bool(r.stdout)
 
 
-def emit(outdir: Path, short: str, spec: figure.FigureSpec) -> dict:
+def emit(outdir: Path, short: str, spec: figure.FigureSpec, *, datestamp: str | None = None) -> dict:
     """Write the map as a chain-named artifact into ``outdir`` (litReview/output) — NOT the paper's
     figures pool, since a contribution map never enters a paper. Same _ra-only clobber guard as the
     pool (a hand-edited ``*_DCR.svg`` stays authoritative), reusing the figure engine's naming +
     renderers so the revision chain and the Inkscape workflow behave identically."""
     outdir.mkdir(parents=True, exist_ok=True)
     ext = figure._SRC_EXT.get(spec.format, "txt")
-    ds = figure._figure_datestamp(outdir, short, spec.id)
+    # The map describes ONE draft, so it carries that draft's datestamp. Reusing the newest
+    # existing map's stamp (the figure engine's rule for paper figures) wrote DigiPros' 261009
+    # fact-base map over the 261006 narrative's, and embedded it under the old date.
+    ds = datestamp or figure._figure_datestamp(outdir, short, spec.id)
     src = outdir / naming.minor_name(short, [spec.id], ext, datestamp=ds)
     svg = outdir / naming.minor_name(short, [spec.id], "svg", datestamp=ds)
     src.write_text(spec.source)
@@ -951,8 +954,15 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     else:
         threads, evidence = parse_threads(review_md), citation_evidence(review_md)
         weight = evidence_weight(review_md)
-    make_map(brain, gc, paths.output, short, threads, refs_bib, evidence, weight, fig_id=fig_id)
+    make_map(brain, gc, paths.output, short, threads, refs_bib, evidence, weight, fig_id=fig_id,
+             datestamp=_draft_datestamp(review.stem))
     return 0
+
+
+def _draft_datestamp(stem: str) -> str | None:
+    """The YYMMDD a litreview draft's name starts with, or None for an undated one."""
+    head = stem.split("_", 1)[0]
+    return head if re.fullmatch(r"\d{6}", head) else None
 
 
 # The fact-base review says so in its front matter, so every reader of a draft can tell which
@@ -966,7 +976,7 @@ def is_fact_base(md: str) -> bool:
 
 def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bib: str,
              evidence: dict[str, list[str]], weight: dict[str, int], *,
-             fig_id: str = "litmap") -> dict:
+             fig_id: str = "litmap", datestamp: str | None = None) -> dict:
     """Compose, rank, rank-band and render the contribution map; returns `emit`'s result.
 
     Its inputs are what differ between review formats: a narrative review supplies its ## threads,
@@ -993,7 +1003,7 @@ def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bi
     spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
                          corpus_size=len(bib_keys(refs_bib)))
     print(f"  {runlog.stamp()}[mindmap] rendering...", flush=True)
-    res = emit(outdir, short, spec)                # into litReview/output, NOT the figures pool
+    res = emit(outdir, short, spec, datestamp=datestamp)   # litReview/output, NOT the figures pool
     print(f"  {runlog.stamp()}[mindmap] {spec.provenance['papers']} papers, "
           f"{spec.provenance['edges']} citation edges, rings at "
           f"{spec.provenance['cuts']} of {spec.provenance['corpus_size']}  ->  "
