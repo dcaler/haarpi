@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -108,6 +109,8 @@ class ZoteroClient:
 
     # ── collections ──────────────────────────────────────────────────────
     def create_collection(self, name: str) -> str:
+        """Find-or-create by name. Only `resolve_collection` should call this, and only when no
+        collection is configured anywhere — see Manifest.zotero_collection."""
         existing = self.find_collection(name)
         if existing:
             return existing
@@ -121,13 +124,52 @@ class ZoteroClient:
             return ok["0"]["key"]
         raise RuntimeError(f"collection create returned: {data}")
 
-    def find_collection(self, name: str) -> str:
-        r = self._client.get(f"{self.prefix}/collections", params={"limit": 100})
+    def collections(self) -> list[dict]:
+        """Every collection in the library, all pages (the API returns at most 100 at a time)."""
+        out, start = [], 0
+        while True:
+            r = self._client.get(f"{self.prefix}/collections",
+                                 params={"limit": 100, "start": start})
+            r.raise_for_status()
+            page = r.json()
+            out += page
+            if len(page) < 100:
+                return out
+            start += 100
+
+    def collection_name(self, key: str) -> str | None:
+        """The collection's name, or None when no collection has this key (deleted, or a typo)."""
+        r = self._client.get(f"{self.prefix}/collections/{key}")
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
-        for col in r.json():
-            if col.get("data", {}).get("name") == name:
-                return col["key"]
-        return ""
+        return (r.json().get("data") or {}).get("name") or ""
+
+    def find_collection(self, name: str) -> str:
+        """The key of the ONE collection with this name, ignoring case and surrounding space.
+
+        "" when none matches. Raises CollectionError when several do: picking one is how a corpus
+        ends up read from the wrong half of a split.
+        """
+        want = (name or "").strip().lower()
+        hits = [c for c in self.collections()
+                if (c.get("data", {}).get("name") or "").strip().lower() == want]
+        if len(hits) > 1:
+            raise CollectionError(
+                f"{len(hits)} Zotero collections are named '{name}' (ignoring case): "
+                + ", ".join(f"{c['key']} '{c['data']['name']}'" for c in hits)
+                + ". Pin the right one as `zotero_collection:` in haarpi.yaml.")
+        return hits[0]["key"] if hits else ""
+
+    def similar_collections(self, name: str, exclude: str = "") -> list[tuple[str, str]]:
+        """Other collections whose name is this one's apart from case, punctuation or a suffix
+        such as "_old" — the trail a split corpus leaves behind."""
+        base = re.sub(r"[^a-z0-9]", "", (name or "").lower())
+        if not base:
+            return []
+        return [(c["key"], c["data"]["name"]) for c in self.collections()
+                if c["key"] != exclude
+                and re.sub(r"[^a-z0-9]", "", (c["data"].get("name") or "").lower()).startswith(base)]
 
     # ── items ────────────────────────────────────────────────────────────
     def items_by_keys(self, keys: list[str]) -> list[dict]:
@@ -309,3 +351,47 @@ class ZoteroClient:
             if start >= total:
                 break
         return "\n".join(parts)
+
+
+# ── the project's ONE collection ────────────────────────────────────────────────
+
+class CollectionError(RuntimeError):
+    """The project's collection cannot be resolved without guessing."""
+
+
+def resolve_collection(zc, cfg, *, create: bool = False) -> str:
+    """The project's collection key. Never invents a second collection.
+
+    A configured key (pinned in haarpi.yaml, adopted into the review config) is used as is, after
+    checking that Zotero still has it — a missing key is an error, never a reason to create a
+    replacement. With no key: the one collection named like the project, ignoring case; and only
+    when there is none at all, and `create` is set (the project's first gather), a new one.
+    """
+    key = (getattr(cfg, "zotero", None) or {}).get("collection_key", "")
+    if key:
+        if zc.collection_name(key) is None:
+            raise CollectionError(
+                f"the configured Zotero collection {key} does not exist. Fix "
+                "`zotero_collection:` in haarpi.yaml (or the review config); not creating a "
+                "replacement, which would split the corpus.")
+        return key
+    key = zc.find_collection(cfg.project_name)
+    if key:
+        return key
+    if not create:
+        raise CollectionError(f"no Zotero collection is configured for '{cfg.project_name}' "
+                              "and none has that name. Run gather first.")
+    return zc.create_collection(cfg.project_name)
+
+
+def warn_similar(zc, cfg, key: str) -> list[tuple[str, str]]:
+    """Say so when other collections look like this project's — a split, or its leftovers."""
+    try:
+        others = zc.similar_collections(cfg.project_name, exclude=key)
+    except Exception:  # noqa: BLE001 — a warning must never stop a run
+        return []
+    if others:
+        print(f"  [warn] other Zotero collections look like this project's ({key} is the one in "
+              f"use): " + ", ".join(f"{k} '{n}'" for k, n in others)
+              + ". If they hold sources, merge them into the one in use.", file=sys.stderr)
+    return others

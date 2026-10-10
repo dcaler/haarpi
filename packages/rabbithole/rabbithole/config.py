@@ -284,6 +284,17 @@ def _adopt_manifest(cfg: "ProjectConfig", start: Path) -> None:
         v = getattr(m, theirs, None)
         if v:
             setattr(cfg, ours, v)
+    # The project's ONE Zotero collection, pinned at project level. It wins over a per-review
+    # copy: DigiPros' review config was rewritten to a freshly created collection by a gather
+    # that looked the collection up by a drifted name, and every later verb followed it.
+    pinned = getattr(m, "zotero_collection", "") or ""
+    if pinned:
+        local = (cfg.zotero or {}).get("collection_key", "")
+        if local and local != pinned:
+            import sys
+            print(f"  [note] the review config names Zotero collection {local}; using the "
+                  f"project's pinned {pinned} (haarpi.yaml).", file=sys.stderr)
+        cfg.zotero = {**(cfg.zotero or {}), "collection_key": pinned}
 
 
 def save_project(cfg: ProjectConfig, path: str | Path = ".") -> Path:

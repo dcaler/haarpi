@@ -142,6 +142,12 @@ class Manifest:
     decks: dict = field(default_factory=dict)
     trundlr_project_id: int | None = None
     trundlr_priority: int = 3          # trundlr's own default band (1 highest .. 4 lowest)
+    # THE project's Zotero collection, by key. One collection per project, shared by every review,
+    # pinned here so no tool ever finds it by name: gather used to look it up by name,
+    # case-sensitively, and create a fresh one on a miss. DigiPros' name drifted between "digipros"
+    # and "DigiPros", and each drift split the corpus into a new collection — twice. rabbitHole
+    # adopts this key over any per-review copy, and refuses to create a collection when it is set.
+    zotero_collection: str = ""
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
 
     def stage_dir(self, root: Path, stage: str) -> Path:
@@ -177,7 +183,8 @@ def save_manifest(m: Manifest, root: Path) -> Path:
             "initials": m.initials, "authors": m.authors, "funders": m.funders,
             "deck_formats": m.deck_formats, "decks": m.decks,
             "trundlr_project_id": m.trundlr_project_id,
-            "trundlr_priority": m.trundlr_priority, "stages": m.stages}
+            "trundlr_priority": m.trundlr_priority,
+            "zotero_collection": m.zotero_collection, "stages": m.stages}
     fp = root / MANIFEST
     fp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
                   encoding="utf-8")

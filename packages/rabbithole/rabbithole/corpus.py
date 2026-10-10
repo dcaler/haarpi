@@ -197,11 +197,11 @@ def _fetch_zotero_pdf(zc, att: dict, dest: Path) -> str:
 def ingest_from_zotero(cfg, gc, paths) -> list[Candidate]:
     from . import zotero
     zc = zotero.ZoteroClient(gc)
-    coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
-    if not coll:
-        raise RuntimeError(
-            f"No Zotero collection for '{cfg.project_name}'. "
-            "Run gather with Zotero configured, or use --from-folder.")
+    try:
+        coll = zotero.resolve_collection(zc, cfg)
+    except zotero.CollectionError as e:
+        raise RuntimeError(f"{e} Or use --from-folder.") from e
+    zotero.warn_similar(zc, cfg, coll)
 
     idx = _load_candidate_index(paths)
     items = zc.collection_items(coll)
@@ -322,8 +322,9 @@ def refresh_append(cfg, gc, paths, existing: list[Candidate]) -> list[Candidate]
     persist — the caller decides when to write, usually after annotating the new items."""
     from . import zotero
     zc = zotero.ZoteroClient(gc)
-    coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
-    if not coll:
+    try:
+        coll = zotero.resolve_collection(zc, cfg)
+    except zotero.CollectionError:
         return []
     have = {c.dedup_key for c in existing if c.dedup_key}
     idx = _load_candidate_index(paths)
@@ -354,8 +355,9 @@ def count_uningested(cfg, gc, existing: list[Candidate]) -> int:
         zc = zotero.ZoteroClient(gc)
     except Exception:  # noqa: BLE001 — a staleness hint must never break a revise
         return 0
-    coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
-    if not coll:
+    try:
+        coll = zotero.resolve_collection(zc, cfg)
+    except zotero.CollectionError:
         return 0
     have = {c.dedup_key for c in existing if c.dedup_key}
     n = 0

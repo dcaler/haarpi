@@ -349,8 +349,9 @@ def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
     try:
         from . import zotero
         zc = zotero.ZoteroClient(gc)
-        coll = cfg.zotero.get("collection_key") or zc.find_collection(cfg.project_name)
-        if not coll:
+        try:
+            coll = zotero.resolve_collection(zc, cfg)
+        except zotero.CollectionError:
             return Reconciliation()
         items = [it for it in zc.collection_items(coll)
                  if (it.get("data", {}) or {}).get("itemType") not in ("attachment", "note")]

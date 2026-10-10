@@ -858,10 +858,18 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
     from . import zotero
     try:
         zc = zotero.ZoteroClient(gc)
-        coll = zc.create_collection(cfg.project_name)   # idempotent find-or-create
+        # The configured collection, never one found or made by name while a key exists. A
+        # name lookup here split DigiPros' corpus twice ("digipros" vs "DigiPros").
+        coll = zotero.resolve_collection(zc, cfg, create=True)
+    except zotero.CollectionError as e:
+        print(f"\n[error] {e}\n        Listing all candidates; no collection was touched.",
+              file=sys.stderr)
+        return "", ranked, 0, 0
     except Exception as e:  # noqa: BLE001
         print(f"\n[warn] Zotero unavailable ({e}); listing all candidates.")
         return "", ranked, 0, 0
+    zotero.warn_similar(zc, cfg, coll)
+    _pin_collection(coll)
 
     print(f"  {runlog.stamp()}Reading the project's Zotero collection, then your whole library "
           f"(page by page, 100 items a request) to spot candidates you already hold...",
@@ -885,6 +893,27 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
             continue
         kept.append(c)
     return coll, kept, already, added
+
+
+def _pin_collection(key: str) -> None:
+    """Record the project's collection in haarpi.yaml the first time one is known, so every
+    review and every later run uses it by key. Never overwrites a pinned key."""
+    try:
+        from pathlib import Path
+
+        from haarpi import project as _hproject
+        root = _hproject.find_root(Path.cwd())
+        if root is None:
+            return
+        m = _hproject.load_manifest(root)
+        if m.zotero_collection:
+            return
+        m.zotero_collection = key
+        _hproject.save_manifest(m, root)
+        print(f"  pinned Zotero collection {key} in {root.name}/haarpi.yaml", flush=True)
+    except Exception as e:  # noqa: BLE001 — pinning is a safeguard, not a precondition
+        print(f"  [warn] could not pin the Zotero collection in haarpi.yaml ({e})",
+              file=sys.stderr)
 
 
 def _cap_arxiv(ranked: list[Candidate], target: int, max_fraction: float) -> list[Candidate]:

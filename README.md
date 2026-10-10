@@ -240,8 +240,11 @@ raster's build writeup, which raconteur finds by a root-level glob — a methods
 review sharing that name would be read as the writeup.
 
 **One Zotero collection per project, forever, and nothing is ever moved out of
-it.** A corpus ledger beside the project records two independent things about
-each source:
+it.** The collection is pinned by key in `haarpi.yaml` (`zotero_collection:`),
+written by the project's first `gather`. Every tool uses that key and never
+looks the collection up by name; if Zotero no longer has it, the tool stops
+rather than create a replacement. A corpus ledger beside the project records two
+independent things about each source:
 
 - **purpose** — what it is *for*: `literature`, `methods`, or **both**. A paper
   on sequence analysis applied to funding pathways is methodological work and
