@@ -309,3 +309,13 @@ def test_ordinary_talk_about_an_existing_section_is_still_an_edit():
         tasks = planner._normalise_tasks(
             [{"comments": [1], "need": "edit", "query": ""}], [text])
         assert [t["need"] for t in tasks] == ["edit"], text
+
+
+def test_a_fact_base_report_draws_its_own_map_so_no_mindmap_follows():
+    """`report` on a fact base embeds the map; a separate mindmap redrew the same files."""
+    redirect = [_task("redirect", "a different question")]
+    assert planner.chain_from_tasks(redirect, fact_base=True)["steps"][-2:] == ["report", "comment"]
+    assert planner.chain_from_tasks(redirect)["steps"][-3:] == ["report", "mindmap", "comment"]
+    # a revise re-draft still gets its map
+    edit = [_task("edit", "")]
+    assert "mindmap" in planner.chain_from_tasks(edit, fact_base=True)["steps"]

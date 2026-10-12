@@ -304,6 +304,7 @@ def test_the_fact_base_report_runs_end_to_end(tmp_path, monkeypatch):
         return fp
 
     monkeypatch.setattr(summarize, "_export_bibtex", _bib)
+    monkeypatch.setattr(facts, "_MIN_TEXT_CHARS", 0)     # the fixtures are a sentence long
     monkeypatch.setattr(mindmap, "make_map", lambda *a, **k: {})
     gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1", contact_email="")
     assert facts.report(cfg, gc, paths, _Brain(), corpus, [{}, {}], citekeys, None) == 0
@@ -334,8 +335,9 @@ def test_one_broken_element_no_longer_costs_the_paper_its_facts():
     assert [f.text for f in fs] == ["A holds.", "C holds."]
 
 
-def test_a_paper_with_no_facts_leaves_its_replies_for_diagnosis(tmp_path):
+def test_a_paper_with_no_facts_leaves_its_replies_for_diagnosis(tmp_path, monkeypatch):
     from rabbithole import summarize
+    monkeypatch.setattr(facts, "_MIN_TEXT_CHARS", 0)     # the fixture is a sentence long
     paths = SimpleNamespace(work=tmp_path, root=tmp_path)
     corpus = [Candidate(title="Opaque", year=2020, fulltext="[p.1]\nSome text.")]
     cfg = SimpleNamespace(topic="t", focus="a; b")
@@ -363,13 +365,59 @@ def test_a_repeated_theme_name_is_made_distinct():
     assert len(set(names)) == len(names) and all(n != "trajectory archetypes" for n in names)
 
 
-def test_breadth_across_topics_outranks_a_deep_score_on_one():
+def test_weight_on_the_brief_outranks_breadth_across_topics():
+    """A specialist with ten central facts on one question's topic outranks a generalist
+    spread thinly over three (the 2026-10-10 DigiPros top list had no prosopography source)."""
+    topics = [Topic(name="Factoid", serves=[1]), Topic(name="Validation", serves=[2]),
+              Topic(name="Docs", serves=[3])]
     narrow = [Fact(id=f"n#{i}", citekey="n", text="t", scores=[3, 0, 0], verified=True)
               for i in range(10)]
     broad = [Fact(id=f"b#{i}", citekey="b", text="t",
                   scores=[2 if j == i % 3 else 0 for j in range(3)], verified=True)
              for i in range(6)]
-    assert facts.rank_key(broad) < facts.rank_key(narrow)
+    assert facts.rank_key(narrow, topics) < facts.rank_key(broad, topics)
+    # equal weight: the source serving more questions wins
+    two = [Fact(id="w#1", citekey="w", text="t", scores=[3, 0, 0], verified=True),
+           Fact(id="w#2", citekey="w", text="t", scores=[0, 3, 0], verified=True)]
+    one = [Fact(id="o#1", citekey="o", text="t", scores=[3, 0, 0], verified=True),
+           Fact(id="o#2", citekey="o", text="t", scores=[3, 0, 0], verified=True)]
+    assert facts.rank_key(two, topics) < facts.rank_key(one, topics)
+
+
+def test_a_topic_serving_no_question_carries_no_weight():
+    topics = [Topic(name="Factoid", serves=[1]), Topic(name="Schelling", serves=[])]
+    fs = {"pros": [Fact(id="p#1", citekey="pros", text="t", scores=[3, 0], verified=True)],
+          "sch": [Fact(id="s#1", citekey="sch", text="t", scores=[0, 3], verified=True),
+                  Fact(id="s#2", citekey="sch", text="t", scores=[2, 3], verified=True)]}
+    assert facts.fact_weight(fs, topics) == {"pros": 3, "sch": 2}
+    assert facts.rank_key(fs["pros"], topics) < facts.rank_key(fs["sch"], topics)
+    assert facts.fact_weight(fs) == {"pros": 3, "sch": 6}      # no topics known: all count
+
+
+def test_a_paper_without_a_text_layer_is_flagged_not_sent_to_the_model(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    paths = SimpleNamespace(work=work)
+    scan = Candidate(title="Prosopography", year=1986, authors=[Author(family="Bulst")],
+                     fulltext="[p.1]\n\n\n[p.2]\nElectronic copy available at ssrn\n")
+    cfg = config.ProjectConfig(project_name="P", topic="t", focus="q")
+
+    class _B:
+        def coordinator(self, *a, **k):
+            raise AssertionError("an image-only scan must not reach the model")
+    no_text: dict = {}
+    out = facts.extract(_B(), [scan], cfg, paths, None, {0: "bulst1986"}, no_text)
+    assert out == {"bulst1986": []} and no_text == {"bulst1986": 29}
+    assert not list(work.glob("facts/*.failed.txt"))
+    base = FactBase(focus=["q"], facts=out, themes=[], topics=[Topic(name="q", serves=[1])],
+                    no_text=no_text)
+    gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
+    md = facts.build_markdown(cfg, "m", base, [scan], {0: "bulst1986"}, gc, [], None)
+    assert "### Sources with no usable text" in md
+    assert "no usable text in the PDF — 29 characters; needs OCR" in md
+    paths.work = work
+    facts.save_sidecar(paths, base, [scan], {0: "bulst1986"}, gc)
+    assert facts.load_sidecar(paths).no_text == {"bulst1986": 29}
 
 
 def test_the_sidecar_says_which_sources_are_on_brief(tmp_path):

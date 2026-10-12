@@ -128,6 +128,9 @@ against the review's approved `topics:` (each mapped to the research questions i
 serves), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
 the link opens the PDF in Zotero at that page. The contribution map is embedded
 in the document, and `work/facts.json` holds the same facts for tools.
+The load-bearing list ranks sources by their weight on the topics that serve a
+research question; a source whose PDF has no usable text (an image-only scan) is
+not sent to the model but listed as needing OCR or a better copy.
 
 Output:
 ```

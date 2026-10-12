@@ -1224,7 +1224,7 @@ def consume_declines(root) -> None:
         project.record_plan(root, {"type": "needs_gather_consumed", "upto": top})
 
 
-def chain_from_tasks(tasks: list[dict]) -> dict:
+def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
     """Derive the litreview rework chain, its instructions, and a summary tier FROM the tasks.
 
     The chain is BUILT, not looked up. Sources reach the corpus by two routes that end the
@@ -1246,6 +1246,9 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
 
     ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
+
+    ``fact_base``: the review renders as a fact base, whose ``report`` draws and embeds the map
+    itself — a ``mindmap`` after it only redraws the same files (22 min on DigiPros).
     """
     needs = {t["need"] for t in tasks}
     gather_topics = [t["query"] for t in tasks
@@ -1294,13 +1297,23 @@ def chain_from_tasks(tasks: list[dict]) -> dict:
     # occurrence. It still re-renders so the reviewer gets the corrected document back.
     if not (corrections and needs == {"correct"}):
         steps.append(redraft)
-    steps.append("mindmap")     # per-draft diagnostic: regenerate the contribution map beside the draft
+    if not (fact_base and steps and steps[-1] == "report"):
+        steps.append("mindmap")  # per-draft diagnostic: regenerate the contribution map beside the draft
     steps.append("comment")
 
     tier = ("redirection" if "redirect" in needs
             else "gap_fill" if needs_sources else "cosmetic")
     return {"steps": steps, "tier": tier, "corrections": corrections,
             "gather_topics": gather_topics, "section_focus": section_focus}
+
+
+def _is_fact_base(directory: str) -> bool:
+    """Does this review render as a fact base (`report_format: facts`)? False on any doubt."""
+    try:
+        from rabbithole import config as rhconfig
+        return (rhconfig.load_project(directory).report_format or "narrative") == "facts"
+    except Exception:                         # noqa: BLE001 — unknown means the default chain
+        return False
 
 
 def _tasks_assessment(tasks: list[dict]) -> str:
@@ -2477,7 +2490,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         for c in carried:
             tasks.append({"comments": [c.get("ask") or c["heading"]],
                           "need": "section", "query": c["missing"]})
-        built = chain_from_tasks(tasks)
+        built = chain_from_tasks(tasks, fact_base=_is_fact_base(str(root)))
         built["carried"] = carried
         # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
         # it was asked for. Replaces each section ask in `gather_topics` with its heading and

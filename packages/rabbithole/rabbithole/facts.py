@@ -44,6 +44,7 @@ _MIN_QUOTE_WORDS = 5            # shorter than this, a "verbatim" match proves n
 _THEME_TARGET = 10              # facts per theme, roughly
 _MAX_THEMES = 8                 # per topic
 _TOP_QUANTILE = 0.05
+_MIN_TEXT_CHARS = 2000          # less body text than this: a scan without a text layer, not a paper
 _THIN_SOURCES = 3               # a question whose topics hold useful facts from fewer is THIN
 
 _SYS = """\
@@ -270,9 +271,19 @@ def ground(facts: list[Fact], marked: str, *, locate=None) -> list[Fact]:
     return facts
 
 
+def body_chars(text: str) -> int:
+    """Characters of real text once the [p.N] markers and whitespace are gone."""
+    return len("".join(_PAGE_SPLIT.sub("", text or "").split()))
+
+
 def extract(brain, corpus: list[Candidate], cfg, paths, collection,
-            citekeys: dict[int, str]) -> dict[str, list[Fact]]:
-    """Every source's facts, grounded. Cached per citekey in work/facts/, versioned."""
+            citekeys: dict[int, str],
+            no_text: dict[str, int] | None = None) -> dict[str, list[Fact]]:
+    """Every source's facts, grounded. Cached per citekey in work/facts/, versioned.
+
+    A source with under `_MIN_TEXT_CHARS` of text (an image-only scan, an SSRN cover page) is
+    not sent to the model — it can only answer nothing — and is recorded in `no_text`
+    (citekey -> characters) so the report says it needs OCR or a better PDF."""
     from . import chroma as _chroma
     from .summarize import _located_filename, _paper_text, reading_text
     d = paths.work / "facts"
@@ -296,8 +307,18 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         except (OSError, ValueError, TypeError):
             pass
         label = f"{c.first_author_last} {c.year or ''}".strip()
+        full = _paper_text(c)
+        n_body = body_chars(full)
+        if n_body < _MIN_TEXT_CHARS:
+            print(f"  [warn] {label}: only {n_body:,} characters of text — no text layer? "
+                  f"Needs OCR or a better PDF (Zotero item {c.zotero_key or ck}).",
+                  file=sys.stderr)
+            if no_text is not None:
+                no_text[ck] = n_body
+            out[ck] = []
+            continue
         print(f"  {runlog.stamp()}[{i + 1}/{len(corpus)}] facts: {label}", flush=True)
-        text = reading_text(brain, c, cfg, collection, ck)
+        text = reading_text(brain, c, cfg, collection, ck, text=full)
         prompt = (f"Review topic: {cfg.topic}\nFocus items:\n{numbered}\n\n"
                   f"Paper: {c.title} ({c.author_year()})\n\n"
                   f"--- PAPER TEXT ---\n{text}\n--- END ---\n\nJSON array:")
@@ -327,7 +348,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         locate = None
         if collection is not None:
             locate = lambda texts, _ck=ck: _chroma.locate_list(collection, brain, _ck, texts)  # noqa: E731
-        ground(facts, _paper_text(c), locate=locate)
+        ground(facts, full, locate=locate)
         n_ok = sum(f.verified for f in facts)
         print(f"  {runlog.stamp()}    {len(facts)} facts, {n_ok} quoted verbatim", flush=True)
         fp.write_text(json.dumps({"_v": _FACTS_VERSION, "facts": [asdict(f) for f in facts]},
@@ -532,19 +553,41 @@ def _good(f: Fact) -> bool:
     return f.verified or (f.support is not None and f.support >= _WEAK_SUPPORT)
 
 
-def fact_weight(facts: dict[str, list[Fact]]) -> dict[str, int]:
-    """Importance to THIS review: the best topic score of each well-grounded fact that scores
-    2+ somewhere, summed — a central fact counts 3, a useful one 2, background nothing."""
-    return {ck: sum(best(f) for f in fs if best(f) >= 2 and _good(f))
+def _brief_topics(topics: list[Topic] | None) -> set[int] | None:
+    """Indices of the topics that serve a research question. A topic serving none (DigiPros'
+    Schelling and Sugarscape) is searched and scored, but carries no weight; with no topics
+    known, every score counts."""
+    if not topics:
+        return None
+    return {i for i, t in enumerate(topics) if t.serves}
+
+
+def _brief_best(f: Fact, idx: set[int] | None) -> int:
+    if idx is None:
+        return best(f)
+    return max((sc for i, sc in enumerate(f.scores) if i in idx), default=0)
+
+
+def fact_weight(facts: dict[str, list[Fact]],
+                topics: list[Topic] | None = None) -> dict[str, int]:
+    """Importance to THIS review: the best score, on a topic that serves a question, of each
+    well-grounded fact scoring 2+ there, summed — a central fact counts 3, a useful one 2,
+    background nothing."""
+    idx = _brief_topics(topics)
+    return {ck: sum(b for f in fs if (b := _brief_best(f, idx)) >= 2 and _good(f))
             for ck, fs in facts.items()}
 
 
-def rank_key(fs: list[Fact]) -> tuple:
-    """Load-bearing order: breadth across the topics first, then weight, then verbatim facts.
-    Counting facts alone tied 74 DigiPros sources at the 10-fact cap."""
-    on = [f for f in fs if best(f) >= 2 and _good(f)]
-    topics = {i for f in on for i, sc in enumerate(f.scores) if sc >= 2}
-    return (-len(topics), -sum(best(f) for f in on), -sum(1 for f in on if f.verified))
+def rank_key(fs: list[Fact], topics: list[Topic] | None = None) -> tuple:
+    """Load-bearing order: weight on the brief first, then how many research questions the
+    source serves, then verbatim facts. Ranking by topic breadth first (2026-10-10) filled the
+    top with ABM-methods generalists and Schelling papers, and no prosopography source made it:
+    a specialist touches two topics however central it is."""
+    idx = _brief_topics(topics)
+    on = [f for f in fs if _brief_best(f, idx) >= 2 and _good(f)]
+    qs = {q for f in on for i, sc in enumerate(f.scores) if sc >= 2
+          and (idx is None or i in idx) for q in (topics[i].serves if topics else [i])}
+    return (-sum(_brief_best(f, idx) for f in on), -len(qs), -sum(1 for f in on if f.verified))
 
 
 def on_brief(fs: list[Fact]) -> bool:
@@ -597,6 +640,7 @@ class FactBase:
     facts: dict                                   # citekey -> [Fact]
     themes: list                                  # [Theme]
     topics: list = field(default_factory=list)    # [Topic]
+    no_text: dict = field(default_factory=dict)   # citekey -> characters, sources unreadable
 
     def by_id(self) -> dict[str, Fact]:
         return {f.id: f for fs in self.facts.values() for f in fs}
@@ -616,6 +660,7 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
         # sources tells a drafter what not to reach for.
         "sources": {ck: {"on_brief": on_brief(fs), "facts": len(fs),
                          "verbatim": sum(f.verified for f in fs)}
+                    | ({"no_text": base.no_text[ck]} if ck in base.no_text else {})
                     for ck, fs in base.facts.items()},
     }
     fp = paths.work / "facts.json"
@@ -635,7 +680,9 @@ def load_sidecar(paths) -> FactBase | None:
         facts.setdefault(d["citekey"], []).append(Fact(**d))
     return FactBase(focus=blob.get("focus_items", []), facts=facts,
                     themes=[Theme(**t) for t in blob.get("themes", [])],
-                    topics=[Topic(**t) for t in blob.get("topics", [])])
+                    topics=[Topic(**t) for t in blob.get("topics", [])],
+                    no_text={ck: s["no_text"] for ck, s in (blob.get("sources") or {}).items()
+                             if "no_text" in s})
 
 
 def map_inputs(base: FactBase):
@@ -652,7 +699,7 @@ def map_inputs(base: FactBase):
             threads.append(mindmap.Thread(theme=t.name, citekeys=list(keys)))
     evidence = {ck: [f.text for f in sorted(fs, key=lambda f: -best(f))][:2]
                 for ck, fs in base.facts.items()}
-    return threads, evidence, fact_weight(base.facts)
+    return threads, evidence, fact_weight(base.facts, base.topics)
 
 
 def coverage(base: FactBase) -> list[str]:
@@ -730,18 +777,20 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
                   f"serves it, or its topics hold useful-or-central facts from fewer than "
                   f"{_THIN_SOURCES} sources.*", ""] + cover + [""]
 
-    weight = fact_weight(base.facts)
+    weight = fact_weight(base.facts, base.topics)
     from .summarize import top_source_count
     ranked = sorted((ck for ck in weight if weight[ck] > 0 and ck in by_key),
-                    key=lambda ck: (rank_key(base.facts[ck]), ck))[:top_source_count(
+                    key=lambda ck: (rank_key(base.facts[ck], base.topics), ck))[:top_source_count(
                         len(corpus), _TOP_QUANTILE)]
     if ranked:
         parts += [f"## Most load-bearing sources (top {_TOP_QUANTILE * 100:g}% of {len(corpus)})",
-                  "", "*The sources whose well-grounded facts score highest across the topics — "
-                  "the same ranking as the contribution map's innermost ring.*", ""]
+                  "", "*The sources whose well-grounded facts score highest on the topics that serve a "
+                  "research question — the same ranking as the contribution map's innermost "
+                  "ring. Topics serving no question do not count.*", ""]
+        idx = _brief_topics(base.topics)
         for ck in ranked:
-            fs = sorted((f for f in base.facts[ck] if best(f) >= 2 and _good(f)),
-                        key=lambda f: -best(f))
+            fs = sorted((f for f in base.facts[ck] if _brief_best(f, idx) >= 2 and _good(f)),
+                        key=lambda f: -_brief_best(f, idx))
             tops = sorted({i + 1 for f in fs for i, sc in enumerate(f.scores) if sc >= 2})
             parts.append(f"- **{by_key[ck].author_year()}** [@{ck}] — topics "
                          f"{', '.join(f'T{n}' for n in tops)}; e.g. {guards_safe(fs[0].text)}")
@@ -783,7 +832,19 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
             tag = _scores_tag(f, base)
             lines.append(f"{_fact_line(f, c, gc, with_key=False)} *[{f.kind}"
                          + (f"; {tag}" if tag else "") + "]*")
+        if not lines and ck in base.no_text:
+            lines = [f"- *(no usable text in the PDF — {base.no_text[ck]:,} characters; needs "
+                     f"OCR or a better copy)*"]
         parts += (lines or ["- *(no facts extracted — re-run report)*"]) + [""]
+    unreadable = [ck for ck in base.no_text if ck in by_key]
+    if unreadable:
+        parts += ["### Sources with no usable text", "",
+                  f"*Under {_MIN_TEXT_CHARS:,} characters of text in the PDF — most likely a scan "
+                  "without a text layer. They contribute nothing until the PDF is OCRed or "
+                  "replaced in Zotero.*", ""]
+        parts += [f"- {by_key[ck].full_citation()} [@{ck}] — {base.no_text[ck]:,} characters"
+                  for ck in sorted(unreadable, key=lambda k: by_key[k].first_author_last.lower())]
+        parts.append("")
     if off:
         parts += ["### Sources with no fact useful to a topic", "",
                   "*None of their facts scores 2 or more on any topic. Their facts are above. "
@@ -809,7 +870,8 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
               file=sys.stderr)
     print(f"\n{runlog.stamp()}[2/4] Extracting facts (up to {_MAX_FACTS} per paper, each "
           f"checked against its page)...", flush=True)
-    facts = extract(brain, corpus, cfg, paths, collection, citekeys)
+    no_text: dict[str, int] = {}
+    facts = extract(brain, corpus, cfg, paths, collection, citekeys, no_text)
 
     print(f"\n{runlog.stamp()}[3/4] Scoring facts against {len(topics)} topics...", flush=True)
     score(brain, facts, topics, corpus, citekeys, paths)
@@ -831,7 +893,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
         print(f"  {runlog.stamp()}T{n} {t.name[:50]}: {len(fs)} facts from "
               f"{len({f.citekey for f in fs})} sources", flush=True)
         themes += themes_for(brain, n, t.name, fs, vectors)
-    base = FactBase(focus=items, facts=facts, themes=themes, topics=topics)
+    base = FactBase(focus=items, facts=facts, themes=themes, topics=topics, no_text=no_text)
     save_sidecar(paths, base, corpus, citekeys, gc)
     cover = coverage(base)
 
@@ -872,4 +934,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
           f"verbatim {sum(f.verified for f in all_facts)} | useful-or-central "
           f"{sum(1 for f in all_facts if best(f) >= 2)} | themes {len(themes)} | "
           f"sidecar work/facts.json")
+    if no_text:
+        print(f"  No usable text: {len(no_text)} source(s) need OCR or a better PDF — "
+              f"listed in the review")
     return 0

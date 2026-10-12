@@ -150,11 +150,23 @@ that reaches outside is dropped and counted in the log, so a bridge to a source 
 it is impossible here rather than flagged. The matcher was checked on 487 quotes already taken
 verbatim from DigiPros' papers: 483 found on the recorded page; the 4 misses were fragments.
 
-Importance (load-bearing list and map rings) sums the best topic score of each source's useful or
-central facts that are verbatim or well supported; the list ranks breadth across topics first. A
+Importance (load-bearing list and map rings) sums, over each source's verbatim or well-supported
+facts, the best score on a topic **that serves a research question**; a topic serving none (DigiPros'
+Schelling and Sugarscape search topics) is scored and shown but weighs nothing. The list ranks by
+that weight, then by how many research questions the source serves, then verbatim facts. It used to
+rank breadth across topics first, and on DigiPros (2026-10-10) that filled the top with
+ABM-methods generalists and Schelling papers while no prosopography source made it — a specialist
+touches two topics however central it is. A
 source with no fact scoring 2+ on any topic is listed last, as citations only — this replaces the
 self-exclusion screen. `work/facts.json` carries every fact
-with its link, for tools; `mindmap` reads it when the draft says `*Format:* fact base`.
+with its link, for tools; `mindmap` reads it when the draft says `*Format:* fact base`. The report
+draws and embeds the map itself, so `haarpi next` queues no separate `mindmap` after a fact-base
+`report`.
+
+**A source with under 2,000 characters of text is not sent to the model.** It is an image-only
+scan or a cover page (Bulst 1986: 54 characters; Cioffi-Revilla 2010: an SSRN cover), the model can
+only answer nothing, and it used to fail silently as "no facts extracted". It is listed under
+*Sources with no usable text* as needing OCR or a better PDF, and recorded in the sidecar.
 
 Not yet done, pending the test: `revise` and the rework tiers still assume a narrative, and
 raconteur still reads the prose prefix.
