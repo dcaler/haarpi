@@ -65,7 +65,9 @@ Rules:
 - Reproduce reported quantities EXACTLY (numbers, units, statistics). Never round them away.
 - The quote must be copied character for character from the text, not paraphrased, and must
   not span a [p.N] marker.
-- Base everything strictly on the provided text. Do not invent."""
+- Base everything strictly on the provided text. Do not invent.
+- Extract the paper's own facts whatever its subject. Relevance is judged later, not by you:
+  a paper with text always establishes something, so never return an empty array."""
 
 _THEME_SYS = """\
 You organise a literature review's facts. Respond with ONLY a JSON object, no other text."""
@@ -98,6 +100,8 @@ class Fact:
     quote: str = ""
     verified: bool = False                         # the quote is on that page, verbatim
     support: float | None = None                   # embedding cosine, when located by search
+    claimed_page: int | None = None                # what the model cited, kept when search
+    claimed_quote: str = ""                        # replaced it: to measure looser matching
     scores: list = field(default_factory=list)     # 0-3 per topic, in topic order
 
 
@@ -145,7 +149,8 @@ def derive_focus(facts: dict[str, list[Fact]], topics: list[Topic]) -> None:
     """A fact bears on a research question when it scores 2+ on a topic serving that question."""
     for fs in facts.values():
         for f in fs:
-            f.focus = sorted({q for t, sc in zip(topics, f.scores) if sc >= 2 for q in t.serves})
+            f.focus = (sorted({q for t, sc in zip(topics, f.scores) if sc >= 2 for q in t.serves})
+                       if _good(f) else [])
 
 
 # ── extraction and verification ─────────────────────────────────────────────────
@@ -260,6 +265,7 @@ def ground(facts: list[Fact], marked: str, *, locate=None) -> list[Fact]:
                   file=sys.stderr)
             located = {}
         for f in todo:
+            f.claimed_page, f.claimed_quote = f.page, f.quote
             it = located.get(f.text)
             if not it:
                 f.page, f.quote = None, ""
@@ -289,7 +295,6 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
     d = paths.work / "facts"
     d.mkdir(parents=True, exist_ok=True)
     items = focus_items(cfg.focus)
-    numbered = "\n".join(f"{i}. {it}" for i, it in enumerate(items, 1)) or "(none)"
     sys_prompt = _SYS.replace("{max_facts}", str(_MAX_FACTS))
     out: dict[str, list[Fact]] = {}
     t0, done, cached = time.time(), 0, 0
@@ -319,8 +324,9 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
             continue
         print(f"  {runlog.stamp()}[{i + 1}/{len(corpus)}] facts: {label}", flush=True)
         text = reading_text(brain, c, cfg, collection, ck, text=full)
-        prompt = (f"Review topic: {cfg.topic}\nFocus items:\n{numbered}\n\n"
-                  f"Paper: {c.title} ({c.author_year()})\n\n"
+        # No review topic or focus here: given them, the model judged off-brief papers to hold
+        # nothing and answered [] (11 DigiPros papers, 2026-10-10). Relevance is `score`'s job.
+        prompt = (f"Paper: {c.title} ({c.author_year()})\n\n"
                   f"--- PAPER TEXT ---\n{text}\n--- END ---\n\nJSON array:")
         facts: list[Fact] = []
         replies: list[str] = []
@@ -549,8 +555,19 @@ def themes_for(brain, item_no: int, item: str, facts: list[Fact],
 # ── ranking, links, rendering ───────────────────────────────────────────────────
 
 def _good(f: Fact) -> bool:
-    from .summarize import _WEAK_SUPPORT
-    return f.verified or (f.support is not None and f.support >= _WEAK_SUPPORT)
+    """Does the fact count? Only a quote found verbatim on its page. A passage located by
+    embedding search is shown for checking but carries no weight: of 30 DigiPros ones scoring
+    0.55-0.75 (2026-10-12), about 6 supported their fact, and the cosine did not tell them apart."""
+    return f.verified
+
+
+def counts(f: Fact, i: int | None = None) -> int:
+    """The fact's score on topic i (0-based), or its best — 0 when it does not count."""
+    if not _good(f):
+        return 0
+    if i is None:
+        return best(f)
+    return f.scores[i] if len(f.scores) > i else 0
 
 
 def _brief_topics(topics: list[Topic] | None) -> set[int] | None:
@@ -626,9 +643,10 @@ def _fact_line(f: Fact, c: Candidate, gc, *, with_key: bool = True) -> str:
         line += f': “{guards_safe(f.quote)}”'
     if not f.verified:
         if f.support is not None and f.support < _WEAK_SUPPORT:
-            line += " *(located by search; weak support — verify)*"
+            line += " *(passage found by search; weak support — verify. Not counted.)*"
         elif f.page:
-            line += " *(located by search, not quoted verbatim)*"
+            line += (" *(passage found by search — it may not support this fact; check. "
+                     "Not counted.)*")
         else:
             line += " *(not found in the text — verify)*"
     return line
@@ -717,8 +735,8 @@ def coverage(base: FactBase) -> list[str]:
             continue
         parts, srcs = [], set()
         for i, t in serving:
-            central = [f for f in all_facts if len(f.scores) > i and f.scores[i] == 3]
-            useful = [f for f in all_facts if len(f.scores) > i and f.scores[i] == 2]
+            central = [f for f in all_facts if counts(f, i) == 3]
+            useful = [f for f in all_facts if counts(f, i) == 2]
             s_t = {f.citekey for f in central + useful}
             srcs |= s_t
             parts.append(f"T{i + 1} {t.name}: {len(central)} central, {len(useful)} useful "
@@ -741,7 +759,7 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
     all_facts = [f for fs in base.facts.values() for f in fs]
     n_src = sum(1 for fs in base.facts.values() if fs)
     n_ver = sum(f.verified for f in all_facts)
-    n_on = sum(1 for f in all_facts if best(f) >= 2)
+    n_on = sum(1 for f in all_facts if counts(f) >= 2)
     pct = (lambda a: f"{100 * a / len(all_facts):.0f}%") if all_facts else (lambda a: "0%")
     parts = [
         f"# Literature Review: {cfg.topic}", "",
@@ -757,8 +775,9 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
               f"{pct(n_ver)} · useful or central to a topic {pct(n_on)}  ", ""]
     parts += ["*How to read this: every fact links to its page — the link opens the PDF in "
               "Zotero at that page. A plain quote was found verbatim on that page; anything "
-              "located by search instead says so. Each fact is scored against the approved "
-              "topics: 3 central, 2 useful, 1 background.*", ""]
+              "located by search instead says so, and is not counted anywhere — its passage may not "
+              "support it. Each fact is scored against the approved topics: 3 central, "
+              "2 useful, 1 background.*", ""]
     if map_png is not None:
         parts += [f"![Contribution map]({map_png.name})", ""]
 
@@ -767,8 +786,8 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
               "serves.*", ""]
     for i, t in enumerate(base.topics, 1):
         qs = ", ".join(f"Q{q}" for q in t.serves) or "no question"
-        n3 = sum(1 for f in all_facts if len(f.scores) >= i and f.scores[i - 1] == 3)
-        n2 = sum(1 for f in all_facts if len(f.scores) >= i and f.scores[i - 1] == 2)
+        n3 = sum(1 for f in all_facts if counts(f, i - 1) == 3)
+        n2 = sum(1 for f in all_facts if counts(f, i - 1) == 2)
         parts.append(f"- **T{i}. {t.name}** — serves {qs}; {n3} central, {n2} useful facts")
     parts.append("")
     if cover:
@@ -797,8 +816,9 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
         parts.append("")
 
     parts += ["## Facts by topic", "",
-              "*Facts scoring useful (2) or central (3) on the topic, central first. Background "
-              "facts appear only in the by-publication list below.*", ""]
+              "*Facts quoted verbatim and scoring useful (2) or central (3) on the topic, central "
+              "first. Background facts, and facts whose passage was only found by search, "
+              "appear in the by-publication list below.*", ""]
     for n, t in enumerate(base.topics, 1):
         themes = [th for th in base.themes if th.item == n]
         qs = ", ".join(f"Q{q}" for q in t.serves)
@@ -807,8 +827,9 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
             parts += ["*No fact in the corpus scores useful or central on this topic.*", ""]
             continue
         for th in themes:
-            fs = sorted((by_id[fid] for fid in th.fact_ids if fid in by_id),
-                        key=lambda f: -(f.scores[n - 1] if len(f.scores) >= n else 0))
+            fs = sorted((by_id[fid] for fid in th.fact_ids
+                         if fid in by_id and counts(by_id[fid], n - 1) >= 2),
+                        key=lambda f: -counts(f, n - 1))
             parts += [f"### {th.name}", ""]
             if th.synthesis:
                 parts += [f"- *{guards_safe(b)}*" for b in th.synthesis] + [""]
@@ -881,7 +902,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     vectors: dict[str, list[float]] = {}
     for fs in facts.values():
         for f in fs:
-            if best(f) >= 2:
+            if counts(f) >= 2:
                 try:
                     vectors[f.id] = brain.embed(f.text)
                 except Exception as e:  # noqa: BLE001
@@ -932,7 +953,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
         print(f"  Map (embedded): {map_png}")
     print(f"  Facts: {len(all_facts)} from {sum(1 for fs in facts.values() if fs)} sources | "
           f"verbatim {sum(f.verified for f in all_facts)} | useful-or-central "
-          f"{sum(1 for f in all_facts if best(f) >= 2)} | themes {len(themes)} | "
+          f"{sum(1 for f in all_facts if counts(f) >= 2)} | themes {len(themes)} | "
           f"sidecar work/facts.json")
     if no_text:
         print(f"  No usable text: {len(no_text)} source(s) need OCR or a better PDF — "

@@ -126,12 +126,14 @@ def test_a_fact_links_to_its_page_in_zotero_or_falls_back_to_the_doi():
     assert facts.page_link(_cand(doi="10.1086/229495"), 7, gc) == "https://doi.org/10.1086/229495"
 
 
-def test_weight_sums_the_best_score_of_well_grounded_useful_facts():
+def test_weight_sums_the_best_score_of_verbatim_useful_facts():
+    """A passage found by search carries no weight, however high its support: of 30 DigiPros
+    ones at 0.55-0.75 about 6 supported their fact, and the cosine did not tell which."""
     fs = {"a": [Fact(id="a#1", citekey="a", text="t", scores=[3, 0], verified=True),
                 Fact(id="a#2", citekey="a", text="t", scores=[1, 1], verified=True),
                 Fact(id="a#3", citekey="a", text="t", scores=[0, 2], support=0.3)],
           "b": [Fact(id="b#1", citekey="b", text="t", scores=[0, 2], support=0.8)]}
-    assert facts.fact_weight(fs) == {"a": 3, "b": 2}
+    assert facts.fact_weight(fs) == {"a": 3, "b": 0}
 
 
 _TOPICS = [Topic(name="Sequence analysis", serves=[1]), Topic(name="Factoid model", serves=[2])]
@@ -162,7 +164,7 @@ def test_coverage_is_built_per_question_from_its_topics():
     base = _base()
     lines = facts.coverage(base)
     assert lines[0].startswith("- **THIN** — *Q1: trajectory archetypes*. 1 sources.")
-    assert "T1 Sequence analysis: 1 central, 1 useful facts from 1 sources" in lines[0]
+    assert "T1 Sequence analysis: 1 central, 0 useful facts from 1 sources" in lines[0]
     assert "T2 Factoid model: 0 central, 0 useful facts from 0 sources" in lines[1]
     base.topics = [Topic(name="Sequence analysis", serves=[1])]
     assert facts.coverage(base)[1] == ("- **THIN** — *Q2: factoid model*. No topic serves this "
@@ -181,11 +183,13 @@ def test_the_document_links_every_fact_and_shows_scores(tmp_path):
                               gc, facts.coverage(base), png)
     assert mindmap.is_fact_base(md)
     assert "![Contribution map](261009_DigiPros_litmap_ra.png)" in md
-    assert "- **T1. Sequence analysis** — serves Q1; 1 central, 1 useful facts" in md
+    assert "- **T1. Sequence analysis** — serves Q1; 1 central, 0 useful facts" in md
     assert ("- Optimal matching found 20 types. [@abbott1990] — "
             "[p.2](zotero://open-pdf/library/items/ATT1?page=2): "
             "“identified 20 ideal-type career patterns” **(central)**") in md
-    assert "weak support — verify" in md                         # f2, located by search, 0.3
+    assert "weak support — verify. Not counted." in md           # f2, located by search, 0.3
+    t1 = md.split("## T1. Sequence analysis")[1].split("## T2.")[0]
+    assert "Careers were coded" not in t1          # search-placed: by-publication list only
     assert "## T2. Factoid model (Q2)" in md
     assert "*No fact in the corpus scores useful or central on this topic.*" in md
     bib = md.split("## Annotated Bibliography (by publication)")[1]
@@ -254,11 +258,47 @@ def test_scoring_is_cached_until_the_topics_change(tmp_path):
 
 
 def test_a_fact_bears_on_the_questions_its_useful_topics_serve():
-    fs = {"a": [Fact(id="a#1", citekey="a", text="t", scores=[2, 1]),
-                Fact(id="a#2", citekey="a", text="t", scores=[0, 3])]}
+    fs = {"a": [Fact(id="a#1", citekey="a", text="t", scores=[2, 1], verified=True),
+                Fact(id="a#2", citekey="a", text="t", scores=[0, 3], verified=True),
+                Fact(id="a#3", citekey="a", text="t", scores=[3, 3], support=0.9)]}
     topics = [Topic("Sequence", [1, 3]), Topic("Factoid", [2])]
     facts.derive_focus(fs, topics)
     assert fs["a"][0].focus == [1, 3] and fs["a"][1].focus == [2]
+    assert fs["a"][2].focus == []                                  # search-placed: not counted
+
+
+def test_search_keeps_the_models_own_quote_for_later_measurement():
+    f = Fact(id="a#1", citekey="a", text="Twenty types emerged.", page=4,
+             quote="twenty ideal types of careers")
+    facts.ground([f], "[p.1]\nnothing here", locate=lambda texts: [
+        {"claim": texts[0], "location": "p.2", "quote": "a nearby passage", "support": 0.7}])
+    assert (f.page, f.quote, f.verified) == (2, "a nearby passage", False)
+    assert (f.claimed_page, f.claimed_quote) == (4, "twenty ideal types of careers")
+
+
+def test_extraction_does_not_tell_the_model_the_review_topic(tmp_path, monkeypatch):
+    """Told the topic, the model answered [] for off-brief papers; relevance is score's job."""
+    monkeypatch.setattr(facts, "_MIN_TEXT_CHARS", 0)
+    seen = []
+
+    class _B:
+        def coordinator(self, prompt, system="", **kw):
+            seen.append((prompt, system))
+            return "[]"
+    cfg = SimpleNamespace(topic="digital prosopography", focus="factoid model; ODD")
+    facts.extract(_B(), [_cand(fulltext="[p.1]\nWind farms divide towns.")], cfg,
+                  SimpleNamespace(work=tmp_path), None, {0: "abbott1990"})
+    prompt, system = seen[0]
+    assert "prosopography" not in prompt and "factoid" not in prompt
+    assert "never return an empty array" in system
+
+
+def test_retrieval_skips_title_pages_and_ocr_noise():
+    from rabbithole.chroma import readable_chunk
+    assert not readable_chunk("[p.3]\nDigitized by the Internet Archive \nIn 2023 with funding")
+    assert not readable_chunk("[p.1]\n" + "nas ova i fe ae eeiat ibd Sree cee setae ame ey " * 10)
+    assert readable_chunk("[p.4]\n" + "The factoid model records each assertion of a source "
+                          "about a person, with the source and the place it was made. " * 3)
 
 
 # ── the whole report, with a fake brain ───────────────────────────────────────

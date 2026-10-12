@@ -123,8 +123,8 @@ only a 12,000-character prefix of the result, never the bibliography where the f
 
 | Step | What happens | LLM |
 |---|---|---|
-| **extract** | up to 10 atomic facts per paper: the fact, its kind, its page, a verbatim quote | coordinator × N papers (cached in `work/facts/`, versioned) |
-| **verify** | the quote is searched for in the paper's own page-marked text (case, whitespace, ligatures, line hyphenation and quote marks ignored). Found → **verbatim**, and the page is where it was found. Not found → located by embedding search, with a support score | none |
+| **extract** | up to 10 atomic facts per paper: the fact, its kind, its page, a verbatim quote. The model is NOT told the review's topic: told it, it answered `[]` for off-brief papers (11 on DigiPros, 2026-10-10) — relevance is `score`'s job | coordinator × N papers (cached in `work/facts/`, versioned) |
+| **verify** | the quote is searched for in the paper's own page-marked text (case, whitespace, ligatures, line hyphenation and quote marks ignored). Found → **verbatim**, and the page is where it was found. Not found → located by embedding search, with a support score, and the model's own page and quote kept (`claimed_page`, `claimed_quote`) to measure looser matching later. **Only verbatim facts count**: a search-placed one is shown in the by-publication list, labelled, and carries no weight, coverage or topic placement — of 30 DigiPros ones at support 0.55–0.75 about 6 supported their fact, and the cosine did not tell which | none |
 | **score** | every fact scored 0–3 against every approved **topic** (0 none, 1 background, 2 useful, 3 central) | 1 call per paper (cached in `work/facts/scores/`, keyed by the topic list) |
 | **group** | facts scoring 2+ on a topic, then cosine k-means into themes (~10 facts each, ≤8 per topic) | 1 short call per theme: a name and 2–4 synthesis bullets |
 | **render** | topics, coverage per research question, the contribution map (embedded), load-bearing sources, facts by topic and theme, every source's facts in full | none |
@@ -150,8 +150,7 @@ that reaches outside is dropped and counted in the log, so a bridge to a source 
 it is impossible here rather than flagged. The matcher was checked on 487 quotes already taken
 verbatim from DigiPros' papers: 483 found on the recorded page; the 4 misses were fragments.
 
-Importance (load-bearing list and map rings) sums, over each source's verbatim or well-supported
-facts, the best score on a topic **that serves a research question**; a topic serving none (DigiPros'
+Importance (load-bearing list and map rings) sums, over each source's verbatim facts, the best score on a topic **that serves a research question**; a topic serving none (DigiPros'
 Schelling and Sugarscape search topics) is scored and shown but weighs nothing. The list ranks by
 that weight, then by how many research questions the source serves, then verbatim facts. It used to
 rank breadth across topics first, and on DigiPros (2026-10-10) that filled the top with
@@ -167,6 +166,12 @@ draws and embeds the map itself, so `haarpi next` queues no separate `mindmap` a
 scan or a cover page (Bulst 1986: 54 characters; Cioffi-Revilla 2010: an SSRN cover), the model can
 only answer nothing, and it used to fail silently as "no facts extracted". It is listed under
 *Sources with no usable text* as needing OCR or a better PDF, and recorded in the sidecar.
+
+**Retrieval skips unreadable chunks.** A long paper is read as its best few chunks per query; each
+query now takes them from a wider pool, skipping chunks under 200 characters or with almost no
+function words (OCR noise). Namier's 700-page *House of Commons* had been read as 12 chunks of
+front matter — the scan's cover, "Digitized by the Internet Archive", the title page — because
+short chunks match an "introduction / preface" query best. The notes share this retrieval.
 
 Not yet done, pending the test: `revise` and the rework tiers still assume a narrative, and
 raconteur still reads the prose prefix.

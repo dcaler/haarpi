@@ -649,6 +649,23 @@ def locate_list(collection, brain, citekey: str, claim_sents: list[str]) -> list
     return results
 
 
+_MIN_CHUNK_CHARS = 200           # shorter: a title page, a running head, a figure label
+_MIN_CHUNK_PROSE = 0.08          # share of common function words below which it is OCR noise
+_FUNCTION_WORDS = frozenset("the of and to in a is that for as by with on was are be this it from "
+                            "or which an at not were have their".split())
+
+
+def readable_chunk(doc: str) -> bool:
+    """Is this chunk worth a model's reading? Namier's 700-page House of Commons was read as 12
+    chunks of front matter — cover-scan noise, "Digitized by the Internet Archive", the title
+    page — because short chunks match an "introduction / preface" query best (2026-10-10)."""
+    body = re.sub(r"\[p\.\d+\]", "", doc or "")
+    if len("".join(body.split())) < _MIN_CHUNK_CHARS:
+        return False
+    words = re.findall(r"[a-z]+", body.lower())
+    return bool(words) and sum(w in _FUNCTION_WORDS for w in words) / len(words) >= _MIN_CHUNK_PROSE
+
+
 def query_paper_multi(collection, brain, citekey: str, queries: list[str],
                       n_per_query: int = 3) -> str:
     """Retrieve chunks across multiple queries, deduplicated and page-ordered.
@@ -656,11 +673,14 @@ def query_paper_multi(collection, brain, citekey: str, queries: list[str],
     Runs one embed + one ChromaDB query per query string, unions the results
     (no duplicate chunks), and returns them sorted by page order. This replaces
     multi-step LLM condensing: N embed calls (fast) instead of N LLM calls.
+    Each query takes its best `n_per_query` READABLE chunks from a wider pool, so fragments
+    and OCR noise never fill the reading; a paper with none readable keeps the nearest.
     """
     total = _paper_chunk_count(collection, citekey)
     if total == 0:
         return ""
     n = min(n_per_query, total)
+    pool = min(total, max(n * 10, 30))
     seen: set[int] = set()
     pairs: list[tuple[dict, str]] = []
     for q in queries:
@@ -672,13 +692,19 @@ def query_paper_multi(collection, brain, citekey: str, queries: list[str],
         r = collection.query(
             query_embeddings=[q_emb],
             where={"citekey": citekey},
-            n_results=n,
+            n_results=pool,
             include=["documents", "metadatas"],
         )
-        for meta, doc in zip(r.get("metadatas", [[]])[0], r.get("documents", [[]])[0]):
+        hits = list(zip(r.get("metadatas", [[]])[0], r.get("documents", [[]])[0]))
+        good = [h for h in hits if readable_chunk(h[1])] or hits
+        taken = 0
+        for meta, doc in good:
+            if taken >= n:
+                break
             cid = meta.get("chunk_idx", 0)
             if cid not in seen:
                 seen.add(cid)
                 pairs.append((meta, doc))
+                taken += 1
     pairs.sort(key=lambda x: x[0].get("chunk_idx", 0))
     return "\n\n".join(doc for _, doc in pairs)
