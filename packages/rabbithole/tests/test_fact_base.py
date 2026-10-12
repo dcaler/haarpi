@@ -49,6 +49,13 @@ def test_a_verbatim_quote_is_found_on_its_page_whatever_the_case_or_hyphenation(
     assert facts.find_quote("“Careers were coded as sequences of positions.”", pages) == 1
 
 
+def test_a_soft_hyphen_at_a_line_break_does_not_hide_a_verbatim_quote():
+    pages = facts.page_texts("[p.1]\nIntro.\n[p.4]\nStudies were identified using the Scopus data\u00ad\n"
+                             "base, using the following combination of terms.")
+    assert facts.find_quote("Studies were identified using the Scopus database, using the "
+                            "following combination", pages) == 4
+
+
 def test_an_elided_quote_matches_only_if_every_piece_is_on_one_page():
     pages = facts.page_texts(_MARKED)
     assert facts.find_quote("Optimal matching identified 20 ideal-type ... closer to their "

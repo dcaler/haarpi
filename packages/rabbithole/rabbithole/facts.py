@@ -162,6 +162,10 @@ def _norm(text: str) -> str:
     """Text as compared for a verbatim match: case, whitespace, hyphenation, quote style and
     ligatures do not count; words do."""
     t = (text or "").replace("ﬁ", "fi").replace("ﬂ", "fl")
+    # A soft hyphen (U+00AD) is an invisible break point the PDF keeps where a word was split
+    # across a line: "data\xad\nbase" on the page is "database" in the quote (DigiPros,
+    # 2026-10-12). Dropped with the whitespace after it, so the word rejoins.
+    t = re.sub(r"\u00ad\s*", "", t)
     # A word hyphenated across a line: "ini-\ntially" in the page, "ini- tially" in a quote
     # copied from it. Both are joined, so the two still compare equal.
     t = re.sub(r"(\w)-\s+(\w)", r"\1\2", t)
