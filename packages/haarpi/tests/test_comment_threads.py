@@ -134,3 +134,22 @@ def test_a_comment_on_deleted_text_is_still_seen(tmp_path):
     assert "7" in spans, "a comment anchored inside deleted text must still have a span"
     text = rl.paragraph_text(p_el)
     assert rl.anchored_sentences(text, spans["7"]), "and must bear on some sentence"
+
+
+def test_a_comment_knows_the_headings_above_it_and_the_text_it_is_on(tmp_path):
+    """A fact base's rework is decided by WHERE a comment sits: which topic, which source."""
+    d = write_commented_docx(
+        tmp_path / "facts.docx",
+        ["T7. Record incompleteness", "Calibration and history",
+         "Backward induction approximates the assumptions. [@fagiolo2018]",
+         "Annotated Bibliography", "Bulst (1986). Prosopography. [@bulst1986]"],
+        [{"cid": "1", "author": HUMAN, "text": "this isn't record bias", "anchor": 2},
+         {"cid": "2", "author": HUMAN, "text": "add a topic on archives", "anchor": 0},
+         {"cid": "3", "author": HUMAN, "text": "fixed the PDF", "anchor": 4}],
+        styles={0: "Heading 2", 1: "Heading 3", 3: "Heading 2"})
+    a = rl.comment_anchors(d)
+    assert a["1"]["headings"] == ["T7. Record incompleteness", "Calibration and history"]
+    assert "[@fagiolo2018]" in a["1"]["text"]
+    assert a["2"]["headings"] == ["T7. Record incompleteness"]    # ON the heading
+    assert a["2"]["text"] == "T7. Record incompleteness"
+    assert a["3"]["headings"] == ["Annotated Bibliography"] and "[@bulst1986]" in a["3"]["text"]

@@ -136,6 +136,14 @@ fused them into a single ask, drafted one section for it, credited that section
 to all three in identical replies, and left a second section belonging to
 nobody.
 
+**The phrasings are published.** Which rework a comment gets depends on which
+kind it is sorted into, so the kinds and the phrasings that trigger them are one
+table per deliverable (`haarpi/comment_kinds.py`). The classifier's prompt is
+generated from it, and so is the **release guide** a deliverable opens with —
+what releasing means, the agent's own checklist, and "write something like … and
+this happens", with the cost. The literature review's fact base (on test) is the
+first to carry one; its comments are routed, never answered by rewording a fact.
+
 **Sections are planned before the gather that has to find their literature.**
 The heading and one-sentence claim are decided in `haarpi next`, so the search
 runs on what will be written rather than on how it was requested — a reviewer's

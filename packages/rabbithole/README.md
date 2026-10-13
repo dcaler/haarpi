@@ -133,6 +133,12 @@ The load-bearing list ranks sources by their weight on the topics that serve a
 research question; a source whose PDF has no usable text (an image-only scan) is
 not sent to the model but listed as needing OCR or a better copy.
 
+The fact base opens with **how to decide whether to release it**: a short checklist, and a
+table of the comment phrasings `haarpi next` recognises and what each costs ("this isn't what
+the paper says" re-extracts that source; "T7 should only mean …" scopes the topic and
+re-scores; "not relevant" quarantines the source). Comments are answered by re-running the
+cached report, never by rewording a fact, and the next version opens with what became of each.
+
 Output:
 ```
 litReview/output/<project>_litreview_<brain>.md

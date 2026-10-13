@@ -1257,6 +1257,40 @@ def anchor_fragment(p_el, fragment: str, nid: str) -> bool:
     return True
 
 
+def comment_anchors(path: Path) -> dict[str, dict]:
+    """What each comment is ON: the headings above it, and the text it highlights.
+
+    ``{id: {"headings": [h1, h2, h3…], "text": "…"}}``. ``headings`` is the outline path to the
+    first anchored paragraph (deepest last); ``text`` joins every paragraph the range touches,
+    as it reads with tracked changes accepted. A reviewer often highlights several bullets at
+    once, and a heading the comment sits ON is included as text, not only as context.
+
+    A deliverable whose rework is decided by WHERE a comment sits (a fact base: which source,
+    which topic) reads this; prose redlining has its own, sentence-level anchoring.
+    """
+    doc = Document(str(path))
+    path_by_level: dict[int, str] = {}
+    opened: dict[str, dict] = {}
+    out: dict[str, dict] = {}
+    for p_el in doc.element.body.iter(qn("w:p")):
+        text = _accepted_para_text(p_el).strip()
+        if _is_heading_p(p_el):
+            st = p_el.find(qn("w:pPr")).find(qn("w:pStyle")).get(qn("w:val")) or ""
+            m = re.search(r"(\d+)", st)
+            level = int(m.group(1)) if m else 1
+            path_by_level = {k: v for k, v in path_by_level.items() if k < level}
+            path_by_level[level] = text
+        for el in p_el.iter(qn("w:commentRangeStart")):
+            cid = el.get(qn("w:id"))
+            heads = [path_by_level[k] for k in sorted(path_by_level)]
+            opened[cid] = out[cid] = {"headings": heads, "text": ""}
+        for rec in opened.values():
+            rec["text"] = (rec["text"] + "\n" + text).strip() if text else rec["text"]
+        for el in p_el.iter(qn("w:commentRangeEnd")):
+            opened.pop(el.get(qn("w:id")), None)
+    return out
+
+
 def _is_heading_p(p_el) -> bool:
     """A heading, read off the XML — the caller may not have a python-docx paragraph."""
     pPr = p_el.find(qn("w:pPr"))

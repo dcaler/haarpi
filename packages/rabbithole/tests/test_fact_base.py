@@ -190,6 +190,10 @@ def test_the_document_links_every_fact_and_shows_scores(tmp_path):
                               gc, facts.coverage(base), png)
     assert mindmap.is_fact_base(md)
     assert "![Contribution map](261009_DigiPros_litmap_ra.png)" in md
+    # the release guide opens it: the agent's checklist inside haarpi's frame, with the phrasings
+    assert md.index("## Before you release this document") < md.index("## Topics")
+    assert "**Coverage against the brief.**" in md and "| **topic_scope** |" in md
+    assert not any("release" in t.theme.lower() for t in mindmap.parse_threads(md))
     assert "- **T1. Sequence analysis** — serves Q1; 1 central, 0 useful facts" in md
     assert ("- Optimal matching found 20 types. [@abbott1990] — "
             "[p.2](zotero://open-pdf/library/items/ATT1?page=2): "
@@ -229,7 +233,7 @@ def test_the_sidecar_round_trips(tmp_path):
     facts.save_sidecar(paths, _base(), corpus, {0: "abbott1990", 1: "zed2020"}, gc)
     blob = json.loads((tmp_path / "facts.json").read_text())
     assert blob["facts"][0]["link"] == "zotero://open-pdf/library/items/ATT1?page=2"
-    assert blob["topics"][0] == {"name": "Sequence analysis", "serves": [1]}
+    assert blob["topics"][0] == {"name": "Sequence analysis", "serves": [1], "covers": ""}
     back = facts.load_sidecar(paths)
     assert back.focus == _base().focus and back.themes[0].name == "Sequence typologies"
     assert back.topics == _TOPICS and back.by_id()["abbott1990#1"].scores == [3, 0]
@@ -474,7 +478,8 @@ def test_the_sidecar_says_which_sources_are_on_brief(tmp_path):
     facts.save_sidecar(paths, _base(), corpus, {0: "abbott1990", 1: "zed2020"}, gc)
     src = json.loads((tmp_path / "facts.json").read_text())["sources"]
     assert src["abbott1990"]["on_brief"] and not src["zed2020"]["on_brief"]
-    assert src["abbott1990"] == {"on_brief": True, "facts": 2, "verbatim": 1}
+    assert src["abbott1990"] == {"on_brief": True, "facts": 2, "verbatim": 1,
+                                 "zotero_key": "", "label": "Abbott, 1990"}
     assert facts.load_sidecar(paths).facts["zed2020"][0].text == "Wind farms divide towns."
 
 

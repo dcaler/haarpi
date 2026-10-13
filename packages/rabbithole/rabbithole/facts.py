@@ -34,6 +34,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
+from haarpi import comment_kinds
+
 from . import guards, mindmap, render, runlog
 from .models import Candidate
 
@@ -121,6 +123,8 @@ def focus_items(focus: str) -> list[str]:
 class Topic:
     name: str
     serves: list = field(default_factory=list)     # 1-based research questions (focus items)
+    covers: str = ""                               # what the topic means and does NOT — a
+                                                   #   reviewer's scope, read by the scorer
 
 
 def resolve_topics(cfg) -> list[Topic]:
@@ -135,7 +139,8 @@ def resolve_topics(cfg) -> list[Topic]:
         elif isinstance(t, dict) and str(t.get("name") or "").strip():
             out.append(Topic(name=str(t["name"]).strip(),
                              serves=sorted({int(x) for x in (t.get("serves") or [])
-                                            if str(x).strip().isdigit()})))
+                                            if str(x).strip().isdigit()}),
+                             covers=str(t.get("covers") or "").strip()))
     if out:
         return out
     return [Topic(name=q, serves=[n]) for n, q in enumerate(focus_items(cfg.focus), 1)]
@@ -387,13 +392,18 @@ Score each fact against EVERY topic:
   2 = useful: a method, definition or finding a researcher on this topic would likely cite
   3 = central: the fact is directly about this topic
 Judge each topic on its own; a fact can score high on several or on none.
+Where a topic says what it covers, a fact outside that scope scores 0 or 1 on it, however many
+words they share.
 
 Return {{"F1": [{n} scores in topic order], "F2": [...], ...}}"""
 
 
 def topics_signature(topics: list[Topic]) -> str:
     import hashlib
-    return hashlib.sha1("\n".join(t.name for t in topics).encode()).hexdigest()[:12]
+    # A scope is part of what is scored against; a topic without one hashes as before, so
+    # adding scopes to some topics leaves the other projects' caches valid.
+    return hashlib.sha1("\n".join(t.name + (f" | {t.covers}" if t.covers else "")
+                                  for t in topics).encode()).hexdigest()[:12]
 
 
 def _parse_scores(raw: str, n_facts: int, n_topics: int) -> list[list[int]] | None:
@@ -425,7 +435,8 @@ def score(brain, facts: dict[str, list[Fact]], topics: list[Topic], corpus, cite
     d = paths.work / "facts" / "scores"
     d.mkdir(parents=True, exist_ok=True)
     sig = topics_signature(topics)
-    listing = "\n".join(f"T{i}. {t.name}" for i, t in enumerate(topics, 1))
+    listing = "\n".join(f"T{i}. {t.name}" + (f" — covers: {t.covers}" if t.covers else "")
+                        for i, t in enumerate(topics, 1))
     label = {citekeys[i]: c.author_year() for i, c in enumerate(corpus) if i in citekeys}
     t0, done, cached, failed = time.time(), 0, 0, 0
     for ck, fs in facts.items():
@@ -681,7 +692,9 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
         # Per source: does any of its facts bear on the brief? A clean list of off-brief
         # sources tells a drafter what not to reach for.
         "sources": {ck: {"on_brief": on_brief(fs), "facts": len(fs),
-                         "verbatim": sum(f.verified for f in fs)}
+                         "verbatim": sum(f.verified for f in fs),
+                         "zotero_key": getattr(by_key.get(ck), "zotero_key", "") or "",
+                         "label": by_key[ck].author_year() if ck in by_key else ck}
                     | ({"no_text": base.no_text[ck]} if ck in base.no_text else {})
                     for ck, fs in base.facts.items()},
     }
@@ -756,8 +769,32 @@ def _scores_tag(f: Fact, base: FactBase) -> str:
     return ", ".join(hits)
 
 
+# The fact base's half of the release guide (haarpi owns the other half: what releasing means,
+# how to release or hold, and the phrasing table generated from the comment-kind vocabulary).
+RELEASE_CHECKLIST = [
+    "**Coverage against the brief.** Does every question marked *Covered* have its own subject "
+    "covered, not a neighbouring one? Comment on any question that is THIN, or that you know is "
+    "under-covered.",
+    "**Most load-bearing sources.** Are these the core literature you would expect? Comment on "
+    "a source that is missing, or on one listed that does not belong.",
+    "**The sources you know best.** Find two or three in the by-publication list. Are the facts "
+    "you would cite from them there? Open one page link per source and check the fact says "
+    "what the page says.",
+    "**Your weakest topic.** Skim its facts: are they on the topic, or only sharing its words?",
+    "**The lists at the end.** *No usable text*: fix the PDF in Zotero (OCR or a better copy) "
+    "and comment “fixed the PDF” on its entry. *No fact useful to a topic*: nothing to do, "
+    "unless one of them should count.",
+]
+RELEASE_WHEN = ("1–3 hold. Do not release if a question is missing its subject, a core source "
+                "is missing, or facts misstate their sources.")
+NOT_REASONS = ("a fact that adds detail from the text around its quote (its page link lets the "
+               "paper stage check it); a fact filed under a neighbouring topic; facts marked "
+               "“found by search”, which are already left out of every count.")
+
+
 def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], citekeys,
-                   gc, cover: list[str], map_png: Path | None) -> str:
+                   gc, cover: list[str], map_png: Path | None,
+                   responses: list[str] | None = None) -> str:
     by_key = {citekeys[i]: c for i, c in enumerate(corpus) if i in citekeys}
     by_id = base.by_id()
     all_facts = [f for fs in base.facts.values() for f in fs]
@@ -777,6 +814,9 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
         parts.append(f"*Focus:* {cfg.focus}  ")
     parts += [f"*Foundation:* {len(all_facts)} facts from {n_src} sources · quoted verbatim "
               f"{pct(n_ver)} · useful or central to a topic {pct(n_on)}  ", ""]
+    parts += comment_kinds.release_guide(comment_kinds.LITREVIEW_FACTS, RELEASE_CHECKLIST,
+                                         RELEASE_WHEN, NOT_REASONS)
+    parts += responses or []
     parts += ["*How to read this: every fact links to its page — the link opens the PDF in "
               "Zotero at that page. A plain quote was found verbatim on that page; anything "
               "located by search instead says so, and is not counted anywhere — its passage may not "
@@ -939,7 +979,9 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
 
     model = (cfg.brain.claude_model if brain.backend == "claude"
              else cfg.brain.coordinator_model)
-    md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_png)
+    from .fact_rework import response_lines
+    md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_png,
+                        response_lines(paths, base))
     stem = f"{date.today().strftime('%y%m%d')}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")

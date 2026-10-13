@@ -287,3 +287,29 @@ def test_copyedits_travel_out_even_when_the_comment_is_skipped():
         brain, _ctx(anchored={0}, authored={"⟦a:1⟧": "their sentence"}), FakePolicy())
     assert disp == Disposition.SKIPPED.value
     assert copy == {"⟦a:1⟧": "their fixed sentence"}
+
+
+# ── a routing-only policy: nothing it delivers is rewritten in place ──────────
+
+def test_a_policy_can_declare_text_it_never_rewrites():
+    """A fact base: a fact is its source's, so a comment on it is routed by kind and the
+    rewrite attempt — which could never pass — is never made."""
+    class _Brain:
+        def coordinator(self, *a, **k):
+            raise AssertionError("no rewrite may be attempted on text that is not editable")
+
+    pol = FakePolicy()
+    pol.route_classes = ("sources", "fact", "drop")
+    pol.editable = lambda ctx: False
+    pol.route_reply = lambda cls: f"queued: {cls}"
+    new, disp, _ = redline_paragraph(_Brain(), _ctx(route_hint="fact"), pol)
+    assert (new, disp) == (None, "routed:fact")
+    verdict = triage(_ctx(route_hint="drop"), Evidence(set(), ""), pol)
+    assert verdict.disposition == "routed:drop" and verdict.reply == "queued: drop"
+    # an unknown kind falls back to the policy's first class, as an audit verdict does
+    assert triage(_ctx(route_hint="nonsense"), Evidence(set(), ""), pol).disposition == \
+        "routed:sources"
+
+
+def test_a_policy_without_the_hook_is_untouched():
+    assert triage(_ctx(), Evidence(set(), ""), FakePolicy()).proceed

@@ -90,6 +90,8 @@ class ParaContext:
     authored: dict[str, str] = field(default_factory=dict)   # ⟦a:N⟧ → the author's exact words
     is_heading: bool = False                # the comment sits on a heading, not body prose
     obsolete_ids: set[str] = field(default_factory=set)  # comment ids whose anchor was deleted
+    route_hint: str | None = None           # the comment's kind, when the orchestrator has
+                                            #   already sorted it (haarpi next's decompose)
 
 
 @dataclass
@@ -148,6 +150,10 @@ class RedlinePolicy(Protocol):
     # route_verb (optional, default "ROUTE"): the word the policy's audit prompt uses to open
     # a route verdict. raconteur says "ROUTE:", rabbitHole says "CORPUS:" — same shape, and
     # the engine reads it via getattr so a policy that omits it gets "ROUTE".
+    # editable(ctx) (optional, default: everything is): may this anchor be rewritten at all?
+    # A fact base answers False — a fact is the source's and changes only by re-reading it —
+    # so triage routes the comment without spending a rewrite attempt it could never pass.
+    # route_reply(cls) (optional): the reply a ROUTED comment of that class receives.
     # soft_finding_kinds() (optional, default frozenset()): the guard-finding kinds this
     # deliverable will SACRIFICE rather than decline on an explicit comment. When a rewrite
     # answers the comment but its only remaining findings are all in this set, the engine holds
@@ -284,6 +290,16 @@ def triage(ctx: ParaContext, evidence: Evidence, policy: RedlinePolicy) -> Triag
     is either pulled in — so the attempt CAN cite it — or routed honestly as a missing source,
     without ever pretending a prose edit was possible.
     """
+    editable = getattr(policy, "editable", None)
+    if editable is not None and not editable(ctx):
+        cls = (ctx.route_hint if ctx.route_hint in policy.route_classes
+               else policy.route_classes[0])
+        reply = getattr(policy, "route_reply", None)
+        return TriageResult.stop(
+            routed(cls),
+            reply(cls) if reply else
+            f"Not edited in place: this text is not rewritten to answer comments. Routed as "
+            f"'{cls}'.")
     if ctx.is_heading:
         return TriageResult.stop(
             routed("section"),

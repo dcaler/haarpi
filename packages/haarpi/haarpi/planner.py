@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config as hconfig
-from . import naming, project, redline, trundlr
+from . import comment_kinds, naming, project, redline, trundlr
 
 
 # ── step registries ──────────────────────────────────────────────────────────
@@ -970,55 +970,18 @@ def classify(stage: str, check: dict, cfg: dict,
 # The verb-need vocabulary. Every unresolved comment maps to exactly one.
 _LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "cite", "redirect", "correct")
 
-_DECOMPOSE_PROMPT = """\
-A reviewer left these unresolved annotations on a literature-review draft, numbered:
-{annotations}
-
-For EACH annotation decide what WORK it needs, then group annotations that need the SAME
-work into one task. Every annotation number must appear in exactly one task.
-
-Decide in THIS ORDER and stop at the first that fits — a later type never overrides an
-earlier one:
-
-1. "correct": the reviewer states that a NAME OR TERM the review uses is factually wrong, and
-   says (or clearly implies) the right one — "you mean X, not Y", "that's called X", "get the
-   name right, it's X". The work is a substitution, not a rewrite. Give "wrong" (the term as
-   the review has it) and "right" (the term it should be). Choose this ONLY for a term the
-   review actually uses; a request to discuss a new topic is "section" or "sources".
-2. "redirect": the review is aimed wrong or needs a fundamentally different scope — a
-   genuine change of direction, not "add more".
-3. "section": asks for a new section, theme, strand, or sub-topic to be DEVELOPED as its
-   own treatment — the review's STRUCTURE must change, not just its wording. Triggers:
-   "a section on X", "identify/enumerate/lay out the Xs", "cover the specific techniques
-   and how to use them", "this is too high level — I want the concrete X". A demand to
-   build out a topic into its own strand is section, NOT sources, even when that topic is
-   already mentioned in passing. When in doubt between section and sources, choose section:
-   a section is drafted and spliced in without touching the rest of the review, so guessing
-   this one wrong costs a strand the reviewer can reject, never a re-read of the document.
-4. "cite": the reviewer says the papers are ALREADY in the Zotero library/collection and
-   asks to cite them — "I've added Doblinger 2019 and Howell 2017 to Zotero, cite them",
-   "these are in the collection now, use them". Nothing is fetched; the papers only need
-   embedding so the reviser can cite them. Choose this, NOT ingest, whenever the reviewer
-   states the works are already in the library/collection.
-5. "ingest": names specific papers, DOIs, authors, or citations the reviewer wants pulled
-   in that are NOT yet in the library — pasted reference text, "add @key", "cite Smith 2020",
-   "these references:". The works must be fetched before they can be cited.
-6. "sources": wants more evidence UNDER the structure that already exists — thicker support
-   for a point the review already makes ("more on X", "go deeper", "what about Y"). Use this
-   only when no new section is being asked for; it gathers literature, it does not re-plan.
-7. "edit": satisfiable by rewriting text that is already there — reword, restructure,
-   clarify, cut. No new sources, no new structure.
-
-For "redirect", "section", and "sources" give a specific, searchable "query" (the topic to
-gather or the section to plan). For "edit", "ingest", and "cite" set "query" to "".
-For "correct" set "query" to "" and give "wrong" and "right" instead.
-
-Respond ONLY with JSON:
-{{"tasks": [{{"comments": [1, 2], "need": "sources", "query": "..."}},
-            {{"comments": [3], "need": "correct", "wrong": "...", "right": "..."}}]}}"""
+# The classifier prompt is GENERATED from the comment-kind table, the same table the
+# deliverable's release guide is rendered from, so the phrasings a reviewer is told to use are
+# the phrasings the classifier is told to recognise. See haarpi/comment_kinds.py.
+_DECOMPOSE_PROMPT = comment_kinds.decompose_prompt(comment_kinds.LITREVIEW_NARRATIVE)
+_FACT_NEEDS = comment_kinds.LITREVIEW_FACTS.names
+_FACT_DECOMPOSE_PROMPT = comment_kinds.decompose_prompt(
+    comment_kinds.LITREVIEW_FACTS,
+    extra="The review's research questions, for the \"serves\" field:\n{questions}")
 
 
-def decompose(comments: list[dict], cfg: dict) -> list[dict]:
+def decompose(comments: list[dict], cfg: dict, *, fact_base: bool = False,
+              questions: list[str] | None = None) -> list[dict]:
     """Per-comment task list for a litreview annotation set (the 'list all the tasks' step).
 
     Returns ``[{comments: [texts], need: <one of _LITREVIEW_NEEDS>, query: str}]``. Falls back
@@ -1034,16 +997,21 @@ def decompose(comments: list[dict], cfg: dict) -> list[dict]:
               o.get("coordinator", "qwen3.6:27b-16k"),
               o.get("worker", "llama3.1:8b"), tool="haarpi")
     numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
+    if fact_base:
+        qs = "\n".join(f"{i}. {q}" for i, q in enumerate(questions or [], 1)) or "(none)"
+        prompt = _FACT_DECOMPOSE_PROMPT.format(annotations=numbered, questions=qs)
+    else:
+        prompt = _DECOMPOSE_PROMPT.format(annotations=numbered)
     try:
-        raw = _parse_json_obj(b.coordinator(
-            _DECOMPOSE_PROMPT.format(annotations=numbered), _SYS, think=False))
+        raw = _parse_json_obj(b.coordinator(prompt, _SYS, think=False))
         parsed = raw.get("tasks") or []
     except (ValueError, json.JSONDecodeError):
         parsed = []
-    return _normalise_tasks(parsed, texts)
+    return _normalise_tasks(parsed, texts, fact_base=fact_base)
 
 
-def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
+def _normalise_tasks(parsed: list[dict], texts: list[str], *,
+                     fact_base: bool = False) -> list[dict]:
     """Coerce the model's task list into the contract, and guarantee total coverage.
 
     Every comment lands in exactly one task: unknown needs become ``edit``, a comment named
@@ -1054,9 +1022,10 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
     n = len(texts)
     claimed: set[int] = set()
     tasks: list[dict] = []
+    allowed = _FACT_NEEDS if fact_base else _LITREVIEW_NEEDS
     for t in parsed:
         need = t.get("need") if isinstance(t, dict) else None
-        if need not in _LITREVIEW_NEEDS:
+        if need not in allowed:
             need = "edit"
         idxs = []
         for c in (t.get("comments") or []):
@@ -1071,6 +1040,12 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
             continue
         query = (t.get("query") or "").strip() if isinstance(t, dict) else ""
         task = {"comments": [texts[i - 1] for i in idxs], "need": need, "query": query}
+        if need == "topic":
+            task["serves"] = sorted({int(x) for x in (t.get("serves") or [])
+                                     if str(x).strip().isdigit()})
+        if need == "topic_scope":
+            num = str(t.get("topic") or "").strip().lstrip("Tt")
+            task["topic"] = int(num) if num.isdigit() else None
         if need == "correct":
             task["wrong"] = (t.get("wrong") or "").strip()
             task["right"] = (t.get("right") or "").strip()
@@ -1094,7 +1069,18 @@ def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
     if missed:
         tasks.append({"comments": [texts[i - 1] for i in missed],
                       "need": "edit", "query": ""})
-    return _promote_explicit_cites(_promote_explicit_sections(tasks))
+    # A fact base's own kinds are already specific — "I've fixed the PDF in Zotero" is `pdf`,
+    # not a request to cite — so the floors leave them alone.
+    keep = ("topic", "topic_scope", "pdf", "fact", "drop") if fact_base else ()
+    tasks = _promote_explicit_cites(_promote_explicit_sections(tasks, keep), keep)
+    if fact_base:
+        # The deterministic section floor files "a section on X" as `section`; in a fact base
+        # the same ask is a new topic, which is what gets searched for and scored against.
+        for t in tasks:
+            if t["need"] == "section":
+                t["need"] = "topic"
+                t.setdefault("serves", [])
+    return tasks
 
 
 # A reviewer who writes "a section on X" is asking for STRUCTURE, and an in-place reviser
@@ -1120,7 +1106,7 @@ _SECTION_ASK = re.compile(
     re.IGNORECASE)
 
 
-def _promote_explicit_sections(tasks: list[dict]) -> list[dict]:
+def _promote_explicit_sections(tasks: list[dict], keep: tuple = ()) -> list[dict]:
     """Move any comment that unambiguously asks for a new section into a ``section`` task.
 
     Coverage is preserved: a promoted comment leaves its old task and joins the section task,
@@ -1129,6 +1115,9 @@ def _promote_explicit_sections(tasks: list[dict]) -> list[dict]:
     promoted: list[str] = []
     kept: list[dict] = []
     for t in tasks:
+        if t["need"] in keep:          # a kind the floor must not second-guess
+            kept.append(t)
+            continue
         if t["need"] == "section":
             # SPLIT it. A task already typed `section` used to pass straight through, so when
             # the model got the classification right and grouped three section asks into one
@@ -1166,7 +1155,7 @@ _CITE_ASK = re.compile(
     re.IGNORECASE)
 
 
-def _promote_explicit_cites(tasks: list[dict]) -> list[dict]:
+def _promote_explicit_cites(tasks: list[dict], keep: tuple = ()) -> list[dict]:
     """Move any comment asserting its papers are ALREADY in Zotero into a ``cite`` task.
 
     The deterministic floor under decompose rule ``cite``: an explicit "already in Zotero / the
@@ -1177,7 +1166,7 @@ def _promote_explicit_cites(tasks: list[dict]) -> list[dict]:
     promoted: list[str] = []
     kept: list[dict] = []
     for t in tasks:
-        if t["need"] in ("section", "redirect", "cite"):
+        if t["need"] in ("section", "redirect", "cite") + tuple(keep):
             kept.append(t)
             continue
         stay = [c for c in t["comments"] if not _CITE_ASK.search(c)]
@@ -1247,9 +1236,11 @@ def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
     ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
 
-    ``fact_base``: the review renders as a fact base, whose ``report`` draws and embeds the map
-    itself — a ``mindmap`` after it only redraws the same files (22 min on DigiPros).
+    ``fact_base``: the review renders as a fact base — see `_fact_chain`. Its ``report`` draws
+    and embeds the map itself, so no ``mindmap`` follows (one redrew the same files for 22 min).
     """
+    if fact_base:
+        return _fact_chain(tasks)
     needs = {t["need"] for t in tasks}
     gather_topics = [t["query"] for t in tasks
                      if t["need"] in ("sources", "section", "redirect") and t["query"]]
@@ -1297,14 +1288,44 @@ def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
     # occurrence. It still re-renders so the reviewer gets the corrected document back.
     if not (corrections and needs == {"correct"}):
         steps.append(redraft)
-    if not (fact_base and steps and steps[-1] == "report"):
-        steps.append("mindmap")  # per-draft diagnostic: regenerate the contribution map beside the draft
+    steps.append("mindmap")     # per-draft diagnostic: regenerate the contribution map beside the draft
     steps.append("comment")
 
     tier = ("redirection" if "redirect" in needs
             else "gap_fill" if needs_sources else "cosmetic")
     return {"steps": steps, "tier": tier, "corrections": corrections,
             "gather_topics": gather_topics, "section_focus": section_focus}
+
+
+def _fact_chain(tasks: list[dict]) -> dict:
+    """The rework chain for a fact base. Every kind ends in `report`, never `revise`: a fact
+    base is rebuilt from its caches, so re-running `report` after invalidating exactly what the
+    comments name IS the incremental rework (about an hour plus whatever was invalidated), and
+    no comment is ever answered by rewording a fact.
+
+    What is invalidated — a source's facts, a topic's scope — is applied by `haarpi next`
+    through rabbitHole's fact_rework before the chain is queued, as corrections are."""
+    needs = {t["need"] for t in tasks}
+    gather_topics = [t["query"] for t in tasks
+                     if t["need"] in ("sources", "topic", "redirect") and t["query"]]
+    corrections = [{"wrong": t["wrong"], "right": t["right"]} for t in tasks
+                   if t["need"] == "correct" and t.get("wrong") and t.get("right")]
+    steps: list[str] = []
+    if "ingest" in needs:
+        steps.append("ingest")
+    gathers = bool(needs & {"sources", "topic", "redirect"})
+    if gathers:
+        steps += ["gather", "collect"]
+    elif "ingest" in needs:
+        steps.append("collect")
+    if "collect" in steps:
+        steps.append("audit")
+    if "collect" in steps or "cite" in needs:
+        steps.append("build")
+    steps += ["report", "comment"]      # report draws and embeds its own map
+    tier = ("redirection" if "redirect" in needs else "gap_fill" if gathers else "cosmetic")
+    return {"steps": steps, "tier": tier, "corrections": corrections,
+            "gather_topics": gather_topics, "section_focus": [], "fact_base": True}
 
 
 def _is_fact_base(directory: str) -> bool:
@@ -1316,11 +1337,36 @@ def _is_fact_base(directory: str) -> bool:
         return False
 
 
+def _focus_items(directory: str) -> list[str]:
+    try:
+        from rabbithole import config as rhconfig
+        focus = rhconfig.load_project(directory).focus or ""
+    except Exception:                         # noqa: BLE001
+        return []
+    return [x.strip() for x in focus.split(";") if x.strip()]
+
+
+def _fact_rework(directory: str, tasks: list[dict], check: dict, markup, built: dict, *,
+                 dry_run: bool) -> dict:
+    """Apply (or, dry, describe) what a fact base's comments invalidate, via rabbitHole."""
+    try:
+        from rabbithole import fact_rework
+        anchors = redline.comment_anchors(markup)
+        return fact_rework.apply(directory, tasks, check["unresolved"], anchors,
+                                 gather="gather" in built["steps"],
+                                 markup=getattr(markup, "name", str(markup)), dry_run=dry_run)
+    except Exception as e:                    # noqa: BLE001 — never wedge the gate
+        print(f"  [warn] fact-base rework could not be applied ({e}) — the chain still "
+              f"re-runs report, but nothing was invalidated")
+        return {"lines": [], "config": None, "responses": []}
+
+
 def _tasks_assessment(tasks: list[dict]) -> str:
     """One-line human summary of the task breakdown, for the plan record and the log."""
     from collections import Counter
     counts = Counter(t["need"] for t in tasks)
-    return ", ".join(f"{counts[n]}×{n}" for n in _LITREVIEW_NEEDS if counts[n])
+    order = list(dict.fromkeys(_LITREVIEW_NEEDS + _FACT_NEEDS))
+    return ", ".join(f"{counts[n]}×{n}" for n in order if counts[n])
 
 
 def _apply_corrections(root: Path, m: project.Manifest, directory: str,
@@ -2474,7 +2520,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # The general solution: decompose the comments into a per-comment task list, derive the
         # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
         # human is the verification loop. See DESIGN_next_orchestration.md.
-        tasks = decompose(check["unresolved"], cfg)
+        fact_base = _is_fact_base(str(root))
+        tasks = decompose(check["unresolved"], cfg, fact_base=fact_base,
+                          questions=_focus_items(str(root)) if fact_base else None)
         # A correction whose wrong term the reviewer never stated: look it up in the draft
         # before the chain is built, so it becomes a real substitution rather than a no-op.
         for t in tasks:
@@ -2486,16 +2534,20 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # AUTOMATIC RE-RUN OF A DECLINED SECTION. A synthetic `section` task, so the chain it
         # implies (gather -> collect -> audit -> build -> revise) is derived by the same rule as
         # any other section ask, and the decline's own brief becomes the gather query.
-        carried = carried_declines(root)
+        carried = [] if fact_base else carried_declines(root)
         for c in carried:
             tasks.append({"comments": [c.get("ask") or c["heading"]],
                           "need": "section", "query": c["missing"]})
-        built = chain_from_tasks(tasks, fact_base=_is_fact_base(str(root)))
+        built = chain_from_tasks(tasks, fact_base=fact_base)
         built["carried"] = carried
         # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
         # it was asked for. Replaces each section ask in `gather_topics` with its heading and
         # claim; the ask itself is kept for any that could not be planned.
-        built["sections"] = _plan_sections(str(root), markup, cfg, built["section_focus"])
+        built["sections"] = ([] if fact_base else
+                             _plan_sections(str(root), markup, cfg, built["section_focus"]))
+        if fact_base:
+            built["fact_rework"] = _fact_rework(str(root), tasks, check, markup, built,
+                                                dry_run=True)
         # Carried sections keep the heading and claim they were planned with. Re-planning them
         # would invent a different compression of the same ask, and the whole point is that the
         # section the reviewer was promised is the section that gets written.
@@ -2544,6 +2596,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
     for s in (plan.get("sections") or []):
         summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
+    if built and built.get("fact_rework"):
+        summary += ["  per comment (fact base — routed, never reworded):"] \
+            + built["fact_rework"]["lines"]
     if built and built.get("carried"):
         summary.append(f"  carried forward: {len(built['carried'])} section(s) a previous "
                        f"revise could not draft — searched for and re-drafted without the "
@@ -2555,7 +2610,11 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # INSTRUCT: write the numbered litrev config that steers the gather/report at the tasks'
     # queries. This is a file side-effect, so it happens only past the dry-run return, and for
     # both the queued and the manual paths (a manual gather deserves steering too).
-    steer_config = _write_litreview_steering(str(root), built) if built else None
+    if built and built.get("fact_base"):
+        done = _fact_rework(str(root), tasks, check, markup, built, dry_run=False)
+        steer_config = done["config"]
+    else:
+        steer_config = _write_litreview_steering(str(root), built) if built else None
     if steer_config:
         summary.append(f"  steering config: {steer_config}")
     # Past the dry-run return, so inspecting a plan never burns the carried entries.

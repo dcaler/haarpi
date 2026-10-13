@@ -173,8 +173,21 @@ function words (OCR noise). Namier's 700-page *House of Commons* had been read a
 front matter — the scan's cover, "Digitized by the Internet Archive", the title page — because
 short chunks match an "introduction / preface" query best. The notes share this retrieval.
 
-Not yet done, pending the test: `revise` and the rework tiers still assume a narrative, and
-raconteur still reads the prose prefix.
+**Rework is routing, never rewording.** `haarpi next` sorts each comment on a fact base into a
+kind (`fact`, `pdf`, `drop`, `topic`, `topic_scope`, `sources`, …; the table is
+`haarpi/comment_kinds.py`), and `fact_rework.apply` invalidates exactly what it names before
+the chain is queued: a `fact`/`pdf` comment moves that source's cached facts and scores to
+`work/facts/old_rework/`; `drop` quarantines the source in the corpus ledger (locked, by the
+human); `topic` adds a topic to a new numbered config and searches for it; `topic_scope` gives
+a topic a `covers:` line the scorer reads ("where a topic says what it covers, a fact outside
+that scope scores 0 or 1"). The chain always ends in the cached `report` — never `revise` — so
+rework costs about an hour plus whatever was invalidated (a topic change re-scores every
+fact, ~2.5 h). Which source a comment means is read from where it sits: the `[@key]` in the
+anchored text, or the fact's own text for a by-publication bullet; which topic, from the
+heading above. The next report opens with the release guide and **"Your comments on the last
+version"**, one line per comment, marked done or not against what the run holds.
+
+Not yet done: raconteur still reads the prose prefix.
 
 ### Synthesise, section by section
 

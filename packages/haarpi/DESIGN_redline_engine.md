@@ -192,6 +192,45 @@ per-paragraph, so they live on the policy but are consumed by the outer `run_red
 
 ---
 
+## A routing-only policy: the fact base
+
+A literature review rendered as a fact base (`report_format: facts`) has almost no prose the
+tool may rewrite. Each fact is its **source's**: it changes only by reading the source again,
+never by rewording it to satisfy a comment — the nearest analogue is raconteur's authored-span
+protection, applied to the whole document. So stages ②–④ never apply, and the engine grew one
+optional seam:
+
+- **`editable(ctx) -> bool`** (optional; absent means everything is). False sends the comment
+  straight out of TRIAGE as `ROUTED`, without spending a rewrite attempt that could never pass.
+- **`ctx.route_hint`** — the kind `haarpi next` already sorted the comment into. A routing-only
+  policy routes by it (unknown kinds fall back to `route_classes[0]`, as an audit verdict does).
+- **`route_reply(cls)`** (optional) — the reply a routed comment of that class receives.
+
+`FactBasePolicy` (`rabbithole/fact_rework.py`) answers `editable → False` everywhere. Its route
+classes are the fact base's comment kinds — `fact`, `pdf`, `drop`, `topic`, `topic_scope`,
+`sources`, `ingest`, `cite`, `redirect`, `correct`, `edit` — and its intra-stage aggregate is
+`haarpi.planner._fact_chain` plus `fact_rework.apply`: invalidate exactly what the comments name
+(a source's cached facts, a topic's scope), then re-run the cached `report`. No `revise`.
+
+A regenerated document cannot carry comment threads forward, so the replies are carried
+instead: `apply` records one response per comment, and the next report opens with **"Your
+comments on the last version"**, each marked done or not against what that run actually holds.
+
+### One comment vocabulary, read two ways
+
+What a comment can ask for is a table per deliverable, `haarpi/comment_kinds.py`: each kind's
+classifier rule, the phrasings shown to the reviewer, what happens, and what it costs. The
+`decompose` prompt is generated from it (the narrative one byte-identical to the hand-written
+original, pinned by a hash), and so is the **release guide** each deliverable opens with — so
+the phrasings a reviewer is told to use are the phrasings the classifier is told to recognise.
+A test holds every offered phrasing to appear in its kind's rule.
+
+The release guide splits by owner: **haarpi** owns what releasing means, how to release or
+hold, and the phrasing table; **the agent** supplies its checklist (`release_guide(vocab,
+checklist, release_when, not_reasons)`). The fact base is the first deliverable to carry one.
+
+---
+
 ## The `aggregate()` boundary law
 
 > **Aggregate routing that stays inside the stage → the policy's `aggregate()`.

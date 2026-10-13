@@ -49,12 +49,13 @@ def _esc(s: str) -> str:
 
 
 def write_commented_docx(path: Path, paragraphs: list[str],
-                         comments: list[dict]) -> Path:
+                         comments: list[dict], styles: dict | None = None) -> Path:
     """Build a .docx whose comments are real: threaded, resolvable, anchored.
 
     ``comments`` entries: ``{cid, author, text, anchor=0, on=None, done=False, parent=None}``
     where ``anchor`` is a paragraph index and ``parent`` is another comment's ``cid``
-    (making this one a reply in that thread).
+    (making this one a reply in that thread). ``styles`` maps a paragraph index to a style
+    name ("Heading 2"), for documents whose comments are read by where they sit.
 
     ``on`` is a SUBSTRING of that paragraph, and it matters more than it looks: half of a
     reviewer's comment is where they put it. "define this" pinned to two words is an
@@ -65,7 +66,7 @@ def write_commented_docx(path: Path, paragraphs: list[str],
 
     path = Path(path)
     doc = Document()
-    paras = [doc.add_paragraph(t) for t in paragraphs]
+    paras = [doc.add_paragraph(t, style=(styles or {}).get(i)) for i, t in enumerate(paragraphs)]
 
     def _reference_after(end_el) -> None:
         # A real Word comment carries a w:commentReference run at its range end; the fixture

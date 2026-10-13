@@ -316,6 +316,21 @@ def test_a_fact_base_report_draws_its_own_map_so_no_mindmap_follows():
     redirect = [_task("redirect", "a different question")]
     assert planner.chain_from_tasks(redirect, fact_base=True)["steps"][-2:] == ["report", "comment"]
     assert planner.chain_from_tasks(redirect)["steps"][-3:] == ["report", "mindmap", "comment"]
-    # a revise re-draft still gets its map
+    # a narrative revise re-draft still gets its map
     edit = [_task("edit", "")]
-    assert "mindmap" in planner.chain_from_tasks(edit, fact_base=True)["steps"]
+    assert "mindmap" in planner.chain_from_tasks(edit)["steps"]
+
+
+def test_a_fact_base_is_reworked_by_report_never_revise():
+    """A fact changes only by re-reading its source, so every kind ends in a cached `report`."""
+    chain = lambda *ts: planner.chain_from_tasks(list(ts), fact_base=True)["steps"]
+    for need in ("fact", "pdf", "drop", "topic_scope", "edit", "correct"):
+        assert chain(_task(need)) == ["report", "comment"], need
+    assert chain(_task("topic", "archival bias")) == [
+        "gather", "collect", "audit", "build", "report", "comment"]
+    assert chain(_task("cite")) == ["build", "report", "comment"]
+    assert chain(_task("ingest")) == ["ingest", "collect", "audit", "build", "report", "comment"]
+    built = planner.chain_from_tasks([_task("topic", "archival bias"), _task("fact")],
+                                     fact_base=True)
+    assert built["gather_topics"] == ["archival bias"] and built["tier"] == "gap_fill"
+    assert all("revise" not in chain(_task(n)) for n in planner._FACT_NEEDS)
