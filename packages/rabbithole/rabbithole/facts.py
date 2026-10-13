@@ -679,6 +679,16 @@ class FactBase:
         return {f.id: f for fs in self.facts.values() for f in fs}
 
 
+def load_bearing(base: FactBase, known: set[str], n_corpus: int) -> list[str]:
+    """The top `_TOP_QUANTILE` of the corpus by weight on the brief — the opening list and
+    the map's inner ring, one ranking."""
+    from .summarize import top_source_count
+    weight = fact_weight(base.facts, base.topics)
+    return sorted((ck for ck in weight if weight[ck] > 0 and ck in known),
+                  key=lambda ck: (rank_key(base.facts[ck], base.topics), ck)
+                  )[:top_source_count(n_corpus, _TOP_QUANTILE)]
+
+
 def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -> Path:
     by_key = {citekeys[i]: c for i, c in enumerate(corpus) if i in citekeys}
     blob = {
@@ -689,6 +699,10 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
                        if f.citekey in by_key else "")
                   for fs in base.facts.values() for f in fs],
         "themes": [asdict(t) for t in base.themes],
+        # What the document's opening says, so a reader of the sidecar (raconteur) need not
+        # re-derive rabbitHole's rules: the coverage verdicts and the load-bearing sources.
+        "coverage": coverage(base),
+        "load_bearing": load_bearing(base, set(by_key), len(corpus)),
         # Per source: does any of its facts bear on the brief? A clean list of off-brief
         # sources tells a drafter what not to reach for.
         "sources": {ck: {"on_brief": on_brief(fs), "facts": len(fs),
@@ -840,11 +854,7 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
                   f"serves it, or its topics hold useful-or-central facts from fewer than "
                   f"{_THIN_SOURCES} sources.*", ""] + cover + [""]
 
-    weight = fact_weight(base.facts, base.topics)
-    from .summarize import top_source_count
-    ranked = sorted((ck for ck in weight if weight[ck] > 0 and ck in by_key),
-                    key=lambda ck: (rank_key(base.facts[ck], base.topics), ck))[:top_source_count(
-                        len(corpus), _TOP_QUANTILE)]
+    ranked = load_bearing(base, set(by_key), len(corpus))
     if ranked:
         parts += [f"## Most load-bearing sources (top {_TOP_QUANTILE * 100:g}% of {len(corpus)})",
                   "", "*The sources whose well-grounded facts score highest on the topics that serve a "

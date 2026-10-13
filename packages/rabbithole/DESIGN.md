@@ -187,7 +187,9 @@ anchored text, or the fact's own text for a by-publication bullet; which topic, 
 heading above. The next report opens with the release guide and **"Your comments on the last
 version"**, one line per comment, marked done or not against what the run holds.
 
-Not yet done: raconteur still reads the prose prefix.
+raconteur reads the fact base from the copy of `work/facts.json` that `haarpi next` freezes
+beside the release; the sidecar also carries the coverage verdicts and load-bearing list for it
+(see `packages/raconteur/DESIGN_litreview_harvest.md`).
 
 ### Synthesise, section by section
 

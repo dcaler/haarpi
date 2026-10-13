@@ -98,7 +98,16 @@ def check_prerequisites(project_dir: Path, cfg) -> None:
 
 
 def load_litreview(project_dir: Path, subdir: str = "litReview") -> str:
-    """Read the most recent literature review from {subdir}/output/."""
+    """Read the most recent literature review from {subdir}/output/.
+
+    A FACT BASE is read as its digest — topics, coverage, load-bearing sources — not as a
+    prefix of its document, which opens with the reviewer's release guide; its content
+    reaches each section as that section's facts (see factbase)."""
+    from . import factbase
+    fb = factbase.load(project_dir, subdir)
+    if fb is not None:
+        log(f"[raconteur] reading litreview ({subdir}) as a fact base: {fb.source.name}")
+        return factbase.digest(fb)
     glob = _LIT_GLOB.format(litrev_dir=subdir)
     files = sorted(
         project_dir.glob(glob),
@@ -192,7 +201,14 @@ def load_litreview_threads(project_dir: Path, subdir: str = "litReview") -> list
 
     The harvestable unit for raconteur: every ``## `` thesis section becomes one thread, with
     its citekeys and a one-sentence thesis. Returns [] for a review with no ``## `` threads (an
-    older flat review), which is the signal for callers to fall back to the truncated prefix."""
+    older flat review), which is the signal for callers to fall back to the truncated prefix.
+
+    A FACT BASE's threads are its themes (with at least one fact that counts), so the outline's
+    harvest binds the paper's pillars to themes of facts rather than to paragraphs of prose."""
+    from . import factbase
+    fb = factbase.load(project_dir, subdir)
+    if fb is not None:
+        return [LitThread(*parts) for parts in factbase.thread_parts(fb)]
     glob = _LIT_GLOB.format(litrev_dir=subdir)
     files = sorted(project_dir.glob(glob), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:

@@ -119,7 +119,10 @@ def test_the_revise_path_uses_the_same_ordering_and_helpers():
     assert "write_order(" in src
     assert "section_band(" in src
     assert "_guard_repair(" in src
-    assert "_context_for_section(heading, litrev, code, results, written, narrative" in src
+    assert "_context_for_section(" in src and "code, results, written, narrative" in src
+    # the literature it is handed is the same as a fresh draft's: the review, or a fact
+    # base's facts for this section
+    assert "_section_litrev(picker, heading, section_outline, litrev, supplied)" in src
     assert "methods_review=methods_review" in src, \
         "revise must reach the methods literature too, or its Methods section cites nobody"
 

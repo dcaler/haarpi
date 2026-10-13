@@ -334,3 +334,20 @@ def test_a_fact_base_is_reworked_by_report_never_revise():
                                      fact_base=True)
     assert built["gather_topics"] == ["archival bias"] and built["tier"] == "gap_fill"
     assert all("revise" not in chain(_task(n)) for n in planner._FACT_NEEDS)
+
+
+def test_a_released_fact_base_freezes_its_facts_beside_the_release(tmp_path):
+    """raconteur reads the facts that were RELEASED; the live sidecar changes with every
+    later report, so it would shift under a paper being drafted."""
+    from types import SimpleNamespace
+    lit = tmp_path / "litReview"
+    (lit / "work").mkdir(parents=True)
+    (lit / "output").mkdir()
+    (lit / "litrev.yaml").write_text("project_name: P\ntopic: t\nreport_format: facts\n")
+    (lit / "work" / "facts.json").write_text('{"facts": []}')
+    m = SimpleNamespace(stages={"litreview": {"dir": "litReview"}})
+    dst = lit / "output" / "P_litreview.docx"
+    out = planner._snapshot_facts(tmp_path, m, "litreview", dst)
+    assert out.name == "P_litreview.facts.json" and out.read_text() == '{"facts": []}'
+    (lit / "litrev.yaml").write_text("project_name: P\ntopic: t\n")         # narrative
+    assert planner._snapshot_facts(tmp_path, m, "litreview", dst) is None

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from pathlib import Path
 
 from .brain import Brain
@@ -301,6 +302,60 @@ def write_order(headings: list[str]) -> list[str]:
                                  headings.index(h)))
 
 
+_FACT_KINDS = ("litrev", "intro", "other", "methods")   # the kinds that read the literature
+
+
+def _fact_picker(project_dir: Path, cfg: ProjectConfig, brain: Brain, analysis: str,
+                 threads: list) -> "factbase.SectionFacts | None":
+    """None for a narrative review. For a fact base, the chooser of each section's facts,
+    restricted to the themes the analysis harvested for this paper's pillars (all of them if
+    it bound none)."""
+    from . import factbase, harvest
+    fb = factbase.load(project_dir, cfg.litrev_dir) if cfg.litrev_dir else None
+    if fb is None:
+        return None
+    themes = None
+    try:
+        parsed = json.loads(analysis[analysis.index("{"):])
+        by_pillar, _unused = harvest._coverage(threads, parsed)
+        themes = {h for hs in by_pillar.values() for h in hs} or None
+    except (ValueError, TypeError, AttributeError):
+        themes = None
+    log(f"[raconteur] fact base: {len(fb.facts)} facts count; drafting from "
+        f"{len(themes) if themes else 'all'} harvested theme(s)")
+    return factbase.SectionFacts(fb, brain, themes)
+
+
+def _section_litrev(picker, heading: str, section_outline: str, litrev: str,
+                    supplied: dict) -> str:
+    """The literature a section is handed: the review text, or — from a fact base — its
+    digest plus the facts chosen for this section, recorded for the trace."""
+    if picker is None or _writes_as(heading) not in _FACT_KINDS:
+        return litrev
+    from . import factbase
+    facts = picker.for_section(heading, section_outline)
+    supplied[heading] = facts
+    return litrev + "\n\n" + factbase.section_block(facts)
+
+
+def _number_guard(facts):
+    """A section's number-fidelity check, when it was handed facts."""
+    if not facts:
+        return None
+    from . import factbase
+    return lambda text: factbase.number_findings(text, facts)
+
+
+def _write_fact_trace(picker, paper_dir: Path, tag: str, assembled: str, supplied: dict):
+    """Beside the draft: every cited sentence → the fact it drew on → its page. Read off the
+    manuscript as written — after the whole-document repair, not the per-section drafts."""
+    if picker is None:
+        return None
+    from . import factbase
+    return factbase.write_trace(Path(paper_dir) / f"{tag}.facttrace.md",
+                                list(_parse_sections(assembled)), supplied, picker.fb)
+
+
 def _context_for_section(heading: str, litrev: str, code: str, results: str,
                          written: dict[str, str] | None = None,
                          narrative: str = "", methods_review: str = "") -> str:
@@ -488,8 +543,12 @@ def _guard_repair(
     bullets: int = 0,
     figure_start: int = 1,
     has_methods_review: bool = False,
+    extra=None,
 ) -> str:
     """Feed mechanical findings back as imperatives until they clear or rounds run out.
+
+    ``extra(text) -> [Finding]`` adds checks this section alone needs (a fact base's
+    number fidelity: a sentence traced to a fact keeps the fact's numbers).
 
     Python decides THAT something is wrong; the LLM decides how to fix it. A finding that
     survives every round is logged, not silently dropped.
@@ -497,7 +556,8 @@ def _guard_repair(
     kw = dict(expect_figures=expect_figures, band=band, bullets=bullets,
               figure_start=figure_start, has_methods_review=has_methods_review)
     for n in range(1, rounds + 1):
-        findings = _guard_section(text, heading, known, have_results, **kw)
+        findings = _guard_section(text, heading, known, have_results, **kw) \
+            + (extra(text) if extra else [])
         if not findings:
             return text
         log(f"[raconteur] guards '{heading}' ({n}): {len(findings)} finding(s)")
@@ -515,7 +575,8 @@ def _guard_repair(
             system=_SYSTEM,
             num_ctx=16384,
         )
-    remaining = _guard_section(text, heading, known, have_results, **kw)
+    remaining = _guard_section(text, heading, known, have_results, **kw) \
+        + (extra(text) if extra else [])
     if remaining:
         log(f"[warn] '{heading}': {len(remaining)} guard finding(s) survived "
             f"{rounds} repair round(s) — shipping anyway:")
@@ -960,6 +1021,8 @@ def _draft_paper(
     threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative,
                                   threads=threads, sidecar=(paper_dir, "paper"))
+    picker = _fact_picker(project_dir, cfg, brain, analysis, threads)
+    supplied: dict[str, list] = {}
 
     venue_section = _venue_block(cfg, venue)
     bib_section = _bib_block(bib_summary)
@@ -1002,8 +1065,9 @@ def _draft_paper(
             # cannot know who contributed what.
             drafted.append((heading, _ack_passthrough(section_outline, project_dir)))
             continue
-        ctx = _context_for_section(heading, litrev, code, results, written, narrative,
-                                   methods_review=methods_review)
+        ctx = _context_for_section(
+            heading, _section_litrev(picker, heading, section_outline, litrev, supplied),
+            code, results, written, narrative, methods_review=methods_review)
         band = guards.section_band(heading, outline_text, budget,
                                    cfg.section_shares or None, rates=rates)
         lo, hi = band if band[0] else _DEFAULT_BAND
@@ -1042,7 +1106,11 @@ def _draft_paper(
                              band=band if band[0] else None,
                              bullets=n_bullets,
                              figure_start=fig_start,
-                             has_methods_review=bool(methods_review))
+                             has_methods_review=bool(methods_review),
+                             extra=_number_guard(supplied.get(heading)))
+        if picker is not None:
+            from . import factbase
+            text = factbase.strip_ids(text)
         drafted.append((heading, text))
         written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
@@ -1058,7 +1126,11 @@ def _draft_paper(
     assembled = _whole_document_repair(brain, assembled, outline_text, budget, bib_keys,
                                        shares=cfg.section_shares or None,
                                        abstract_limit=abstract_limit, rates=rates)
+    if picker is not None:                # an id the whole-document repair carried back in
+        from . import factbase
+        assembled = factbase.strip_ids(assembled)
     _write(project_dir, cfg, paper_dir, assembled, venue)
+    _write_fact_trace(picker, paper_dir, "paper", assembled, supplied)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
 
@@ -1091,6 +1163,8 @@ def _revise_paper(
     threads = load_litreview_threads(project_dir, cfg.litrev_dir) if cfg.litrev_dir else []
     analysis = _analyze_structure(brain, cfg.description, litrev, code, results, narrative,
                                   threads=threads, sidecar=(paper_dir, "paper-revise"))
+    picker = _fact_picker(project_dir, cfg, brain, analysis, threads)
+    supplied: dict[str, list] = {}
 
     existing_text = read_text(user_rev)
     annotations = build_revision_context(user_rev)
@@ -1122,8 +1196,9 @@ def _revise_paper(
                             or _ack_passthrough(section_outline, project_dir)))
             continue
         existing = existing_map.get(heading, "")
-        ctx = _context_for_section(heading, litrev, code, results, written, narrative,
-                                   methods_review=methods_review)
+        ctx = _context_for_section(
+            heading, _section_litrev(picker, heading, section_outline, litrev, supplied),
+            code, results, written, narrative, methods_review=methods_review)
         band = guards.section_band(heading, outline_text, budget,
                                    cfg.section_shares or None, rates=rates)
         log(f"[raconteur] revising '{heading}'…")
@@ -1145,7 +1220,11 @@ def _revise_paper(
         text = _guard_repair(brain, heading, text, section_outline, bib_section,
                              bib_keys, bool(results),
                              expect_figures=_outline_figure_count(section_outline),
-                             has_methods_review=bool(methods_review))
+                             has_methods_review=bool(methods_review),
+                             extra=_number_guard(supplied.get(heading)))
+        if picker is not None:
+            from . import factbase
+            text = factbase.strip_ids(text)
         revised.append((heading, text))
         written[guards.budget_kind(heading)] = text
         log(f"[raconteur] section complete: {heading}")
@@ -1171,7 +1250,11 @@ def _revise_paper(
         for f in findings:
             log(f"[warn]   · {f.kind} — {f.where}")
 
+    if picker is not None:                # an id the whole-document repair carried back in
+        from . import factbase
+        assembled = factbase.strip_ids(assembled)
     _write(project_dir, cfg, paper_dir, assembled, venue)
+    _write_fact_trace(picker, paper_dir, "paper-revise", assembled, supplied)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
 

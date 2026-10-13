@@ -1337,6 +1337,31 @@ def _is_fact_base(directory: str) -> bool:
         return False
 
 
+def facts_snapshot_name(release: Path) -> str:
+    """Where a released fact base's facts live: beside the release, named after it."""
+    return f"{Path(release).stem}.facts.json"
+
+
+def _snapshot_facts(root: Path, m, stage: str, dst: Path) -> Path | None:
+    """Freeze a fact base's facts with its release.
+
+    Downstream reads releases, and the sidecar is the fact base's structured content — but
+    `work/facts.json` is rewritten by every later report, so a litreview reworked while the
+    paper is drafted would change the facts under the paper. The copy beside the release is
+    what raconteur reads."""
+    review_dir = Path(root) / (m.stages.get(stage, {}).get("dir") or "litReview")
+    if not _is_fact_base(str(review_dir)):
+        return None
+    src = review_dir / "work" / "facts.json"
+    if not src.is_file():
+        print(f"  [warn] {stage} is a fact base but has no work/facts.json to release with it")
+        return None
+    out = Path(dst).with_name(facts_snapshot_name(dst))
+    shutil.copy2(src, out)
+    print(f"  facts released with it: {out.name}")
+    return out
+
+
 def _focus_items(directory: str) -> list[str]:
     try:
         from rabbithole import config as rhconfig
@@ -2466,6 +2491,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             result = redline.mint_release(
                 markup, dst, post=post,
                 md_sibling=stage != "paper")
+            if stage in LITERATURE_STAGES:
+                _snapshot_facts(root, m, stage, dst)
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and

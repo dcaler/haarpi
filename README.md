@@ -143,6 +143,8 @@ generated from it, and so is the **release guide** a deliverable opens with —
 what releasing means, the agent's own checklist, and "write something like … and
 this happens", with the cost. The literature review's fact base (on test) is the
 first to carry one; its comments are routed, never answered by rewording a fact.
+Its facts are frozen beside its release, and raconteur drafts each section from
+the facts chosen for it, writing a trace from every cited sentence to its page.
 
 **Sections are planned before the gather that has to find their literature.**
 The heading and one-sentence claim are decided in `haarpi next`, so the search

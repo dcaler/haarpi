@@ -304,6 +304,16 @@ in `results/`, passing all three to the LLM as context. None is strictly require
 — a missing source triggers a loud warning naming the tool that should have
 produced it, and raconteur proceeds with what it has.
 
+**A literature review that is a fact base** (rabbitHole's `report_format: facts`)
+is read from the facts frozen beside its release (`<release>.facts.json`), not
+from its document. The analysis gets its topics, coverage and load-bearing
+sources; the outline's harvest binds the paper's pillars to its themes; and each
+Background, Introduction, Discussion and Methods section is handed the facts
+chosen for its outline beats — only facts quoted verbatim and useful to a topic
+that serves a research question. Every draft writes `paper.facttrace.md` beside
+it: each cited sentence, the fact it drew on, and a link to that fact's page. A
+sentence that changes its fact's numbers is sent back to be repaired.
+
 ---
 
 ## `raconteur.yaml` reference

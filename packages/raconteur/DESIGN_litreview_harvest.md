@@ -49,10 +49,41 @@ revise, skeleton, focus. Each passes its own `sidecar=(paper_dir, tag)`.
 With no threads, `_analyze_structure` reproduces the original behaviour exactly — the truncated
 prefix, no `litrev_harvest`, no sidecar. The new path is additive and never the only path.
 
+## A fact base
+
+rabbitHole can render the review as a **fact base** (`report_format: facts`): facts per source,
+each with its page and a verbatim quote, scored 0–3 against approved topics and grouped into
+themes. Its document opens with the reviewer's release guide, so the prefix fallback would be
+worse than useless; raconteur reads the structured sidecar instead (`factbase.py`), from the
+copy `haarpi next` freezes beside the release (`<release>.facts.json`) — the live
+`work/facts.json` changes with every later report and would shift under a paper being drafted.
+
+- **Digest** in place of the review text: topics (with the questions they serve and any scope),
+  coverage verdicts, load-bearing sources — rabbitHole writes the last two into the sidecar, so
+  raconteur does not re-derive its rules.
+- **Threads** = themes with at least one fact that counts (verbatim, scoring ≥2 on a topic that
+  serves a question). Tier-1 and tier-2 above run unchanged on them.
+- **Per-section facts — the step this design left undone.** Background, Introduction, Discussion
+  and Methods sections each get "Facts you may use": up to 40 facts (6k chars), drawn from the
+  themes the harvest bound to the paper's pillars, ranked by embedding similarity to the
+  section's outline beats (word overlap without an embedder), central facts first. Each line
+  carries `[@citekey]`, its page and its id `{ck#n}`; an id copied into prose is stripped.
+- **Trace.** After the manuscript is assembled, every sentence citing a source is matched to the
+  supplied fact of that source it most resembles (word overlap, deterministic) and written to
+  `{paper_dir}/paper.facttrace.md` with the fact's page link — or "no matching fact". It is how a
+  reader checks any claim at its page.
+- **Number fidelity.** A sentence traced to a fact that reports a number its fact does not is a
+  guard finding (`fact-number`), fed back through the section's guard repair.
+
+Not yet built: a paper comment disputing a traced claim routing back to the litreview as a
+`fact` rework. That crosses a stage boundary, so it waits on the cross-stage signal in
+`haarpi/DESIGN_redline_engine.md` (build order item 5); meanwhile the trace finds the fact.
+
 ## Not done here
 
-- Per-section **prose** harvest. Today tier-2 records which threads feed each pillar; it does
-  not yet splice a thread's full `body` into the individual section draft (those drafts read the
+- Per-section **prose** harvest for a NARRATIVE review (a fact base has it — above). Today
+  tier-2 records which threads feed each pillar; it does not yet splice a thread's full `body`
+  into the individual section draft (those drafts read the
   analysis JSON + `refs.bib`, not the review prose). The `LitThread.body` field is carried for
   exactly that next step.
 - `_MAX_LITREV_CHARS` still governs the flat-review fallback; the threaded path ignores it.
