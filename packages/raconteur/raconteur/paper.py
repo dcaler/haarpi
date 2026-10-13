@@ -338,6 +338,51 @@ def _section_litrev(picker, heading: str, section_outline: str, litrev: str,
     return litrev + "\n\n" + factbase.section_block(facts)
 
 
+def dispute_notes(user_rev: Path, project_dir: Path, cfg: ProjectConfig) -> dict[str, str]:
+    """What `haarpi next` decided about each disputed claim: {comment id: instruction}.
+
+    Written beside the markup (`disputes.json`) for THIS markup only. "paper": the sentence
+    misstated its fact — rewrite it to the fact. "source": the fact was re-read in the
+    literature review — rewrite the claim to the source's facts as now released, or remove it.
+    """
+    fp = Path(user_rev).parent / "disputes.json"
+    try:
+        blob = json.loads(fp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if blob.get("markup") != Path(user_rev).name or not blob.get("disputes"):
+        return {}
+    from . import factbase
+    fb = factbase.load(project_dir, cfg.litrev_dir) if cfg.litrev_dir else None
+    out: dict[str, str] = {}
+    for d in blob["disputes"]:
+        if d["where"] == "source":
+            now = [f for f in (fb.facts.values() if fb else []) if f.citekey == d["citekey"]]
+            if fb is None or fb.source.stat().st_mtime < fp.stat().st_mtime:
+                log(f"[warn] the literature review has not been re-released since the dispute "
+                    f"on [@{d['citekey']}] — revising from the facts as they were")
+            said = "; ".join(f"“{f.text}” (p.{f.page})" for f in now) or "none that count"
+            out[d["id"]] = (f"DISPUTED CLAIM. The source [@{d['citekey']}] was re-read after "
+                            f"this comment. Its facts now: {said}. Rewrite the claim to say "
+                            f"what these say, or remove it if none supports it.")
+        else:
+            note = f" ({d['note']})" if d.get("note") else ""
+            out[d["id"]] = (f"DISPUTED CLAIM. The fact this sentence was drawn from "
+                            f"([@{d['citekey']}], p.{d.get('page')}): “{d['fact']}” — the "
+                            f"source's words: “{d.get('quote', '')}”{note}. Rewrite the "
+                            f"sentence to say what the fact says.")
+    return out
+
+
+def _dispute_block(user_rev: Path, project_dir: Path, cfg: ProjectConfig) -> str:
+    """The same instructions, for the whole-draft revise (which reads all comments at once)."""
+    notes = dispute_notes(user_rev, project_dir, cfg)
+    if not notes:
+        return ""
+    return "\n\nDISPUTED CLAIMS — each traced to the fact it was drawn from:\n" + \
+        "\n".join(f"- {t}" for t in notes.values()) + "\n"
+
+
 def _number_guard(facts):
     """A section's number-fidelity check, when it was handed facts."""
     if not facts:
@@ -764,8 +809,50 @@ def _flag_figure_numbers(docx: Path, text: str, project_dir: Path) -> None:
         log(f"[warn] could not attach the figure-number checks ({e})")
 
 
+# raconteur's half of the manuscript's review guide; haarpi supplies the frame (what releasing
+# means, how to release or hold) and the phrasing list, from the vocabulary its gate reads by.
+_PAPER_CHECKLIST = [
+    "The argument. Read the Introduction and the Discussion together: is this the paper the "
+    "one-pager promised? If not, that is a narrative comment.",
+    "Claims against their sources. Open paper.facttrace.md beside this draft: every cited "
+    "sentence, the fact it drew on, and a link to that fact's page. Check any claim you doubt "
+    "at its page, and every sentence marked “no matching fact”.",
+    "Numbers. Results must match the results write-up.",
+    "Figures. Answer raconteur's figure-number notes.",
+]
+_PAPER_RELEASE_WHEN = "the argument holds and no claim misstates its source."
+_PAPER_NOT_REASONS = ("wording you would polish yourself — edit it directly as tracked "
+                      "changes; your own edits are accepted into the release.")
+
+
+def review_guide(traced: bool) -> str:
+    """The manuscript's review guide, as the text of a comment on its title. A comment, not
+    a section: the body is what gets submitted. Unresolved, it blocks the release — resolving
+    it is the acknowledgement. The claim check and the `dispute` route exist only when the
+    literature review is a fact base (there is a trace to check against)."""
+    from haarpi import comment_kinds as ck
+    vocab = ck.PAPER_MANUSCRIPT
+    checklist = list(_PAPER_CHECKLIST)
+    if not traced:
+        vocab = ck.Vocabulary(vocab.deliverable,
+                              tuple(k for k in vocab.kinds if k.name != "dispute"), "", "")
+        checklist = [c for c in checklist if not c.startswith("Claims against")]
+    return ck.guide_text(vocab, checklist, _PAPER_RELEASE_WHEN, _PAPER_NOT_REASONS)
+
+
+def _attach_review_guide(docx: Path, title: str, traced: bool) -> None:
+    from haarpi import redline as _rl
+    try:
+        n = _rl.add_anchored_comments(docx, [(title, review_guide(traced))],
+                                      author="raconteur", initials="ra")
+        if n:
+            log("[raconteur] attached the review guide (a comment on the title)")
+    except Exception as e:  # noqa: BLE001 — a comment must never cost the draft
+        log(f"[warn] could not attach the review guide ({e})")
+
+
 def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
-           venue: str = "") -> None:
+           venue: str = "", traced: bool = False) -> None:
     from .context import load_authors_block
     v = cfg.venue(venue) if venue else None
     # A double-blind venue gets no block at all. This is the whole reason authorship is
@@ -800,6 +887,7 @@ def _write(project_dir: Path, cfg: ProjectConfig, paper_dir: Path, text: str,
     out_path.unlink(missing_ok=True)
     log(f"[raconteur] wrote {docx.relative_to(project_dir)}")
     _flag_figure_numbers(docx, text, project_dir)
+    _attach_review_guide(docx, cfg.title, traced)
 
 
 # ── fresh paper draft ─────────────────────────────────────────────────────────
@@ -1129,7 +1217,7 @@ def _draft_paper(
     if picker is not None:                # an id the whole-document repair carried back in
         from . import factbase
         assembled = factbase.strip_ids(assembled)
-    _write(project_dir, cfg, paper_dir, assembled, venue)
+    _write(project_dir, cfg, paper_dir, assembled, venue, traced=picker is not None)
     _write_fact_trace(picker, paper_dir, "paper", assembled, supplied)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 
@@ -1168,6 +1256,8 @@ def _revise_paper(
 
     existing_text = read_text(user_rev)
     annotations = build_revision_context(user_rev)
+    if annotations:
+        annotations += _dispute_block(user_rev, project_dir, cfg)
     if not annotations:
         log("[warn] no annotations in revision file — nothing to revise")
         return
@@ -1253,7 +1343,7 @@ def _revise_paper(
     if picker is not None:                # an id the whole-document repair carried back in
         from . import factbase
         assembled = factbase.strip_ids(assembled)
-    _write(project_dir, cfg, paper_dir, assembled, venue)
+    _write(project_dir, cfg, paper_dir, assembled, venue, traced=picker is not None)
     _write_fact_trace(picker, paper_dir, "paper-revise", assembled, supplied)
     log(f"[raconteur] {guards.metrics(assembled, bib_keys, budget)}")
 

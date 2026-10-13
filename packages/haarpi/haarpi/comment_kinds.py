@@ -13,6 +13,7 @@ so a narrow kind (``correct``) sits before a broad one (``edit``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -208,6 +209,68 @@ For "redirect", "topic", "topic_scope" and "sources" give "query" as described a
             {{"comments": [2, 4], "need": "fact", "query": ""}},
             {{"comments": [3], "need": "topic_scope", "topic": 7, "query": "..."}}]}}""",
 )
+
+
+# ── the manuscript (raconteur's paper draft) ───────────────────────────────────
+# The paper gate sorts the WHOLE annotation set into one tier (STAGE_PROMPTS["paper"]), so its
+# rules live in that prompt; this table is the reviewer's side of it, and a test holds each
+# phrasing below to appear in the prompt it will be read by. `dispute` is decided per comment
+# (planner._paper_disputes) against the fact the sentence was drawn from.
+
+DISPUTE_RULE = """the reviewer says a claim misstates its source — "this isn't what the
+   source says", "wrong number", "check this against the source", "the paper says the
+   opposite". The sentence is traced to the fact it was drawn from."""
+
+PAPER_MANUSCRIPT = Vocabulary(
+    deliverable="paper manuscript",
+    kinds=(
+        Kind("cosmetic", "", ("reword this", "unclear"),
+             "the passage is rewritten in place, as tracked changes"),
+        Kind("structural", "", ("merge these sections", "this belongs in Methods"),
+             "the outline is rebuilt, then the paper is drafted again", "a day"),
+        Kind("narrative", "", ("this is not the argument",),
+             "the one-pager is re-cut for you to approve before anything is rebuilt",
+             "days"),
+        Kind("upstream_literature", "", ("cite more recent work on X",),
+             "the literature review gathers first, and the paper follows it", "days"),
+        Kind("dispute", DISPUTE_RULE,
+             ("this isn't what the source says", "wrong number",
+              "check this against the source"),
+             "the sentence is traced to its fact. If it misstates the fact, it is rewritten to "
+             "the fact. If it matches the fact, the source is re-read in the literature review "
+             "— you check and release that — and then the paper is revised from it. Put the "
+             "comment on the sentence itself",
+             "an hour, or a litreview round"),
+    ),
+    query_rules="", example="")
+
+
+def guide_text(vocab: Vocabulary, checklist: list[str], release_when: str = "",
+               not_reasons: str = "") -> str:
+    """The release guide as PLAIN text, for a deliverable that carries it as a comment (a
+    manuscript must not carry it in its body — the body is what gets submitted)."""
+    out = ["HOW TO REVIEW THIS DRAFT — resolve this comment once read. "
+           + re.sub(r"\*\*", "", RELEASE_MEANING), "", "Check, in order:"]
+    out += [f"{i}. {re.sub(r'[*`]', '', c)}" for i, c in enumerate(checklist, 1)]
+    if release_when:
+        out += ["", "Release when " + release_when]
+    out += ["", re.sub(r"[*`]|  $", "", HOW_TO_RELEASE.replace("  \n", "\n"))]
+    if not_reasons:
+        out += ["", "Not reasons to hold: " + not_reasons]
+    out += ["", "How to ask for things:"]
+    for k in vocab.kinds:
+        if k.triggers:
+            said = "; ".join(f"“{t}”" for t in k.triggers)
+            out.append(f"• {k.name}: write {said} — {k.does}" + (f" ({k.cost})" if k.cost else "")
+                       + ".")
+    return "\n".join(out)
+
+
+GUIDE_MARK = "HOW TO REVIEW THIS DRAFT"
+
+
+def is_guide(text: str) -> bool:
+    return (text or "").lstrip().startswith(GUIDE_MARK)
 
 
 def litreview_vocabulary(fact_base: bool) -> Vocabulary:

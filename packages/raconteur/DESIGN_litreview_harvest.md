@@ -75,9 +75,20 @@ copy `haarpi next` freezes beside the release (`<release>.facts.json`) — the l
 - **Number fidelity.** A sentence traced to a fact that reports a number its fact does not is a
   guard finding (`fact-number`), fed back through the section's guard repair.
 
-Not yet built: a paper comment disputing a traced claim routing back to the litreview as a
-`fact` rework. That crosses a stage boundary, so it waits on the cross-stage signal in
-`haarpi/DESIGN_redline_engine.md` (build order item 5); meanwhile the trace finds the fact.
+**Disputes.** A reviewer comment such as "this isn't what the source says" on a traced sentence
+is decided by `haarpi next` (see `haarpi/DESIGN_redline_engine.md`, build order item 5): if the
+sentence misstates its fact, the revise is handed the fact and its quote; if it says what the
+fact says, the litreview re-reads the source, the reviewer re-releases it, and the revise is
+handed the source's facts as now released. Either way the instruction rides on that comment's
+own text into the redline (`paper.dispute_notes`).
+
+**The review guide.** Every manuscript carries a comment on its title, from raconteur, that
+opens "HOW TO REVIEW THIS DRAFT": what releasing means, raconteur's checklist (the argument,
+claims against `paper.facttrace.md`, numbers, figures), and how to ask for each kind of rework,
+`dispute` included — generated from `haarpi.comment_kinds.PAPER_MANUSCRIPT`, whose phrasings a
+test holds to the gate's own prompt and dispute floor. A comment, not a section, because the
+body is what gets submitted; unresolved, it blocks the release, so resolving it is the
+acknowledgement. Neither the gate's classifier nor the revise reads it as an ask.
 
 ## Not done here
 

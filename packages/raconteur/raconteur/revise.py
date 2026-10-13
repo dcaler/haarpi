@@ -1,6 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
 
+from haarpi.comment_kinds import is_guide
+
 try:
     from docx import Document
     from docx.oxml.ns import qn
@@ -44,7 +46,9 @@ def read_comments(path: Path) -> list[dict]:
             for c in rel.target_part._element.findall(".//" + qn("w:comment")):
                 author = c.get(qn("w:author"), "reviewer")
                 texts = [t.text for t in c.findall(".//" + qn("w:t")) if t.text]
-                if texts:
+                # raconteur's own review guide is for the reviewer, not an instruction:
+                # its "how to ask" list names every kind of rework there is.
+                if texts and not is_guide(" ".join(texts)):
                     comments.append({"author": author, "text": " ".join(texts)})
             break
     except Exception:

@@ -314,6 +314,15 @@ that serves a research question. Every draft writes `paper.facttrace.md` beside
 it: each cited sentence, the fact it drew on, and a link to that fact's page. A
 sentence that changes its fact's numbers is sent back to be repaired.
 
+**Every manuscript opens with a review guide** — a comment on its title saying
+how to decide whether to release it, and how to ask for each kind of rework.
+Resolve it once read; it blocks the release until you do. One of those kinds is
+a **dispute**: write "this isn't what the source says" (or "wrong number")
+on the sentence. `haarpi next` traces it to its fact. If the sentence misstates
+the fact, the redline rewrites it to the fact; if it says what the fact says,
+the literature review re-reads that source, you check and release it, and the
+paper is revised from what the source now says.
+
 ---
 
 ## `raconteur.yaml` reference

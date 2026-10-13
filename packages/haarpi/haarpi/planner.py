@@ -598,9 +598,11 @@ tiers below run from lightest to heaviest; a single heavier request outranks a p
 of lighter ones, because a lighter pipeline cannot perform the heavier work.
 
 - "cosmetic": every annotation is satisfiable by rewriting the flagged passages in place —
-  wording, clarity, tone, transitions, small factual fixes from existing material.
+  wording, clarity, tone, transitions, small factual fixes from existing material ("reword
+  this", "unclear").
 - "structural": at least one annotation demands reorganization — sections added, removed,
-  merged, or reordered; the argument restructured. The outline must change, but the story
+  merged, or reordered ("merge these sections", "this belongs in Methods"); the argument
+  restructured. The outline must change, but the story
   the paper tells is still the right one.
 - "narrative": at least one annotation rejects the through-line itself — the motivation,
   the framing, what the paper claims to contribute, or which results carry it. Not "move
@@ -886,7 +888,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
     for name in steps:
         st, _, sname = name.rpartition(":")
         st = st or stage
-        plan_steps.append((st, sname, STAGE_STEPS[st][sname]))
+        plan_steps.append((st, sname, _step_of(stage, name)))
     plan_steps.append((stage, "next",
                        Step("haarpi next", 0.1,
                             "Read the finished markup; mint a release or queue rework.",
@@ -919,9 +921,18 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
 
 # ── classification ───────────────────────────────────────────────────────────
 
+# Another stage's gate, as a chain element ("litreview:next"): a cross-stage detour that has
+# to come back through that stage's human gate before the chain carries on (a paper dispute
+# whose source the litreview re-reads, and you re-release).
+_GATE_STEP = Step("haarpi next", 0.1, "Read the finished markup; mint a release or queue "
+                  "rework.", resource="gpu")
+
+
 def _step_of(stage: str, name: str) -> Step:
     """Resolve a chain element, honouring the 'otherstage:step' form."""
     st, _, sname = name.rpartition(":")
+    if sname == "next" and st:
+        return _GATE_STEP
     return STAGE_STEPS[st or stage][sname]
 
 
@@ -1384,6 +1395,126 @@ def _fact_rework(directory: str, tasks: list[dict], check: dict, markup, built: 
         print(f"  [warn] fact-base rework could not be applied ({e}) — the chain still "
               f"re-runs report, but nothing was invalidated")
         return {"lines": [], "config": None, "responses": []}
+
+
+# ── a disputed claim in the paper ─────────────────────────────────────────────
+# A reviewer who writes "this isn't what the source says" on a manuscript sentence is disputing
+# either the PAPER (the sentence misstates the fact it was drawn from) or the FACT (the sentence
+# says what the fact says, so the fact misreads its source). The first is a paper revise with
+# the fact in hand; the second is the litreview's `fact` rework, and only `haarpi next` may
+# reach across that stage boundary (DESIGN_redline_engine.md, the aggregate() boundary law).
+
+DISPUTES_FILE = "disputes.json"            # beside the paper markup; read by raconteur revise
+
+_DISPUTE_FLOOR = re.compile(
+    r"\b(?:is ?n'?o?t what|not what (?:the |it |they )?|does ?n'?o?t say|does not say|"
+    r"wrong (?:number|figure|value|year|date)|misstat|misquot|misrepresent|"
+    r"check (?:this|that|it) against|says the opposite|not in the (?:source|paper)|"
+    r"the (?:source|paper|study|authors?) (?:actually )?(?:says?|found|reports?))",
+    re.IGNORECASE)
+
+_DISPUTE_PROMPT = """\
+A reviewer commented on a sentence of a paper draft. The sentence cites a source, and was drawn
+from a fact extracted from that source (with the passage quoted verbatim from its page).
+
+Reviewer's comment: {comment}
+Sentence: {sentence}
+Fact (from [@{citekey}], p.{page}): {fact}
+Quoted passage: {quote}
+
+1. Is the reviewer disputing that the sentence is true to its source — its claim, number, or
+   direction — rather than asking for wording, structure, or more sources?
+2. If so, where is the error? "paper": the sentence says something the fact does not.
+   "source": the sentence says what the fact says, so the reviewer is disputing the fact itself.
+
+Respond ONLY with JSON: {{"dispute": true|false, "where": "paper"|"source"}}"""
+
+
+def _dispute_verdict(comment: str, sentence: str, f, cfg: dict) -> str | None:
+    """"paper", "source", or None (not a dispute). A changed number is the paper's error
+    without asking; a model decides the rest, and an unreachable model decides nothing."""
+    from raconteur import factbase
+    floor = bool(_DISPUTE_FLOOR.search(comment))
+    if floor and factbase.numbers(sentence) - factbase.numbers(f.text):
+        return "paper"
+    from .brain import Brain
+    o = cfg.get("ollama", {})
+    b = Brain(o.get("url", "http://localhost:11434"), o.get("coordinator", "qwen3.6:27b-16k"),
+              o.get("worker", "llama3.1:8b"), tool="haarpi")
+    try:
+        got = _parse_json_obj(b.coordinator(_DISPUTE_PROMPT.format(
+            comment=comment, sentence=sentence, citekey=f.citekey, page=f.page or "?",
+            fact=f.text, quote=getattr(f, "quote", "") or "(none)"), _SYS, think=False))
+    except Exception:                         # noqa: BLE001 — undecided is not a dispute
+        return "paper" if floor else None
+    if not got.get("dispute") and not floor:
+        return None
+    return "source" if got.get("where") == "source" else "paper"
+
+
+def _paper_disputes(root: Path, m, markup: Path, check: dict, cfg: dict) -> list[dict]:
+    """The comments that dispute a claim traced to a fact, each with its verdict."""
+    try:
+        from raconteur import factbase
+    except ImportError:
+        return []
+    lit_dir = (m.stages.get("litreview") or {}).get("dir") or "litReview"
+    fb = factbase.load(Path(root), lit_dir)
+    if fb is None:
+        return []
+    anchors = redline.comment_anchors(markup)
+    facts = list(fb.facts.values())
+    already = {(d.get("comment"), d.get("citekey")) for e in project.list_plans(root)
+               for d in (e.get("disputes") or []) if d.get("where") == "source"}
+    out = []
+    for c in check["unresolved"]:
+        if redline.is_tool_author(c["author"]) or c["id"] not in anchors:
+            continue
+        rows = [r for r in factbase.trace(anchors[c["id"]]["text"], facts) if r["fact"]]
+        if not rows:
+            continue
+        r = max(rows, key=lambda r: r["overlap"])
+        f = r["fact"]
+        where = _dispute_verdict(c["text"], r["sentence"], f, cfg)
+        if where is None:
+            continue
+        note = ""
+        if where == "source" and (c["text"], f.citekey) in already:
+            # Re-read once already for this very comment: a second re-extraction would answer
+            # it the same way. The paper is told the source stands, and rewrites or removes.
+            where, note = "paper", "the source was already re-read for this comment"
+        out.append({"id": c["id"], "comment": c["text"], "sentence": r["sentence"],
+                    "citekey": f.citekey, "fact_id": f.id, "fact": f.text, "page": f.page,
+                    "quote": getattr(f, "quote", ""), "link": f.link, "where": where,
+                    "note": note})
+    return out
+
+
+def _apply_disputes(root: Path, m, markup: Path, disputes: list[dict]) -> list[str]:
+    """Write the disputes for raconteur's revise, and send each disputed FACT back to the
+    litreview as a `fact` rework (its cached facts move aside; its response is recorded, so
+    the litreview's next report shows the paper comment under "Your comments")."""
+    lines = []
+    (Path(markup).parent / DISPUTES_FILE).write_text(json.dumps(
+        {"markup": Path(markup).name, "disputes": disputes}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    lines.append(f"  disputes written for the revise: {DISPUTES_FILE}")
+    to_source = [d for d in disputes if d["where"] == "source"]
+    if to_source:
+        lit_dir = Path(root) / ((m.stages.get("litreview") or {}).get("dir") or "litReview")
+        try:
+            from rabbithole import fact_rework
+            tasks = [{"need": "fact", "comments": [d["comment"]], "query": ""} for d in to_source]
+            asks = [{"id": d["id"], "text": d["comment"]} for d in to_source]
+            anchors = {d["id"]: {"headings": ["Paper dispute"], "text": f"[@{d['citekey']}]"}
+                       for d in to_source}
+            done = fact_rework.apply(str(lit_dir), tasks, asks, anchors, gather=False,
+                                     markup=f"the paper ({Path(markup).name})")
+            lines += ["  sent back to the litreview:"] + done["lines"]
+        except Exception as e:                # noqa: BLE001 — the paper revise still runs
+            lines.append(f"  [warn] could not send the disputed fact(s) back to the "
+                         f"litreview ({e}); the revise will work from the facts as they are")
+    return lines
 
 
 def _tasks_assessment(tasks: list[dict]) -> str:
@@ -2543,6 +2674,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # unresolved asks -> plan + queue rework
     dtiers = PAPER_DELIVERABLE_TIERS.get(deliverable) if deliverable else None
     built = None
+    disputes: list[dict] = []
     if stage in LITERATURE_STAGES:
         # The general solution: decompose the comments into a per-comment task list, derive the
         # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
@@ -2599,9 +2731,32 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                 "sections": built["sections"],
                 "assessment": _tasks_assessment(tasks)}
     else:
-        plan = classify(stage, check, cfg, tiers=dtiers, deliverable=deliverable)
+        # raconteur's review guide rides as a comment on the title. It blocks the release
+        # until resolved (that is the acknowledgement) but it is not an ask: its text names
+        # every kind of rework, and read as one it would steer the classifier anywhere.
+        asks = {**check, "unresolved": [c for c in check["unresolved"]
+                                       if not comment_kinds.is_guide(c["text"])]}
+        if stage == "paper" and not deliverable:
+            disputes = _paper_disputes(root, m, markup, asks, cfg)
+            disputed = {d["id"] for d in disputes}
+            asks["unresolved"] = [c for c in asks["unresolved"] if c["id"] not in disputed]
+        if not asks["unresolved"] and not disputes:
+            print("haarpi next: the only open comment is raconteur's review guide — resolve it "
+                  "(that is the acknowledgement) and run `haarpi next` again to release.")
+            return 0
+        if asks["unresolved"]:
+            plan = classify(stage, asks, cfg, tiers=dtiers, deliverable=deliverable)
+        else:
+            plan = {"tier": "cosmetic",
+                    "assessment": f"{len(disputes)} disputed claim(s), nothing else"}
         tier = plan["tier"]
-        steps = (dtiers or STAGE_TIERS[stage])[tier]
+        steps = list((dtiers or STAGE_TIERS[stage])[tier])
+        if any(d["where"] == "source" for d in disputes) and tier != "upstream_literature":
+            # The fact is suspect: the litreview re-reads the source and you release it (the
+            # paper reads only RELEASED facts), then this chain carries straight on into the
+            # paper's own rework. Not back through a paper `next`: its loop guard would
+            # refuse this same annotation set a second time.
+            steps = ["litreview:report", "litreview:comment", "litreview:next"] + steps
     what = f"{stage} [{deliverable}]" if deliverable else stage
     if venue:
         what += f" ({venue})"
@@ -2623,6 +2778,10 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append(f"  gather topics: {', '.join(plan['gather_topics'])}")
     for s in (plan.get("sections") or []):
         summary.append(f"  section to draft: {s['heading']} — {s['claim']}")
+    for d in disputes:
+        summary.append(f"  dispute → {d['where']}: {d['comment'][:60]!r} on [@{d['citekey']}] — "
+                       f"fact {d['fact_id']} (p.{d.get('page') or '?'})"
+                       + (f"; {d['note']}" if d.get("note") else ""))
     if built and built.get("fact_rework"):
         summary += ["  per comment (fact base — routed, never reworded):"] \
             + built["fact_rework"]["lines"]
@@ -2666,6 +2825,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             + (f"; {in_doc} occurrence(s) in the document, corrected by `revise`" if in_doc
                else "; NOT FOUND in the document either — check the term is the one the "
                     "project actually uses"))
+    if disputes:
+        summary += _apply_disputes(root, m, markup, disputes)
     confirm = tier in (cfg.get("planner", {}).get("confirm_tiers") or [])
     if confirm:
         summary.append("  confirm_tiers: an 'approve plan' task gates this chain")
@@ -2676,6 +2837,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
              "sections": plan.get("sections") or [],
              "steer_config": steer_config,
              "corrections": corrections, "correction_counts": corr_counts,
+             "disputes": [{"comment": d["comment"], "citekey": d["citekey"],
+                           "where": d["where"]} for d in disputes],
              "bindings": _current_bindings(root, m, stage)}
     if not queueing:
         project.record_plan(root, entry)

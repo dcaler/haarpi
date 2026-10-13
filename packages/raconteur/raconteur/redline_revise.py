@@ -440,7 +440,7 @@ def redline_revise(
     the heading (the one-pager's beats) routes on the paragraph text instead.
     """
     from docx import Document
-    from .paper import _context_for_section
+    from .paper import _context_for_section, dispute_notes
 
     out = _out_path(paper_dir, cfg.short_title, user_rev)
     shutil.copy2(user_rev, out)
@@ -451,6 +451,9 @@ def redline_revise(
     # already answered (still open) is a failure to repair, not a fresh request.
     asks = {a["id"]: a for a in hredline.open_asks(out)}
     live = set(asks)
+    # A claim the reviewer disputed and `haarpi next` traced to its fact: the comment carries
+    # the verdict with it — the fact to rewrite to, or the source as re-read.
+    disputed = dispute_notes(user_rev, project_dir, cfg)
     anchors = redline.comment_anchors(out, only=live)
     cmap = redline.comments_by_id(out)
     headings = redline.heading_comments(out, only=live)
@@ -487,7 +490,8 @@ def redline_revise(
                             "so there is nothing here to revise. Resolve the thread if the "
                             "deletion settles it; re-comment on the new text if it does not.")
         ids_live = [c for c in anchor["ids"] if c not in obsolete]
-        comments = [_ask_text(asks[c]) for c in ids_live if c in asks]
+        comments = [_ask_text(asks[c]) + (f"\n{disputed[c]}" if c in disputed else "")
+                    for c in ids_live if c in asks]
         if not comments:
             if obsolete:
                 log(f"[raconteur] para {anchor['index']}: {len(obsolete)} comment(s) on "

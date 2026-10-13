@@ -295,7 +295,17 @@ law is not a constraint either tool strains against; it is each one's natural sh
    collection *write-back* are deliberately not built (they exist only to save the manual add,
    which the user is happy to do); they remain a future opt-in. rabbitHole suite green (134,
    +4 triage tests).
-5. Formalise the cross-stage `FollowUp` signal and wire raconteur's `sources/evidence/figure`
-   routes into the planner (the `aggregate()` boundary law).
+5. **Partly DONE — the first cross-stage route: a disputed claim.** A paper comment disputing a
+   sentence that traces to a fact is decided in `haarpi next` (`planner._paper_disputes`), the
+   one place allowed to cross the boundary — no signal object was needed, because the planner
+   reads the paper markup and the fact snapshot itself. A changed number is the paper's error
+   outright; otherwise one model call compares comment, sentence and fact. **Paper error**: the
+   revise is handed the fact (`disputes.json` beside the markup → the comment's text in
+   `redline_revise`). **Fact error**: rabbitHole's `fact_rework` re-reads that source, and the
+   chain runs `litreview:report → litreview:comment → litreview:next` (another stage's gate as a
+   chain element) straight into the paper's own rework — not back through a paper `next`, whose
+   loop guard would refuse the same annotations twice. A comment routed to its source once is
+   sent to the paper path the second time. Still to formalise: raconteur's
+   `sources/evidence/figure` routes as typed signals.
 6. *(later, optional)* Parameterise the core guard vocabulary into a shared `haarpi.guards`
    so the guard functions live once, not twice.

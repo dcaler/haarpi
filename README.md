@@ -145,6 +145,10 @@ this happens", with the cost. The literature review's fact base (on test) is the
 first to carry one; its comments are routed, never answered by rewording a fact.
 Its facts are frozen beside its release, and raconteur drafts each section from
 the facts chosen for it, writing a trace from every cited sentence to its page.
+A reviewer who disputes a claim in the paper gets it fixed where the error is:
+the sentence (rewritten to its fact) or the fact (the source is re-read in the
+literature review, re-released, and the paper revised from it) — the one route
+that crosses a stage boundary, and so the one `haarpi next` takes itself.
 
 **Sections are planned before the gather that has to find their literature.**
 The heading and one-sentence claim are decided in `haarpi next`, so the search

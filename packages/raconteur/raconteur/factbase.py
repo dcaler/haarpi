@@ -45,6 +45,7 @@ class Fact:
     text: str
     page: int | None = None
     link: str = ""
+    quote: str = ""
     weight: int = 0                     # best score on a question-serving topic (0 = not counted)
 
 
@@ -117,7 +118,8 @@ def from_blob(blob: dict, source: Path) -> FactBase:
         w = max((sc for i, sc in enumerate(d.get("scores") or []) if i in serving), default=0)
         if w >= 2:
             facts[d["id"]] = Fact(d["id"], d["citekey"], " ".join((d.get("text") or "").split()),
-                                  d.get("page"), d.get("link") or "", w)
+                                  d.get("page"), d.get("link") or "",
+                                  " ".join((d.get("quote") or "").split()), w)
     themes = []
     for t in blob.get("themes", []):
         fs = sorted((facts[i] for i in t.get("fact_ids", []) if i in facts),
