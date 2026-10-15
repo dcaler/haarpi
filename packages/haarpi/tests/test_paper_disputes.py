@@ -73,7 +73,7 @@ def test_a_changed_number_is_the_papers_error_without_asking(tmp_path, monkeypat
     got, _, brain = _disputes(
         tmp_path, monkeypatch,
         "Pattern-oriented validation compared 15 patterns across 3 scales [@grimm2006].",
-        "wrong number", '{"dispute": true, "where": "source"}')
+        "wrong number", '{"dispute": true, "faithful": true}')
     assert [(d["where"], d["fact_id"]) for d in got] == [("paper", "grimm2006#1")]
     assert brain.calls == 0
 
@@ -82,7 +82,7 @@ def test_a_faithful_sentence_puts_the_fact_in_question(tmp_path, monkeypatch):
     got, _, _ = _disputes(
         tmp_path, monkeypatch,
         "Pattern-oriented validation compared 12 patterns across 3 scales [@grimm2006].",
-        "this isn't what the source says", '{"dispute": true, "where": "source"}')
+        "this isn't what the source says", '{"dispute": true, "faithful": true}')
     assert got[0]["where"] == "source" and got[0]["quote"] == "twelve patterns at three scales"
 
 
@@ -101,7 +101,7 @@ def test_a_source_already_re_read_is_not_re_read_again(tmp_path, monkeypatch):
     got, _, _ = _disputes(
         tmp_path, monkeypatch,
         "Pattern-oriented validation compared 12 patterns across 3 scales [@grimm2006].",
-        "this isn't what the source says", '{"dispute": true, "where": "source"}')
+        "this isn't what the source says", '{"dispute": true, "faithful": true}')
     assert got[0]["where"] == "paper" and "already re-read" in got[0]["note"]
 
 
@@ -109,7 +109,7 @@ def test_a_disputed_fact_is_sent_back_and_the_revise_is_told(tmp_path, monkeypat
     got, markup, _ = _disputes(
         tmp_path, monkeypatch,
         "Pattern-oriented validation compared 12 patterns across 3 scales [@grimm2006].",
-        "this isn't what the source says", '{"dispute": true, "where": "source"}')
+        "this isn't what the source says", '{"dispute": true, "faithful": true}')
     lines = planner._apply_disputes(tmp_path, _M, markup, got)
     blob = json.loads((markup.parent / planner.DISPUTES_FILE).read_text())
     assert blob["markup"] == markup.name and blob["disputes"][0]["where"] == "source"
@@ -142,3 +142,38 @@ def test_every_paper_phrasing_is_one_the_gate_reads(kind):
             assert planner._DISPUTE_FLOOR.search(t), t
         else:
             assert flat(t) in flat(planner.STAGE_PROMPTS["paper"]), t
+
+
+def test_the_model_is_asked_whether_the_sentence_is_faithful_not_where_the_error_is(
+        tmp_path, monkeypatch):
+    """Asked "where is the error?", qwen3.6 blamed the sentence every time (bake-off, 2026-10-15).
+    The route is now derived from a checkable answer."""
+    sentence = "Pattern-oriented validation compared 12 patterns across 3 scales [@grimm2006]."
+    got, _, _ = _disputes(tmp_path, monkeypatch, sentence, "I doubt this",
+                          '{"dispute": true, "faithful": false}')
+    assert got[0]["where"] == "paper"
+    assert "faithful" in planner._DISPUTE_PROMPT and "where is the error" not in \
+        planner._DISPUTE_PROMPT
+
+
+def test_a_sentence_that_shares_little_with_its_fact_is_the_papers_error_unasked(
+        tmp_path, monkeypatch):
+    got, _, brain = _disputes(
+        tmp_path, monkeypatch,
+        "Pattern-oriented validation works equally well without any empirical data [@grimm2006].",
+        "the source says the opposite", '{"dispute": true, "faithful": true}')
+    assert got[0]["where"] == "paper" and brain.calls == 0
+
+
+def test_word_overlap_cannot_see_a_swap_so_it_never_decides_faithful():
+    """The misstated Dahlstrom case swaps the two kinds of communication and still shares 92% of
+    its words with the fact — which is why there is no "faithful" floor."""
+    fact = ("Logical-scientific communication aims for abstract truths valid across situations, "
+            "whereas narrative communication provides specific cases from which individuals "
+            "generalize up.")
+    swapped = ("Narrative communication aims at abstract truths valid across situations, whereas "
+               "logical-scientific communication works from specific cases [@d].")
+    assert planner._overlap(swapped, fact) > 0.85
+    assert planner._overlap("Prosopography works equally well for poorly documented groups",
+                            "Prosopography is severely limited by the quantity and quality of "
+                            "data") < planner._MISSTATED_BELOW

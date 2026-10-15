@@ -1422,20 +1422,48 @@ Sentence: {sentence}
 Fact (from [@{citekey}], p.{page}): {fact}
 Quoted passage: {quote}
 
-1. Is the reviewer disputing that the sentence is true to its source — its claim, number, or
-   direction — rather than asking for wording, structure, or more sources?
-2. If so, where is the error? "paper": the sentence says something the fact does not.
-   "source": the sentence says what the fact says, so the reviewer is disputing the fact itself.
+Answer two separate questions.
+1. "dispute": is the reviewer disputing that the sentence is true to its source — its claim,
+   number, or direction — rather than asking for wording, structure, or more sources?
+2. "faithful": compare ONLY the sentence with the fact, ignoring the comment. Does the sentence
+   say what the fact says — the same claim, the same direction, the same numbers? Paraphrase,
+   shortening and leaving details out are faithful. Answer false only if the sentence adds,
+   reverses, swaps or changes something the fact says.
 
-Respond ONLY with JSON: {{"dispute": true|false, "where": "paper"|"source"}}"""
+Respond ONLY with JSON: {{"dispute": true|false, "faithful": true|false}}"""
+
+# Below this share of the sentence's content words found in its fact, the sentence plainly says
+# something else: the paper's error, no model needed. There is no floor the other way — word
+# overlap cannot see a swapped role ("narrative aims at abstract truths" shares 92% of its words
+# with the fact that says the opposite), so a faithful-looking sentence is always asked about.
+_MISSTATED_BELOW = 0.5
+_STOPWORDS = frozenset("the and for with that this these those from its their there which who "
+                       "whom been than then not are was were has have had into over".split())
+
+
+def _overlap(sentence: str, fact: str) -> float:
+    """Share of the sentence's content words (crudely stemmed) that its fact also uses."""
+    def words(t):
+        t = re.sub(r"\[@[^\]]+\]", "", (t or "").lower())
+        return {re.sub(r"(ies|es|s|ed|ing|ly)$", "", w)
+                for w in re.findall(r"[a-z][a-z-]{2,}", t) if w not in _STOPWORDS}
+    sw = words(sentence)
+    return len(sw & words(fact)) / len(sw) if sw else 0.0
 
 
 def _dispute_verdict(comment: str, sentence: str, f, cfg: dict) -> str | None:
-    """"paper", "source", or None (not a dispute). A changed number is the paper's error
-    without asking; a model decides the rest, and an unreachable model decides nothing."""
+    """"paper", "source", or None (not a dispute).
+
+    Asking the model "where is the error?" sent every case to the paper — on the 2026-10-15
+    bake-off, qwen3.6 blamed the sentence in all 5 cases where it was faithful to a disputed
+    fact, so the litreview was never asked to re-read a source. So the model now answers the
+    checkable question — does the sentence say what the fact says? — and the route is derived:
+    faithful means the fact is what is disputed. Changed numbers, or a sentence sharing under
+    half its words with its fact, are the paper's error without asking."""
     from raconteur import factbase
     floor = bool(_DISPUTE_FLOOR.search(comment))
-    if floor and factbase.numbers(sentence) - factbase.numbers(f.text):
+    if floor and (factbase.numbers(sentence) - factbase.numbers(f.text)
+                  or _overlap(sentence, f.text) < _MISSTATED_BELOW):
         return "paper"
     from .brain import Brain
     o = cfg.get("ollama", {})
@@ -1449,7 +1477,7 @@ def _dispute_verdict(comment: str, sentence: str, f, cfg: dict) -> str | None:
         return "paper" if floor else None
     if not got.get("dispute") and not floor:
         return None
-    return "source" if got.get("where") == "source" else "paper"
+    return "source" if got.get("faithful") is True else "paper"
 
 
 def _paper_disputes(root: Path, m, markup: Path, check: dict, cfg: dict) -> list[dict]:

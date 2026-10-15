@@ -185,8 +185,14 @@ def prepare(project: Path = DIGIPROS, out: Path | None = None) -> Path:
     _dump(out / "a3.json", {"groups": groups})
 
     # B1 / B2 / B3
-    fill = lambda t: t.replace("X", "archival silences").replace("Y", "the factoid model") \
-        .replace("T7", "T2").replace("…", "process-level validation only")
+    # "…" stands for what the reviewer would write there: a scope after "should only mean", a
+    # pasted reference after "these references:" (a bare label there is not an ingest ask).
+    def fill(t: str) -> str:
+        t = t.replace("X", "archival silences").replace("Y", "the factoid model").replace("T7", "T2")
+        if t.startswith("these references"):
+            return t.replace("…", "Bradley, J. & Short, H. (2005). Texts into databases. "
+                                  "Literary and Linguistic Computing 20(1).")
+        return t.replace("…", "process-level validation only")
     b1 = [{"text": fill(t), "kind": k.name, "fact_base": fb}
           for fb, vocab in ((False, ck.LITREVIEW_NARRATIVE), (True, ck.LITREVIEW_FACTS))
           for k in vocab.kinds for t in k.triggers]
