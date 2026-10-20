@@ -127,7 +127,7 @@ only a 12,000-character prefix of the result, never the bibliography where the f
 | **verify** | the quote is searched for in the paper's own page-marked text (case, whitespace, ligatures, line hyphenation, soft hyphens and quote marks ignored). Found → **verbatim**, and the page is where it was found. Not found → located by embedding search, with a support score, and the model's own page and quote kept (`claimed_page`, `claimed_quote`) to measure looser matching later. **Only verbatim facts count**: a search-placed one is shown in the by-publication list, labelled, and carries no weight, coverage or topic placement — of 30 DigiPros ones at support 0.55–0.75 about 6 supported their fact, and the cosine did not tell which | none |
 | **score** | every fact scored 0–3 against every approved **topic** (0 none, 1 background, 2 useful, 3 central) | 1 call per paper (cached in `work/facts/scores/`, keyed by the topic list) |
 | **group** | facts scoring 2+ on a topic, then cosine k-means into themes (~10 facts each, ≤8 per topic) | 1 short call per theme: a name and 2–4 synthesis bullets |
-| **render** | topics, coverage per research question, the contribution map (embedded), load-bearing sources, facts by topic and theme, every source's facts in full | none |
+| **render** | topics, coverage per research question, a link to the contribution map (an interactive page beside the review), load-bearing sources, facts by topic and theme, every source's facts in full | none |
 
 **Topics, not research questions, are what facts are scored against.** The review's config holds
 `topics:`, a person-approved list of single subjects, each with the research questions (focus

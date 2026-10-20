@@ -17,7 +17,7 @@ bibliography, which is where the facts were. A fact base drops the prose and kee
             dropped core sources, read loosely everything drifted to the broadest question
   group     facts by topic (score 2+), then into themes by embedding; one short call per theme
             names it and writes 2-4 synthesis bullets that may cite only that theme's facts
-  render    coverage per research question (from its topics), the contribution map (embedded),
+  render    coverage per research question (from its topics), a link to the contribution map,
             the load-bearing sources, the facts by topic and theme, and every source's facts in
             full — each fact linked to its page in Zotero. `work/facts.json` holds the same
 
@@ -30,6 +30,7 @@ import json
 import re
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -734,21 +735,82 @@ def load_sidecar(paths) -> FactBase | None:
                              if "no_text" in s})
 
 
+NO_TOPIC_SLICE = mindmap.UNPLACED
+
+
+def map_slice(fs: list[Fact], topics: list[Topic]) -> int | None:
+    """The topic a source's map dot sits in (0-based), or None for no useful fact.
+
+    The topic where its counted facts score highest in sum, preferring a topic that serves a
+    research question: a source with one central fact on T4 and two useful ones on T8 (which
+    serves none) belongs with T4, since that is what it brings to the brief."""
+    total: Counter = Counter()
+    for f in fs:
+        for i in range(len(topics)):
+            if (sc := counts(f, i)) >= 2:
+                total[i] += sc
+    if not total:
+        return None
+    idx = _brief_topics(topics)
+    pool = [i for i in total if idx is None or i in idx] or list(total)
+    return max(pool, key=lambda i: (total[i], -i))
+
+
 def map_inputs(base: FactBase):
-    """What the contribution map needs, from the facts: themes as threads, facts as the
-    grounding sentences, well-grounded facts as importance."""
-    by_id = base.by_id()
-    threads = []
-    for t in base.themes:
-        keys: dict[str, None] = {}
-        for fid in t.fact_ids:
-            if fid in by_id:
-                keys.setdefault(by_id[fid].citekey, None)
-        if keys:
-            threads.append(mindmap.Thread(theme=t.name, citekeys=list(keys)))
+    """What the contribution map needs, from the facts: one thread per topic (the map's slices —
+    each source in exactly one, by :func:`map_slice`), facts as the grounding sentences,
+    well-grounded facts as importance.
+
+    The slices used to be the themes. DigiPros has 72 themes under 10 topics; drawn as 59 pie
+    slices of 6° each, the map had no visible structure, and the topics are what the reviewer
+    is asked to judge."""
+    names = [f"T{i + 1}. {t.name}" for i, t in enumerate(base.topics)]
+    slices: dict[str, list[str]] = {n: [] for n in names + [NO_TOPIC_SLICE]}
+    for ck, fs in base.facts.items():
+        if not fs:
+            continue
+        i = map_slice(fs, base.topics)
+        slices[names[i] if i is not None else NO_TOPIC_SLICE].append(ck)
+    threads = [mindmap.Thread(theme=n, citekeys=keys) for n, keys in slices.items() if keys]
     evidence = {ck: [f.text for f in sorted(fs, key=lambda f: -best(f))][:2]
                 for ck, fs in base.facts.items()}
     return threads, evidence, fact_weight(base.facts, base.topics)
+
+
+def zotero_select(item_key: str, gc) -> str:
+    """A link that selects the item in Zotero (the page links open its PDF instead)."""
+    if not item_key:
+        return ""
+    lib = (f"groups/{gc.zotero_library_id}"
+           if getattr(gc, "zotero_library_type", "user") == "group" else "library")
+    return f"zotero://select/{lib}/items/{item_key}"
+
+
+def map_details(paths, base: FactBase, gc, per_source: int = 3) -> dict[str, dict]:
+    """Per source, what the map's click panel shows: its best counted facts with their page
+    links, its fact counts, the questions it serves, and a link to the item in Zotero. Links
+    come from the sidecar, which `report` writes before the map and `mindmap` reads after."""
+    try:
+        blob = json.loads((paths.work / "facts.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        blob = {}
+    links = {d.get("id"): d.get("link", "") for d in blob.get("facts", [])}
+    sources = blob.get("sources") or {}
+    out: dict[str, dict] = {}
+    for ck, fs in base.facts.items():
+        if not fs:
+            continue
+        top = sorted(fs, key=lambda f: (-counts(f), not f.verified, f.page or 0))[:per_source]
+        n3 = sum(1 for f in fs if counts(f) == 3)
+        n2 = sum(1 for f in fs if counts(f) == 2)
+        qs = sorted({q for f in fs for q in f.focus})
+        out[ck] = {"facts": [{"text": f.text, "where": f"p.{f.page}" if f.page else "",
+                              "link": links.get(f.id, "")} for f in top],
+                   "counts": f"{n3} central, {n2} useful of {len(fs)} facts",
+                   "questions": ("Serves " + ", ".join(f"Q{q}" for q in qs)) if qs
+                   else "Serves no research question",
+                   "zotero": zotero_select((sources.get(ck) or {}).get("zotero_key", ""), gc)}
+    return out
 
 
 def coverage(base: FactBase) -> list[str]:
@@ -790,7 +852,9 @@ RELEASE_CHECKLIST = [
     "covered, not a neighbouring one? Comment on any question that is THIN, or that you know is "
     "under-covered.",
     "**Most load-bearing sources.** Are these the core literature you would expect? Comment on "
-    "a source that is missing, or on one listed that does not belong.",
+    "a source that is missing, or on one listed that does not belong. The contribution map "
+    "(linked above) shows the same ranking by topic: an empty inner wedge is a topic with no "
+    "core source.",
     "**The sources you know best.** Find two or three in the by-publication list. Are the facts "
     "you would cite from them there? Open one page link per source and check the fact says "
     "what the page says.",
@@ -807,7 +871,7 @@ NOT_REASONS = ("a fact that adds detail from the text around its quote (its page
 
 
 def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], citekeys,
-                   gc, cover: list[str], map_png: Path | None,
+                   gc, cover: list[str], map_html: Path | None,
                    responses: list[str] | None = None) -> str:
     by_key = {citekeys[i]: c for i, c in enumerate(corpus) if i in citekeys}
     by_id = base.by_id()
@@ -836,8 +900,14 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
               "located by search instead says so, and is not counted anywhere — its passage may not "
               "support it. Each fact is scored against the approved topics: 3 central, "
               "2 useful, 1 background.*", ""]
-    if map_png is not None:
-        parts += [f"![Contribution map]({map_png.name})", ""]
+    if map_html is not None:
+        # Linked, not embedded: the map is an interactive page (hover for each paper's
+        # contribution, click for its facts), which a picture in a docx cannot be. The link
+        # is relative, so it keeps working when the output folder moves.
+        parts += [f"**[Open the contribution map]({map_html.name})** — an interactive page "
+                  "(opens in a browser) placing every source by topic and by its weight on the "
+                  "brief; hover a dot for what the source contributes, click it for its facts "
+                  "and page links.", ""]
 
     parts += ["## Topics", "",
               "*The subjects every fact was scored against, and the research questions each "
@@ -973,16 +1043,15 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     cover = coverage(base)
 
     bib_path = _export_bibtex(cfg, gc, paths, citekeys, corpus)
-    map_png = None
+    map_html = None
     if bib_path and Path(bib_path).is_file():
         try:
             threads, evidence, weight = map_inputs(base)
             res = mindmap.make_map(brain, gc, paths.output, cfg.project_name, threads,
                                    Path(bib_path).read_text(), evidence, weight,
-                                   datestamp=date.today().strftime("%y%m%d"))
-            svg = res.get("svg")
-            png = Path(svg).with_suffix(".png") if svg else None
-            map_png = png if png and png.is_file() else None
+                                   datestamp=date.today().strftime("%y%m%d"),
+                                   details=map_details(paths, base, gc), pin_slices=True)
+            map_html = res.get("html")
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] contribution map failed ({e}); the document ships without it.",
                   file=sys.stderr)
@@ -990,7 +1059,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     model = (cfg.brain.claude_model if brain.backend == "claude"
              else cfg.brain.coordinator_model)
     from .fact_rework import response_lines
-    md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_png,
+    md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_html,
                         response_lines(paths, base))
     stem = f"{date.today().strftime('%y%m%d')}_{cfg.project_name}_litreview_ra"
     out_md = paths.output / f"{stem}.md"
@@ -1005,8 +1074,8 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     print(f"  Review (md)  : {out_md}")
     if ok:
         print(f"  Review (docx): {out_docx}")
-    if map_png:
-        print(f"  Map (embedded): {map_png}")
+    if map_html:
+        print(f"  Map (linked): {map_html}")
     print(f"  Facts: {len(all_facts)} from {sum(1 for fs in facts.values() if fs)} sources | "
           f"verbatim {sum(f.verified for f in all_facts)} | useful-or-central "
           f"{sum(1 for f in all_facts if counts(f) >= 2)} | themes {len(themes)} | "

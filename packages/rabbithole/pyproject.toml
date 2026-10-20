@@ -45,5 +45,8 @@ rabbitHole = "rabbithole.cli:main"
 [tool.setuptools.packages.find]
 include = ["rabbithole*"]
 
+[tool.setuptools.package-data]
+rabbithole = ["assets/*.js"]
+
 [tool.uv.sources]
 haarpi = { workspace = true }

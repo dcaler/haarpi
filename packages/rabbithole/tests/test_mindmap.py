@@ -130,20 +130,23 @@ def _sample_map():
     )
 
 
-def test_to_dot_is_a_pinned_banded_map_that_renders():
-    # corpus of 8 -> cuts at 5%/25%/50% collapse to ranks 1 and 2 (rounding), so two rings
-    dot = mindmap.to_dot(_sample_map(), title="Test map", corpus_size=8)
-    assert "digraph litmap {" in dot                              # pinned digraph (render: dot -Kneato -n2)
-    assert '"__hub__"' in dot and "Contribution map" not in dot   # centre hub carries the title
-    assert '"__t0__"' in dot and '"__t1__"' in dot                # a theme label node per theme, outside
-    assert '"__ring0__"' in dot and '"__ring1__"' in dot          # rings identified by INDEX
-    assert '"rousta2015"' in dot and '"allcott2011"' in dot       # a node per paper
-    assert '!"' in dot and dot.count('pos="') >= 5                # everything pinned
-    assert "distance cuts" in dot and "tooltip" not in dot        # phrase in the node, no tooltips
-    assert 'color="#dc2626"' in dot and "top 5% (1)" in dot       # red rings + their labels
-    assert "of the 8-source corpus by importance" in dot          # legend explains the rings
-    assert "budget" not in dot                                    # a ring is not a cap any more
-    assert mindmap._render_pinned(dot, tmp := Path(__file__).parent / "_x.svg") and tmp.unlink() is None
+def test_the_map_is_one_self_contained_page():
+    html = mindmap.to_html(_sample_map(), title="Test map", corpus_size=8)
+    assert html.startswith("<!doctype html>") and "<title>Test map</title>" in html
+    assert "vis-network" in html and "<script src" not in html       # script inlined: opens offline
+    assert html.count("</script>") == 2                              # nothing inside closes a tag
+    d = _data(html)
+    assert {p["id"] for p in d["papers"]} == {"rousta2015", "allcott2011"}
+    assert d["papers"][0]["phrase"] == "distance cuts missorting"     # the sentence rides the tooltip
+    assert [(r["name"], r["cut"]) for r in d["rings"]] == [("top 5%", 1), ("top 25%", 2),
+                                                           ("top 50%", 4)]
+    assert d["corpus"] == 8 and "budget" not in html                  # a ring is not a cap
+
+
+def _data(html):
+    import json
+    blob = html.split("const D = ", 1)[1].split(";\n", 1)[0]
+    return json.loads(blob.replace("<\\/", "</"))
 
 
 def test_band_layout_bands_by_importance_with_exact_quantile_rings():
@@ -177,35 +180,62 @@ def test_band_cuts_are_corpus_quantiles_and_strictly_increasing():
     assert mindmap.band_cuts(181) == sorted(set(mindmap.band_cuts(181)))
 
 
-def test_band_layout_has_no_overlapping_boxes():
-    # varied sizes (via cited_by) across two themes; the collision-scale must separate every pair.
+def test_band_layout_has_no_overlapping_dots():
+    # varied sizes (via cited_by) across two slices; the packing must separate every pair.
     papers = [mindmap.Paper(f"p{i}", f"Author {i} 20{i:02d}", "A" if i % 2 else "B",
-                            "a contribution phrase that wraps onto a few lines here",
-                            cited_by=10 ** (i % 4), importance=50 - i) for i in range(16)]
+                            "a contribution phrase", cited_by=10 ** (i % 4), importance=50 - i)
+              for i in range(16)]
     m = mindmap.Mindmap(themes=["A", "B"], papers=papers, edges=[])
     pos, *_ = mindmap.band_layout(m, [4, 10])
-    ext = {p.key: mindmap._extents(p) for p in papers}
+    r = {p.key: mindmap._node_size(p.cited_by) for p in papers}
     for i in range(16):
         for j in range(i + 1, 16):
-            (xi, yi), (wi, hi) = pos[f"p{i}"], ext[f"p{i}"]
-            (xj, yj), (wj, hj) = pos[f"p{j}"], ext[f"p{j}"]
-            assert abs(xi - xj) >= (wi + wj) / 2 - 1 or abs(yi - yj) >= (hi + hj) / 2 - 1, \
+            (xi, yi), (xj, yj) = pos[f"p{i}"], pos[f"p{j}"]
+            assert ((xi - xj) ** 2 + (yi - yj) ** 2) ** 0.5 >= r[f"p{i}"] + r[f"p{j}"] - 1, \
                 f"p{i}/p{j} overlap"
 
 
-def test_to_dot_colors_each_theme_from_the_palette():
-    dot = mindmap.to_dot(_sample_map(), title="t")
-    hue0, tint0 = mindmap._PALETTE[0]
-    hue1, _ = mindmap._PALETTE[1]
-    assert f'fillcolor="{hue0}"' in dot and f'fillcolor="{hue1}"' in dot   # distinct theme hues
-    assert f'fillcolor="{tint0}"' in dot                          # papers take the theme's pale tint
+def test_a_digipros_sized_map_stays_compact():
+    """224 sources in 10 topic slices. Packing label boxes and scaling until none overlapped made
+    DigiPros' map 64,000 pt square; dots without text must pack into a canvas you can see whole."""
+    papers = [mindmap.Paper(f"p{i}", f"A{i} 2020", f"T{i % 10}", "x" * 120,
+                            cited_by=(i * 37) % 900, importance=300 - i) for i in range(224)]
+    m = mindmap.Mindmap(themes=[f"T{k}" for k in range(10)], papers=papers, edges=[])
+    _pos, _rings, _labels, outer = mindmap.band_layout(m, mindmap.band_cuts(226))
+    assert outer < 1500
 
 
-def test_all_papers_appear_no_collapse():
-    papers = [mindmap.Paper(f"p{i}", f"A{i} 20{i:02d}", "T", f"phrase {i}") for i in range(8)]
-    m = mindmap.Mindmap(themes=["T"], papers=papers, edges=[])
-    dot = mindmap.to_dot(m)
-    assert all(f'"p{i}"' in dot for i in range(8)) and "_more" not in dot   # every paper, none collapsed
+def test_each_slice_gets_its_palette_hue_and_every_paper_appears():
+    papers = [mindmap.Paper(f"p{i}", f"A{i} 20{i:02d}", "AB"[i % 2], f"phrase {i}")
+              for i in range(8)]
+    d = mindmap.map_data(mindmap.Mindmap(themes=["A", "B"], papers=papers, edges=[]))
+    assert [s["hue"] for s in d["slices"]] == [mindmap._PALETTE[0][0], mindmap._PALETTE[1][0]]
+    assert [s["papers"] for s in d["slices"]] == [4, 4]
+    assert len(d["papers"]) == 8                                      # every paper, none collapsed
+
+
+def test_bands_follow_the_ranking():
+    papers = [mindmap.Paper(f"p{i}", f"A{i}", "T", "", importance=100 - i) for i in range(8)]
+    d = mindmap.map_data(mindmap.Mindmap(themes=["T"], papers=papers, edges=[]), corpus_size=8)
+    band = {p["id"]: p["band"] for p in d["papers"]}
+    assert band["p0"] == 0 and band["p1"] == 1 and band["p2"] == band["p3"] == 2
+    assert band["p7"] == 3 and d["bands"][-1] == "the rest"
+
+
+def test_details_reach_the_click_panel_and_nothing_else_does():
+    d = mindmap.map_data(_sample_map(), details={"rousta2015": {
+        "facts": [{"text": "f", "where": "p.2", "link": "zotero://open-pdf/x"}],
+        "zotero": "zotero://select/library/items/K", "secret": "dropped"}})
+    p = next(p for p in d["papers"] if p["id"] == "rousta2015")
+    assert p["facts"][0]["link"] == "zotero://open-pdf/x" and p["zotero"].endswith("/K")
+    assert "secret" not in p
+
+
+def test_a_closing_tag_in_the_data_cannot_end_the_script():
+    m = mindmap.Mindmap(themes=["T"], papers=[mindmap.Paper("k", "K 1", "T",
+                                                            "</script><b>x</b>")], edges=[])
+    html = mindmap.to_html(m)
+    assert html.count("</script>") == 2 and _data(html)["papers"][0]["phrase"] == "</script><b>x</b>"
 
 
 def test_evidence_weight_measures_review_prose_per_paper():
@@ -220,12 +250,6 @@ def test_clean_phrase_strips_the_stray_brace_bug():
         {"papers": [{"key": "k", "theme": "T", "phrase": "{Bonjoc 2025 explores frameworks*"}]},
         {"k": "Bonjoc 2025"}, ["T"])
     assert m.papers[0].phrase == "Bonjoc 2025 explores frameworks"   # leading { and trailing * gone
-
-
-def test_spec_from_map_renders_all_papers():
-    spec = mindmap.spec_from_map(_sample_map(), title="t")
-    assert spec.provenance["papers"] == 2 and spec.provenance["themes"] == 2
-    assert mindmap._renders(spec.source)
 
 
 def test_bib_dois_parses_and_normalises():
@@ -273,30 +297,17 @@ def test_citation_graph_also_returns_world_citation_counts():
     assert world == {"A": 1200, "B": 3}                            # OpenAlex cited_by_count per paper
 
 
-def test_node_size_and_ring_encode_citations():
+def test_dot_size_and_ring_encode_citations():
     # A is highly cited (big) and cited within the corpus (ring); B is neither.
     m = mindmap.Mindmap(themes=["T"],
                         papers=[mindmap.Paper("A", "A 1", "T", "", cited_by=1000),
                                 mindmap.Paper("B", "B 2", "T", "", cited_by=0)],
                         edges=[mindmap.Edge("B", "A", "cites")])   # B cites A -> A gets a ring
-    dot = mindmap.to_dot(m)
-    big, small = mindmap._node_fontsize(1000), mindmap._node_fontsize(0)
-    assert big > small and small == 8.0                            # log-scaled size, floor at 8pt
-    a_line = next(ln for ln in dot.splitlines() if ln.strip().startswith('"A" ['))
-    assert f"fontsize={big}" in a_line and 'color="#0f172a"' in a_line   # big + black ring (in-corpus cited)
-    b_line = next(ln for ln in dot.splitlines() if ln.strip().startswith('"B" ['))
-    assert "penwidth=0]" in b_line                                 # B has no in-corpus citations: no ring
-    assert mindmap._renders(dot)
-
-
-def test_cites_edges_render_with_a_citation_legend():
-    m = mindmap.Mindmap(themes=["T"],
-                        papers=[mindmap.Paper("A", "A 1", "T", ""), mindmap.Paper("B", "B 2", "T", "")],
-                        edges=[mindmap.Edge("A", "B", "cites")])
-    dot = mindmap.to_dot(m)
-    assert '"A" -> "B"' in dot and "arrowsize" in dot              # a directed citation arrow
-    assert "cites — A cites B" in dot                             # legend decodes it
-    assert mindmap._renders(dot)
+    d = {p["id"]: p for p in mindmap.map_data(m)["papers"]}
+    assert d["A"]["size"] > d["B"]["size"] == 4.0                   # log-scaled, floor at 4
+    assert d["A"]["border"] > 0 and d["B"]["border"] == 0
+    assert mindmap.map_data(m)["edges"] == [{"from": "B", "to": "A", "kind": "cites"}]
+    assert "cites" in mindmap.map_data(m)["kinds"]                  # the legend decodes it
 
 
 def test_validate_reads_the_finding_key():
@@ -305,30 +316,47 @@ def test_validate_reads_the_finding_key():
     assert m.papers[0].phrase == "cut missorting 55%->39%"        # new 'finding' key honored
 
 
-def test_build_spec_with_fake_brain_is_grounded_and_renders():
+def test_build_map_with_fake_brain_is_grounded():
     reply = """```json
     {"papers": [{"key": "rousta2015", "theme": "Structural convenience drives compliance",
                  "phrase": "distance to bins cuts missorting"},
                 {"key": "GHOST", "theme": "Social norms amplify behaviour", "phrase": "invented"}],
      "edges": [{"src": "rousta2015", "dst": "GHOST", "kind": "influence"}]}
     ```"""
-    spec = mindmap.build_spec(MD, BIB, FakeBrain(reply), title="Contribution map")
-    assert spec.format == "dot" and spec.id == "litmap" and spec.kind == "mindmap"
-    assert "rousta2015" in spec.source
-    assert "GHOST" not in spec.source                 # grounding dropped the invented paper + its edge
-    assert mindmap._renders(spec.source)
-    assert spec.provenance["papers"] == 1             # only the grounded paper survived
+    m = mindmap.build_map(MD, BIB, FakeBrain(reply))
+    assert [p.key for p in m.papers] == ["rousta2015"]   # grounding dropped the invented paper
+    assert m.edges == [] and m.papers[0].importance > 0
 
 
-def test_emit_writes_into_output_not_the_figures_pool(tmp_path):
+def test_emit_writes_a_chain_named_page_into_output_not_the_figures_pool(tmp_path):
     reply = ('{"papers": [{"key": "rousta2015", "theme": "Structural convenience drives compliance",'
              ' "phrase": "distance cuts missorting"}], "edges": []}')
-    spec = mindmap.build_spec(MD, BIB, FakeBrain(reply), title="Map")
-    res = mindmap.emit(tmp_path, "consGateII", spec)
-    assert res["source"].parent == tmp_path                 # written into the given output dir
-    assert res["source"].suffix == ".dot" and res["source"].exists()
-    assert "litmap" in res["source"].name and res["source"].name.endswith("_ra.dot")   # chain draft
+    html = mindmap.to_html(mindmap.build_map(MD, BIB, FakeBrain(reply)), title="Map")
+    res = mindmap.emit(tmp_path, "consGateII", html, datestamp="261020")
+    assert res["html"] == tmp_path / "261020_consGateII_litmap_ra.html" and res["html"].exists()
     assert not (tmp_path / "figures").exists()              # never the paper's figures pool
+    assert not list(tmp_path.glob("*.png")) and not list(tmp_path.glob("*.svg"))
+
+
+def test_make_map_can_pin_each_paper_to_the_slice_that_lists_it(tmp_path):
+    from types import SimpleNamespace
+    threads = [mindmap.Thread(theme="T1. A", citekeys=["rousta2015"]),
+               mindmap.Thread(theme="T2. B", citekeys=["best2011"])]
+    reply = ('[{"key": "rousta2015", "theme": "T2. B", "contribution": "x"},'
+             ' {"key": "best2011", "theme": "T2. B", "contribution": "y"}]')
+    gc = SimpleNamespace(contact_email="")
+    orig = mindmap.citation_graph
+    mindmap.citation_graph = lambda *a, **k: ([], {})       # offline
+    try:
+        res = mindmap.make_map(FakeBrain(reply), gc, tmp_path, "X", threads, BIB, {}, {},
+                               datestamp="261020", pin_slices=True)
+    finally:
+        mindmap.citation_graph = orig
+    d = _data(res["html"].read_text())
+    names = [s["name"] for s in d["slices"]]
+    assert names == ["T1. A", "T2. B"]
+    assert {p["id"]: names[p["slice"]] for p in d["papers"]} == {"rousta2015": "T1. A",
+                                                                   "best2011": "T2. B"}
 
 
 def test_compose_survives_a_garbage_reply():

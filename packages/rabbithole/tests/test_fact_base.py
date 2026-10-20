@@ -160,11 +160,38 @@ def _base():
                     topics=list(_TOPICS))
 
 
-def test_the_map_is_built_from_themes_facts_and_fact_weight():
+def test_the_map_slices_are_topics_and_each_source_sits_in_one():
     threads, evidence, weight = facts.map_inputs(_base())
-    assert [(t.theme, t.citekeys) for t in threads] == [("Sequence typologies", ["abbott1990"])]
+    # abbott1990's counted fact is central on T1; zed2020 has no useful fact — its own slice
+    assert [(t.theme, t.citekeys) for t in threads] == [
+        ("T1. Sequence analysis", ["abbott1990"]), (facts.NO_TOPIC_SLICE, ["zed2020"])]
     assert evidence["abbott1990"][0] == "Optimal matching found 20 types."
     assert weight == {"abbott1990": 3, "zed2020": 0}       # f2 is located weakly: not counted
+
+
+def test_a_source_sits_in_the_topic_that_serves_the_brief():
+    topics = [Topic(name="A", serves=[1]), Topic(name="Schelling", serves=[])]
+    fs = [Fact(id="k#1", citekey="k", text="t", scores=[2, 3], verified=True),
+          Fact(id="k#2", citekey="k", text="t", scores=[0, 3], verified=True)]
+    assert facts.map_slice(fs, topics) == 0                # T2 sums higher but serves no question
+    assert facts.map_slice(fs[1:], topics) == 1            # only off-brief: it still has a home
+    assert facts.map_slice([Fact(id="k#3", citekey="k", text="t", scores=[3, 0])], topics) is None
+
+
+def test_map_details_carry_page_links_counts_and_a_zotero_link(tmp_path):
+    base = _base()
+    paths = SimpleNamespace(work=tmp_path)
+    (tmp_path / "facts.json").write_text(json.dumps({
+        "facts": [{"id": "abbott1990#1", "link": "zotero://open-pdf/library/items/ATT1?page=2"}],
+        "sources": {"abbott1990": {"zotero_key": "ITEM1"}}}))
+    base.facts["abbott1990"][0].focus = [1]
+    gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
+    d = facts.map_details(paths, base, gc)["abbott1990"]
+    assert d["facts"][0] == {"text": "Optimal matching found 20 types.", "where": "p.2",
+                             "link": "zotero://open-pdf/library/items/ATT1?page=2"}
+    assert d["counts"] == "1 central, 0 useful of 2 facts"
+    assert d["questions"] == "Serves Q1"
+    assert d["zotero"] == "zotero://select/library/items/ITEM1"
 
 
 def test_coverage_is_built_per_question_from_its_topics():
@@ -184,12 +211,14 @@ def test_the_document_links_every_fact_and_shows_scores(tmp_path):
     cfg = SimpleNamespace(topic="t", project_name="DigiPros", focus="trajectory archetypes; "
                           "factoid model")
     gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
-    png = tmp_path / "261009_DigiPros_litmap_ra.png"
+    page = tmp_path / "261009_DigiPros_litmap_ra.html"
     base = _base()
     md = facts.build_markdown(cfg, "qwen", base, corpus, {0: "abbott1990", 1: "zed2020"},
-                              gc, facts.coverage(base), png)
+                              gc, facts.coverage(base), page)
     assert mindmap.is_fact_base(md)
-    assert "![Contribution map](261009_DigiPros_litmap_ra.png)" in md
+    # the map is linked (relative), never embedded as a picture
+    assert "**[Open the contribution map](261009_DigiPros_litmap_ra.html)**" in md
+    assert "![" not in md
     # the release guide opens it: the agent's checklist inside haarpi's frame, with the phrasings
     assert md.index("## Before you release this document") < md.index("## Topics")
     assert "**Coverage against the brief.**" in md and "| **topic_scope** |" in md

@@ -127,8 +127,10 @@ facts, checks every quote verbatim against its page (a fact whose quote is only
 found by search is shown for checking but not counted), scores every fact 0–3
 against the review's approved `topics:` (each mapped to the research questions it
 serves), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
-the link opens the PDF in Zotero at that page. The contribution map is embedded
-in the document, and `work/facts.json` holds the same facts for tools.
+the link opens the PDF in Zotero at that page. The document links to the
+contribution map, an interactive page beside it: one slice per topic and a dot
+per source (hover for what it contributes, click for its facts and page links).
+`work/facts.json` holds the same facts for tools.
 The load-bearing list ranks sources by their weight on the topics that serve a
 research question; a source whose PDF has no usable text (an image-only scan) is
 not sent to the model but listed as needing OCR or a better copy.

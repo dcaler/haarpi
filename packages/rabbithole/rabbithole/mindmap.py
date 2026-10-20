@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import math
 import re
-import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
@@ -373,63 +372,57 @@ def validate(raw: dict, valid_keys: dict[str, str], themes: list[str]) -> Mindma
     return Mindmap(themes=used or [default_theme], papers=list(papers.values()), edges=edges)
 
 
-# ── DOT (deterministic) — a radial twopi mind-map ────────────────────────────────
-# The map is radial, not a left-right DAG: a centre (the review) → a ring of themes →
-# a ring of papers. `twopi` gives that shape for free (the `dot` binary honours the in-file
-# `layout=twopi` attribute, so `figure.render` needs no change). Each theme owns a hue; its
-# papers are a pale tint of the same hue, so the branches read at a glance (the graphviz
-# "happiness" technique). Each paper node carries its `Author Year` citation followed by the
-# one-sentence contribution phrase (radial layout + colour keep this legible where the old
-# left-right wall did not). The theme spokes carry no arrowhead; the influence/temporal/evolution
-# links are drawn as directed citation ARROWS overlaid with `constraint=false` (so they never
-# distort the rings) and decoded by a legend of the kinds actually present.
+# ── the interactive map (deterministic) — one self-contained HTML page ──────────
+# The map is a vis-network page, not a static figure. A static map has to print every paper's
+# contribution sentence beside its node, and keeping 200+ such labels apart scaled DigiPros'
+# canvas to 64,000 pt square: rasterised to 1600 px for the docx, every node was a speck. Here a
+# node is a small dot with an ``Author Year`` label that appears on zoom, the sentence and the
+# paper's facts sit in a hover tooltip and a click panel, and the layout can pack tight. The
+# review links to the page rather than embedding a picture of it. The vis-network script is
+# vendored (assets/) and inlined, so the page opens offline and never changes under the reader.
 
-# a strong hue + a pale tint per theme, cycled when there are more themes than entries
+# a strong hue + a pale tint per slice, cycled when there are more slices than entries
 _PALETTE = [
     ("#2563eb", "#dbeafe"), ("#059669", "#d1fae5"), ("#d97706", "#fef3c7"),
     ("#dc2626", "#fee2e2"), ("#7c3aed", "#ede9fe"), ("#0891b2", "#cffafe"),
     ("#db2777", "#fce7f3"), ("#65a30d", "#ecfccb"), ("#475569", "#e2e8f0"),
     ("#ea580c", "#ffedd5"),
 ]
-
-_CROSSLINK = {                                                       # directed, constraint=false
-    "cites":     'color="#47556955", penwidth=1.2',                # A cites B (OpenAlex); alpha-faded
-    "influence": 'color="#334155", penwidth=1.6',                   # who built on whom
-    "temporal":  'color="#1d4ed8", style=dashed, penwidth=1.4',     # time ordering
-    "evolution": 'color="#7c3aed", penwidth=2.4',                   # how the theme evolved
-}
 _KIND_LABEL = {"cites":     "cites — A cites B (from OpenAlex)",
                "influence": "influence — one paper built on another",
                "temporal":  "temporal — earlier ▸ later",
                "evolution": "evolution — the theme shifting"}
-_KIND_ORDER = ("cites", "influence", "temporal", "evolution")       # stable legend order
+# The slice for sources with nothing useful to any topic: grey, so it reads as the remainder
+# rather than as one more topic.
+UNPLACED = "No fact useful to a topic"
+_UNPLACED_HUE = ("#94a3b8", "#f1f5f9")
+_VIS_JS = Path(__file__).parent / "assets" / "vis-network-9.1.9.min.js"
 
 
-def _node_fontsize(cited_by: int) -> float:
-    """Node size encodes TOTAL (field-wide) citations. Citation counts are heavy-tailed, so the map
-    is log-scaled and clamped: 0→8pt, 10→~13, 100→~18, 1000+→22 — perceptible without one blob
-    dwarfing the rest."""
-    return round(min(22.0, 8.0 + 5.0 * math.log10(1 + max(0, cited_by))), 1)
+def _node_size(cited_by: int) -> float:
+    """Dot radius encodes TOTAL (field-wide) citations. Citation counts are heavy-tailed, so it is
+    log-scaled and clamped: 0→4, 10→~7, 100→~10, 1000+→13 — perceptible without one dot dwarfing
+    the rest."""
+    return round(min(13.0, 4.0 + 3.0 * math.log10(1 + max(0, cited_by))), 1)
 
 
 def _node_border(in_degree: int) -> float:
-    """Black-ring thickness encodes citations WITHIN this review (in-corpus in-degree). 0→no ring;
-    otherwise a bounded penwidth so the local pillar stands out without a cartoon-thick border."""
-    return 0.0 if in_degree <= 0 else round(min(5.0, 0.8 + 0.6 * in_degree), 1)
+    """Dark-ring thickness encodes citations WITHIN this review (in-corpus in-degree). 0→no ring;
+    otherwise bounded so the local pillar stands out without a cartoon-thick border."""
+    return 0.0 if in_degree <= 0 else round(min(4.0, 1.0 + 0.5 * in_degree), 1)
 
 
-# ── packed-bands pie-slice layout (points; rendered by `dot -Kneato -n2`) ────────
-# Papers are ranked by importance to THIS review (evidence_weight) and split into IMPORTANCE bands
-# cut at fixed QUANTILES OF THE PROJECT CORPUS, separated by radial gaps that hold the red rings.
-# Each band is packed tight into concentric rings; a paper sits at its THEME's angular sector (a
-# coloured pie slice), so a peripheral theme shows an empty inner slice (the diagnostic). Band
-# MEMBERSHIP carries the meaning; radius WITHIN a band is just packing. Blob size = total citations;
-# black ring = in-corpus.
+# ── packed-bands pie-slice layout (canvas pixels) ──────────────────────────────
+# Papers are ranked by importance to THIS review (evidence_weight, or the fact base's weight on
+# the brief) and split into IMPORTANCE bands cut at fixed QUANTILES OF THE PROJECT CORPUS,
+# separated by radial gaps that hold the red rings. Each band is packed tight into concentric
+# rows; a paper sits in its slice's angular sector (a coloured pie slice), so a peripheral slice
+# shows an empty inner wedge (the diagnostic). Band MEMBERSHIP carries the meaning; radius WITHIN
+# a band is just packing. Dot size = total citations; dark ring = in-corpus.
 #
-# The rings used to mark a reference BUDGET (target_min/target_max). They no longer do: a litreview
-# is a coverage instrument, and exceeding a reference target when the work asks for it is correct,
-# so a ring labelled "papers outside exceed it" was making a false claim about a healthy review.
-# They now mark where a paper sits in the corpus by importance, which is a fact rather than a verdict.
+# The rings used to mark a reference BUDGET. They no longer do: a litreview is a coverage
+# instrument, and exceeding a reference target when the work asks for it is correct. They mark
+# where a paper sits in the corpus by importance, which is a fact rather than a verdict.
 BAND_QUANTILES = (0.05, 0.25, 0.50)   # innermost cut is the top-5% slice the review's header prints
 
 
@@ -437,8 +430,7 @@ def band_cuts(corpus_size: int, quantiles: tuple[float, ...] = BAND_QUANTILES) -
     """Rank positions of the rings, as a share of the project corpus. Strictly increasing.
 
     A small corpus can round several quantiles onto the same rank; collapsing them means one ring
-    rather than three drawn on top of each other (the duplicate-node-id bug the old two-ring code
-    shipped whenever ``target_min == target_max``).
+    rather than three drawn on top of each other.
     """
     cuts: list[int] = []
     for q in quantiles:
@@ -446,83 +438,35 @@ def band_cuts(corpus_size: int, quantiles: tuple[float, ...] = BAND_QUANTILES) -
         if not cuts or c > cuts[-1]:
             cuts.append(c)
     return cuts
-_HALF_FILL = 0.92        # fraction of each theme's angular sector used (leaves gaps between slices)
-_R0 = 210.0              # inner radius, points (leaves room for the centre hub)
-_GAP = 48.0              # radial gap between bands (holds a target ring)
-_PAD = 12.0              # minimum spacing between boxes, points
-_LABEL_GAP = 130.0       # theme-label distance beyond the outermost paper, points
-_HUB_W, _HUB_H = 2.3, 1.0    # centre hub size, inches
 
 
-def _legend(kinds: list[str], cuts: list[int], corpus_size: int,
-            quantiles: tuple[float, ...] = BAND_QUANTILES) -> str:
-    """Graph-label legend decoding every channel: the red quantile rings, blob size (total
-    citations), black-ring thickness (in-corpus citations), and the citation arrows present."""
-    pcts = "% / ".join(f"{q * 100:g}" for q in quantiles[:len(cuts)]) + "%"
-    ranks = " / ".join(str(c) for c in cuts)
-    rows = [f'<TR><TD ALIGN="LEFT"><FONT COLOR="#dc2626"><B>red rings</B></FONT> = top {pcts} '
-            f'of the {corpus_size}-source corpus by importance to this review '
-            f'({ranks} papers)</TD></TR>',
-            '<TR><TD ALIGN="LEFT"><B>nearer the centre</B> = more discussed in this review</TD></TR>',
-            '<TR><TD ALIGN="LEFT"><B>blob size</B> = total citations (OpenAlex)</TD></TR>',
-            '<TR><TD ALIGN="LEFT"><B>black ring</B> = citations within this review</TD></TR>']
-    for k in kinds:
-        hue = _CROSSLINK[k].split('"')[1]                            # the colour out of the style
-        rows.append(f'<TR><TD ALIGN="LEFT"><FONT COLOR="{hue}"><B>&#8594;</B></FONT> '
-                    f'{_KIND_LABEL[k]}</TD></TR>')
-    return ('<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2" CELLPADDING="2">'
-            '<TR><TD ALIGN="LEFT"><B>legend</B></TD></TR>'
-            + "".join(rows) + "</TABLE>>")
-
-
-def _q(s: str, limit: int = 90) -> str:
-    return str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").strip()[:limit]
-
-
-def _wrap_lines(s: str, width: int = 22) -> list[str]:
-    words, lines, cur = s.split(), [], ""
-    for w in words:
-        if len(cur) + len(w) + 1 > width and cur:
-            lines.append(cur); cur = w
-        else:
-            cur = f"{cur} {w}".strip()
-    if cur:
-        lines.append(cur)
-    return lines or [""]
-
-
-def _wrap(s: str, width: int = 20) -> str:
-    return "\\n".join(_wrap_lines(s, width))
-
-
-def _node_label(p: Paper) -> tuple[str, list[str]]:
-    """The node's label string and its lines: the ``Author Year`` citation, then the wrapped
-    contribution phrase (when present — labels-only draft maps pass papers with an empty phrase)."""
-    lines = [_q(p.label, 40)] + (_wrap_lines(_q(p.phrase, 160), 22) if p.phrase else [])
-    return "\\n".join(lines), lines
+_HALF_FILL = 0.92        # fraction of each slice's angular sector used (leaves gaps between slices)
+_R0 = 40.0               # inner radius, px (leaves room for the centre title)
+_GAP = 22.0              # radial gap between bands (holds a red ring)
+_PAD = 2.0               # spacing between dots, px — dense on purpose; nothing is written on a dot
+_LABEL_GAP = 26.0        # slice-label distance beyond the outermost paper, px
 
 
 def _extents(p: Paper) -> tuple[float, float]:
-    """Estimated box (width, height) in points — used to pack tight and to guarantee no overlap."""
-    _, lines = _node_label(p)
-    fs = _node_fontsize(p.cited_by)
-    return max(len(l) for l in lines) * fs * 0.60 + 24, len(lines) * fs * 1.34 + 20
+    """The dot's footprint (width, height) in px — what the packing reserves for it."""
+    d = 2 * _node_size(p.cited_by)
+    return d, d
 
 
 def _place_band(ps: list[Paper], r0: float, pos: dict[str, tuple[float, float]],
                 theme_idx: dict[str, int], n: int, half: float) -> float:
-    """Pack one importance band into concentric rings, box-aware, each paper at its theme's sector.
-    Returns the band's outer radius. Rings fill in importance order with a per-theme angular budget,
-    so the band is radially dense; a theme absent from a ring just leaves an angular gap."""
+    """Pack one importance band into concentric rows, each paper at its slice's sector.
+    Returns the band's outer radius. Rows fill in importance order with a per-slice angular
+    budget, so the band is radially dense; a slice absent from a row just leaves an angular gap."""
     ps = sorted(ps, key=lambda p: (p.importance, p.cited_by), reverse=True)
     r, idx, outer = r0, 0, r0
     while idx < len(ps):
-        ring, used = [], defaultdict(float)                          # per-theme arc used
+        ring, used = [], defaultdict(float)                          # per-slice arc used
         while idx < len(ps):
             p = ps[idx]; w, h = _extents(p)
             arc = 2 * half * (r + h / 2)
             if used[p.theme] and used[p.theme] + w > arc:
-                break                                                # this theme full at this radius
+                break                                                # this slice full at this radius
             ring.append((p, w, h)); used[p.theme] += w + _PAD; idx += 1
         if not ring:                                                 # safety: never stall
             p = ps[idx]; w, h = _extents(p); ring = [(p, w, h)]; idx += 1
@@ -544,35 +488,19 @@ def _place_band(ps: list[Paper], r0: float, pos: dict[str, tuple[float, float]],
     return outer
 
 
-def _collision_scale(m: Mindmap, pos: dict[str, tuple[float, float]]) -> float:
-    """Smallest S >= 1 such that multiplying every position by S leaves no two boxes overlapping —
-    the guarantee that packing overlaps (from size variation) are removed with minimal expansion."""
-    he = {p.key: _extents(p) for p in m.papers}
-    keys = [p.key for p in m.papers if p.key in pos]
-    s = 1.0
-    for i in range(len(keys)):
-        xi, yi = pos[keys[i]]; wi, hi = he[keys[i]]
-        for j in range(i + 1, len(keys)):
-            xj, yj = pos[keys[j]]; wj, hj = he[keys[j]]
-            dx, dy = abs(xi - xj), abs(yi - yj)
-            sx = (wi / 2 + wj / 2) / dx if dx > 1e-6 else 1e9
-            sy = (hi / 2 + hj / 2) / dy if dy > 1e-6 else 1e9
-            s = max(s, min(sx, sy))
-    return s * 1.02
-
-
 def band_layout(m: Mindmap, cuts: list[int]
                 ) -> tuple[dict[str, tuple[float, float]], list[float], dict[int, tuple[float, float]], float]:
-    """The full geometry: pinned (x,y) points per paper, one ring radius per cut, per-theme label
+    """The full geometry: an (x, y) point per paper, one ring radius per cut, per-slice label
     anchors, and the outer radius. Pure + deterministic (unit-testable).
 
     Papers rank by importance; ``cuts`` (from :func:`band_cuts`) splits the ranking into
     ``len(cuts) + 1`` bands, and a red ring sits in each gap so exactly ``cuts[i]`` papers fall
-    inside ring *i*. Then a single collision-scale guarantees zero overlap."""
+    inside ring *i*. No scale-to-fit pass: dots carry no text, so the packing itself is the
+    layout, and its size grows with the paper count, not with the longest sentence."""
     n = max(1, len(m.themes))
     half = (math.pi / n) * _HALF_FILL
     theme_idx = {t: i for i, t in enumerate(m.themes)}
-    ranked = sorted(m.papers, key=lambda p: (p.importance, p.cited_by, p.key), reverse=True)
+    ranked = ranking(m)
     edges_ = [0, *cuts, len(ranked)]
     bands = [ranked[a:b] for a, b in zip(edges_, edges_[1:])]
     pos: dict[str, tuple[float, float]] = {}
@@ -585,90 +513,247 @@ def band_layout(m: Mindmap, cuts: list[int]
             r0 = bmax + _GAP
         else:
             outer = bmax
-    s = _collision_scale(m, pos)
-    if s > 1.0:
-        pos = {k: (x * s, y * s) for k, (x, y) in pos.items()}
-        circle_r = [r * s for r in circle_r]
-        outer *= s
     label_pos = {i: ((outer + _LABEL_GAP) * math.cos(2 * math.pi * i / n),
                      (outer + _LABEL_GAP) * math.sin(2 * math.pi * i / n)) for i in range(n)}
     return pos, circle_r, label_pos, outer
 
 
-def to_dot(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
-           corpus_size: int = 0, quantiles: tuple[float, ...] = BAND_QUANTILES) -> str:
-    """The contribution map: importance BANDS packed into theme pie-slices, with red rings at fixed
-    quantiles of the project corpus. Blob size = total citations, black ring = in-corpus citations,
-    faded arrows = the real OpenAlex citation graph, a centre hub, theme labels outside. Emits pinned
-    coordinates in points — render with ``dot -Kneato -n2`` (see :func:`_render_pinned`)."""
-    prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview"}
-    cuts = band_cuts(corpus_size or len(m.papers), quantiles)
+def ranking(m: Mindmap) -> list[Paper]:
+    """Papers by importance to this review, most important first — the order the bands cut."""
+    return sorted(m.papers, key=lambda p: (p.importance, p.cited_by, p.key), reverse=True)
+
+
+def _band_names(cuts: list[int], quantiles: tuple[float, ...]) -> list[str]:
+    names = [f"top {quantiles[i] * 100:g}%" if i < len(quantiles) else f"top {c}"
+             for i, c in enumerate(cuts)]
+    return names + ["the rest"]
+
+
+def map_data(m: Mindmap, *, title: str = "", corpus_size: int = 0,
+             quantiles: tuple[float, ...] = BAND_QUANTILES,
+             details: dict[str, dict] | None = None) -> dict:
+    """Everything the page draws, as one JSON-ready dict. Deterministic; the page adds no data.
+
+    ``details`` holds per-paper extras for the click panel, all optional: ``facts`` (a list of
+    ``{"text", "where", "link"}``), ``counts`` and ``questions`` (short strings), ``zotero`` (a
+    link that selects the item in Zotero)."""
+    details = details or {}
+    corpus = corpus_size or len(m.papers)
+    cuts = band_cuts(corpus, quantiles)
     pos, circle_r, label_pos, outer = band_layout(m, cuts)
-    shown = set(pos)
-    indeg = Counter(e.dst for e in m.edges if e.src in shown and e.dst in shown)
-    L = [figure._dot_header(fig_id, title or "Contribution map.", prov),
-         f"digraph {fig_id} {{",
-         '  bgcolor="#ffffff"; outputorder=edgesfirst; fontname="Helvetica";',
-         '  node [shape=box, style="rounded,filled", fontname="Helvetica", penwidth=0, '
-         'margin="0.06,0.03"];',
-         f'  "__hub__" [pos="0,0!", shape=ellipse, style=filled, fillcolor="#0f172a", '
-         f'fontcolor="#ffffff", fontsize=20, fixedsize=true, width={_HUB_W}, height={_HUB_H}, '
-         f'label="{_wrap(_q(title or fig_id, 48), 20)}"];']
+    names = _band_names(cuts, quantiles)
+    band = {}
+    for i, p in enumerate(ranking(m)):
+        band[p.key] = sum(1 for c in cuts if i >= c)
+    indeg = Counter(e.dst for e in m.edges if e.src in pos and e.dst in pos)
+    slices = []
+    for i, t in enumerate(m.themes):
+        hue, tint = _UNPLACED_HUE if t == UNPLACED else _PALETTE[i % len(_PALETTE)]
+        slices.append({"name": t, "hue": hue, "tint": tint,
+                       "angle": round(2 * math.pi * i / max(1, len(m.themes)), 5),
+                       "label": [round(label_pos[i][0], 1), round(label_pos[i][1], 1)],
+                       "papers": sum(1 for p in m.papers if p.theme == t)})
+    tidx = {t: i for i, t in enumerate(m.themes)}
+    papers = []
     for p in m.papers:
         if p.key not in pos:
             continue
-        hue, tint = _PALETTE[m.themes.index(p.theme) % len(_PALETTE)] if p.theme in m.themes \
-            else _PALETTE[0]
         x, y = pos[p.key]
-        lab, _lines = _node_label(p)
-        fs = _node_fontsize(p.cited_by)
-        border = _node_border(indeg.get(p.key, 0))
-        ring = (f', penwidth={border}, color="#0f172a"' if border else ', penwidth=0')
-        L.append(f'  "{p.key}" [label="{lab}", pos="{x:.1f},{y:.1f}!", fillcolor="{tint}", '
-                 f'fontcolor="#1e293b", fontsize={fs}{ring}];')
-    present: list[str] = []
-    for e in m.edges:
-        if e.src in shown and e.dst in shown:
-            style = _CROSSLINK.get(e.kind, _CROSSLINK["influence"])
-            kind = e.kind if e.kind in _CROSSLINK else "influence"
-            if kind not in present:
-                present.append(kind)
-            L.append(f'  "{e.src}" -> "{e.dst}" [{style}, arrowsize=0.6];')
-    # native red quantile rings (drawn on top) + their labels. Node ids are the ring INDEX, never
-    # the cut value: two equal cuts used to emit the same id twice and graphviz silently kept one.
-    for bi, (rr, cut) in enumerate(zip(circle_r, cuts)):
-        pct = f"{quantiles[bi] * 100:g}%" if bi < len(quantiles) else f"top {cut}"
-        L.append(f'  "__ring{bi}__" [pos="0,0!", shape=circle, fixedsize=true, width={2*rr/72:.3f}, '
-                 f'height={2*rr/72:.3f}, label="", style=solid, fillcolor="none", color="#dc2626", '
-                 'penwidth=4];')
-        L.append(f'  "__ringlbl{bi}__" [pos="0,{rr+34:.0f}!", shape=plaintext, '
-                 f'label="top {pct} ({cut})", '
-                 f'fontcolor="#dc2626", fontsize=26, fontname="Helvetica-Bold"];')
-    # theme labels outside the outermost ring
-    for i, theme in enumerate(m.themes):
-        hue, _tint = _PALETTE[i % len(_PALETTE)]
-        lx, ly = label_pos[i]
-        L.append(f'  "__t{i}__" [pos="{lx:.1f},{ly:.1f}!", shape=box, style="rounded,filled", '
-                 f'fillcolor="{hue}", fontcolor="#ffffff", fontsize=16, label="{_wrap(_q(theme, 70), 18)}"];')
-    legend = _legend([k for k in _KIND_ORDER if k in present], cuts, corpus_size or len(m.papers),
-                     quantiles)
-    L.append(f'  label={legend}; labelloc=b; fontsize=11; fontname="Helvetica";')
-    L.append("}")
-    return "\n".join(L) + "\n"
+        papers.append({"id": p.key, "label": p.label, "phrase": p.phrase,
+                       "slice": tidx.get(p.theme, 0), "band": band[p.key],
+                       "x": round(x, 1), "y": round(y, 1), "size": _node_size(p.cited_by),
+                       "border": _node_border(indeg.get(p.key, 0)),
+                       "cited_by": p.cited_by, "in_corpus": indeg.get(p.key, 0),
+                       **{k: v for k, v in (details.get(p.key) or {}).items()
+                          if k in ("facts", "counts", "questions", "zotero")}})
+    edges = [{"from": e.src, "to": e.dst, "kind": e.kind}
+             for e in m.edges if e.src in pos and e.dst in pos]
+    return {"title": title or "Contribution map", "corpus": corpus,
+            "rings": [{"r": round(r, 1), "name": names[i], "cut": cuts[i]}
+                      for i, r in enumerate(circle_r)],
+            "bands": names, "half": round(math.pi / max(1, len(m.themes)) * _HALF_FILL, 5),
+            "r0": _R0, "outer": round(outer, 1), "slices": slices, "papers": papers,
+            "edges": edges, "kinds": {k: v for k, v in _KIND_LABEL.items()
+                                      if any(e["kind"] == k for e in edges)}}
 
 
-def _render_pinned(source: str, out_svg: Path) -> Path | None:
-    """Render a pinned-coordinate DOT with ``dot -Kneato -n2`` (positions are final; no layout).
-    Best-effort: a missing/failing renderer keeps the source and returns None."""
-    if not __import__("shutil").which("dot"):
-        return None
-    out_svg.parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(["dot", "-Kneato", "-n2", "-Tsvg"], input=source, capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout:
-        print(f"[mindmap] dot -Kneato -n2 failed: {r.stderr.strip()[:200]}", file=sys.stderr)
-        return None
-    out_svg.write_text(r.stdout)
-    return out_svg
+def to_html(m: Mindmap, *, title: str = "", corpus_size: int = 0,
+            quantiles: tuple[float, ...] = BAND_QUANTILES,
+            details: dict[str, dict] | None = None) -> str:
+    """The contribution map as one self-contained HTML page (script and data inlined)."""
+    data = map_data(m, title=title, corpus_size=corpus_size, quantiles=quantiles,
+                    details=details)
+    # Only a literal ``</script`` can end an inline script early. In JSON, ``<\\/`` is the same
+    # string; the library is escaped the same narrow way, because a blanket ``</`` rewrite
+    # corrupts its regular-expression literals.
+    blob = _CLOSE_SCRIPT.sub(r"<\\/\1", json.dumps(data, ensure_ascii=False))
+    vis_js = _CLOSE_SCRIPT.sub(r"<\\/\1", _VIS_JS.read_text(encoding="utf-8"))
+    page = _PAGE.replace("__TITLE__", _html_escape(data["title"]))
+    return page.replace("__VIS__", vis_js).replace("__DATA__", blob)
+
+
+_CLOSE_SCRIPT = re.compile(r"</(script)", re.I)
+
+
+def _html_escape(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root{--bg:#ffffff;--fg:#1e293b;--mut:#64748b;--rule:#e2e8f0;--panel:#f8fafc;--red:#dc2626}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+#wrap{display:flex;height:100%}
+#side{width:340px;min-width:280px;overflow-y:auto;border-right:1px solid var(--rule);background:var(--panel);padding:12px 14px}
+#net{flex:1;min-width:0;height:100%}
+h1{font-size:16px;margin:0 0 6px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:14px 0 4px}
+.mut{color:var(--mut)}
+label{display:flex;gap:6px;align-items:flex-start;margin:2px 0;cursor:pointer}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-top:4px;flex:none}
+input[type=search],select{width:100%;padding:4px 6px;border:1px solid var(--rule);border-radius:4px;font:inherit}
+#detail .phrase{font-size:15px;margin:4px 0 8px}
+#detail ul{padding-left:18px;margin:4px 0}
+#detail li{margin:3px 0}
+a{color:#2563eb}
+.tip{max-width:320px;font:13px/1.4 system-ui,sans-serif;white-space:normal}
+.tip b{display:block}
+div.vis-tooltip{padding:6px 8px;border-radius:4px;background:#fff;border:1px solid var(--rule);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+@media (max-width:700px){#wrap{flex-direction:column}#side{width:auto;min-width:0;height:38%;flex:none;border-right:0;border-bottom:1px solid var(--rule)}#net{flex:none;height:62%}}
+</style></head><body>
+<div id="wrap">
+<div id="side">
+<h1 id="ttl"></h1>
+<div class="mut" id="sub"></div>
+<h2>Find</h2>
+<input type="search" id="q" placeholder="Author or year">
+<h2>Show</h2>
+<select id="band"></select>
+<label><input type="checkbox" id="edges" checked> citation arrows (OpenAlex)</label>
+<h2>Slices</h2>
+<div id="slices"></div>
+<h2>Selected paper</h2>
+<div id="detail" class="mut">Hover a dot for its contribution; click it for its facts and links.</div>
+<h2>How to read it</h2>
+<div class="mut" id="legend"></div>
+</div>
+<div id="net"></div>
+</div>
+<script>__VIS__</script>
+<script>
+const D = __DATA__;
+const el = (t, a, ...kids) => { const e = document.createElement(t);
+  Object.entries(a || {}).forEach(([k, v]) => k === "text" ? e.textContent = v : e.setAttribute(k, v));
+  kids.forEach(k => k && e.appendChild(typeof k === "string" ? document.createTextNode(k) : k)); return e; };
+document.getElementById("ttl").textContent = D.title;
+document.getElementById("sub").textContent =
+  D.papers.length + " papers of a " + D.corpus + "-source corpus · " + D.slices.length + " slices";
+const shown = new Set(D.slices.map((_, i) => i));
+let maxBand = D.bands.length - 1;
+const bandSel = document.getElementById("band");
+D.bands.forEach((b, i) => { if (i < D.bands.length - 1)
+  bandSel.appendChild(el("option", {value: i, text: "Only the " + b + " (" + D.rings[i].cut + ")"})); });
+bandSel.appendChild(el("option", {value: D.bands.length - 1, text: "All papers"}));
+bandSel.value = D.bands.length - 1;
+const sl = document.getElementById("slices");
+D.slices.forEach((s, i) => { const cb = el("input", {type: "checkbox"}); cb.checked = true;
+  cb.onchange = () => { cb.checked ? shown.add(i) : shown.delete(i); refresh(); };
+  const sw = el("span", {class: "sw"}); sw.style.background = s.hue;
+  sl.appendChild(el("label", null, cb, sw, el("span", {text: s.name + " (" + s.papers + ")"}))); });
+const lg = document.getElementById("legend");
+[["Nearer the centre", "more weight in this review"],
+ ["Red rings", D.rings.map(r => r.name + " (" + r.cut + ")").join(" · ") + " of the corpus by that weight"],
+ ["Dot size", "total citations (OpenAlex)"], ["Dark ring", "cited by other papers in this review"],
+ ["Labels", "zoom in to read them"]].concat(Object.values(D.kinds).map(k => ["Arrow", k]))
+ .forEach(([a, b]) => lg.appendChild(el("div", null, el("b", {text: a + ": "}), b)));
+const tip = p => { const s = D.slices[p.slice];
+  return el("div", {class: "tip"}, el("b", {text: p.label}), p.phrase || "",
+            el("div", {class: "mut", text: s.name + " · " + D.bands[p.band]})); };
+// Labels draw only once they would be legible (drawThreshold), so the overview stays a dense
+// field of dots; the core band's names are larger and read at the overview zoom.
+const nodeOf = p => ({id: p.id, x: p.x, y: p.y, size: p.size, label: p.label, title: tip(p),
+  font: {size: p.band === 0 ? 8 : 5},
+  shape: "dot", borderWidth: p.border, borderWidthSelected: p.border + 2,
+  color: {background: D.slices[p.slice].hue, border: p.border ? "#0f172a" : D.slices[p.slice].hue,
+          highlight: {background: D.slices[p.slice].hue, border: "#0f172a"}},
+  hidden: !(shown.has(p.slice) && p.band <= maxBand)});
+const nodes = new vis.DataSet(D.papers.map(nodeOf));
+const edges = new vis.DataSet(D.edges.map((e, i) => ({id: i, from: e.from, to: e.to})));
+const net = new vis.Network(document.getElementById("net"), {nodes, edges}, {
+  physics: false, layout: {improvedLayout: false},
+  interaction: {hover: true, tooltipDelay: 60, dragNodes: false, multiselect: false},
+  nodes: {font: {color: "#1e293b", strokeWidth: 2, strokeColor: "#ffffff"},
+          scaling: {label: {drawThreshold: 6}}},
+  edges: {arrows: {to: {enabled: true, scaleFactor: 0.35}}, smooth: false, width: 0.5,
+          color: {color: "rgba(71,85,105,0.22)", highlight: "#334155", hover: "#334155"}}});
+net.fit(); net.moveTo({scale: net.getScale() * 0.86});
+function refresh() {
+  nodes.update(D.papers.map(p => ({id: p.id, hidden: !(shown.has(p.slice) && p.band <= maxBand)})));
+}
+bandSel.onchange = () => { maxBand = +bandSel.value; refresh(); };
+document.getElementById("edges").onchange = e =>
+  edges.update(D.edges.map((_, i) => ({id: i, hidden: !e.target.checked})));
+net.on("beforeDrawing", ctx => {
+  const n = D.slices.length, h = D.half, R = D.outer + 6;
+  D.slices.forEach((s, i) => { if (!shown.has(i)) return;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, s.angle - h, s.angle + h); ctx.closePath();
+    ctx.fillStyle = s.tint; ctx.globalAlpha = 0.55; ctx.fill(); ctx.globalAlpha = 1; });
+  ctx.beginPath(); ctx.arc(0, 0, D.r0 - 14, 0, 2 * Math.PI); ctx.fillStyle = "#0f172a"; ctx.fill();
+  ctx.fillStyle = "#ffffff"; ctx.font = "bold 7px system-ui, sans-serif"; ctx.textAlign = "center";
+  ctx.textBaseline = "middle"; ctx.fillText(D.papers.length + " papers", 0, 0);
+});
+net.on("afterDrawing", ctx => {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  D.rings.forEach(r => { ctx.beginPath(); ctx.arc(0, 0, r.r, 0, 2 * Math.PI);
+    ctx.strokeStyle = "#dc2626"; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.font = "bold 9px system-ui, sans-serif"; ctx.fillStyle = "#dc2626";
+    ctx.fillText(r.name + " (" + r.cut + ")", 0, -r.r - 6); });
+  D.slices.forEach((s, i) => { if (!shown.has(i)) return;
+    ctx.font = "bold 11px system-ui, sans-serif"; ctx.fillStyle = s.hue;
+    // anchor each title on its side away from the centre, so it never runs back over the dots
+    const c = Math.cos(s.angle), sn = Math.sin(s.angle);
+    ctx.textAlign = c < -0.35 ? "right" : c > 0.35 ? "left" : "center";
+    const words = s.name.split(" "), lines = []; let cur = "";
+    words.forEach(w => { if ((cur + " " + w).trim().length > 22 && cur) { lines.push(cur); cur = w; }
+                         else cur = (cur + " " + w).trim(); });
+    if (cur) lines.push(cur);
+    const y0 = sn < -0.35 ? -(lines.length - 1) * 13 : sn > 0.35 ? 0 : -(lines.length - 1) * 6.5;
+    lines.forEach((l, k) => ctx.fillText(l, s.label[0], s.label[1] + y0 + k * 13)); });
+});
+const byId = Object.fromEntries(D.papers.map(p => [p.id, p]));
+function show(id) {
+  const p = byId[id], d = document.getElementById("detail"); d.className = ""; d.textContent = "";
+  if (!p) { d.className = "mut"; d.textContent = "Click a dot to see its facts and links."; return; }
+  d.appendChild(el("b", {text: p.label}));
+  d.appendChild(el("div", {class: "phrase", text: p.phrase || ""}));
+  const s = D.slices[p.slice];
+  d.appendChild(el("div", {class: "mut", text: s.name + " · " + D.bands[p.band] +
+    " · cited " + p.cited_by + "× (OpenAlex), " + p.in_corpus + "× in this review"}));
+  if (p.counts) d.appendChild(el("div", {class: "mut", text: p.counts}));
+  if (p.questions) d.appendChild(el("div", {class: "mut", text: p.questions}));
+  if (p.facts && p.facts.length) { const ul = el("ul");
+    p.facts.forEach(f => { const li = el("li", {text: f.text + " "});
+      if (f.link) li.appendChild(el("a", {href: f.link, text: f.where || "open"}));
+      else if (f.where) li.appendChild(el("span", {class: "mut", text: f.where}));
+      ul.appendChild(li); });
+    d.appendChild(ul); }
+  if (p.zotero) d.appendChild(el("a", {href: p.zotero, text: "Open in Zotero"}));
+}
+net.on("click", e => show(e.nodes[0]));
+document.getElementById("q").oninput = e => {
+  const q = e.target.value.trim().toLowerCase(); if (q.length < 2) { net.unselectAll(); return; }
+  const hits = D.papers.filter(p => p.label.toLowerCase().includes(q)).map(p => p.id);
+  net.selectNodes(hits);
+  if (hits.length === 1) { net.focus(hits[0], {scale: 2, animation: true}); show(hits[0]); }
+};
+</script>
+</body></html>
+"""
 
 
 # ── the LLM step: brain builds the spec, grounded + validated ──────────────────
@@ -814,67 +899,30 @@ def compose(brain, threads: list[Thread], valid_keys: dict[str, str], *,
 
 # ── orchestration ──────────────────────────────────────────────────────────────
 
-def spec_from_map(m: Mindmap, *, fig_id: str = "litmap", title: str = "",
-                  corpus_size: int = 0,
-                  quantiles: tuple[float, ...] = BAND_QUANTILES) -> figure.FigureSpec:
-    """Render an already-composed Mindmap (all papers) to a FigureSpec, with the red rings drawn at
-    fixed quantiles of the project corpus (``corpus_size``)."""
-    dot = to_dot(m, fig_id=fig_id, title=title, corpus_size=corpus_size, quantiles=quantiles)
-    cuts = band_cuts(corpus_size or len(m.papers), quantiles)
-    prov = {"mode": "conceptual", "author": "rabbitHole+brain", "from": "minted litreview",
-            "themes": len(m.themes), "papers": len(m.papers), "edges": len(m.edges),
-            "corpus_size": corpus_size or len(m.papers),
-            "quantiles": list(quantiles[:len(cuts)]), "cuts": cuts}
-    return figure.FigureSpec(id=fig_id, kind="mindmap", format="dot", source=dot,
-                             caption=title or "Contribution map.", provenance=prov)
-
-
-def build_spec(review_md: str, refs_bib: str, brain, *, fig_id: str = "litmap", title: str = "",
-               corpus_size: int = 0,
-               quantiles: tuple[float, ...] = BAND_QUANTILES) -> figure.FigureSpec:
-    """Core, testable with a fake brain: review + refs.bib -> composed, grounded FigureSpec. The
-    contribution phrases come from the brain (grounded in the review's citing sentences) and node
-    centrality from the review's own prose weight; the citation arrows + sizes are overlaid in
-    :func:`run` (they need the network), so this seam stays offline."""
+def build_map(review_md: str, refs_bib: str, brain) -> Mindmap:
+    """Core, testable with a fake brain: review + refs.bib -> a composed, grounded Mindmap. The
+    contribution phrases come from the brain (grounded in the review's citing sentences) and
+    importance from the review's own prose weight; the citation arrows + sizes are overlaid in
+    :func:`make_map` (they need the network), so this seam stays offline."""
     keys = bib_keys(refs_bib)
-    m = compose(brain, parse_threads(review_md), keys,
-                evidence=citation_evidence(review_md))
+    m = compose(brain, parse_threads(review_md), keys, evidence=citation_evidence(review_md))
     weight = evidence_weight(review_md)
     for p in m.papers:
         p.importance = weight.get(p.key, 0)
-    return spec_from_map(m, fig_id=fig_id, title=title,
-                         corpus_size=corpus_size or len(keys), quantiles=quantiles)
+    return m
 
 
-def _renders(dot: str) -> bool:
-    """Best-effort: does this DOT compile? (used by tests / a sanity gate)."""
-    if not (path := __import__("shutil").which("dot")):
-        return True
-    r = subprocess.run([path, "-Tsvg"], input=dot, capture_output=True, text=True)
-    return r.returncode == 0 and bool(r.stdout)
-
-
-def emit(outdir: Path, short: str, spec: figure.FigureSpec, *, datestamp: str | None = None) -> dict:
-    """Write the map as a chain-named artifact into ``outdir`` (litReview/output) — NOT the paper's
-    figures pool, since a contribution map never enters a paper. Same _ra-only clobber guard as the
-    pool (a hand-edited ``*_DCR.svg`` stays authoritative), reusing the figure engine's naming +
-    renderers so the revision chain and the Inkscape workflow behave identically."""
+def emit(outdir: Path, short: str, html: str, *, fig_id: str = "litmap",
+         datestamp: str | None = None) -> dict:
+    """Write the map page as a chain-named artifact into ``outdir`` (litReview/output) — never the
+    paper's figures pool, since a contribution map never enters a paper. The map describes ONE
+    draft, so it carries that draft's datestamp (reusing the newest existing map's stamp once
+    wrote DigiPros' fact-base map over the narrative's)."""
     outdir.mkdir(parents=True, exist_ok=True)
-    ext = figure._SRC_EXT.get(spec.format, "txt")
-    # The map describes ONE draft, so it carries that draft's datestamp. Reusing the newest
-    # existing map's stamp (the figure engine's rule for paper figures) wrote DigiPros' 261009
-    # fact-base map over the 261006 narrative's, and embedded it under the old date.
-    ds = datestamp or figure._figure_datestamp(outdir, short, spec.id)
-    src = outdir / naming.minor_name(short, [spec.id], ext, datestamp=ds)
-    svg = outdir / naming.minor_name(short, [spec.id], "svg", datestamp=ds)
-    src.write_text(spec.source)
-    rendered = _render_pinned(spec.source, svg)          # pinned coords -> dot -Kneato -n2
-    if rendered:
-        figure.export_png(rendered, rendered.with_suffix(".png"))
-    if figure._has_finished_version(outdir, short, spec.id):
-        print(f"[mindmap] note: a hand-edited/released {spec.id} exists — refreshed the _ra draft; "
-              "your version stays authoritative.", file=sys.stderr)
-    return {"id": spec.id, "datestamp": ds, "source": src, "svg": rendered}
+    ds = datestamp or figure._figure_datestamp(outdir, short, fig_id)
+    page = outdir / naming.minor_name(short, [fig_id], "html", datestamp=ds)
+    page.write_text(html, encoding="utf-8")
+    return {"id": fig_id, "datestamp": ds, "html": page}
 
 
 def _find_review(out: Path) -> Path | None:
@@ -921,8 +969,8 @@ def _project_short(stem: str) -> str:
 
 def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str = "litmap") -> int:
     """CLI entry: read the current litreview DRAFT (or minted release) + refs.bib and write the
-    contribution map beside it. A per-draft diagnostic — regenerated each revise cycle so the author
-    can see the reference budget and which themes are peripheral while there is still time to act."""
+    contribution map page beside it. A per-draft diagnostic — regenerated each revise cycle so the
+    author can see which themes are peripheral while there is still time to act."""
     from . import config as _config
     from .brain import Brain
     runlog.start()               # the run clock every stamp() in this process reads
@@ -951,11 +999,13 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
                   "re-run report.", file=sys.stderr)
             return 1
         threads, evidence, weight = _facts.map_inputs(base)
+        extra = {"details": _facts.map_details(paths, base, gc), "pin_slices": True}
     else:
         threads, evidence = parse_threads(review_md), citation_evidence(review_md)
         weight = evidence_weight(review_md)
+        extra = {"details": {k: {"facts": [{"text": s} for s in v]} for k, v in evidence.items()}}
     make_map(brain, gc, paths.output, short, threads, refs_bib, evidence, weight, fig_id=fig_id,
-             datestamp=_draft_datestamp(review.stem))
+             datestamp=_draft_datestamp(review.stem), **extra)
     return 0
 
 
@@ -976,19 +1026,31 @@ def is_fact_base(md: str) -> bool:
 
 def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bib: str,
              evidence: dict[str, list[str]], weight: dict[str, int], *,
-             fig_id: str = "litmap", datestamp: str | None = None) -> dict:
-    """Compose, rank, rank-band and render the contribution map; returns `emit`'s result.
+             fig_id: str = "litmap", datestamp: str | None = None,
+             details: dict[str, dict] | None = None, pin_slices: bool = False) -> dict:
+    """Compose, rank, rank-band and write the contribution map page; returns `emit`'s result.
 
     Its inputs are what differ between review formats: a narrative review supplies its ## threads,
-    citing sentences and words of prose per source; a fact base supplies its themes, facts and
-    well-supported fact counts. Everything from composition on is the same map."""
-    # Compose the findings phrases (grounded in the evidence sentences).
+    citing sentences and words of prose per source; a fact base supplies one thread per topic,
+    its best facts, and its weight on the brief, plus ``details`` (facts with page links, Zotero
+    links) for the click panel. ``pin_slices`` puts each paper in the thread that lists it rather
+    than the one the model names — a fact base's threads are a deterministic assignment, not a
+    reading. Everything from composition on is the same map."""
     m = compose(brain, threads, bib_keys(refs_bib), evidence=evidence)
     if not m.papers:
-        print("[mindmap] the brain returned no grounded papers — wrote a stub; re-run or check "
-              "the review.", file=sys.stderr)
+        print("[mindmap] the brain returned no grounded papers — wrote an empty map; re-run or "
+              "check the review.", file=sys.stderr)
+    if pin_slices:
+        home: dict[str, str] = {}
+        for t in threads:
+            for k in t.citekeys:
+                home.setdefault(k, t.theme)
+        for p in m.papers:
+            p.theme = home.get(p.key, p.theme)
+        m.themes = [t.theme for t in threads if any(p.theme == t.theme for p in m.papers)] \
+            or m.themes
     # Node channels: importance-to-this-review pulls a paper toward the centre; OpenAlex
-    # citation counts size each blob; the real citation graph draws the faded arrows.
+    # citation counts size each dot; the real citation graph draws the faded arrows.
     edges, world = citation_graph(m.papers, bib_dois(refs_bib), gc.contact_email)
     for p in m.papers:
         p.cited_by = world.get(p.key, 0)
@@ -996,16 +1058,12 @@ def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bi
     m.edges = edges
     print(f"  {runlog.stamp()}[mindmap] citation graph: {len(edges)} real edges, {len(world)} "
           f"papers sized by OpenAlex citations (email={gc.contact_email or 'unset'})", flush=True)
-    # ONE big map: importance bands (core / budget / overflow) as theme pie-slices, with the red
-    # target rings drawn at the project's reference budget; size = total citations, ring = in-corpus.
     # The rings are quantiles of the PROJECT CORPUS — refs.bib is that corpus as exported, and is
     # the same universe the grounding law admits papers from, so it is the honest denominator.
-    spec = spec_from_map(m, fig_id=fig_id, title=f"Contribution map — {short}",
-                         corpus_size=len(bib_keys(refs_bib)))
-    print(f"  {runlog.stamp()}[mindmap] rendering...", flush=True)
-    res = emit(outdir, short, spec, datestamp=datestamp)   # litReview/output, NOT the figures pool
-    print(f"  {runlog.stamp()}[mindmap] {spec.provenance['papers']} papers, "
-          f"{spec.provenance['edges']} citation edges, rings at "
-          f"{spec.provenance['cuts']} of {spec.provenance['corpus_size']}  ->  "
-          f"{res.get('svg') or res.get('source')}", flush=True)
+    corpus = len(bib_keys(refs_bib))
+    html = to_html(m, title=f"Contribution map — {short}", corpus_size=corpus, details=details)
+    res = emit(outdir, short, html, fig_id=fig_id, datestamp=datestamp)
+    print(f"  {runlog.stamp()}[mindmap] {len(m.papers)} papers in {len(m.themes)} slices, "
+          f"{len(edges)} citation edges, rings at {band_cuts(corpus)} of {corpus}  ->  "
+          f"{res['html']}", flush=True)
     return res

@@ -2,14 +2,24 @@
 
 ## What it is
 
-A rabbitHole verb that reads the **current litreview draft** (or the minted release) and renders a
-**contribution map** into the review's own outputs (`litReview/output/`). It is a *diagnostic the
+A rabbitHole verb that reads the **current litreview draft** (or the minted release) and writes a
+**contribution map** — one self-contained, interactive HTML page — into the review's own outputs
+(`litReview/output/`). It is a *diagnostic the
 author consults while writing*, not a mint-only deliverable: it surfaces, every revise cycle,
 where the review actually invests its argument and which themes are peripheral to its core — while
 there is still time to act. It does **not** enter the shared `figures/` pool (nothing here reaches a
 paper or deck). The last draft's map is also the minted map, so nothing is lost at release.
 
 Diagram-as-code, no diffusion: deterministic geometry + batched model calls for the node phrases.
+
+**A page, not a picture (2026-10-20).** The map used to be a pinned graphviz figure (`.dot` →
+`.svg` → `.png`) with every paper's contribution sentence printed beside its node, embedded in
+the review. Keeping 224 such labels from overlapping scaled DigiPros' canvas to 64,000 pt
+square; rasterised to 1600 px for the docx, every node was a speck. Now each paper is a small
+dot whose `Author Year` label appears on zoom; the sentence is a hover tooltip, and a click opens
+a panel with the paper's facts and page links. The layout packs tight because no text has to
+fit beside a dot. The page inlines a vendored vis-network (`assets/vis-network-9.1.9.min.js`),
+so it opens offline, and the review **links** to it rather than embedding it.
 
 `compose` runs **one call per chunk of papers within a theme** (`_COMPOSE_BATCH = 25`), never one
 call for the review. A single whole-review call does not fit: a 160-paper review built a
@@ -36,15 +46,21 @@ One node per cited paper, laid out so that **four orthogonal signals** read at a
   where a paper sits in the corpus by importance, which is a fact rather than a verdict. Band
   membership
   is the diagnostic; radius *within* a band is just packing.
-- **Angle = theme.** Each theme owns an angular **pie slice**. A theme with no core papers shows an
-  empty inner slice — the signal that the topic is peripheral to the review's argument.
-- **Blob size = total (field-wide) citations** — OpenAlex `cited_by_count`, log-scaled.
-- **Black ring thickness = citations *within* the corpus** — the in-degree of the real OpenAlex
+- **Angle = theme (narrative) or topic (fact base).** Each owns an angular **pie slice**. A slice
+  with no core papers shows an empty inner wedge — the signal that the topic is peripheral to the
+  review's argument. A fact base's slices are its approved **topics** (T1…Tn), not its themes:
+  DigiPros' 72 themes drew as 59 slices of 6° each, with no visible structure. Each source sits in
+  one slice (`facts.map_slice`: the topic its counted facts score highest on, preferring one that
+  serves a research question); sources with no useful fact share a grey slice.
+- **Dot size = total (field-wide) citations** — OpenAlex `cited_by_count`, log-scaled.
+- **Dark ring thickness = citations *within* the corpus** — the in-degree of the real OpenAlex
   citation graph (how many of *these* papers cite it).
 
 Faded grey arrows overlay the **real** citation graph (A→B iff B ∈ A's OpenAlex `referenced_works`).
-A centre hub carries the title; theme labels sit outside the outermost ring; a legend decodes every
-channel.
+Slice titles sit outside the outermost ring; the side panel holds a legend, a search box, a
+band filter (only the top 5% / 25% / 50%), a checkbox per slice, and the selected paper's panel:
+its contribution, slice and band, citation counts, and — for a fact base — its fact counts, the
+questions it serves, its best three facts with their page links, and an *Open in Zotero* link.
 
 Because the four signals are orthogonal, the map is a diagnostic: a paper can be *famous but
 peripheral here* (big, outside the rings — e.g. a canonical reference the review barely discusses),
@@ -53,7 +69,7 @@ that the field has not caught up to).
 
 ## The node phrase — the qualitative contribution
 
-Each node carries its `Author Year` citation and a one-line **contribution**: *qualitatively and at a
+Each node carries its `Author Year` citation and, in its tooltip, a one-line **contribution**: *qualitatively and at a
 high level, what we now know from this paper that we did not before*. Not the topic ("Examines how
 proximity affects sorting"), not a context-free statistic ("b=0.74"): the claim, in plain words
 ("Physical proximity to bins matters more than attitudes"). This is a **rewriting** task — the
@@ -67,7 +83,7 @@ GPU-free pass is wanted; the layout carries the diagnostic without the phrases.
 
 The deterministic scaffold is hardened and unit-tested; the one LLM step (the phrases) concentrates
 the risk. Everything else — importance ranking, band geometry, the citation graph, the target rings,
-the collision-free layout — is pure and frozen by tests before any live model run.
+the packed layout — is pure and frozen by tests before any live model run.
 
 **Grounding law** (mirrors the redline contract). Every `key` MUST be a citekey in
 `litReview/output/refs.bib`. `validate()` drops any paper with an unknown or duplicate key, coerces
@@ -95,11 +111,13 @@ never invent a paper; a reply with no usable JSON yields a labelled-stub map, ne
  → `bib_keys` / `bib_dois` (the grounding sets)
  → **model** distils a contribution per paper from its citing sentences (`compose`, grounded)
  → `evidence_weight` (importance) + `citation_graph` (edges, sizes) overlaid on the papers
- → `band_layout` → `to_dot` (importance bands as theme pie-slices, packed rings, collision-scaled to
-   zero overlap, native red rings at the corpus quantiles, centre hub, outside labels)
- → `_render_pinned` renders the pinned coordinates with **`dot -Kneato -n2`** (positions are final;
-   no layout) → `emit` writes `…_litmap_ra.{dot,svg,png}` into `litReview/output/` (same `_ra`-only
-   clobber guard and Inkscape hand-edit workflow as the figures pool, but **not** the pool).
+ → `band_layout` → `map_data` (importance bands as pie-slices of packed dots, red rings at the
+   corpus quantiles, slice-title anchors, per-paper details) → `to_html` (the data and the vendored
+   vis-network inlined into one page; physics off, so the positions are final)
+ → `emit` writes `…_litmap_ra.html` into `litReview/output/` (**not** the figures pool). A fact
+   base's `report` links it from the review; the inputs come from `facts.map_inputs` (one thread
+   per topic) and `facts.map_details` (facts with page links and Zotero links, read from the
+   sidecar).
 
 ## Per-draft integration
 
@@ -128,12 +146,14 @@ Globbing `*.md` alone meant the map died with "render a draft first" after every
    (bibliography, load-bearing front block, and headings excluded; tags stripped).
 4. `citation_graph` — the real reference graph from a fake `fetch` (edges + `cited_by_count`), with
    non-corpus and DOI-less papers correctly dropped.
-5. `band_layout` — bands by importance (most-discussed nearest the centre), the target rings holding
-   **exactly** each quantile cut, and a collision-scale that leaves **zero** overlapping
-   boxes across varied sizes and themes.
-6. `to_dot` — a pinned `digraph` with the centre hub, a red ring per quantile cut, theme labels, size +
-   black-ring encoding, faded citation arrows, and a legend; renders under `dot -Kneato -n2`.
-7. `build_spec` against a **fake brain** → the composed, grounded `FigureSpec` is deterministic.
+5. `band_layout` — bands by importance (most-discussed nearest the centre), the rings holding
+   **exactly** each quantile cut, no two dots overlapping, and a DigiPros-sized map (224 papers,
+   10 slices) packing inside a radius of 1500 px.
+6. `map_data` / `to_html` — one self-contained page (script inlined, nothing able to close the
+   script early), a ring per quantile cut, a palette hue per slice, size + ring encoding, the
+   citation edges, and only the known detail fields reaching the click panel.
+7. `build_map` against a **fake brain** → the composed, grounded `Mindmap` is deterministic;
+   `make_map(pin_slices=True)` keeps each paper in the slice that lists it.
 8. `test_docx_draft.py` — the docx-only draft: a tracked insertion is not invisible, a deletion
    stays gone, `Heading N` comes back as `#`×N and parses as the same threads, and `_find_review`
    picks the docx when a redline left no markdown (preferring a same-stem `.md` when there is one,
