@@ -1248,7 +1248,7 @@ def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
 
     ``fact_base``: the review renders as a fact base — see `_fact_chain`. Its ``report`` draws
-    and embeds the map itself, so no ``mindmap`` follows (one redrew the same files for 22 min).
+    and links the map itself, so no ``mindmap`` follows (one redrew the same files for 22 min).
     """
     if fact_base:
         return _fact_chain(tasks)
