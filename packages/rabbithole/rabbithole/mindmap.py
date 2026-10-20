@@ -1020,8 +1020,13 @@ def _draft_datestamp(stem: str) -> str | None:
 FACT_BASE_MARK = "*Format:* fact base"
 
 
+# Matched without its emphasis: the reviewer's annotated docx, read back, has lost the italics
+# ("Format: fact base"), and the map step reads that docx when it is the newest draft.
+_FACT_BASE_RE = re.compile(r"\*?Format:\*?\s*fact base")
+
+
 def is_fact_base(md: str) -> bool:
-    return FACT_BASE_MARK in (md or "")[:4000]
+    return bool(_FACT_BASE_RE.search((md or "")[:4000]))
 
 
 def make_map(brain, gc, outdir: Path, short: str, threads: list[Thread], refs_bib: str,

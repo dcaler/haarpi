@@ -169,6 +169,12 @@ def test_the_map_slices_are_topics_and_each_source_sits_in_one():
     assert weight == {"abbott1990": 3, "zed2020": 0}       # f2 is located weakly: not counted
 
 
+def test_a_fact_base_is_recognised_in_its_docx_read_back_without_italics():
+    assert mindmap.is_fact_base("# Literature Review: x\n\n*Format:* fact base  \n")
+    assert mindmap.is_fact_base("Project: DigiProsDate: 2026-10-13Format: fact baseFocus: q")
+    assert not mindmap.is_fact_base("# Literature Review: x\n\n## Narrative Review\n")
+
+
 def test_a_source_sits_in_the_topic_that_serves_the_brief():
     topics = [Topic(name="A", serves=[1]), Topic(name="Schelling", serves=[])]
     fs = [Fact(id="k#1", citekey="k", text="t", scores=[2, 3], verified=True),
