@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import yaml
 
 from haarpi import planner, project, trundlr
 from packages.haarpi.tests.test_release_gate import _make_markup
@@ -120,15 +121,20 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert (proj / "litReview" / "output").is_dir()
     assert (proj / ".haarpi" / "plans").is_dir()
     titles = [t["title"] for t in tr.tasks]
-    assert titles == ["rabbithole gather 1", "rabbithole collect 1",
-                      "rabbithole report 1", "rabbithole mindmap 1", "rabbithole comment 1",
-                      "rabbithole next 1"]
+    # a new review is a fact base: questions and topics are settled with the person first,
+    # and its report draws its own map
+    assert titles == ["rabbithole topics 1", "rabbithole topics-review 1",
+                      "rabbithole topics-apply 1", "rabbithole gather 1", "rabbithole collect 1",
+                      "rabbithole report 1", "rabbithole comment 1", "rabbithole next 1"]
+    cfg = yaml.safe_load((proj / "litReview" / "litrev.yaml").read_text())
+    assert cfg["report_format"] == "facts" and cfg["questions"] == []
     # chained, umbrella-form commands, human steps command-less
     assert tr.tasks[1]["depends_on_id"] == tr.tasks[0]["id"]
-    assert tr.tasks[0]["command"].startswith("haarpi rabbithole")
-    assert tr.tasks[3]["command"] == "haarpi rabbithole mindmap"   # the per-draft map, on the runner
-    assert "command" not in tr.tasks[4]                            # comment is the human step
-    assert tr.tasks[5]["command"] == "haarpi next"
+    assert tr.tasks[0]["command"] == "haarpi rabbithole topics"
+    assert "command" not in tr.tasks[1]                            # the person reviews the page
+    assert tr.tasks[2]["command"] == "haarpi rabbithole topics --apply"
+    assert "command" not in tr.tasks[6]                            # comment is the human step
+    assert tr.tasks[7]["command"] == "haarpi next"
 
 
 def test_init_does_not_publish_runnable_work_before_the_project_exists(
@@ -219,13 +225,16 @@ def test_init_reads_a_pasted_multiparagraph_brief_without_spilling(
     root = tmp_path / "260801_pasted"
     root.mkdir()
     # brief lines (with a paragraph break) → sentinel → initials → priority(default)
+    # → research questions → sentinel
     feed = iter(["para one of the brief", "", "para two of the brief", ".",
-                 "JQ", ""])
+                 "JQ", "", "Why does it happen?", "."])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(feed))
     assert planner.run_init(root, name="pasted", short_title="pasted") == 0
     m = project.load_manifest(root)
     assert m.brief == "para one of the brief\n\npara two of the brief"
     assert m.initials == "JQ"          # the 2nd paragraph did NOT leak here
+    cfg = yaml.safe_load((root / "litReview" / "litrev.yaml").read_text())
+    assert cfg["questions"] == ["Why does it happen?"]
 
 
 def test_init_multiline_brief_ends_on_eof(tmp_path, servers, monkeypatch):
@@ -276,8 +285,17 @@ def test_clean_markup_mints_release_and_advances(proj, servers):
     assert project.latest_release(proj, m, "litreview") is not None
 
 
+def _narrative(root):
+    """Turn a freshly inited (fact-base) review back into a narrative one."""
+    from rabbithole import config as rh
+    cfg = rh.load_project(root)
+    cfg.report_format = "narrative"
+    rh.save_project(cfg, root)
+
+
 def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
     tr, ol = servers
+    _narrative(proj)
     # litreview now decomposes into a per-comment task list; a 'sources' task yields gap_fill.
     ol.reply = json.dumps({"tasks": [{"comments": [1], "need": "sources", "query": "X"}]})
     m = project.load_manifest(proj)
@@ -602,7 +620,7 @@ def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     created = [p for p in tr.projects if p["name"] == "other"]
     assert created and created[0]["priority"] == 1
     titles = [t["title"] for t in tr.tasks if t.get("project_id") == m.trundlr_project_id]
-    assert titles[0].startswith("rabbithole gather")
+    assert titles[0].startswith("rabbithole topics")
     assert planner.run_queue(root) == 0                         # idempotent: nothing doubled
     assert len([t for t in tr.tasks
-                if t.get("project_id") == m.trundlr_project_id]) == 6
+                if t.get("project_id") == m.trundlr_project_id]) == 8

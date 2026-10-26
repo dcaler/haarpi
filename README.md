@@ -207,13 +207,18 @@ and the opening list are one ranking seen two ways. The prose carries the
 through line that organizes those facts — the same structure the map draws
 radially.
 
-A second format is on test, per project (`report_format: facts`): a **fact
-base** with no prose. Each source's salient facts are extracted, every quote is
+A second format, the **fact base**, is the default for a new project
+(`report_format: facts`; older reviews stay narrative unless migrated). It has no prose. Each source's salient facts are extracted, every quote is
 checked verbatim against its page, and each fact links to that page in Zotero.
 Every fact is scored against a person-approved list of topics, each mapped to
 the research questions it serves; facts are grouped by topic and theme with short
 synthesis bullets, and the document links to the contribution map: an
 interactive page (hover a source for what it contributes, click for its facts).
+The research questions (`questions:`, one to three, asked when the project is set up, or drafted
+from the brief) are kept apart from the search `focus`, whose items are lenses rather
+than questions. A fact base's opening cycle settles both before it searches: `topics`
+drafts them as a page, the person accepts or rejects each one, and `topics --apply`
+writes the result into the config.
 
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
@@ -304,6 +309,7 @@ reporting which sources still lack a PDF.
 | `revise` | answers every comment in kind (see the table above) |
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
+| `topics` | a fact base's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new fact base's opening cycle |
 | `mindmap` | regenerates the contribution map (an interactive HTML page) beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |

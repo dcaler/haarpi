@@ -3,6 +3,7 @@
     rabbitHole init       interactive project setup -> litrev.yaml
     rabbitHole gather     discover & curate sources missing from your Zotero collection
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
+    rabbitHole topics     a fact base's research questions + topics, for review (--apply adopts)
     rabbitHole graft      add a requested section, leaving the rest of the review untouched
     rabbitHole refresh    recompute the load-bearing block on an existing draft
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
@@ -208,6 +209,16 @@ def _run(argv: list[str] | None = None) -> int:
                     help="override the brain backend for this run")
     _review_arg(mm)
 
+    tp = sub.add_parser("topics",
+                        help="draft a fact base's research questions and topics as a review page; "
+                             "--apply adopts the reviewer's saved answers into the config")
+    tp.add_argument("--apply", action="store_true",
+                    help="adopt the newest saved review (or the draft as drafted) into a new "
+                         "numbered config")
+    tp.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                    help="override the brain backend for this run")
+    _review_arg(tp)
+
     aud = sub.add_parser("audit",
                          help="quarantine lexical false-friends (shared word, no conceptual "
                               "transfer) from the corpus into a Zotero 'quarantine' collection")
@@ -344,6 +355,12 @@ def _run(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=False)          # edits the .docx in place; no pandoc render
         from . import refresh
         return refresh.run(args.dir, brain_override=args.brain, file=args.file)
+
+    if args.command == "topics":
+        if not args.apply:
+            _check_env(need_pandoc=False)      # the draft needs the brain; --apply needs nothing
+        from . import topics
+        return topics.run(args.dir, brain_override=args.brain, apply=args.apply)
 
     if args.command == "mindmap":
         _check_env(need_pandoc=False)          # needs the brain (Ollama); no pandoc

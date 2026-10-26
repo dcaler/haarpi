@@ -129,6 +129,21 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "diagnostic of the reference budget and which themes are peripheral.",
                         resource="gpu"),
         "comment": Step(None, 0.15, "Review the new draft and annotate it.", resource="human"),
+        # A fact base scores every fact against approved topics serving the research questions,
+        # so a person settles both before the first `report`: drafted, reviewed on a page in
+        # litReview/output, adopted into the config. See rabbithole.topics.
+        "topics":       Step("haarpi rabbithole topics", 0.2,
+                             "Draft the research questions and topics from the brief and write "
+                             "the review page (`*_topics_ra.html`) into litReview/output.",
+                             resource="gpu"),
+        "topics-review": Step(None, 0.25,
+                              "Open the `*_topics_ra.html` page in litReview/output: accept or "
+                              "reject each research question and topic, edit, add. Save the JSON "
+                              "into litReview/output, then mark this done. Leaving everything "
+                              "pending adopts the draft as it is.", resource="human"),
+        "topics-apply": Step("haarpi rabbithole topics --apply", 0.05,
+                             "Adopt the saved questions and topics into a new numbered config.",
+                             resource="cpu"),
     },
     "paper": {
         "revise":   Step("haarpi raconteur draft", 2.0,
@@ -1337,6 +1352,15 @@ def _fact_chain(tasks: list[dict]) -> dict:
     tier = ("redirection" if "redirect" in needs else "gap_fill" if gathers else "cosmetic")
     return {"steps": steps, "tier": tier, "corrections": corrections,
             "gather_topics": gather_topics, "section_focus": [], "fact_base": True}
+
+
+def opening_chain(directory) -> list[str]:
+    """The litreview's first cycle. A fact base settles its questions and topics with the person
+    first — before gather, so the hour of searching and the collect sitting come after the scope
+    is agreed — and its `report` draws and links its own map."""
+    if _is_fact_base(str(directory)):
+        return ["topics", "topics-review", "topics-apply", "gather", "collect", "report", "comment"]
+    return ["gather", "collect", "report", "mindmap", "comment"]
 
 
 def _is_fact_base(directory: str) -> bool:
@@ -2922,7 +2946,7 @@ def run_queue(root: Path) -> int:
                   f"({len(titles)} total) — nothing to queue.")
             return 0
         queued = queue_chain(client, m.trundlr_project_id, "litreview",
-                             ["gather", "collect", "report", "mindmap", "comment"], tr_cfg,
+                             opening_chain(root), tr_cfg,
                              description=m.brief[:300])
         print(f"haarpi queue: litreview cycle {queued['cycle']} queued "
               f"({len(queued['tasks'])} tasks, ends in `haarpi next`).")
@@ -2976,7 +3000,8 @@ def _ask_priority(default: int = trundlr.PRIORITY_DEFAULT) -> int:
 
 def run_init(root: Path, name: str | None = None, short_title: str | None = None,
              brief: str | None = None, initials: str | None = None,
-             priority: int | None = None, no_trundlr: bool = False) -> int:
+             priority: int | None = None, no_trundlr: bool = False,
+             questions: list[str] | None = None) -> int:
     """One interview -> haarpi.yaml + the stage skeleton + the trundlr project +
     the lit-review opening chain. Identity is answered once, here; the stage
     tools' own inits go straight to their substance."""
@@ -3011,6 +3036,13 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
                           else _ask_priority() if asks_trundlr
                           else trundlr.PRIORITY_DEFAULT),
     )
+    if questions is None and brief is None:
+        # The review's research questions — what the work answers, not search terms. Asked only
+        # in the interview (a scripted init that passes --brief is not at a keyboard). Optional:
+        # the opening cycle drafts them from the brief, and the person settles them either way.
+        questions = _ask_multiline("research questions, one per line (blank: draft them from "
+                                   "the brief)").splitlines()
+    questions = [q.strip() for q in questions or [] if q.strip()]
     lines = []
     client = None
     pid = None
@@ -3042,14 +3074,14 @@ def run_init(root: Path, name: str | None = None, short_title: str | None = None
     # own scheduled start — and every other task on that runner's resource stopped with it.
     project.save_manifest(m, root)
     project.scaffold(root, m)
-    seeded = project.seed_tool_configs(root, m)
+    seeded = project.seed_tool_configs(root, m, questions)
     if seeded:
         lines.append("seeded stage config(s): " + ", ".join(seeded))
 
     if client is not None and pid is not None:
         try:
             queued = queue_chain(client, pid, "litreview",
-                                 ["gather", "collect", "report", "mindmap", "comment"], tr_cfg,
+                                 opening_chain(root), tr_cfg,
                                  description=m.brief[:300])
             lines.append(f"queued litreview cycle {queued['cycle']} "
                          f"({len(queued['tasks'])} tasks, ends in `haarpi next`)")

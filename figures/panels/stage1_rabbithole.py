@@ -10,6 +10,7 @@ COVERS = {          # registry step -> the panel key(s) that depict it
  "gather": "gather", "collect": "collect", "report": "report",
  "mindmap": "mm", "comment": "comm",
  "ingest": "ingest", "audit": "audit", "build": "build", "revise": "revise",
+ "topics": "topics", "topics-review": "tvet", "topics-apply": "topics",
 }
 OMITS = {           # deliberately not drawn, and why
  "graft": "vestigial: only cli.py reaches graft.run(); its drafting functions live "
@@ -20,6 +21,8 @@ OMITS = {           # deliberately not drawn, and why
 ROWS = [
  ("hdr",     None,      None),
  ("brief",   None,      "a_cfg"),
+ ("topics",  None,      "a_tpage"),
+ ("tvet",    None,      None),
  ("gather",  "ingest",  "a_list"),   # ─┐ the revisions band: everything a revision can
  ("collect", "audit",   None),       #  │ remake, from a new collect-list down to a new
  ("report",  "build",   "a_docx"),   #  │ contribution map
@@ -30,12 +33,17 @@ ROWS = [
  ("gate",    None,      None),
  ("rel",     None,      "a_mint"),
 ]
-BAND = (2, 7)
+BAND = (4, 9)
 
 SPINE = {
  "hdr":  ("head", "1. rabbitHole surveys the literature"),
- "brief": ("amber", "haarpi init: the Human sets the brief — the question, how many "
-                    "sources, the Zotero collection"),
+ "brief": ("amber", "haarpi init: the Human sets the brief — the research questions, how "
+                    "many sources, the Zotero collection"),
+ "topics": ("indigo", "topics  →  drafts the research questions (unless init took them) and the "
+                      "topics every fact will be scored against, as a review page; after the "
+                      "Human's review, `topics --apply` writes them into the config"),
+ "tvet": ("amber", "the Human accepts or rejects each question and topic on that page and "
+                   "saves the answers beside it"),
  "gather": ("indigo", "gather  →  searches, ranks and curates candidate sources, and writes "
                       "the collect-list for the Human to verify"),
  "collect": ("amber", "collect: the Human adds each real source to Zotero WITH its PDF — "
@@ -67,12 +75,12 @@ LANE = {
             "built — so it queues no step at all",
 }
 ARTS = {
- "a_cfg": "litrev.yaml", "a_list": "the collect-list",
+ "a_cfg": "litrev.yaml", "a_list": "the collect-list", "a_tpage": "the topics page",
  "a_docx": "the review .docx", "a_refs": "refs.bib",
  "a_corp": "the embedded corpus", "a_map": "the contribution map",
  "a_mint": "the released review",
 }
-MAKES = [("brief","a_cfg"), ("gather","a_list"), ("report","a_docx"),
+MAKES = [("brief","a_cfg"), ("topics","a_tpage"), ("gather","a_list"), ("report","a_docx"),
          ("report","a_refs"), ("report","a_corp"), ("mm","a_map"), ("rel","a_mint")]
 
 OPTS = {}

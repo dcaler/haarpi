@@ -206,7 +206,7 @@ def scaffold(root: Path, m: Manifest) -> list[Path]:
     return made
 
 
-def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
+def seed_tool_configs(root: Path, m: Manifest, questions: list[str] | None = None) -> list[str]:
     """Materialise the UNATTENDED stages' tool configs from the one interview.
 
     Attended stages (raster, rayleigh) init inside their own design sessions,
@@ -215,14 +215,18 @@ def seed_tool_configs(root: Path, m: Manifest) -> list[str]:
     extracts topic/focus from the research prompt itself, and raconteur's
     onepager extracts title/topic/focus from the description, so the manifest
     brief is a sufficient seed for both. Existing files are never touched;
-    re-running `haarpi init` repairs a project that predates this seeding."""
+    re-running `haarpi init` repairs a project that predates this seeding.
+
+    A new review is a FACT BASE (`report_format: facts`), carrying the research questions the
+    interview took, if any; its opening cycle drafts the rest for the person to settle."""
     seeded = []
 
     from rabbithole import config as rh
     lit_dir = root / m.stages["litreview"]["dir"]
     if rh.latest_project_file(root) is None:
         cfg = rh.ProjectConfig(project_name=m.name, research_prompt=m.brief,
-                               trundlr_project_id=m.trundlr_project_id)
+                               trundlr_project_id=m.trundlr_project_id, report_format="facts",
+                               questions=[q.strip() for q in questions or [] if q.strip()])
         lit_dir.mkdir(parents=True, exist_ok=True)
         fp = rh.save_project_to(cfg, lit_dir / rh.PROJECT_FILE)
         seeded.append(str(fp.relative_to(root)))
