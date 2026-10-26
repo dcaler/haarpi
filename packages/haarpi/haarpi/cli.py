@@ -130,6 +130,24 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
     return 2
 
 
+def _init_dir(rest: list[str]) -> Path:
+    """Where `haarpi init` made its project (its --dir, else the cwd)."""
+    for i, a in enumerate(rest):
+        if a == "--dir" and i + 1 < len(rest):
+            return Path(rest[i + 1]).resolve()
+        if a.startswith("--dir="):
+            return Path(a.split("=", 1)[1]).resolve()
+    return Path(".").resolve()
+
+
+def _write_status(verb: str, init_dir: Path | None = None) -> None:
+    """Refresh the project's .haarpi/status.json after any verb (raDash reads it). On every exit
+    path, errors included, and never at the cost of the verb's own result."""
+    from . import project, status
+    root = init_dir if init_dir is not None else project.find_root()
+    status.write_status(root, generated_by=verb)
+
+
 def _dispatch(tool_pkg: str, args: list[str]) -> int:
     mod = importlib.import_module(f"{tool_pkg}.cli")
     # tools read sys.argv via argparse; present ourselves as the tool
@@ -219,13 +237,19 @@ def main(argv: list[str] | None = None) -> int:
             if fp:
                 print(f"[runlog] {fp}")
     if cmd in TOOLS:
-        return _dispatch(TOOLS[cmd], rest)
+        try:
+            return _dispatch(TOOLS[cmd], rest)
+        finally:
+            _write_status(f"haarpi {cmd} {rest[0]}" if rest else f"haarpi {cmd}")
     if cmd == "doctor":
         if "--migrate" in rest:
             return _migrate([a for a in rest if a != "--migrate"])
         return _doctor()
     if cmd in ("init", "next", "status", "queue", "authors"):
-        return _pipeline_verb(cmd, rest)
+        try:
+            return _pipeline_verb(cmd, rest)
+        finally:
+            _write_status(f"haarpi {cmd}", init_dir=_init_dir(rest) if cmd == "init" else None)
     if cmd == "bench":
         from . import bench
         return bench.main(rest)

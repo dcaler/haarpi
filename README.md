@@ -33,7 +33,7 @@ files on disk.
 |---|---|---|---|
 | **HAARPi** (this repo) | the `ra*` research tools and the planner that chains them | the GPU machine, as commands trundlr's runners call | — |
 | **[trundlr](https://github.com/dcaler/trundlr)** | task and resource scheduler: a board of tasks, and lanes for human, CPU, GPU and Claude time | a small server of its own; its runners live on the GPU machine | `haarpi next` queues every chain on it, and its runners execute HAARPi's commands. **Required** for anything to run unattended |
-| **[raDash](https://github.com/dcaler/radash)** | a read-only observatory of your research portfolio: where your reading, your writing and the literature stand relative to one another | a Docker container on any machine that can see your project folders | reads each project's `haarpi.yaml` and `.haarpi/corpus_ledger.json`, and trundlr's board, and never writes to any of them. **Optional** |
+| **[raDash](https://github.com/dcaler/radash)** | a read-only observatory of your research portfolio: where your reading, your writing and the literature stand relative to one another | a Docker container on any machine that can see your project folders | reads each project's `haarpi.yaml`, `.haarpi/corpus_ledger.json` and `.haarpi/status.json`, and trundlr's board, and never writes to any of them. **Optional** |
 
 The loop they make: raDash shows you where your work sits against your reading
 and the field, and hands you a read-in brief or a corpus fill list. You carry
@@ -667,6 +667,13 @@ haarpi rabbithole gather     # or drive any stage tool directly
 
 `haarpi next` runs automatically as the last task of every queued chain, so in
 normal use the loop is: read the document, mark it up, mark the task done.
+
+Every `haarpi` verb also rewrites the project's `.haarpi/status.json`: every milestone the
+project can reach (the stage releases, the paper's rungs, one track per venue, the decks),
+which are done, who each is waiting on, and how each stands against the target dates you set
+under `milestones:` in `haarpi.yaml`. It is derived from the releases on disk, so nothing is
+ticked by hand. raDash reads it; the schema is
+[`packages/haarpi/DESIGN_status_json.md`](packages/haarpi/DESIGN_status_json.md).
 
 ## Repo layout
 

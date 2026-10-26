@@ -148,6 +148,10 @@ class Manifest:
     # and "DigiPros", and each drift split the corpus into a new collection — twice. rabbitHole
     # adopts this key over any per-review copy, and refuses to create a collection when it is set.
     zotero_collection: str = ""
+    # TARGET dates, by milestone id (`litreview`, `paper.css2026.submission`, `deck.longtalk`, …
+    # — the ids in .haarpi/status.json). Optional: a milestone without one reports no_target.
+    # Only the targets live here; whether a milestone is DONE is read from its release on disk.
+    milestones: dict = field(default_factory=dict)
     stages: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STAGES.items()})
 
     def stage_dir(self, root: Path, stage: str) -> Path:
@@ -185,6 +189,8 @@ def save_manifest(m: Manifest, root: Path) -> Path:
             "trundlr_project_id": m.trundlr_project_id,
             "trundlr_priority": m.trundlr_priority,
             "zotero_collection": m.zotero_collection, "stages": m.stages}
+    if m.milestones:
+        data["milestones"] = m.milestones
     fp = root / MANIFEST
     fp.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
                   encoding="utf-8")

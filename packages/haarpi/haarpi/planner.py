@@ -3147,7 +3147,7 @@ def _paper_rung_state(root: Path, m: project.Manifest, includes: list[str]) -> s
     fl = _paper_pick(root, m, includes, want_release=False)
     if fl:
         chain = (naming.parse(fl, m.short_title) or ("", ["ra"], ""))[1]
-        turn = "your turn" if chain[-1].lower() != "ra" else "tool's turn"
+        turn = "awaiting your review" if chain[-1].lower() == "ra" else "awaiting the tool"
         return f"in flight  {fl.name}  ({turn})"
     return "pending"
 
@@ -3202,7 +3202,10 @@ def run_status(root: Path) -> int:
         if rel and not flight:
             state = f"released   {rel.name}"
         elif flight:
-            turn = "your turn" if (naming.parse(flight, m.short_title) or ("", ["ra"], ""))[1][-1].lower() != "ra" else "tool's turn"
+            # who the document waits on: a tool draft (`_ra`) waits on the reviewer, a reviewer's
+            # markup waits on the tool (`haarpi next`)
+            last = (naming.parse(flight, m.short_title) or ("", ["ra"], ""))[1][-1].lower()
+            turn = "awaiting your review" if last == "ra" else "awaiting the tool"
             state = f"in flight  {flight.name}  ({turn})"
             if rel:
                 state += f"  [last release {rel.name}]"

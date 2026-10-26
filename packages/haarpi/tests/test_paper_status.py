@@ -41,13 +41,13 @@ class TestRungState:
         _touch(tmp_path / "paper" / "output" / "260717_Chords_css2026_outline.docx")
         assert planner._paper_rung_state(tmp_path, _m(), ["css2026", "outline"]).startswith("released")
 
-    def test_tool_output_is_the_tools_turn(self, tmp_path):
+    def test_a_tool_draft_awaits_your_review(self, tmp_path):
         _touch(tmp_path / "paper" / "260717_Chords_onepager_ra.docx")
-        assert "tool's turn" in planner._paper_rung_state(tmp_path, _m(), ["onepager"])
+        assert "awaiting your review" in planner._paper_rung_state(tmp_path, _m(), ["onepager"])
 
-    def test_human_markup_is_your_turn(self, tmp_path):
+    def test_your_markup_awaits_the_tool(self, tmp_path):
         _touch(tmp_path / "paper" / "260717_Chords_onepager_ra_DCR.docx")
-        assert "your turn" in planner._paper_rung_state(tmp_path, _m(), ["onepager"])
+        assert "awaiting the tool" in planner._paper_rung_state(tmp_path, _m(), ["onepager"])
 
 
 class TestSubmissionState:
