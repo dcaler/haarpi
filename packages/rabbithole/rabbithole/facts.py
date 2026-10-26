@@ -120,10 +120,17 @@ def focus_items(focus: str) -> list[str]:
     return [x.strip() for x in (focus or "").split(";") if x.strip()]
 
 
+def research_questions(cfg) -> list[str]:
+    """The review's research questions: the config's `questions:` when it has any, else the
+    focus items (a focus is search scope, so its items are only a stand-in)."""
+    qs = [str(q).strip() for q in (getattr(cfg, "questions", None) or []) if str(q).strip()]
+    return qs or focus_items(cfg.focus)
+
+
 @dataclass
 class Topic:
     name: str
-    serves: list = field(default_factory=list)     # 1-based research questions (focus items)
+    serves: list = field(default_factory=list)     # 1-based research questions
     covers: str = ""                               # what the topic means and does NOT — a
                                                    #   reviewer's scope, read by the scorer
 
@@ -144,7 +151,7 @@ def resolve_topics(cfg) -> list[Topic]:
                              covers=str(t.get("covers") or "").strip()))
     if out:
         return out
-    return [Topic(name=q, serves=[n]) for n, q in enumerate(focus_items(cfg.focus), 1)]
+    return [Topic(name=q, serves=[n]) for n, q in enumerate(research_questions(cfg), 1)]
 
 
 def best(f: Fact) -> int:
@@ -304,7 +311,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
     from .summarize import _located_filename, _paper_text, reading_text
     d = paths.work / "facts"
     d.mkdir(parents=True, exist_ok=True)
-    items = focus_items(cfg.focus)
+    items = research_questions(cfg)
     sys_prompt = _SYS.replace("{max_facts}", str(_MAX_FACTS))
     out: dict[str, list[Fact]] = {}
     t0, done, cached = time.time(), 0, 0
@@ -1007,7 +1014,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     from .render import _paged_reference
     from .summarize import _export_bibtex
     t0 = time.time()
-    items = focus_items(cfg.focus)
+    items = research_questions(cfg)
     topics = resolve_topics(cfg)
     if not getattr(cfg, "topics", None):
         print("  [note] no approved topics in the config — scoring against the research "

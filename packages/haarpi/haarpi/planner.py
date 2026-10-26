@@ -1374,12 +1374,12 @@ def _snapshot_facts(root: Path, m, stage: str, dst: Path) -> Path | None:
 
 
 def _focus_items(directory: str) -> list[str]:
+    """The fact base's research questions (its `questions:`, else the focus items)."""
     try:
-        from rabbithole import config as rhconfig
-        focus = rhconfig.load_project(directory).focus or ""
+        from rabbithole import config as rhconfig, facts as rhfacts
+        return rhfacts.research_questions(rhconfig.load_project(directory))
     except Exception:                         # noqa: BLE001
         return []
-    return [x.strip() for x in focus.split(";") if x.strip()]
 
 
 def _fact_rework(directory: str, tasks: list[dict], check: dict, markup, built: dict, *,

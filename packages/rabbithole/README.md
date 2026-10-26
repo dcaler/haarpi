@@ -126,7 +126,7 @@ addresses it in its own words.
 facts, checks every quote verbatim against its page (a fact whose quote is only
 found by search is shown for checking but not counted), scores every fact 0–3
 against the review's approved `topics:` (each mapped to the research questions it
-serves), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
+serves; the questions are the config's `questions:`, or the focus items when it has none), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
 the link opens the PDF in Zotero at that page. The document links to the
 contribution map, an interactive page beside it: one slice per topic and a dot
 per source (hover for what it contributes, click for its facts and page links).

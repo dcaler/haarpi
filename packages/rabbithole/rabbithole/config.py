@@ -160,6 +160,11 @@ class ProjectConfig:
     # fact is scored 0-3 against every topic. Unlike `gather_topics` (this cycle's search asks,
     # replaced each cycle) this is the review's standing list.
     topics: list = field(default_factory=list)
+    # The fact base's RESEARCH QUESTIONS — usually one to three, from the brief. `focus` stays the
+    # search scope gather feeds to query generation; its items are lenses, keywords and appended
+    # asks, not questions (FirmPathways: seven items, one question). Empty: the focus items stand
+    # in, as before. Topics' `serves` numbers index this list.
+    questions: list = field(default_factory=list)
 
     def to_yaml(self) -> str:
         d = asdict(self)

@@ -261,6 +261,16 @@ def test_topics_come_from_the_config_or_fall_back_to_the_questions():
         [Topic("a", [1]), Topic("b", [2])]
 
 
+def test_the_research_questions_are_the_configs_own_list_not_the_search_focus():
+    # FirmPathways: seven focus items are lenses on one question
+    cfg = SimpleNamespace(focus="sequence analysis; NK model; fitness landscapes",
+                          questions=["How do firms navigate public funding?", " "], topics=[])
+    assert facts.research_questions(cfg) == ["How do firms navigate public funding?"]
+    assert facts.resolve_topics(cfg) == [Topic("How do firms navigate public funding?", [1])]
+    assert facts.research_questions(SimpleNamespace(focus="a; b")) == ["a", "b"]
+    assert config.ProjectConfig().questions == []
+
+
 def test_the_sidecar_round_trips(tmp_path):
     paths = SimpleNamespace(work=tmp_path)
     corpus = [_cand(attachment_key="ATT1"), Candidate(title="Wind", year=2020)]
