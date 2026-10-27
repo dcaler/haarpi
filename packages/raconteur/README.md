@@ -101,7 +101,8 @@ purely an interactive setup step. The wizard asks for:
 - **Literature review** — if `litReview/` (rabbitHole) is present, whether to use it
   as context. If absent, you get a loud warning.
 - **Short title** — used in all filenames (no spaces; e.g. `trust_ai`). Offered from
-  rabbitHole's `litrev.yaml` when available.
+  rabbitHole's `litrev.yaml` when available. In a HAARPi project the manifest's
+  `short_title` (`haarpi.yaml`) wins, since `haarpi next` finds drafts by it, case and all.
 - **Research description** — describe your research in plain language. Also offered
   from rabbitHole's `litrev.yaml`. It is parsed into `topic`/`focus` later, on first
   use in `raconteur onepager`.
@@ -188,6 +189,11 @@ numbers. Failures are fed back as imperatives. The run ends with a metrics line:
 ```
 citekeys resolved 47/47 · uncited body paragraphs 0 · sparse 2 · sections 6
 ```
+
+A key pandoc cannot read (Zotero built it from a record spelled with a prime or a curly
+apostrophe, e.g. `o′sullivanSchellings2009`) would make pandoc reject the whole `refs.bib`.
+The .docx render renames such keys in scratch copies, citations included, and logs each one;
+your `refs.bib` and draft are left as they are. Fix the Zotero record to make it go away.
 
 Output: `paper/YYMMDD_shorttitle_ra.md` and `paper/YYMMDD_shorttitle_ra.docx`.
 A fresh draft is a major version — new date stamp, chain reset to `ra`.
@@ -329,7 +335,7 @@ paper is revised from what the source now says.
 
 ```yaml
 title: Trust in AI-Assisted Decision Making
-short_title: trust_ai           # used in all filenames — no spaces
+short_title: trust_ai           # used in all filenames — no spaces; haarpi.yaml's wins
 author_initials: DCR            # your initials, appended when you revise
 topic: trust in AI systems in high-stakes decision contexts
 focus: the role of explainability in building appropriate reliance
