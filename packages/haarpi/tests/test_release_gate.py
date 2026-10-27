@@ -370,3 +370,16 @@ def test_a_release_that_is_not_clean_is_refused(tmp_path, monkeypatch):
     with pytest.raises(redline.UnacceptedRevisions) as e:
         redline.mint_release(src, tmp_path / "out" / "260722_p_paper.docx", md_sibling=False)
     assert "still carries tracked changes" in str(e.value)
+
+
+def test_a_document_with_external_links_still_mints(tmp_path):
+    """A fact base links every fact to its page in Zotero, and each link is an EXTERNAL
+    relationship — no part behind it. Asking python-docx for its part raises ValueError, and
+    DigiPros' first fact-base release crashed on it (261027)."""
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    doc = Document()
+    doc.add_paragraph("A fact, linked to its page.")
+    doc.part.relate_to("zotero://open-pdf/library/items/ABC123?page=4", RT.HYPERLINK,
+                       is_external=True)
+    counts = redline.accept_all_changes(doc)
+    assert counts["paras"] == 0

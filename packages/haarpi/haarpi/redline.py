@@ -1447,13 +1447,18 @@ def _revisable_roots(doc):
     roots = [doc.element.body]
     seen = {id(doc.element.body)}
     for rel in doc.part.rels.values():
-        try:
-            el = rel.target_part._element
-        except AttributeError:
+        # An EXTERNAL relationship — a hyperlink, such as a fact base's links into Zotero — has
+        # no part, and python-docx raises ValueError (not AttributeError) on asking for one.
+        # DigiPros' release crashed here on its first fact base (261027).
+        if rel.is_external:
             continue
         low = rel.reltype.lower()
         if not any(k in low for k in ("footnotes", "endnotes", "header", "footer",
                                       "styles", "comments")):
+            continue
+        try:
+            el = rel.target_part._element
+        except AttributeError:
             continue
         if id(el) not in seen:
             seen.add(id(el))
