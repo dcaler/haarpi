@@ -151,3 +151,15 @@ def test_a_spec_never_passes_as_a_fact_when_it_is_a_guess():
     unknown = VenueConfig(name="X")
     assert "unknown" in unknown.spec_line("page_limit")
     assert "do not assume" in unknown.spec_line("page_limit")
+
+
+def test_the_short_title_comes_from_the_manifest(tmp_path):
+    """`digipros` in raconteur.yaml beside the manifest's `DigiPros` wrote drafts that the
+    case-sensitive `haarpi next` could not see."""
+    from raconteur.config import ProjectConfig, PROJECT_CONFIG_FILE
+    ProjectConfig(short_title="digipros").save(tmp_path)
+    assert ProjectConfig.load(tmp_path).short_title == "digipros"        # no manifest: own copy
+    (tmp_path / "haarpi.yaml").write_text("name: D\nshort_title: DigiPros\n")
+    assert ProjectConfig.load(tmp_path).short_title == "DigiPros"
+    (tmp_path / "haarpi.yaml").write_text("authors: [oh no: [\n")
+    assert ProjectConfig.load(tmp_path).short_title == "digipros"        # broken manifest

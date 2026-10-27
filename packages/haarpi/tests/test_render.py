@@ -92,3 +92,41 @@ def test_without_a_bib_the_raw_key_survives(md, tmp_path):
     assert render.pandoc_convert(md, dst)
     text = re.sub(r"<[^>]+>", "", zipfile.ZipFile(dst).read("word/document.xml").decode())
     assert "[@knuth1984]" in text
+
+
+def test_a_citekey_pandoc_cannot_read_is_renamed_for_the_render_only(tmp_path):
+    """Zotero spelled O'Sullivan with a prime (U+2032), the key inherited it, and pandoc
+    refused the whole bibliography: the DigiPros one-pager rendered no .docx at all."""
+    bib = tmp_path / "refs.bib"
+    bib.write_text("@article{o′sullivanSchellings2009,\n  title={Schelling′s model},\n"
+                   "  author={O′Sullivan, Arthur},\n  year={2009}\n}\n"
+                   "@article{knuth1984,\n  title={LP},\n  year={1984}\n}\n", encoding="utf-8")
+    md = tmp_path / "d.md"
+    md.write_text("As shown [@o′sullivanSchellings2009; @knuth1984].\n", encoding="utf-8")
+    src, bib2, scratch = render._pandoc_ready(md, bib)
+    assert "@article{osullivanSchellings2009," in bib2.read_text(encoding="utf-8")
+    assert "Schelling′s model" in bib2.read_text(encoding="utf-8")   # only the key changes
+    assert src.read_text(encoding="utf-8") == "As shown [@osullivanSchellings2009; @knuth1984].\n"
+    assert "o′sullivan" in bib.read_text(encoding="utf-8")            # originals untouched
+    assert "o′sullivan" in md.read_text(encoding="utf-8")
+    assert set(scratch) == {src, bib2}
+
+
+def test_a_clean_bibliography_is_handed_over_as_is(md, bib):
+    assert render._pandoc_ready(md, bib) == (md, bib, [])
+
+
+def test_a_repaired_key_never_collides_with_an_existing_one():
+    keys = render._pandoc_safe_keys("@article{ab,\n}\n@article{a′b,\n}\n")
+    assert keys == {"a′b": "ab2"}
+
+
+@pytest.mark.skipif(not render.check_pandoc(), reason="pandoc not installed")
+def test_pandoc_renders_past_a_bad_key_and_cleans_up(tmp_path):
+    bib = tmp_path / "refs.bib"
+    bib.write_text("@article{o′sullivan2009,\n  title={T},\n  author={O, A},\n"
+                   "  year={2009},\n  journal={J}\n}\n", encoding="utf-8")
+    md = tmp_path / "d.md"
+    md.write_text("# T\n\nClaim [@o′sullivan2009].\n", encoding="utf-8")
+    assert render.pandoc_convert(md, tmp_path / "d.docx", bib_path=bib)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["d.docx", "d.md", "refs.bib"]

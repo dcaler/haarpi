@@ -260,6 +260,17 @@ class ProjectConfig:
             slug = venue_slug(legacy["name"])
             venues[slug] = _venue_from(slug, {**legacy, "status": "selected"})
 
+        # The short title is the manifest's: haarpi finds every deliverable by it, and
+        # naming.parse is case-sensitive. A copy here that drifted (`digipros` beside the
+        # manifest's `DigiPros`) wrote drafts `haarpi next` could not see.
+        manifest = project_dir / "haarpi.yaml"
+        try:
+            short = (yaml.safe_load(manifest.read_text()) or {}).get("short_title")
+        except (OSError, yaml.YAMLError, AttributeError):
+            short = None
+        if short:
+            data["short_title"] = short
+
         return cls(
             **data,
             brain=BrainConfig(**brain_data),

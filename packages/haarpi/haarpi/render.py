@@ -17,6 +17,7 @@ failed conversion warns and returns None/False rather than raising.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,67 @@ def enable_track_changes(docx_path: Path) -> bool:
     return True
 
 
+# A citekey pandoc can read: letters (any script), digits, underscore and the few separators
+# its BibTeX and markdown parsers both accept. Zotero keys are generated from the record, so
+# a record that spells O'Sullivan with a prime (U+2032) yields `o′sullivanSchellings2009`,
+# and pandoc then refuses the WHOLE bibliography — one stray character, no .docx at all.
+_KEY_CHAR = re.compile(r"[^\w:.\-+/]")
+_BIB_KEY = re.compile(r"(@\w+\s*\{\s*)([^,\s]+)(\s*,)")
+
+
+def _pandoc_safe_keys(bib_text: str) -> dict[str, str]:
+    """Every bib key pandoc would reject, mapped to a readable stand-in (unique in the file)."""
+    keys = [m.group(2) for m in _BIB_KEY.finditer(bib_text)]
+    taken, out = set(keys), {}
+    for k in keys:
+        safe = _KEY_CHAR.sub("", k)
+        if safe == k or k in out:
+            continue
+        base, n = safe or "ref", 1
+        while safe in taken or not safe:
+            n += 1
+            safe = f"{base}{n}"
+        taken.add(safe)
+        out[k] = safe
+    return out
+
+
+def _with_keys(text: str, keys: dict[str, str], bib: bool) -> str:
+    for old, new in keys.items():
+        if bib:
+            text = _BIB_KEY.sub(lambda m: m.group(1) + (new if m.group(2) == old else m.group(2))
+                                + m.group(3), text)
+        else:
+            text = re.sub(r"@" + re.escape(old) + r"(?=[\s\],;}]|$)", "@" + new, text)
+    return text
+
+
+def _pandoc_ready(src: Path, bib_path: Path | None) -> tuple[Path, Path | None, list[Path]]:
+    """The source and bibliography as pandoc should see them, plus the scratch files to remove.
+
+    Untouched unless a key needs repair; then both files are copied beside the originals
+    (so relative figure paths still resolve) with the key rewritten in the bib entry AND in
+    every citation of it. The files on disk keep the key exactly as Zotero wrote it."""
+    if bib_path is None or not Path(bib_path).exists():
+        return src, bib_path, []
+    bib_text = Path(bib_path).read_text(encoding="utf-8", errors="replace")
+    keys = _pandoc_safe_keys(bib_text)
+    if not keys:
+        return src, bib_path, []
+    print(f"  [note] citekeys pandoc cannot read, renamed for this render: "
+          + ", ".join(f"{k} → {v}" for k, v in keys.items()))
+    bib2 = Path(bib_path).with_name(f".{Path(bib_path).stem}.pandoc.bib")
+    bib2.write_text(_with_keys(bib_text, keys, bib=True), encoding="utf-8")
+    scratch = [bib2]
+    if src.suffix.lower() == ".md":
+        src2 = src.with_name(f".{src.stem}.pandoc.md")
+        src2.write_text(_with_keys(src.read_text(encoding="utf-8"), keys, bib=False),
+                        encoding="utf-8")
+        scratch.append(src2)
+        src = src2
+    return src, bib2, scratch
+
+
 def check_pandoc() -> bool:
     try:
         subprocess.run(["pandoc", "--version"], capture_output=True, check=True)
@@ -126,6 +188,7 @@ def pandoc_convert(src: Path, dst: Path, bib_path: Path | None = None,
         print("  [note] pandoc not found — skipping .docx (md written). "
               "Install pandoc to get .docx output.")
         return False
+    src, bib_path, scratch = _pandoc_ready(src, bib_path)
     cmd = _pandoc_cmd(src, dst, bib_path, resource_path, suppress_bibliography,
                       reference_doc)
     try:
@@ -138,6 +201,9 @@ def pandoc_convert(src: Path, dst: Path, bib_path: Path | None = None,
     except subprocess.CalledProcessError as e:
         print(f"  [warn] pandoc failed: {e.stderr.decode()[:200]}")
         return False
+    finally:
+        for p in scratch:
+            p.unlink(missing_ok=True)
 
 
 def to_docx(
