@@ -523,13 +523,25 @@ def index_paper(collection, brain, citekey: str, text: str) -> int:
         docs.append(chunk_text)
         metas.append({"citekey": citekey, "page": page_num, "chunk_idx": j})
         embeds.append(emb)
-    if ids:
-        collection.add(ids=ids, documents=docs, metadatas=metas, embeddings=embeds)
+    # In slices: Chroma refuses an add over its max batch size (5461 here), and a whole book
+    # crosses it — backwardTime's 10,419-page encyclopedia was 30,188 chunks, refused only
+    # after forty minutes of embedding them.
+    step = _max_batch(collection)
+    for i in range(0, len(ids), step):
+        collection.add(ids=ids[i:i + step], documents=docs[i:i + step],
+                       metadatas=metas[i:i + step], embeddings=embeds[i:i + step])
     return len(ids)
 
 
+def _max_batch(collection) -> int:
+    try:
+        return max(1, int(collection._client.get_max_batch_size()))
+    except Exception:  # noqa: BLE001 — an older or wrapped client: stay under the known limit
+        return 5000
+
+
 def _paper_chunk_count(collection, citekey: str) -> int:
-    r = collection.get(where={"citekey": citekey}, include=[], limit=9999)
+    r = collection.get(where={"citekey": citekey}, include=[])
     return len(r["ids"])
 
 

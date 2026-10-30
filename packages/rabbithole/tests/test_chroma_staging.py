@@ -419,3 +419,21 @@ if __name__ == "__main__":
                 mp.undo()
     print(f"\n{len(fns) - failures}/{len(fns)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+def test_a_source_larger_than_one_chroma_batch_is_indexed_in_slices(tmp_path, monkeypatch):
+    """backwardTime's encyclopedia came to 30,188 chunks; Chroma refuses an add over its max
+    batch size, so the report died after embedding them all."""
+    col = chromadb.PersistentClient(path=str(tmp_path / "db")).get_or_create_collection("papers")
+    monkeypatch.setattr(chroma, "_max_batch", lambda c: 7)
+
+    class _Brain:
+        def embed_batch(self, texts):
+            return [[float(len(t)), 1.0] for t in texts]
+
+    text = "".join(f"[p.{i}]" + "x" * 300 for i in range(1, 24))
+    assert chroma.index_paper(col, _Brain(), "big2009", text) == 23
+    assert chroma._paper_chunk_count(col, "big2009") == 23
+    assert chroma._max_batch(col) == 7
+    monkeypatch.undo()
+    assert chroma._max_batch(col) > 1000                      # the client's real limit
