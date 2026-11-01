@@ -122,3 +122,18 @@ def test_no_brief_seeds_nothing(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_the_anchor_lists_the_families_not_the_briefs_title():
+    """DigiPros' brief opens with a title line; as the anchor it would have filtered the
+    methods search on "DigiPros — Methods scope for a second literature review"."""
+    brief = ("# DigiPros — Methods scope for a second literature review (cycle 261101)\n\n"
+             "*Written during `ramus init`.*\n\n"
+             "## M1 — Sequence dissimilarity for event/state sequences\n- used in A1\n"
+             "## M2 — Clustering sequences and choosing the number of clusters\n"
+             "## Judged already covered (no new review needed)\n- Abbott 1990\n")
+    assert planner._scope_anchor(brief) == (
+        "the methodology of any of: Sequence dissimilarity for event/state sequences; "
+        "Clustering sequences and choosing the number of clusters")
+    assert planner._scope_anchor("Optimal matching and sequence distance measures\nmore") \
+        == "Optimal matching and sequence distance measures"

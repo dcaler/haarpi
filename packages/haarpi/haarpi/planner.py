@@ -2328,6 +2328,30 @@ _OPENING: dict[str, tuple[str, str, str]] = {
 }
 
 
+def _scope_anchor(scope: str) -> str:
+    """The methods review's domain filter: the FAMILIES the scope brief names.
+
+    A brief is written as a markdown document, one `##` heading per family, so its first line
+    is the document's title. Taken as the anchor, that filtered DigiPros' methods search on
+    "DigiPros — Methods scope for a second literature review". A source about any one family
+    belongs, so the anchor lists them all; a section saying what is already covered is not a
+    family to search. A brief with no headings keeps its first line of prose.
+    """
+    families = []
+    for line in scope.splitlines():
+        mt = re.match(r"#{2,}\s+(.*)", line.strip())
+        if not mt:
+            continue
+        name = re.sub(r"^[A-Z]?\d+[.)]?\s*[—–:-]\s*", "", mt.group(1)).strip()
+        if name and not re.search(r"\bcovered\b|not needed|out of scope", name, re.I):
+            families.append(name)
+    if families:
+        return "the methodology of any of: " + "; ".join(families)
+    prose = [ln.strip() for ln in scope.splitlines()
+             if ln.strip() and not ln.lstrip().startswith(("#", "*", "_"))]
+    return prose[0][:300] if prose else ""
+
+
 def _seed_methods_config(root: Path, m: project.Manifest) -> None:
     """Give the methods review a config, from the design session's scope brief.
 
@@ -2352,7 +2376,7 @@ def _seed_methods_config(root: Path, m: project.Manifest) -> None:
             "procedural methodology literature behind the analytical approach — how to compute "
             "and defend the choices it makes, and what the standing critiques of them are — so "
             "that each can be justified at review.\n\n" + scope),
-        domain_anchor=scope.splitlines()[0][:300] if scope else "",
+        domain_anchor=_scope_anchor(scope),
         exclude_topics=(f"{m.brief[:200]}; substantive applications carrying no "
                         f"methodological contribution"),
         target_min=20, target_max=25,
