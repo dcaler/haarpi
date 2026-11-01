@@ -642,6 +642,10 @@ a{color:#2563eb}
 .tip{max-width:320px;font:13px/1.4 system-ui,sans-serif;white-space:normal}
 .tip b{display:block}
 div.vis-tooltip{padding:6px 8px;border-radius:4px;background:#fff;border:1px solid var(--rule);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+/* embedded in the review page: the panel goes under the map, so the map keeps the width */
+body.embedded #wrap{flex-direction:column}
+body.embedded #net{order:1;flex:1 1 auto;height:auto;min-height:0}
+body.embedded #side{order:2;width:auto;min-width:0;height:30%;flex:none;border-right:0;border-top:1px solid var(--rule)}
 @media (max-width:700px){#wrap{flex-direction:column}#side{width:auto;min-width:0;height:38%;flex:none;border-right:0;border-bottom:1px solid var(--rule)}#net{flex:none;height:62%}}
 </style></head><body>
 <div id="wrap">
@@ -665,6 +669,7 @@ div.vis-tooltip{padding:6px 8px;border-radius:4px;background:#fff;border:1px sol
 <script>__VIS__</script>
 <script>
 const D = __DATA__;
+if (window.parent !== window) document.body.classList.add("embedded");
 const el = (t, a, ...kids) => { const e = document.createElement(t);
   Object.entries(a || {}).forEach(([k, v]) => k === "text" ? e.textContent = v : e.setAttribute(k, v));
   kids.forEach(k => k && e.appendChild(typeof k === "string" ? document.createTextNode(k) : k)); return e; };

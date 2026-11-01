@@ -200,7 +200,7 @@ textarea,input[type=text]{width:100%;font:inherit;font-size:.9em;background:var(
 blockquote{margin:4px 0;padding:2px 10px;border-left:3px solid var(--line);color:var(--mut);font-size:.9em}
 .pill{display:inline-block;font-size:.78em;border-radius:10px;padding:0 7px;border:1px solid var(--line)}
 .pill.ok{color:var(--ok);border-color:var(--ok)} .pill.warn{color:var(--warn);border-color:var(--warn)} .pill.no{color:var(--no);border-color:var(--no)}
-iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:6px;background:#fff}
+iframe{width:100%;height:820px;border:1px solid var(--line);border-radius:6px;background:#fff}
 #status{font-size:.9em}
 </style></head><body><main>
 <header><h1 id="ttl"></h1><span id="status"></span>
