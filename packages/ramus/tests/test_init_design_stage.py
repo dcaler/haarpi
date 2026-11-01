@@ -62,7 +62,13 @@ def test_render_prereg_makes_a_gate_ready_docx(tmp_path):
         "## Analytical approach\n\nTransfer entropy over the chain.\n")
     doc = rinit.render_prereg(design, Config(), "demo", "260804")
     assert doc is not None and doc.is_file()
-    assert doc.name == "260804_demo_prereg_ra.docx"     # {cycle}_{short}_prereg_{ra}
+    assert doc.name == "260804_demo_prereg_ra.docx"     # {cycle}_{short}_{rung}_{ra}
+    scope = rinit.render_prereg(design, Config(), "demo", "260804", rung="scope")
+    assert scope.name == "260804_demo_scope_ra.docx"
+    from haarpi import planner
+    from pathlib import Path as _P
+    assert planner._deliverable_of(_P(scope.name), "demo", "design") == "scope"
+    assert planner._deliverable_of(_P(doc.name), "demo", "design") == ""
 
     # haarpi parses it as design-stage markup (infix prereg), not a release
     from haarpi import naming
@@ -80,3 +86,41 @@ def test_the_command_line_gives_init_every_option_it_reads(tmp_path, monkeypatch
     monkeypatch.setattr(rinit, "load_config", lambda: Config())
     assert cli.main(["init", "-C", str(tmp_path), "--no-launch"]) == 0
     assert (tmp_path / "design" / "ramus.yaml").is_file()
+
+
+def test_init_renders_the_scope_rung_on_exit(tmp_path, monkeypatch):
+    """init renders a SCOPE: rendered as `prereg`, the gate read DigiPros' framework as the
+    finished preregistration and held it behind a methods review only a scope mint starts."""
+    import yaml
+    (tmp_path / "haarpi.yaml").write_text(yaml.safe_dump({"name": "D", "short_title": "Dp"}))
+    monkeypatch.setattr(rinit, "load_config", lambda: Config())
+    monkeypatch.setattr(rinit.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(rinit, "launch_session", lambda *a, **k: 0)
+    seen = {}
+    monkeypatch.setattr(rinit, "render_prereg",
+                        lambda d, c, short, cycle, rung="prereg": seen.update(
+                            short=short, rung=rung))
+    assert rinit.run_init(_args(tmp_path, no_launch=False)) == 0
+    assert seen == {"short": "Dp", "rung": "scope"}       # the manifest's short title, too
+
+
+def test_design_renders_the_prereg_on_exit(tmp_path, monkeypatch):
+    import yaml
+    from ramus import design as rdesign
+    (tmp_path / "haarpi.yaml").write_text(yaml.safe_dump({"name": "D", "short_title": "Dp"}))
+    docs = tmp_path / "design" / "designdocs"
+    docs.mkdir(parents=True)
+    (docs / "EXPERIMENTS.md").write_text("# bound\n")
+    (tmp_path / "design" / "ramus.yaml").write_text("cycle: '261101'\n")
+    monkeypatch.setattr(rdesign, "load_config", lambda: Config())
+    monkeypatch.setattr(rdesign.hproject, "methods_review_pending", lambda r, m: False)
+    monkeypatch.setattr(rdesign.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(rdesign.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0))
+    seen = {}
+    monkeypatch.setattr(rinit, "render_prereg",
+                        lambda d, c, short, cycle, rung="prereg": seen.update(
+                            short=short, cycle=cycle, rung=rung))
+    assert rdesign.run_design(types.SimpleNamespace(dir=str(tmp_path), no_launch=False,
+                                                    model="")) == 0
+    assert seen == {"short": "Dp", "cycle": "261101", "rung": "prereg"}

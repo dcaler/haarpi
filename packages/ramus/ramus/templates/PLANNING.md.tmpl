@@ -97,6 +97,8 @@ Self-audit the three non-negotiables (don't wait for the user to catch them):
 Then:
 - `EXPERIMENTS.md` states the questions + analytical approach + the data-infrastructure the
   handoff requires. (No executable `experiments.yaml` here — that's `rayleigh plan`, after raster.)
-- Tell the user: **review the design, then `haarpi next` to commit it** — that mints the
-  preregistration and hands off to raster to build the data infrastructure for the approach.
-  (`init` renders the prereg `.docx` for that review when the session ends.)
+- Tell the user the session is done and they can exit. **Never ask them to review a `.md`.**
+  When the session ends, `init` renders the framework as the **scope** `.docx`; that docx is
+  what they review (or leave clean, having shaped it with you here), and `haarpi next` then
+  mints the scope and queues the methods review METHODS_SCOPE.md asks for. The
+  preregistration itself comes later, from `ramus design`, once that review is in.

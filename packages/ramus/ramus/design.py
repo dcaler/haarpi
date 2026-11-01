@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import date
 from pathlib import Path
 
 from haarpi import project as hproject
@@ -44,7 +45,8 @@ DESIGN_PROMPT = (
     "settle something, say so EXPLICITLY, say what would, and we decide together — do not "
     "leave it implicit. "
     "Then write the bound design back into design/designdocs/EXPERIMENTS.md, replacing the "
-    "provisional language rather than annotating it, and re-render the prereg. "
+    "provisional language rather than annotating it; the prereg docx is rendered from it "
+    "when this session ends, so never ask me to review a markdown file. "
     "Three hard rules, unchanged from init: (1) cite what each decision rests on; (2) SURFACE "
     "EVERY SCOPE/COMPUTE DECISION for me to confirm — never set one silently; (3) YOU DESIGN "
     "AND SPECIFY ONLY — building the code is raster's job, running the experiments is "
@@ -98,4 +100,26 @@ def run_design(args) -> int:
     use_model = model if model and model.lower() not in ("claude", "default") else ""
     cmd = ["claude"] + (["--model", use_model] if use_model else []) + [DESIGN_PROMPT]
     log(f"launching the binding session ({use_model or 'default'}) in {root} …")
-    return subprocess.run(cmd, cwd=str(root)).returncode
+    rc = subprocess.run(cmd, cwd=str(root)).returncode
+    if rc == 0:
+        # The bound design is the preregistration. Nothing rendered it before: the prompt told
+        # the session to "re-render the prereg", and `haarpi next` then had no docx to mint.
+        from ramus.init import render_prereg
+        design = designdocs.parent
+        cycle = str((_ramus_yaml(design).get("cycle")) or date.today().strftime("%y%m%d"))
+        doc = render_prereg(design, cfg, m.short_title, cycle, rung="prereg")
+        if doc is not None:
+            log(f"rendered the preregistration for review: {doc.relative_to(root)}")
+            log("review it in the docx (or leave it clean), then `haarpi next` mints the "
+                "design and hands off to raster.")
+        else:
+            log("could not render the prereg (pandoc missing?) — render it before `haarpi next`.")
+    return rc
+
+
+def _ramus_yaml(design: Path) -> dict:
+    try:
+        import yaml
+        return yaml.safe_load((design / "ramus.yaml").read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return {}

@@ -150,12 +150,16 @@ PRIOR_SOURCES = [
 # every one of them, stalling `init` for many seconds. os.walk lets us prune them by name.
 
 
-def render_prereg(design_dir: Path, cfg, short_title: str, cycle: str) -> Path | None:
-    """Render the human-facing design doc (designdocs/EXPERIMENTS.md) to the prereg docx the
-    gate mints. Named on the revision chain so `haarpi next` recognises it as design-stage
-    markup: `{cycle}_{short}_prereg_{ra}.docx` in design/ (infix `prereg`). Track-changes on for
-    the OPTIONAL margin review — a clean doc mints in one `haarpi next`. Returns the docx path,
-    or None if the source or pandoc is unavailable."""
+def render_prereg(design_dir: Path, cfg, short_title: str, cycle: str,
+                  rung: str = "prereg") -> Path | None:
+    """Render the human-facing design doc (designdocs/EXPERIMENTS.md) to the docx the gate
+    mints. Named on the revision chain so `haarpi next` recognises it as design-stage markup:
+    `{cycle}_{short}_{rung}_{ra}.docx` in design/. The RUNG IS IN THE NAME, and it matters:
+    `ramus init` renders `scope` (minting it queues the methods search) and `ramus design`
+    renders `prereg` (the final rung). init once rendered `prereg`, which the gate read as the
+    finished preregistration — held forever behind a methods review that only a scope mint
+    could start. Track-changes on for the OPTIONAL margin review — a clean doc mints in one
+    `haarpi next`. Returns the docx path, or None if the source or pandoc is unavailable."""
     src = design_dir / "designdocs" / "EXPERIMENTS.md"
     if not src.is_file():
         return None
@@ -165,7 +169,7 @@ def render_prereg(design_dir: Path, cfg, short_title: str, cycle: str) -> Path |
         return None
     if not hrender.check_pandoc():
         return None
-    dst = design_dir / f"{cycle}_{short_title}_prereg_{cfg.tool_initials}.docx"
+    dst = design_dir / f"{cycle}_{short_title}_{rung}_{cfg.tool_initials}.docx"
     if not hrender.pandoc_convert(src, dst):
         return None
     hrender.enable_track_changes(dst)
@@ -288,14 +292,18 @@ def run_init(args) -> int:
     interactive = not getattr(args, "no_launch", False) and shutil.which("claude") is not None
     rc = launch_session(root, getattr(args, "no_launch", False), model=cfg.design_model)
     if interactive and rc == 0:
-        # The design doc is now authored. Render it to the prereg docx the gate mints — review
-        # it, then `haarpi next` commits the preregistration and hands off to raster.
-        doc = render_prereg(design, cfg, name, cycle)
+        # The framework is now authored. Render it as the SCOPE rung: minting it (clean, or
+        # after your margin review) queues the methods search METHODS_SCOPE.md asks for; the
+        # prereg comes later, from `ramus design`.
+        from haarpi import figure as hfigure
+        doc = render_prereg(design, cfg, hfigure.project_short_title(root, slugify(name)),
+                            cycle, rung="scope")
         if doc is not None:
-            print(f"\n  Rendered the preregistration for review: {doc.relative_to(root)}")
-            print("  Review it, then `haarpi next` to commit the design → hands off to raster.")
+            print(f"\n  Rendered the design scope for review: {doc.relative_to(root)}")
+            print("  Review it in the docx (or leave it clean), then `haarpi next` mints the "
+                  "scope and queues the methods review.")
         else:
-            print("\n  (Render the prereg for review once the design doc is ready.)")
+            print("\n  (Render the scope for review once the design doc is ready.)")
         # If the session authored a framework schematic (Graphviz DOT), render + chain it onto the
         # project's figure pool — a conceptual figure both the paper and the deck will want.
         from haarpi import figure as hfigure

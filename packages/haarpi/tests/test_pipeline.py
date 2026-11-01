@@ -417,9 +417,10 @@ def test_reordered_ladder_puts_design_before_build(proj):
     assert (proj / "design" / "output").is_dir()          # own workspace, scaffolded
 
 
-def test_dirty_prereg_reopens_the_design_session(proj, servers):
-    """A prereg annotation that isn't clean re-opens the attended design session (rayleigh
-    re-authors experiments.yaml + the prereg), mirroring experiments' review_session."""
+def test_dirty_prereg_reopens_the_binding_session(proj, servers):
+    """A prereg annotation that isn't clean re-opens the session that WROTE the prereg —
+    `ramus design` — not `ramus init`, which renders a scope and would send the design back
+    to the start of its ladder."""
     tr, ol = servers
     ol.reply = json.dumps({"tier": "revise", "assessment": "tighten E2's metric"})
     m = project.load_manifest(proj)
@@ -429,11 +430,11 @@ def test_dirty_prereg_reopens_the_design_session(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     new = tr.tasks[before:]
-    assert new[0]["title"].startswith("ramus design_session")
+    assert new[0]["title"].startswith("ramus design_bind")
     # Attended: yours to run, and it carries the verb rather than making you
     # retype it. What keeps a runner off it is the RESOURCE — neither the human
     # nor the Claude resource has one attached.
-    assert new[0]["command"] == "haarpi ramus init"
+    assert new[0]["command"] == "haarpi ramus design"
     assert sorted(new[0]["resource_ids"]) == [1, 4]                         # attended session, yours
 
 
@@ -652,3 +653,14 @@ def test_a_clean_scope_mints_and_queues_the_methods_search(proj, servers):
     assert planner.run_next(proj) == 0
     assert tr.tasks[before:] == []
     assert not (m.output_dir(proj, "design") / "260710_myproj_prereg.docx").exists()
+
+
+def test_a_dirty_scope_reopens_the_framework_session(proj, servers):
+    tr, ol = servers
+    ol.reply = json.dumps({"tier": "revise", "assessment": "RQ2 is too broad"})
+    m = project.load_manifest(proj)
+    _make_markup(m.output_dir(proj, "design") / "260710_myproj_scope_ra_DCR.docx",
+                 resolved=False)
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    assert tr.tasks[before]["command"] == "haarpi ramus init"

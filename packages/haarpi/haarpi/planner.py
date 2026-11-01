@@ -207,7 +207,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                             resource="human", attended=True),
         "design_session": Step("haarpi ramus init", 1.0,
                                "Re-open the design session to address the annotations and "
-                               "re-render the prereg docx. The EXECUTABLE experiments.yaml is "
+                               "re-render the scope docx. The EXECUTABLE experiments.yaml is "
                                "not written here — `rayleigh plan` authors it in the "
                                "experiments stage, against the code raster built.",
                                resource="human", attended=True),
@@ -397,6 +397,11 @@ PAPER_DELIVERABLE_TIERS: dict[str, dict[str, list[str]]] = {
     },
 }
 PAPER_DELIVERABLE_TIERS["venue"] = PAPER_DELIVERABLE_TIERS["outline"]
+
+# The design stage's FINAL rung re-opens the session that wrote it. STAGE_TIERS["design"] sends
+# rework to `ramus init`, which is right for the scope rung and wrong here: init renders a SCOPE,
+# so an annotated prereg would have sent the design back to the start of its ladder.
+PREREG_TIERS: dict[str, list[str]] = {"revise": ["design_bind"]}
 
 # The skeleton is headings only, so every structural ask is answered by re-running phase
 # one against the annotations — cheap, and the whole reason the rung exists. Without an
@@ -2732,6 +2737,8 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
 
     # unresolved asks -> plan + queue rework
     dtiers = PAPER_DELIVERABLE_TIERS.get(deliverable) if deliverable else None
+    if stage == "design" and not deliverable:
+        dtiers = PREREG_TIERS
     built = None
     disputes: list[dict] = []
     if stage in LITERATURE_STAGES:
