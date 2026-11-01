@@ -14,6 +14,8 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="open or roll a research cycle and run the design session")
     init.add_argument("-C", "--dir", default=".", help="project directory (default: cwd)")
+    init.add_argument("--name", help="project name (default: derived from the working-dir name)")
+    init.add_argument("--brief", help="starting research brief (else from the prior spec / project)")
     init.add_argument("--new-cycle", action="store_true",
                       help="archive the current cycle's designdocs/ and open a new datestamp")
     init.add_argument("--no-launch", action="store_true",

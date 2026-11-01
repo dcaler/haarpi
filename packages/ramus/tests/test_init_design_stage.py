@@ -71,3 +71,12 @@ def test_render_prereg_makes_a_gate_ready_docx(tmp_path):
     _ds, chain, _ext = parsed
     assert "prereg" in [c.lower() for c in chain]
     assert not naming.is_release(chain)                 # a draft, awaiting the mint
+
+
+def test_the_command_line_gives_init_every_option_it_reads(tmp_path, monkeypatch):
+    """The split from rayleigh dropped --name/--brief from the parser while run_init kept
+    reading them, so a bare `haarpi ramus init` died on AttributeError before doing anything."""
+    from ramus import cli
+    monkeypatch.setattr(rinit, "load_config", lambda: Config())
+    assert cli.main(["init", "-C", str(tmp_path), "--no-launch"]) == 0
+    assert (tmp_path / "design" / "ramus.yaml").is_file()
