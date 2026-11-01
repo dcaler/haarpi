@@ -220,6 +220,15 @@ than questions. A fact base's opening cycle settles both before it searches: `to
 drafts them as a page, the person accepts or rejects each one, and `topics --apply`
 writes the result into the config.
 
+A fact base is assessed on its **review page**, not by redlining the docx, which is a
+record rather than prose to annotate. `report` writes `{date}_{short}_review_ra.html`
+beside each draft: a short answer to each research question written from its facts
+alone, a verdict per topic (enough / thin / off-target), a box for papers that must be
+there (matched against the corpus as you type), a spot-check of 15 random facts beside
+their quotes and pages, and the contribution map embedded with its own verdicts. Each
+verdict is saved with the comment kind it stands for into `…_review_ra_DCR.json`. The
+docx-comment route still works; `haarpi next` does not read the JSON yet (on trial).
+
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
 
@@ -310,6 +319,7 @@ reporting which sources still lack a PDF.
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
 | `topics` | a fact base's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new fact base's opening cycle |
+| `reviewpage` | (re)builds a fact-base draft's review page from `work/facts.json`, and re-skins its map so the page can embed it; `report` does this itself. `--no-answers` skips the per-question answers (no brain; cached ones still show) |
 | `mindmap` | regenerates the contribution map (an interactive HTML page) beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |

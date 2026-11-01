@@ -593,6 +593,24 @@ def to_html(m: Mindmap, *, title: str = "", corpus_size: int = 0,
 
 
 _CLOSE_SCRIPT = re.compile(r"</(script)", re.I)
+_DATA_LINE = re.compile(r"^const D = (.*);$", re.M)
+
+
+def reskin(html_path: Path) -> bool:
+    """Rebuild an existing map page with the current template, keeping its data — so a map
+    drawn before a template change gains it without a brain run. False if the page is not one
+    of ours (no data line), in which case it is left untouched."""
+    text = Path(html_path).read_text(encoding="utf-8")
+    found = list(_DATA_LINE.finditer(text))   # the last: the inlined library comes first
+    m = found[-1] if found else None
+    t = re.search(r"<title>(.*?)</title>", text, re.S)
+    if not m:
+        return False
+    vis_js = _CLOSE_SCRIPT.sub(r"<\\/\1", _VIS_JS.read_text(encoding="utf-8"))
+    page = _PAGE.replace("__TITLE__", t.group(1) if t else "Contribution map")
+    page = page.replace("__VIS__", vis_js).replace("__DATA__", m.group(1))
+    Path(html_path).write_text(page, encoding="utf-8")
+    return True
 
 
 def _html_escape(s: str) -> str:
@@ -743,8 +761,22 @@ function show(id) {
       ul.appendChild(li); });
     d.appendChild(ul); }
   if (p.zotero) d.appendChild(el("a", {href: p.zotero, text: "Open in Zotero"}));
+  // Embedded in the litreview's review page: mark the source there (the page owns the marks).
+  if (EMBEDDED) { const box = el("div", {style: "margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"});
+    [["false_friend", "Doesn't belong"], ["wrong_topic", "Wrong topic"]].forEach(([v, t]) => {
+      const on = MARKS[p.id] && MARKS[p.id].v === v;
+      const b = el("button", {text: (on ? "✓ " : "") + t, style: "font:inherit;font-size:12px;padding:2px 8px;border-radius:5px;cursor:pointer;" +
+        "border:1px solid " + (on ? "#c62828" : "#cbd5e1") + ";background:" + (on ? "#c62828" : "#fff") + ";color:" + (on ? "#fff" : "#1e293b")});
+      b.onclick = () => parent.postMessage({type: "haarpi-map-verdict", id: p.id, v, label: p.label,
+                                            topic: D.slices[p.slice].name}, "*");
+      box.appendChild(b); });
+    d.appendChild(box); }
 }
-net.on("click", e => show(e.nodes[0]));
+const EMBEDDED = window.parent !== window;
+let MARKS = {}, SHOWN = null;
+window.addEventListener("message", e => { const m = e.data || {};
+  if (m.type === "haarpi-map-state") { MARKS = m.marks || {}; if (SHOWN) show(SHOWN); } });
+net.on("click", e => { SHOWN = e.nodes[0] || null; show(SHOWN); });
 document.getElementById("q").oninput = e => {
   const q = e.target.value.trim().toLowerCase(); if (q.length < 2) { net.unselectAll(); return; }
   const hits = D.papers.filter(p => p.label.toLowerCase().includes(q)).map(p => p.id);

@@ -209,6 +209,15 @@ def _run(argv: list[str] | None = None) -> int:
                     help="override the brain backend for this run")
     _review_arg(mm)
 
+    rp = sub.add_parser("reviewpage",
+                        help="(re)build a fact-base draft's review page: coverage verdicts, "
+                             "known papers, a fact spot-check and the map, saved as _DCR.json")
+    rp.add_argument("--no-answers", action="store_true",
+                    help="skip the per-question answers (no brain); cached ones are still shown")
+    rp.add_argument("--brain", choices=["ollama", "claude"], default=None,
+                    help="override the brain backend for this run")
+    _review_arg(rp)
+
     tp = sub.add_parser("topics",
                         help="draft a fact base's research questions and topics as a review page; "
                              "--apply adopts the reviewer's saved answers into the config")
@@ -366,6 +375,13 @@ def _run(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=False)          # needs the brain (Ollama); no pandoc
         from . import mindmap
         return mindmap.run(args.dir, brain_override=args.brain)
+
+    if args.command == "reviewpage":
+        if not args.no_answers:
+            _check_env(need_pandoc=False)      # the answers need the brain
+        from . import review_page
+        return review_page.run(args.dir, brain_override=args.brain,
+                               answers=not args.no_answers)
 
     if args.command == "audit":
         _check_env(need_pandoc=False)          # brain + Zotero; no pandoc

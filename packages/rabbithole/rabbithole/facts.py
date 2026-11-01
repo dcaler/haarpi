@@ -1074,6 +1074,14 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     out_docx = paths.output / f"{stem}.docx"
     ok = render.pandoc_convert(out_md, out_docx, resource_path=paths.output,
                                reference_doc=_paged_reference(paths))
+    try:                             # the page the reviewer assesses the draft on
+        from . import review_page
+        page = review_page.write(paths, answers=review_page.answer_questions(brain, paths))
+        if page:
+            print(f"  {runlog.stamp()}review page: {page.name}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] review page failed ({e}); the draft ships without it.",
+              file=sys.stderr)
     all_facts = [f for fs in facts.values() for f in fs]
     print("\n" + "=" * 60)
     print(f" report (fact base) complete  [{runlog.fmt_dt(time.time() - t0)}]")
