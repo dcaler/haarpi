@@ -195,6 +195,7 @@ h3{font-size:1em;margin:14px 0 4px}
 .row .body{flex:1 1 360px;min-width:0}
 .btns{display:flex;gap:4px;flex-wrap:wrap;flex:none;align-items:center}
 .need{font-size:.78em;color:var(--mut);margin-left:6px}
+details{font-size:.9em;margin-top:3px} details summary{cursor:pointer;color:var(--mut)}
 ul.claims{margin:4px 0 2px;padding-left:1.3em} ul.claims li{margin:2px 0}
 textarea,input[type=text]{width:100%;font:inherit;font-size:.9em;background:var(--in);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;margin-top:4px}
 blockquote{margin:4px 0;padding:2px 10px;border-left:3px solid var(--line);color:var(--mut);font-size:.9em}
@@ -277,9 +278,11 @@ const T = Object.fromEntries(D.topics.map(t => [t.n, t]));
 function topicRow(t) {
   const claims = el("ul", {class: "claims"});
   t.themes.forEach(th => claims.append(el("li", {}, el("b", {}, th.name), el("span", {class: "mut"}, ` · ${th.facts} facts, ${th.sources} sources`))));
+  // collapsed by default: the counts are the summary line, the claims open beneath it
+  const det = el("details", {}, el("summary", {}, `${t.central} central and ${t.useful} useful facts from ${t.sources} sources · ` +
+    `${t.themes.length} theme${t.themes.length === 1 ? "" : "s"}`), t.covers ? el("div", {class: "mut"}, "Covers: " + t.covers) : null, claims);
   const r = el("div", {class: "row"}, el("div", {class: "body"}, el("b", {}, `T${t.n}. ${t.name}`),
-    el("div", {class: "mut"}, `${t.central} central and ${t.useful} useful facts from ${t.sources} sources` + (t.covers ? ` · covers: ${t.covers}` : "")),
-    claims, note(S.t, t.n, "What is thin or off-target (optional)")), picker("topic", S.t, t.n));
+    det, note(S.t, t.n, "What is thin or off-target (optional)")), picker("topic", S.t, t.n));
   rowsByKey["t" + t.n] = r; return r;
 }
 const qs = document.getElementById("qs");
