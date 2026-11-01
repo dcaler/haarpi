@@ -4,8 +4,15 @@ The preregistration half of the experiment workflow, and the stage before raster
 
 From the minted literature review and the project brief, `ramus init` co-designs the research
 questions and the analytical approach, states what would confirm or disconfirm each, and
-specifies the **data infrastructure** raster must then build. It renders a `prereg` docx; the
-haarpi gate mints it, and that mint is the handoff.
+specifies the **data infrastructure** raster must then build. It writes `METHODS_SCOPE.md`,
+the methodological families the approach must defend, and renders the framework as a
+**`scope`** docx on exit. Minting the scope queues the methods review. Once that is released,
+`ramus design` binds every method to its sources and renders the **`prereg`** docx on exit;
+the haarpi gate mints it, and that mint is the handoff to raster.
+
+Each session's docx is what you review: mark it up, or leave it clean if you shaped it in
+the session. An annotated docx re-opens the session that rendered it. Neither session asks you
+to review its markdown.
 
 It authors the **framework only**. The executable `experiments.yaml` is written later by
 `rayleigh plan`, against code raster has actually built — designing executables against
@@ -22,9 +29,11 @@ his reputation rests on measuring nitrogen two ways, finding a 0.5% discrepancy,
 to write it off — which is interpretation, and there is nothing here to interpret yet.
 
 ```
-ramus init                 # open or continue a cycle, run the design session
+ramus init                 # open or continue a cycle, run the framework session (→ scope docx)
 ramus init --new-cycle     # archive this cycle's designdocs/ and open a new datestamp
 ramus init --no-launch     # scaffold and write the prompt without launching
+ramus init --name N --brief B   # override the project name / starting brief
+ramus design               # after the methods review: bind the methods (→ prereg docx)
 ```
 
 Or through the umbrella: `haarpi ramus init`.
