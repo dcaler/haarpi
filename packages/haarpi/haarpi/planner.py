@@ -494,6 +494,11 @@ def _queue_next_rung(root: Path, m, client, tr_cfg: dict, deliverable: str,
     The design stage climbs rungs too, and has no fork: scope -> methods review -> prereg.
     """
     steps = _LADDERS[stage][deliverable]
+    if stage == "design" and deliverable == "scope":
+        # The chain this queues opens with `rabbithole gather methods`, which needs a methods
+        # config to read. Seeding lived only where the methods review opened as a STAGE, which
+        # it no longer is, so DigiPros' first gather died on "No litrev.yaml in methodsReview".
+        _seed_methods_config(root, m)
     if deliverable != "venue":
         queued = queue_chain(client, m.trundlr_project_id, stage, steps, tr_cfg,
                              description=f"{deliverable} gate passed: {dst.name}.",

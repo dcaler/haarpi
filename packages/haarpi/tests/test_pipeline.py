@@ -646,6 +646,10 @@ def test_a_clean_scope_mints_and_queues_the_methods_search(proj, servers):
         "haarpi rabbithole build methods",
         "haarpi rabbithole report methods", None, "haarpi next"]
     assert sorted(new[4]["resource_ids"]) == [1]                    # you review the methods review
+    # and the gather has a config to read, seeded from the scope brief
+    from rabbithole import config as rh
+    mcfg = rh.load_project(proj / rh.REVIEW_KINDS["methods"].dir)
+    assert "Process-level validation" in mcfg.domain_anchor
 
     # the prereg itself is still held until the methods review releases
     _make_markup(m.output_dir(proj, "design") / "260710_myproj_prereg_ra_DCR.docx", resolved=True)
