@@ -174,9 +174,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
     },
     # The DESIGN (preregistration) stage. Its rework is always an attended re-run of the
     # design session — rayleigh re-authors experiments.yaml + the prereg docx addressing the
-    # annotations (mirrors experiments' `review_session`). No `comment` step: re-running the
-    # session ends by re-rendering the prereg for the author to annotate again.
+    # annotations (mirrors experiments' `review_session`). Rework queues no `comment`: re-running
+    # the session ends by re-rendering the prereg for the author to annotate again. The RUNG
+    # chains do (DESIGN_LADDER) — the methods review and the prereg each wait on the author —
+    # and the step they name has to exist, or the first scope mint dies on a KeyError.
     "design": {
+        "comment": Step(None, 0.25, "Review the new draft (the methods review, or the prereg) "
+                        "and annotate it.", resource="human"),
         # The methods search, inside the design stage. Same rabbitHole verbs as a literature
         # review, pointed at the methods review by its name.
         "methods_gather": Step("haarpi rabbithole gather methods", 3.0,
@@ -2576,7 +2580,10 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # prevent — it is what produced one project's [PROVISIONAL] markers and its hand-written
     # "methods addendum". Refuse, and say what is missing; the design is not re-opened and the
     # markup is not consumed, so the same file mints the moment the review releases.
-    if stage == "design" and not check["unresolved"] and project.methods_review_pending(root, m):
+    # The PREREG only (the rung with no word in its chain): the scope rung is what queues the
+    # methods search, so holding it until that search has released waits on itself forever.
+    if stage == "design" and not deliverable and not check["unresolved"] \
+            and project.methods_review_pending(root, m):
         print(f"haarpi next: the design reads clean, but this project's METHODS review has not "
               f"been released yet.\n"
               f"  The prereg binds methodological choices to sources — minting now would fix "

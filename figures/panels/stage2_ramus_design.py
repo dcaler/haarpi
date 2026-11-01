@@ -10,7 +10,7 @@ the search cannot precede it, and the prereg cannot precede the search.
 STAGE = "design"
 COVERS = {"design_session": "session", "design_bind": "bind",
           "methods_gather": "mgather", "methods_collect": "mcollect",
-          "methods_build": "mbuild", "methods_report": "mreport"}
+          "methods_build": "mbuild", "methods_report": "mreport", "comment": "comm"}
 OMITS = {}
 
 ROWS = [

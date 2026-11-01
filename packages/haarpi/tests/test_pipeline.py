@@ -624,3 +624,31 @@ def test_run_queue_registers_and_queues_for_late_trundlr(tmp_path, servers):
     assert planner.run_queue(root) == 0                         # idempotent: nothing doubled
     assert len([t for t in tr.tasks
                 if t.get("project_id") == m.trundlr_project_id]) == 8
+
+
+def test_a_clean_scope_mints_and_queues_the_methods_search(proj, servers):
+    """The methods guard held the SCOPE rung as well as the prereg — but minting scope is what
+    queues the methods search, so the design stage waited on itself (DigiPros, 2026-11-01)."""
+    tr, _ = servers
+    m = project.load_manifest(proj)
+    docs = proj / "design" / "designdocs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / project.METHODS_SCOPE).write_text("Process-level validation of agent-based models\n")
+    assert project.methods_review_pending(proj, m)
+    _make_markup(m.output_dir(proj, "design") / "260710_myproj_scope_ra_DCR.docx", resolved=True)
+
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    new = tr.tasks[before:]
+    assert [t.get("command") for t in new] == [
+        "haarpi rabbithole gather methods", "haarpi rabbithole collect methods",
+        "haarpi rabbithole build methods",
+        "haarpi rabbithole report methods", None, "haarpi next"]
+    assert sorted(new[4]["resource_ids"]) == [1]                    # you review the methods review
+
+    # the prereg itself is still held until the methods review releases
+    _make_markup(m.output_dir(proj, "design") / "260710_myproj_prereg_ra_DCR.docx", resolved=True)
+    before = len(tr.tasks)
+    assert planner.run_next(proj) == 0
+    assert tr.tasks[before:] == []
+    assert not (m.output_dir(proj, "design") / "260710_myproj_prereg.docx").exists()
