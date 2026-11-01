@@ -83,11 +83,63 @@ These facts were grouped together. Each begins with the [@citekey] of its source
 {facts}
 
 Return:
-{{"name": "what THESE facts share that the other themes do not, at most 6 words. Never restate
-           the topic, and never reuse or paraphrase another theme's name",
+{{"name": "{name_rule}",
   "synthesis": ["2-4 bullets. Each says where these sources AGREE, where they are in TENSION,
                  or what GAP they leave for the topic — and cites the [@citekey]s of the
                  facts it rests on. Use ONLY the facts above; add nothing they do not say."]}}"""
+
+
+# A theme is named as the claim its facts support — a stylized fact a reviewer can weigh against
+# the research question at a glance — not as a label for what they are about. 2026-11-01: a
+# label (FirmPathways' "Sequential policy instrument effects") said what to look at, never what was found.
+_NAME_RULE = ("the CLAIM these facts jointly support, as one plain sentence of at most 15 words "
+              "— what the literature holds, not what it is about (\\\"Bringing collection points "
+              "closer to homes cuts sorting errors\\\", not \\\"Proximity of collection points\\\"). "
+              "Never restate the topic, and never repeat another theme's claim")
+
+_RESTATE_PROMPT = """\
+Topic: {item}
+Other themes under this topic, already stated: {taken}
+
+These facts were grouped together. Each begins with the [@citekey] of its source:
+{facts}
+
+Return {{"name": "{name_rule}"}}"""
+
+
+def restate_themes(brain, paths) -> int:
+    """Re-name an existing fact base's themes as claims, in `work/facts.json` only: facts,
+    scores, groupings and synthesis are untouched, and the next `report` names them this way
+    itself. Returns how many were renamed."""
+    fp = paths.work / "facts.json"
+    blob = json.loads(fp.read_text(encoding="utf-8"))
+    text = {d["id"]: (d["citekey"], d["text"]) for d in blob.get("facts", [])}
+    topics = blob.get("topics", [])
+    done: dict[int, list[str]] = {}
+    n = 0
+    for th in blob.get("themes", []):
+        item = th.get("item", 0)
+        topic = topics[item - 1]["name"] if 0 < item <= len(topics) else ""
+        lines = "\n".join(f"- [@{text[i][0]}] {text[i][1]}" for i in th.get("fact_ids", [])
+                          if i in text)
+        taken = "; ".join(done.get(item, [])) or "(none yet)"
+        try:
+            raw = brain.coordinator(_RESTATE_PROMPT.format(item=topic, taken=taken, facts=lines,
+                                                           name_rule=_NAME_RULE),
+                                    _THEME_SYS, think=False, num_ctx=16384)
+            m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+            name = " ".join(str((json.loads(m.group(0)) if m else {}).get("name") or "").split())
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] T{item} '{th.get('name')}': restating failed ({e}); kept",
+                  file=sys.stderr)
+            name = ""
+        if name and not any(_same_name(name, t) for t in done.get(item, [])):
+            th["name"] = name[:160]
+            n += 1
+        done.setdefault(item, []).append(th["name"])
+        print(f"  {runlog.stamp()}T{item}: {th['name']}", flush=True)
+    fp.write_text(json.dumps(blob, indent=2, ensure_ascii=False), encoding="utf-8")
+    return n
 
 
 # ── data ───────────────────────────────────────────────────────────────────────
@@ -554,11 +606,12 @@ def themes_for(brain, item_no: int, item: str, facts: list[Fact],
         name, synthesis = f"Theme {n}", []
         taken = "; ".join(t.name for t in out) or "(none yet)"
         try:
-            raw = brain.coordinator(_THEME_PROMPT.format(item=item, taken=taken, facts=lines),
+            raw = brain.coordinator(_THEME_PROMPT.format(item=item, taken=taken, facts=lines,
+                                                         name_rule=_NAME_RULE),
                                     _THEME_SYS, think=False, num_ctx=16384)
             m = re.search(r"\{.*\}", raw or "", re.DOTALL)
             obj = json.loads(m.group(0)) if m else {}
-            name = " ".join(str(obj.get("name") or name).split())[:80] or name
+            name = " ".join(str(obj.get("name") or name).split())[:160] or name
             if _same_name(name, item) or any(_same_name(name, t.name) for t in out):
                 name = f"{name} ({_distinguisher(fs)})"
             bullets = [" ".join(str(b).split()) for b in (obj.get("synthesis") or [])
@@ -1076,7 +1129,7 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
                                reference_doc=_paged_reference(paths))
     try:                             # the page the reviewer assesses the draft on
         from . import review_page
-        page = review_page.write(paths, answers=review_page.answer_questions(brain, paths))
+        page = review_page.write(paths)
         if page:
             print(f"  {runlog.stamp()}review page: {page.name}", flush=True)
     except Exception as e:  # noqa: BLE001

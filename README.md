@@ -221,12 +221,17 @@ drafts them as a page, the person accepts or rejects each one, and `topics --app
 writes the result into the config.
 
 A fact base is assessed on its **review page**, not by redlining the docx, which is a
-record rather than prose to annotate. `report` writes `{date}_{short}_review_ra.html`
-beside each draft: a short answer to each research question written from its facts
-alone, a verdict per topic (enough / thin / off-target), a box for papers that must be
-there (matched against the corpus as you type), a spot-check of 15 random facts beside
-their quotes and pages, and the contribution map embedded with its own verdicts. Each
-verdict is saved with the comment kind it stands for into `…_review_ra_DCR.json`. The
+record rather than prose to annotate. At this gate the question is whether the topics
+cover the research question, judged against what each one found; whether the facts can
+carry an argument is tested later, by the stages that use them. `report` writes
+`{date}_{short}_review_ra.html` beside each draft: each topic with its counts and its
+themes, each stated as the claim its facts support; a verdict per question (covers it /
+has gaps, the gap described in words) and per topic (enough / thin / off-target); a box
+for papers that must be there, matched against the corpus as you type; a spot-check of
+15 random facts beside their quotes and pages; and the contribution map, embedded, for
+flagging a source. Nothing is assumed: every question and spot-check fact needs a verdict,
+and **Release** is a button pressed, not silence. Release or Hold saves
+`…_review_ra_DCR.json`, each verdict tagged with the comment kind it stands for. The
 docx-comment route still works; `haarpi next` does not read the JSON yet (on trial).
 
 Reference targets are a diagnostic band, never a cap; a review is expected to
@@ -319,7 +324,7 @@ reporting which sources still lack a PDF.
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
 | `topics` | a fact base's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new fact base's opening cycle |
-| `reviewpage` | (re)builds a fact-base draft's review page from `work/facts.json`, and re-skins its map so the page can embed it; `report` does this itself. `--no-answers` skips the per-question answers (no brain; cached ones still show) |
+| `reviewpage` | (re)builds a fact-base draft's review page from `work/facts.json`, and re-skins its map so the page can embed it; `report` does this itself. `--restate-themes` first re-names the themes as claims (brain) |
 | `mindmap` | regenerates the contribution map (an interactive HTML page) beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |

@@ -212,8 +212,8 @@ def _run(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("reviewpage",
                         help="(re)build a fact-base draft's review page: coverage verdicts, "
                              "known papers, a fact spot-check and the map, saved as _DCR.json")
-    rp.add_argument("--no-answers", action="store_true",
-                    help="skip the per-question answers (no brain); cached ones are still shown")
+    rp.add_argument("--restate-themes", action="store_true",
+                    help="first re-name the themes as the claims their facts support (brain)")
     rp.add_argument("--brain", choices=["ollama", "claude"], default=None,
                     help="override the brain backend for this run")
     _review_arg(rp)
@@ -377,11 +377,11 @@ def _run(argv: list[str] | None = None) -> int:
         return mindmap.run(args.dir, brain_override=args.brain)
 
     if args.command == "reviewpage":
-        if not args.no_answers:
-            _check_env(need_pandoc=False)      # the answers need the brain
+        if args.restate_themes:
+            _check_env(need_pandoc=False)      # restating needs the brain
         from . import review_page
         return review_page.run(args.dir, brain_override=args.brain,
-                               answers=not args.no_answers)
+                               restate=args.restate_themes)
 
     if args.command == "audit":
         _check_env(need_pandoc=False)          # brain + Zotero; no pandoc

@@ -61,7 +61,7 @@ def test_topics_carry_counts_themes_and_the_questions_they_serve(tmp_path):
     d = review_page.page_data(_project(tmp_path), "261101_Firm_review_ra")
     t1, t2 = d["topics"]
     assert (t1["central"], t1["useful"], t1["sources"]) == (10, 10, 20)
-    assert t1["themes"][0]["synthesis"] == ["Order matters [@k1]."]
+    assert t1["themes"] == [{"name": "Funding order", "facts": 1, "sources": 1}]   # no bullets
     assert d["questions"][0]["topics"] == [1] and t2["serves"] == []
     assert all("<i>" not in c["title"] for c in d["corpus"])
     assert d["needs"]["topic"]["thin"] == "sources" and d["needs"]["map"]["false_friend"] == "drop"
@@ -71,30 +71,29 @@ def test_every_need_is_a_fact_base_comment_kind():
     from haarpi import comment_kinds
     names = set(comment_kinds.LITREVIEW_FACTS.names)
     used = {n for kind in review_page.NEEDS.values() for n in kind.values() if n}
-    assert used <= names
+    assert used - {"sort"} <= names       # "sort": the note is sorted like a docx comment
 
 
 class _Brain:
-    def __init__(self, reply):
-        self.reply, self.calls = reply, 0
+    def __init__(self, *replies):
+        self.replies, self.prompts = list(replies), []
 
-    def coordinator(self, *a, **k):
-        self.calls += 1
-        return self.reply
+    def coordinator(self, prompt, *a, **k):
+        self.prompts.append(prompt)
+        return self.replies.pop(0)
 
 
-def test_an_answer_citing_outside_its_facts_is_discarded(tmp_path):
+def test_restating_renames_themes_as_claims_in_the_sidecar_only(tmp_path):
     paths = _project(tmp_path)
-    got = review_page.answer_questions(_Brain("Firms sequence grants [@nobody2020]."), paths)
-    assert got["1"]["text"] == "" and "nobody2020" in got["1"]["note"]
-
-
-def test_a_good_answer_is_kept_and_cached_on_its_facts(tmp_path):
-    paths = _project(tmp_path)
-    brain = _Brain("Order matters [@k1]. The facts do not settle debt [@k3].")
-    assert review_page.answer_questions(brain, paths)["1"]["text"].startswith("Order matters")
-    review_page.answer_questions(brain, paths)
-    assert brain.calls == 1
+    blob = json.loads((paths.work / "facts.json").read_text())
+    blob["themes"].append(dict(blob["themes"][0], name="Second"))
+    (paths.work / "facts.json").write_text(json.dumps(blob))
+    brain = _Brain('{"name": "Grants first de-risks firms"}', '{"name": "grants first de-risks firms!"}')
+    assert facts.restate_themes(brain, paths) == 1
+    after = json.loads((paths.work / "facts.json").read_text())
+    assert [t["name"] for t in after["themes"]] == ["Grants first de-risks firms", "Second"]
+    assert after["themes"][0]["synthesis"] == blob["themes"][0]["synthesis"]
+    assert "[@k1] Fact 1." in brain.prompts[0] and "Grants first" in brain.prompts[1]
 
 
 def test_write_names_the_page_after_the_draft_and_embeds_the_map(tmp_path):
