@@ -307,6 +307,19 @@ may still appear in the SI). So in a methods review:
 - the ranker scores whether a source shows how a procedure, or an alternative to it,
   is done or where it fails, and ignores what the source is about.
 
+The report has the same shape. A methods review is not a thematic review: it has
+one section per family, fixed by the scope rather than planned, and each section
+is written in four labelled parts:
+
+1. **The options**: the ways the procedure can be done, and who did it each way.
+2. **Against each**: the critiques, comparisons and failure conditions, cited.
+3. **The choice**: which option the project should use, and why each of the others
+   is not preferred.
+4. **For the SI**: which rejected options are worth running as robustness checks.
+
+A section missing a part goes back for revision. The choice is the review's
+recommendation; `ramus design` binds it in the preregistration.
+
 So a review is a **kind**: a folder, a config stem, and a deliverable infix.
 `litReview/litrev.yaml` mints a `litreview`; `methodsReview/methodsreview.yaml`
 mints a `methodsreview`. The infixes differ because `methods` already belongs to

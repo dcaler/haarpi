@@ -684,7 +684,7 @@ def _pending_corrections(paths) -> list[dict]:
     except Exception:  # noqa: BLE001
         return []
     for plan in reversed(plans):
-        if (plan or {}).get("stage") != "litreview":
+        if (plan or {}).get("stage") != config.kind_of(paths.root).infix:
             continue
         if plan.get("type") not in (None, "plan"):
             continue
@@ -720,7 +720,8 @@ def _planned_sections(paths) -> dict[str, list]:
     except Exception:  # noqa: BLE001
         return {}
     for plan in reversed(plans):
-        if (plan or {}).get("stage") != "litreview" or plan.get("type") not in (None, "plan"):
+        if ((plan or {}).get("stage") != config.kind_of(paths.root).infix
+                or plan.get("type") not in (None, "plan")):
             continue
         out: dict[str, list] = {}
         for sec in (plan.get("sections") or []):

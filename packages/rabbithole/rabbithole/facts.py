@@ -37,7 +37,7 @@ from pathlib import Path
 
 from haarpi import comment_kinds
 
-from . import guards, mindmap, render, runlog
+from . import config, guards, mindmap, render, runlog
 from .models import Candidate
 
 _FACTS_VERSION = 1
@@ -1297,7 +1297,8 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     from .fact_rework import response_lines
     md = build_markdown(cfg, model, base, corpus, citekeys, gc, cover, map_html,
                         response_lines(paths, base))
-    stem = f"{date.today().strftime('%y%m%d')}_{cfg.project_name}_litreview_ra"
+    stem = (f"{date.today().strftime('%y%m%d')}_{cfg.project_name}_"
+            f"{config.kind_of(paths.root).infix}_ra")
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
     out_docx = paths.output / f"{stem}.docx"

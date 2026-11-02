@@ -817,6 +817,98 @@ def _plan_sections(brain: Brain, cfg, compact: dict[str, str]) -> list[Section]:
     return sections
 
 
+# ── 1b. the methods review's shape ───────────────────────────────────────────
+# A methods review is not a thematic review. Its unit is a PROCEDURE the design must defend,
+# and there are usually several ways to do it. The preregistration has to say which way it
+# takes and why, AND why it did not take the others (some of which may still run in the SI as
+# robustness checks). So every section is one family from the scope brief, written in four
+# labelled parts, and the sources are cited for HOW a procedure was done or WHERE it fails,
+# never for what their own studies were about. The prereg session binds the choice; this
+# review makes the case it ratifies or overturns.
+METHODS_PARTS = (
+    ("The options", "the ways this procedure can be done, each with the sources that did it "
+                    "that way and how (the specification, the parameters)"),
+    ("Against each", "the case against each option: the critiques, comparisons, simulation "
+                     "studies and failure conditions, cited, including those against the "
+                     "option most likely to be chosen"),
+    ("The choice", "which option this project should use for the use the scope names, why, and "
+                   "for EACH other option why it is not preferred here"),
+    ("For the SI", "which rejected options are worth running as robustness checks in the "
+                   "supplementary information, and what a difference between them would mean"),
+)
+
+METHODS_SYS = """
+
+THIS IS A METHODS REVIEW. IT OVERRIDES "STRUCTURE" ABOVE.
+- Each section is one PROCEDURE the project's design must defend, never an idea about the
+  project's topic. Cite a source for HOW it carried out the procedure or WHY the procedure
+  fails, never for what its own study was about.
+- Criticism carries as much weight as the procedure itself. There are usually several ways to
+  do it; the section must make the case for one AND against each of the others.
+- Write each section in four parts, in this order, each starting a paragraph with its label in
+  bold followed by a full stop: """ + "; ".join(f"**{h}.** ({d})" for h, d in METHODS_PARTS) + """.
+- Every part cites sources. A part the corpus cannot support says so in one cited sentence
+  naming what is missing, rather than filling the gap from general knowledge."""
+
+_METHODS_DRAFT_PROMPT = """\
+Methods review for: {topic}
+
+You are writing ONE section of the methods review. The full outline, in order:
+{outline}
+
+Write the section marked ▶: "{heading}"
+What the design must defend here: {claim}
+{transition}
+EVIDENCE you may cite — each line begins with the [@citekey] to cite that source by. Cite
+ONLY from this list, using the exact key shown:
+{candidates}
+
+Write the four parts, in order, each opening a paragraph with its bold label:
+{parts}
+A part may run to several paragraphs; only its first paragraph carries the label. Set sources
+against each other: who did it which way, who showed where that fails, who compared them.
+{established}
+Do NOT write the "## " heading — output only the paragraphs of this section."""
+
+
+def methods_sections(cfg) -> list[Section]:
+    """One section per family the scope brief named, from the gather asks it was seeded with
+    ("Family name: what must be defended"). Fixed, not planned: the families ARE the review."""
+    out = []
+    for ask in (getattr(cfg, "gather_topics", None) or []):
+        ask = str(ask).strip()
+        if not ask:
+            continue
+        name, _, defend = ask.partition(":")
+        out.append(Section(heading=name.strip()[:80],
+                           claim=(defend.strip() or name.strip()), ask=ask))
+    return out
+
+
+def methods_parts_guard(text: str) -> list[guards.Finding]:
+    """A methods section missing one of its four parts has not made its case."""
+    out = []
+    for head, what in METHODS_PARTS:
+        if not re.search(rf"\*\*{re.escape(head)}\.?\*\*", text):
+            out.append(guards.Finding(
+                "methods-part", "section",
+                f"Add the part '{head}': a paragraph opening with **{head}.** that gives {what}."))
+    return out
+
+
+def _draft_methods_section(brain: Brain, cfg, sections: list[Section], i: int,
+                           full: dict[str, str], sys_prompt: str, prev_tail: str = "") -> str:
+    sec = sections[i]
+    transition = (f"\nThe previous section ends: \"{prev_tail}\"\n" if prev_tail else "")
+    parts = "\n".join(f"  **{h}.** {d}" for h, d in METHODS_PARTS)
+    return strip_headings(brain.coordinator(
+        _METHODS_DRAFT_PROMPT.format(
+            topic=cfg.topic, outline=_outline(sections, i), heading=sec.heading,
+            claim=sec.claim, transition=transition, parts=parts,
+            candidates=_candidate_block(sec, full), established=_established(sections, i)),
+        sys_prompt, num_ctx=16384))
+
+
 # ── 2. shortlist each section's evidence (embeddings, no LLM) ─────────────────
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -1605,8 +1697,11 @@ def _enforce_paragraph_citations(brain: Brain, narrative: str, digest: str,
 
 def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
                citekeys: dict[int, str], style_profile: str = "",
-               trace: dict | None = None) -> tuple[str, dict[str, str]]:
+               trace: dict | None = None, methods: bool = False) -> tuple[str, dict[str, str]]:
     """Build the narrative section by section, and drive every curated source to a decision.
+
+    `methods`: a methods review: one fixed section per scope family, each in the four parts of
+    METHODS_PARTS (see there), instead of planned thematic sections.
 
     Returns (narrative, rejected) where `rejected` maps citekey -> the reason that source was
     left uncited. An empty ledger with sources still uncited is a defect; it shows up in the
@@ -1632,7 +1727,7 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     self_text = {citekeys[i]: _self_text(n) for i, n in enumerate(notes)
                  if i in citekeys and n}
 
-    sys_prompt = SYNTH_SYS
+    sys_prompt = SYNTH_SYS + (METHODS_SYS if methods else "")
     if style_profile:
         sys_prompt = (sys_prompt.rstrip()
                       + f"\n\nWRITING STYLE\nMatch the following author's voice and "
@@ -1640,7 +1735,11 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
 
     print(f"  {_stamp()}Planning sections from {len(compact)} sources "
           f"(compact digest, ~{sum(map(len, compact.values())) // 4:,} tokens)...", flush=True)
-    sections = _plan_sections(brain, cfg, compact)
+    sections = methods_sections(cfg) if methods else []
+    if methods and not sections:
+        print("  [warn] methods review with no families in gather_topics; planning sections "
+              "instead, still in the methods shape.", flush=True)
+    sections = sections or _plan_sections(brain, cfg, compact)
     if not sections:
         raise SystemExit("  [error] section planning returned no sections; cannot synthesise.")
     for i, s in enumerate(sections, 1):
@@ -1670,12 +1769,17 @@ def synthesize(brain: Brain, corpus: list[Candidate], notes: list[dict], cfg,
     for i, sec in enumerate(sections):
         print(f"\n  {_stamp()}Drafting §{i + 1}/{len(sections)}: {sec.heading}", flush=True)
         try:
-            sec.text = _draft_section(brain, cfg, sections, i, full, sys_prompt, prev_tail)
+            draft = _draft_methods_section if methods else _draft_section
+            sec.text = draft(brain, cfg, sections, i, full, sys_prompt, prev_tail)
         except Exception as e:  # noqa: BLE001
             print(f"  [warn] drafting §{i + 1} failed ({e}); section dropped.", file=sys.stderr)
             continue
+        extra = _attribution_guards(sections, i, terms, self_text)
+        if methods:
+            base_extra = extra
+            extra = lambda t, _b=base_extra: list(_b(t)) + methods_parts_guard(t)  # noqa: E731
         sec.text = _polish_section(brain, cfg, sections, i, full, sys_prompt, corpus_keys,
-                                   extra=_attribution_guards(sections, i, terms, self_text))
+                                   extra=extra)
         prev_tail = _tail_sentence(sec.text)
 
     sections = [s for s in sections if s.text.strip()]
@@ -2408,8 +2512,12 @@ def run(directory: str = ".", brain_override: str | None = None,
             print("  [note] use_style=true but no style_profile.md found; "
                   "run 'rabbitHole style' to train one.")
     trace: dict = {}
+    methods = config.kind_of(paths.root).name == "methods"
+    if methods:
+        print("  methods review: one section per family — the options, the case against each, "
+              "the choice, and what belongs in the SI.")
     narrative, rejected = synthesize(brain, corpus, notes, cfg, citekeys, style_profile,
-                                     trace=trace)
+                                     trace=trace, methods=methods)
     _write_disposition(paths, corpus, citekeys, narrative, rejected)
     # What the synthesis saw and chose, per section and per source. disposition.json says what
     # happened to each source; this says why — and a source that was never shortlisted at all

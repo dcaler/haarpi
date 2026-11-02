@@ -137,7 +137,8 @@ def _draft_reviews(directory: str) -> list[Path]:
         out = config.project_paths(directory).output
     except Exception:  # noqa: BLE001
         return []
-    return [p for p in sorted(out.glob("*_litreview_ra.md"))] if out.is_dir() else []
+    infix = config.kind_of(out.parent).infix
+    return [p for p in sorted(out.glob(f"*_{infix}_ra.md"))] if out.is_dir() else []
 
 
 def _write_gap_config(directory: str, plan: dict, extra_focus: str = "") -> Path:

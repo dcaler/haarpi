@@ -26,6 +26,11 @@ def _paged_reference(paths):
         return None
 
 
+def _title_word(cfg) -> str:
+    return "Methods Review" if (getattr(cfg, "topic", "") or "").startswith("how to carry out") \
+        else "Literature Review"
+
+
 def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
                    corpus, unmatched: list[str], metrics_line: str = "",
                    top_block: str = "") -> str:
@@ -35,7 +40,7 @@ def build_markdown(cfg, brain_backend: str, narrative: str, biblio: str,
     else:
         model_str = brain.coordinator_model
     parts = [
-        f"# Literature Review: {cfg.topic}",
+        f"# {_title_word(cfg)}: {cfg.topic}",
         "",
         f"*Project:* {cfg.project_name}  ",
         f"*Date:* {date.today().isoformat()}  ",
@@ -73,7 +78,10 @@ def write_review(cfg, paths, brain_backend: str, narrative: str, biblio: str,
     md = build_markdown(cfg, brain_backend, narrative, biblio, corpus, unmatched, metrics_line,
                         top_block)
     today = date.today().strftime("%y%m%d")
-    stem = f"{today}_{cfg.project_name}_litreview_ra"
+    # The review's own infix: a methods review mints a `methodsreview`, which is what the
+    # design ladder's gate looks for. Writing `litreview` here left that rung unrecognisable.
+    from .config import kind_of
+    stem = f"{today}_{cfg.project_name}_{kind_of(paths.output.parent).infix}_ra"
     out_md = paths.output / f"{stem}.md"
     out_md.write_text(md, encoding="utf-8")
 

@@ -119,3 +119,55 @@ def test_a_methods_gather_claims_only_what_it_found(project, monkeypatch):
 def test_collect_still_claims_what_you_add_for_the_review(project, monkeypatch):
     _sync(project, monkeypatch, _items("MINE"), claim_all=True)
     assert cl.load(project)["MINE"].purpose == [cl.METHODS]
+
+
+# ── the methods report's shape ────────────────────────────────────────────────
+from rabbithole import render, summarize  # noqa: E402
+
+
+def _mcfg():
+    return types.SimpleNamespace(
+        topic="how to carry out: Sequence dissimilarity; Resampling", focus="",
+        gather_topics=["Sequence dissimilarity: optimal matching cost debate",
+                       "Resampling: block bootstrap"], project_name="P",
+        brain=types.SimpleNamespace(coordinator_model="m", claude_model="c"))
+
+
+def test_a_methods_review_has_one_fixed_section_per_family():
+    secs = summarize.methods_sections(_mcfg())
+    assert [s.heading for s in secs] == ["Sequence dissimilarity", "Resampling"]
+    assert secs[0].claim == "optimal matching cost debate"
+
+
+def test_each_section_is_drafted_in_four_parts_with_criticism_as_weighty_as_the_procedure():
+    secs = summarize.methods_sections(_mcfg())
+    seen = {}
+
+    class B:
+        def coordinator(self, prompt, sys, **k):
+            seen.update(prompt=prompt, sys=sys)
+            return "**The options.** x [@a]."
+    summarize._draft_methods_section(B(), _mcfg(), secs, 0, {}, summarize.SYNTH_SYS
+                                     + summarize.METHODS_SYS)
+    for head, _ in summarize.METHODS_PARTS:
+        assert f"**{head}.**" in seen["prompt"]
+    assert "why it is not preferred" in seen["prompt"]
+    assert "OVERRIDES" in seen["sys"] and "Criticism carries as much weight" in seen["sys"]
+
+
+def test_a_section_missing_a_part_is_sent_back():
+    text = "**The options.** a [@x].\n\n**Against each.** b [@y].\n\n**The choice.** c [@z]."
+    missing = summarize.methods_parts_guard(text)
+    assert [f.kind for f in missing] == ["methods-part"] and "For the SI" in missing[0].imperative
+    assert summarize.methods_parts_guard(text + "\n\n**For the SI.** d [@x].") == []
+
+
+def test_a_methods_review_mints_a_methodsreview_not_a_litreview(project, monkeypatch):
+    monkeypatch.setattr(render, "pandoc_convert", lambda *a, **k: False)
+    paths = config.project_paths(project / "methodsReview").ensure()
+    md, _ = render.write_review(_mcfg(), paths, "ollama", "A claim [@k].", "", [], [])
+    assert md.name.endswith("_P_methodsreview_ra.md")
+    assert md.read_text().startswith("# Methods Review: how to carry out")
+    assert "## Narrative Review" in md.read_text()     # graft and docxio split on it
+    from rabbithole import steering
+    assert steering._draft_reviews(str(project / "methodsReview")) == [md]
