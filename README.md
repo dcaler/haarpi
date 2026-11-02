@@ -214,6 +214,11 @@ its main contribution and its major themes. An incidental detail (background, an
 a sample description, a passing statistic) or a claim the source reports from another
 work never becomes a fact of that source, and no document, page or later stage sees one.
 Every quote is checked verbatim against its page, and each fact links to that page in Zotero.
+A fact's weight is its topic score scaled by its role (a paper's main contribution outweighs
+a theme it develops) and by where it is quoted from (the abstract or front matter, which only
+announce a claim, count for less than the body that establishes it); within a topic, themes
+more independent sources agree on come first. A source with no usable text is left out of
+the review entirely and named only in the run log.
 Every fact is scored against a person-approved list of topics, each mapped to
 the research questions it serves; facts are grouped by topic and theme with short
 synthesis bullets, and the document links to the contribution map: an
@@ -229,10 +234,12 @@ record rather than prose to annotate. At this gate the question is whether the t
 cover the research question, judged against what each one found; whether the facts can
 carry an argument is tested later, by the stages that use them. `report` writes
 `{date}_{short}_review_ra.html` beside each draft: each topic with its counts and its
-themes, each named as the claim its facts support; a verdict per question (covers it /
-has gaps, the gap described in words) and per topic (enough / thin / off-target); a box
+themes, each named as the claim its facts support; a verdict per question, right under it
+(covers it / has gaps, the gap described in words), and per topic (enough / thin /
+off-target); a box
 for papers that must be there, matched against the corpus as you type; a spot-check of
-15 random facts beside their quotes and pages; and the contribution map, embedded, for
+15 random facts beside their quotes and pages (right / distorted / unsupported, or off-brief
+when the paper does not belong at all); and the contribution map, embedded, for
 flagging a source. Nothing is assumed: every question and spot-check fact needs a verdict,
 and **Release** is a button pressed, not silence. Release or Hold saves
 `…_review_ra_DCR.json`, each verdict tagged with the comment kind it stands for. The

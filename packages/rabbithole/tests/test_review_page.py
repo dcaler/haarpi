@@ -122,3 +122,13 @@ def test_reskin_keeps_the_map_data_and_rebuilds_the_template(tmp_path):
     other = tmp_path / "x.html"
     other.write_text("<html>not a map</html>")
     assert not mindmap.reskin(other) and other.read_text() == "<html>not a map</html>"
+
+
+def test_off_brief_drops_the_paper_and_unreadable_papers_are_not_offered(tmp_path):
+    assert review_page.NEEDS["spot"]["off_brief"] == "drop"
+    paths = _project(tmp_path)
+    blob = json.loads((paths.work / "facts.json").read_text())
+    blob["unreadable"] = ["k3"]
+    (paths.work / "facts.json").write_text(json.dumps(blob))
+    d = review_page.page_data(paths, "261101_Firm_review_ra")
+    assert "k3" not in {c["ck"] for c in d["corpus"]} and "k4" in {c["ck"] for c in d["corpus"]}

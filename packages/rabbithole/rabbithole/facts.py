@@ -67,6 +67,9 @@ Rules:
 - At most {max_facts} facts; usually 3-6 are enough. "contribution": the paper's main
   contribution — what a reader would cite it for. "theme": a major theme the paper develops,
   argued or evidenced at length. A fact must be checkable against the quote.
+- Quote where the paper ESTABLISHES the fact: its results, discussion or conclusions. Never
+  quote the abstract or the introduction, which only announce; when the main contribution is
+  stated there, find the passage in the body that argues or evidences it.
 - NEVER extract an incidental detail: background, an aside, an example, a description of the
   sample or data, a calibration or implementation detail, a passing statistic. A paper is cited
   for what it is about, so a detail it is not about is not a fact of it.
@@ -170,6 +173,8 @@ class Fact:
     scores: list = field(default_factory=list)     # 0-3 per topic, in topic order
     role: str = ""                                 # contribution | theme | incidental; "" =
                                                    #   extracted before roles, not yet checked
+    front: bool | None = None                      # quoted from the abstract / front matter;
+                                                   #   None = not yet checked
 
 
 @dataclass
@@ -445,6 +450,24 @@ def check_roles(brain, c: Candidate, facts: list[Fact]) -> bool:
     return True
 
 
+_INTRO = re.compile(r"(?im)^[ \t]*(?:\d+(?:\.\d+)*\.?|[IVX]+\.)?[ \t]*introduction[ \t]*$")
+
+
+def mark_front(facts: list[Fact], abstract: str, full: str) -> None:
+    """Flag each fact quoted from the abstract or from the front matter before the
+    Introduction heading: such a passage announces a claim rather than establishing it, so the
+    fact is discounted (`FRONT_WEIGHT`). An unanchored fact is left unflagged."""
+    ab = _norm(abstract)
+    m = _INTRO.search(full or "")
+    head = _norm(full[:m.start()]) if m else ""
+    for f in facts:
+        q = _norm(f.quote)[:80]
+        if not q or not f.verified:
+            f.front = False
+            continue
+        f.front = bool((ab and q in ab) or (head and q in head))
+
+
 def kept_facts(facts: list[Fact], label: str) -> list[Fact]:
     """What a source may be cited for: its contribution and major themes. Incidental facts and
     claims it reports from another work are dropped here, before anything is built from them —
@@ -491,7 +514,11 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
             blob = json.loads(fp.read_text(encoding="utf-8"))
             if blob.get("_v") == _FACTS_VERSION and blob.get("facts"):
                 fs = [Fact(**f) for f in blob["facts"]]
-                if check_roles(brain, c, fs):   # cached before roles: label once, re-cache
+                changed = False
+                if any(f.front is None for f in fs):   # cached before place was checked
+                    mark_front(fs, c.abstract or "", _paper_text(c))
+                    changed = True
+                if check_roles(brain, c, fs) or changed:   # label once, re-cache
                     blob["facts"] = [asdict(f) for f in fs]
                     fp.write_text(json.dumps(blob, indent=2, ensure_ascii=False),
                                   encoding="utf-8")
@@ -509,8 +536,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
                   file=sys.stderr)
             if no_text is not None:
                 no_text[ck] = n_body
-            out[ck] = []
-            continue
+            continue            # left out of the review entirely: named in the log only
         print(f"  {runlog.stamp()}[{i + 1}/{len(corpus)}] facts: {label}", flush=True)
         text = reading_text(brain, c, cfg, collection, ck, text=full)
         # No review topic or focus here: given them, the model judged off-brief papers to hold
@@ -545,6 +571,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
             locate = lambda texts, _ck=ck: _chroma.locate_list(collection, brain, _ck, texts)  # noqa: E731
         ground(facts, full, locate=locate)
         check_roles(brain, c, facts)            # any the extractor left unlabelled
+        mark_front(facts, c.abstract or "", full)
         n_ok = sum(f.verified for f in facts)
         print(f"  {runlog.stamp()}    {len(facts)} facts, {n_ok} quoted verbatim", flush=True)
         fp.write_text(json.dumps({"_v": _FACTS_VERSION, "facts": [asdict(f) for f in facts]},
@@ -691,6 +718,17 @@ def cluster(vectors: list[list[float]], k: int) -> list[int]:
     return [int(x) for x in labels]
 
 
+def theme_sources(t: Theme) -> int:
+    """How many independent sources a theme's claim rests on."""
+    return len({fid.rsplit("#", 1)[0] for fid in t.fact_ids})
+
+
+def rank_themes(themes: list[Theme]) -> list[Theme]:
+    """Within each topic, the claim more sources agree on first: a stylized fact five papers
+    support is stronger than one resting on a single paper."""
+    return sorted(themes, key=lambda t: (t.item, -theme_sources(t), -len(t.fact_ids)))
+
+
 def _synthesis_ok(bullet: str, allowed: set[str]) -> bool:
     """A synthesis bullet must cite, and cite only facts in its own theme — that is what makes
     a bridge to a source that never said it impossible here rather than merely flagged."""
@@ -758,13 +796,39 @@ def _good(f: Fact) -> bool:
     return f.verified
 
 
+# A FACT'S WEIGHT is its topic score scaled by what it is to its paper and where it is quoted
+# from (2026-11-02): a paper's main contribution outweighs a theme it develops, and a claim
+# quoted from the abstract or front matter, which only announces, counts for less than one
+# quoted where the paper establishes it. Unknown role or place (older bases) weighs as before.
+ROLE_WEIGHT = {"contribution": 1.0, "theme": 0.85}
+FRONT_WEIGHT = 0.6
+_CENTRAL, _USEFUL = 2.5, 1.5    # weighted score -> tier: a theme's central fact stays central;
+                                #   a front-matter quote drops a tier
+
+
+def fact_scale(f: Fact) -> float:
+    return ROLE_WEIGHT.get(f.role, 1.0) * (FRONT_WEIGHT if f.front else 1.0)
+
+
+def weighted(f: Fact, i: int | None = None) -> float:
+    """The fact's weighted score on topic i (0-based), or its best — 0 when it does not count."""
+    if not _good(f):
+        return 0.0
+    raw = best(f) if i is None else (f.scores[i] if len(f.scores) > i else 0)
+    return raw * fact_scale(f)
+
+
 def counts(f: Fact, i: int | None = None) -> int:
-    """The fact's score on topic i (0-based), or its best — 0 when it does not count."""
+    """The fact's tier on topic i (0-based), or its best: 3 central, 2 useful, from its weighted
+    score; 1 or 0 below that, and 0 when it does not count at all."""
+    w = weighted(f, i)
+    if w >= _CENTRAL:
+        return 3
+    if w >= _USEFUL:
+        return 2
     if not _good(f):
         return 0
-    if i is None:
-        return best(f)
-    return f.scores[i] if len(f.scores) > i else 0
+    return min(1, best(f) if i is None else (f.scores[i] if len(f.scores) > i else 0))
 
 
 def _brief_topics(topics: list[Topic] | None) -> set[int] | None:
@@ -776,10 +840,11 @@ def _brief_topics(topics: list[Topic] | None) -> set[int] | None:
     return {i for i, t in enumerate(topics) if t.serves}
 
 
-def _brief_best(f: Fact, idx: set[int] | None) -> int:
+def _brief_best(f: Fact, idx: set[int] | None) -> float:
+    """The fact's best WEIGHTED score on a topic that serves a research question."""
     if idx is None:
-        return best(f)
-    return max((sc for i, sc in enumerate(f.scores) if i in idx), default=0)
+        return best(f) * fact_scale(f)
+    return max((sc for i, sc in enumerate(f.scores) if i in idx), default=0) * fact_scale(f)
 
 
 def fact_weight(facts: dict[str, list[Fact]],
@@ -788,7 +853,7 @@ def fact_weight(facts: dict[str, list[Fact]],
     well-grounded fact scoring 2+ there, summed — a central fact counts 3, a useful one 2,
     background nothing."""
     idx = _brief_topics(topics)
-    return {ck: sum(b for f in fs if (b := _brief_best(f, idx)) >= 2 and _good(f))
+    return {ck: round(sum(b for f in fs if (b := _brief_best(f, idx)) >= _USEFUL and _good(f)), 2)
             for ck, fs in facts.items()}
 
 
@@ -798,7 +863,7 @@ def rank_key(fs: list[Fact], topics: list[Topic] | None = None) -> tuple:
     top with ABM-methods generalists and Schelling papers, and no prosopography source made it:
     a specialist touches two topics however central it is."""
     idx = _brief_topics(topics)
-    on = [f for f in fs if _brief_best(f, idx) >= 2 and _good(f)]
+    on = [f for f in fs if _brief_best(f, idx) >= _USEFUL and _good(f)]
     qs = {q for f in on for i, sc in enumerate(f.scores) if sc >= 2
           and (idx is None or i in idx) for q in (topics[i].serves if topics else [i])}
     return (-sum(_brief_best(f, idx) for f in on), -len(qs), -sum(1 for f in on if f.verified))
@@ -884,14 +949,16 @@ def save_sidecar(paths, base: FactBase, corpus: list[Candidate], citekeys, gc) -
         # What the document's opening says, so a reader of the sidecar (raconteur) need not
         # re-derive rabbitHole's rules: the coverage verdicts and the load-bearing sources.
         "coverage": coverage(base),
-        "load_bearing": load_bearing(base, set(by_key), len(corpus)),
+        "load_bearing": load_bearing(base, set(by_key), len(corpus) - len(base.no_text)),
+        # sources with no usable text: left out of the review, kept here only so the review
+        # page does not offer them as corpus papers
+        "unreadable": sorted(base.no_text),
         # Per source: does any of its facts bear on the brief? A clean list of off-brief
         # sources tells a drafter what not to reach for.
         "sources": {ck: {"on_brief": on_brief(fs), "facts": len(fs),
                          "verbatim": sum(f.verified for f in fs),
                          "zotero_key": getattr(by_key.get(ck), "zotero_key", "") or "",
                          "label": by_key[ck].author_year() if ck in by_key else ck}
-                    | ({"no_text": base.no_text[ck]} if ck in base.no_text else {})
                     for ck, fs in base.facts.items()},
     }
     fp = paths.work / "facts.json"
@@ -912,8 +979,7 @@ def load_sidecar(paths) -> FactBase | None:
     return FactBase(focus=blob.get("focus_items", []), facts=facts,
                     themes=[Theme(**t) for t in blob.get("themes", [])],
                     topics=[Topic(**t) for t in blob.get("topics", [])],
-                    no_text={ck: s["no_text"] for ck, s in (blob.get("sources") or {}).items()
-                             if "no_text" in s})
+                    no_text={ck: 0 for ck in blob.get("unreadable", [])})
 
 
 NO_TOPIC_SLICE = mindmap.UNPLACED
@@ -1113,7 +1179,7 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
                   "ring. Topics serving no question do not count.*", ""]
         idx = _brief_topics(base.topics)
         for ck in ranked:
-            fs = sorted((f for f in base.facts[ck] if _brief_best(f, idx) >= 2 and _good(f)),
+            fs = sorted((f for f in base.facts[ck] if _brief_best(f, idx) >= _USEFUL and _good(f)),
                         key=lambda f: -_brief_best(f, idx))
             tops = sorted({i + 1 for f in fs for i, sc in enumerate(f.scores) if sc >= 2})
             parts.append(f"- **{by_key[ck].author_year()}** [@{ck}] — topics "
@@ -1158,19 +1224,7 @@ def build_markdown(cfg, model: str, base: FactBase, corpus: list[Candidate], cit
             tag = _scores_tag(f, base)
             lines.append(f"{_fact_line(f, c, gc, with_key=False)} *[{f.kind}"
                          + (f"; {tag}" if tag else "") + "]*")
-        if not lines and ck in base.no_text:
-            lines = [f"- *(no usable text in the PDF — {base.no_text[ck]:,} characters; needs "
-                     f"OCR or a better copy)*"]
         parts += (lines or ["- *(no facts extracted — re-run report)*"]) + [""]
-    unreadable = [ck for ck in base.no_text if ck in by_key]
-    if unreadable:
-        parts += ["### Sources with no usable text", "",
-                  f"*Under {_MIN_TEXT_CHARS:,} characters of text in the PDF — most likely a scan "
-                  "without a text layer. They contribute nothing until the PDF is OCRed or "
-                  "replaced in Zotero.*", ""]
-        parts += [f"- {by_key[ck].full_citation()} [@{ck}] — {base.no_text[ck]:,} characters"
-                  for ck in sorted(unreadable, key=lambda k: by_key[k].first_author_last.lower())]
-        parts.append("")
     if off:
         parts += ["### Sources with no fact useful to a topic", "",
                   "*None of their facts scores 2 or more on any topic. Their facts are above. "
@@ -1215,10 +1269,11 @@ def report(cfg, gc, paths, brain, corpus, notes, citekeys, collection) -> int:
     themes: list[Theme] = []
     for n, t in enumerate(topics, 1):
         fs = [f for f_list in facts.values() for f in f_list
-              if len(f.scores) >= n and f.scores[n - 1] >= 2 and f.id in vectors]
+              if counts(f, n - 1) >= 2 and f.id in vectors]
         print(f"  {runlog.stamp()}T{n} {t.name[:50]}: {len(fs)} facts from "
               f"{len({f.citekey for f in fs})} sources", flush=True)
         themes += themes_for(brain, n, t.name, fs, vectors)
+    themes = rank_themes(themes)
     base = FactBase(focus=items, facts=facts, themes=themes, topics=topics, no_text=no_text)
     save_sidecar(paths, base, corpus, citekeys, gc)
     cover = coverage(base)

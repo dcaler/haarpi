@@ -9,7 +9,8 @@ argument is tested later, by the stages that use them. The page asks:
      in words and sorted like a comment, since it may be a new topic, a thin one, or scope)
      per topic: enough / thin / off-target, shown with its counts and its themes' claims
   2. known papers: the reviewer lists papers that must be there; each is matched to the corpus
-  3. a fact spot-check: a fixed random sample of counted facts beside their quote and page —
+  3. a fact spot-check: a fixed random sample of counted facts beside their quote and page
+     (right / distorted / unsupported, or off-brief: the paper does not belong here) —
      a misread fact is cheap to catch now and expensive once it is in a design or a paper
   4. the contribution map, embedded: a source can be flagged a false friend or mis-filed
 
@@ -30,7 +31,7 @@ import sys
 from pathlib import Path
 
 from . import runlog
-from .facts import FactBase, counts, load_sidecar
+from .facts import FactBase, counts, load_sidecar, rank_themes
 
 SPOT_N = 15            # facts in the spot-check
 SPOT_RECHECK = 3       # this many bad ones -> the whole fact base is re-checked
@@ -39,7 +40,7 @@ SPOT_RECHECK = 3       # this many bad ones -> the whole fact base is re-checked
 NEEDS = {
     "topic": {"enough": None, "thin": "sources", "off_target": "topic_scope"},
     "question": {"covers": None, "gaps": "sort"},
-    "spot": {"right": None, "distorted": "fact", "unsupported": "fact"},
+    "spot": {"right": None, "distorted": "fact", "unsupported": "fact", "off_brief": "drop"},
     "known": {"cited": None, "unused": "fact", "absent": "ingest"},
     "map": {"false_friend": "drop", "wrong_topic": "topic_scope"},
 }
@@ -70,16 +71,19 @@ def _topic_rows(base: FactBase) -> list[dict]:
                      "sources": len({f.citekey for f in central + useful}),
                      "themes": [{"name": th.name, "facts": len(th.fact_ids),
                                  "sources": len({fid.split("#")[0] for fid in th.fact_ids})}
-                                for th in base.themes if th.item == i + 1]})
+                                for th in rank_themes([th for th in base.themes
+                                                       if th.item == i + 1])]})
     return rows
 
 
-def _corpus_index(corpus: list[dict], sources: dict) -> list[dict]:
-    """What the known-paper box matches against: every corpus paper, and whether it yielded a
-    fact that counts."""
+def _corpus_index(corpus: list[dict], sources: dict, skip=()) -> list[dict]:
+    """What the known-paper box matches against: every readable corpus paper, and whether it
+    yielded a fact that counts. A paper with no usable text is not part of the review."""
     out = []
     for c in corpus:
         ck = c.get("citekey") or ""
+        if ck in skip:
+            continue
         s = sources.get(ck) or {}
         authors = " ".join((a.get("family") or "") for a in (c.get("authors") or [])
                            if isinstance(a, dict))
@@ -106,7 +110,7 @@ def page_data(paths, stem: str, *, litmap: str = "") -> dict:
     return {"stem": stem, "generated": blob.get("generated", ""), "litmap": litmap,
             "questions": questions, "topics": topics, "coverage": blob.get("coverage", []),
             "spot": _spot_sample(base, links, stem), "spot_recheck": SPOT_RECHECK,
-            "corpus": _corpus_index(corpus, sources), "labels": labels, "needs": NEEDS,
+            "corpus": _corpus_index(corpus, sources, set(blob.get("unreadable", []))), "labels": labels, "needs": NEEDS,
             "n_facts": len(blob.get("facts", [])), "n_sources": len(sources)}
 
 
@@ -238,9 +242,9 @@ let S;
 try { S = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { S = null; }
 S = Object.assign({q: {}, t: {}, spot: {}, map: {}, known: "", notes: ""}, S || {});
 const LABEL = {covers: "covers it", gaps: "has gaps", enough: "enough", thin: "thin", off_target: "off-target",
-  right: "right", distorted: "distorted", unsupported: "unsupported", false_friend: "doesn't belong", wrong_topic: "wrong topic"};
+  right: "right", distorted: "distorted", unsupported: "unsupported", off_brief: "off-brief", false_friend: "doesn't belong", wrong_topic: "wrong topic"};
 const TONE = {covers: "on-ok", enough: "on-ok", right: "on-ok", thin: "on-warn", gaps: "on-warn", distorted: "on-warn",
-  off_target: "on-no", unsupported: "on-no", false_friend: "on-no", wrong_topic: "on-warn"};
+  off_target: "on-no", unsupported: "on-no", off_brief: "on-no", false_friend: "on-no", wrong_topic: "on-warn"};
 const NEED_TXT = {sources: "→ gather more sources", topic_scope: "→ re-scope the topic", sort: "→ sorted like a comment",
   fact: "→ re-check the fact", drop: "→ drop the source", ingest: "→ pull the paper in"};
 const v = (store, id) => store[id] && store[id].v;
@@ -287,12 +291,13 @@ function topicRow(t) {
 }
 const qs = document.getElementById("qs");
 D.questions.forEach(q => {
-  qs.append(el("h3", {}, `Q${q.n}. ${q.text}`), el("div", {class: "mut"}, `Served by ${q.topics.length} topic${q.topics.length === 1 ? "" : "s"}.`));
-  q.topics.forEach(n => qs.append(topicRow(T[n])));
-  const r = el("div", {class: "row"}, el("div", {class: "body"}, el("b", {}, `Taken together, do these topics cover Q${q.n}?`),
-    el("div", {class: "mut"}, "If it has gaps, say what is missing — a subject, a thin part, or a scope problem — and mark every topic above."),
+  // the question's own verdict sits right under it; its topics follow as the evidence
+  qs.append(el("h3", {}, `Q${q.n}. ${q.text}`));
+  const r = el("div", {class: "row"}, el("div", {class: "body"}, el("b", {}, `Taken together, do the ${q.topics.length} topics below cover Q${q.n}?`),
+    el("div", {class: "mut"}, "If it has gaps, say what is missing — a subject, a thin part, or a scope problem — and mark every topic below."),
     note(S.q, q.n, "What is missing")), picker("question", S.q, q.n, status));
   rowsByKey["q" + q.n] = r; qs.append(r);
+  q.topics.forEach(n => qs.append(topicRow(T[n])));
 });
 const orphan = D.topics.filter(t => !t.serves.length);
 if (orphan.length) { qs.append(el("h3", {}, "Topics serving no research question"),
@@ -337,7 +342,8 @@ ka.oninput = known;
 
 // 3 · spot-check
 document.getElementById("spotintro").textContent = `${D.spot.length} facts drawn at random from the ${D.n_facts} in this review (the same ones on every reload). ` +
-  `Open each page and judge the fact against its source; all ${D.spot.length} need a verdict. ${D.spot_recheck} or more bad ones send the whole fact base back for re-checking.`;
+  `Open each page and judge the fact against its source; all ${D.spot.length} need a verdict. ${D.spot_recheck} or more distorted or unsupported ones send the whole fact base back for re-checking. ` +
+  `Mark a fact off-brief when its paper does not belong in this review at all: that drops the paper, and does not count against the facts.`;
 const sp = document.getElementById("spot");
 D.spot.forEach((f, i) => { const r = el("div", {class: "row"}, el("div", {class: "body"},
   el("span", {class: "mut"}, `${i + 1}. ${D.labels[f.citekey] || f.citekey} · `), f.link ? el("a", {href: f.link}, f.page ? "p." + f.page : "open") : (f.page ? "p." + f.page : ""),
@@ -385,7 +391,7 @@ function items() {
 }
 function status() {
   const t = marks(), it = items(), asks = it.filter(x => x.need).length + (S.notes.trim() ? 1 : 0);
-  const bad = it.filter(x => x.kind === "spot" && x.need).length;
+  const bad = it.filter(x => x.kind === "spot" && x.need === "fact").length;
   const st = document.getElementById("status");
   st.textContent = t.size ? `incomplete: ${t.size} verdict${t.size === 1 ? "" : "s"} to go`
     : asks ? `${asks} rework ask${asks === 1 ? "" : "s"}` + (bad >= D.spot_recheck ? " · full fact re-check" : "") : "complete · nothing to fix";
@@ -393,7 +399,7 @@ function status() {
   document.getElementById("hold").disabled = !!(t.size || !asks);
 }
 async function save(decision) {
-  const it = items(), bad = it.filter(x => x.kind === "spot" && x.need).length;
+  const it = items(), bad = it.filter(x => x.kind === "spot" && x.need === "fact").length;
   const out = {schema: 2, review: D.stem, saved: new Date().toISOString(), decision,
     spot: {checked: it.filter(x => x.kind === "spot").length, bad, of: D.spot.length, recheck_all: bad >= D.spot_recheck},
     items: it, notes: S.notes.split("\n").map(s => s.trim()).filter(Boolean)};

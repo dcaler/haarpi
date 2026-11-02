@@ -490,7 +490,8 @@ def test_a_topic_serving_no_question_carries_no_weight():
     assert facts.fact_weight(fs) == {"pros": 3, "sch": 6}      # no topics known: all count
 
 
-def test_a_paper_without_a_text_layer_is_flagged_not_sent_to_the_model(tmp_path):
+def test_a_paper_without_a_text_layer_is_left_out_of_the_review(tmp_path, capsys):
+    """Not sent to the model, and absent from every output: named in the run log only."""
     work = tmp_path / "work"
     work.mkdir()
     paths = SimpleNamespace(work=work)
@@ -503,17 +504,16 @@ def test_a_paper_without_a_text_layer_is_flagged_not_sent_to_the_model(tmp_path)
             raise AssertionError("an image-only scan must not reach the model")
     no_text: dict = {}
     out = facts.extract(_B(), [scan], cfg, paths, None, {0: "bulst1986"}, no_text)
-    assert out == {"bulst1986": []} and no_text == {"bulst1986": 29}
-    assert not list(work.glob("facts/*.failed.txt"))
+    assert out == {} and no_text == {"bulst1986": 29}
+    assert "Needs OCR or a better PDF" in capsys.readouterr().err
     base = FactBase(focus=["q"], facts=out, themes=[], topics=[Topic(name="q", serves=[1])],
                     no_text=no_text)
     gc = SimpleNamespace(zotero_library_type="user", zotero_library_id="1")
     md = facts.build_markdown(cfg, "m", base, [scan], {0: "bulst1986"}, gc, [], None)
-    assert "### Sources with no usable text" in md
-    assert "no usable text in the PDF — 29 characters; needs OCR" in md
-    paths.work = work
+    assert "bulst1986" not in md and "no usable text" not in md
     facts.save_sidecar(paths, base, [scan], {0: "bulst1986"}, gc)
-    assert facts.load_sidecar(paths).no_text == {"bulst1986": 29}
+    blob = json.loads((work / "facts.json").read_text())
+    assert "bulst1986" not in blob["sources"] and blob["unreadable"] == ["bulst1986"]
 
 
 def test_the_sidecar_says_which_sources_are_on_brief(tmp_path):
@@ -628,3 +628,34 @@ def test_the_extractor_s_role_is_read_and_an_unknown_one_left_unchecked():
     raw = json.dumps([{"fact": "A.", "role": "Contribution", "quote": "q"},
                       {"fact": "B.", "role": "trivia", "quote": "q"}])
     assert [f.role for f in facts._parse_facts(raw, "k", 1)] == ["contribution", ""]
+
+
+# ── weighting: role and place ─────────────────────────────────────────────────
+
+def _w(score, role="", front=None):
+    return Fact(id="k#1", citekey="k", text="t", scores=[score], verified=True, role=role,
+                front=front)
+
+
+def test_a_contribution_outweighs_a_theme_and_a_front_matter_quote_drops_a_tier():
+    assert facts.weighted(_w(3, "contribution")) > facts.weighted(_w(3, "theme"))
+    assert facts.counts(_w(3, "theme")) == 3            # a theme's central fact stays central
+    assert facts.counts(_w(2, "theme")) == 2
+    assert facts.counts(_w(3, "contribution", front=True)) == 2
+    assert facts.counts(_w(2, "contribution", front=True)) == 1      # no longer counts
+    assert facts.counts(_w(3)) == 3 and facts.weighted(_w(2)) == 2   # unknown: as before
+
+
+def test_a_quote_from_the_abstract_or_before_the_introduction_is_front_matter():
+    full = "[p.1]\nTitle\nWe show bins cut errors.\n1. Introduction\nWaste is hard.\n[p.5]\nResults: proximity cut errors by 28 percent."
+    fs = [_q("We show bins cut errors"), _q("proximity cut errors by 28 percent"),
+          _q("Sorting effort falls")]
+    facts.mark_front(fs, "Sorting effort falls with distance.", full)
+    assert [f.front for f in fs] == [True, False, True]
+
+
+def test_themes_more_sources_agree_on_come_first_within_their_topic():
+    t = lambda item, ids: Theme(item=item, name=str(ids), fact_ids=ids)   # noqa: E731
+    ranked = facts.rank_themes([t(1, ["a#1", "a#2", "a#3"]), t(2, ["c#1"]),
+                                t(1, ["a#4", "b#1"])])
+    assert [r.fact_ids for r in ranked] == [["a#4", "b#1"], ["a#1", "a#2", "a#3"], ["c#1"]]
