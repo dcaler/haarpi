@@ -680,7 +680,9 @@ API access for the literature stage. The deck's illustrations need an `imagine` 
 runner's PATH (local Stable Diffusion); without it the `illustrate` step fails, saying why, and the
 briefs stay as notes. `report` and `build` stop before doing any
 work if Zotero isn't configured; `--from-folder` builds from `./pdfs/` only when
-you ask for it. Configuration lives in `~/.config/haarpi/config.toml`.
+you ask for it. Configuration lives in `~/.config/haarpi/config.toml`. Every agent sends
+its model calls to `OLLAMA_URL` when it is set, else to the config's `ollama.url`, else to
+`localhost:11434`; a GPU runner sets `OLLAMA_URL` to its own card's server.
 
 ## Use
 

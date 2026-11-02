@@ -66,6 +66,20 @@ def _env_int(name: str, default: int) -> int:
     return default
 
 
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+
+def ollama_url(ollama_cfg: dict | None = None) -> str:
+    """Where this process's model calls go: `OLLAMA_URL` first, then the config's
+    `ollama.url`, then localhost. A runner lane in the GPU pool sets `OLLAMA_URL` to its own
+    card's server, so every agent must read it — rabbitHole, raconteur and raster always did;
+    the planner and razzle read only the config, and would have sent every lane's model calls
+    to one server."""
+    return (os.environ.get("OLLAMA_URL")
+            or (ollama_cfg or {}).get("url")
+            or DEFAULT_OLLAMA_URL)
+
+
 OLLAMA_TIMEOUT = _env_int("OLLAMA_TIMEOUT", 1800)   # per-chunk read gap, not total
 KEEPALIVE = os.environ.get("HAARPI_KEEPALIVE") or os.environ.get("RASTER_KEEPALIVE") or "30m"
 HEARTBEAT_SECS = 300

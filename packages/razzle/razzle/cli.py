@@ -167,9 +167,9 @@ def _local_brain():
     a one-pager and a manuscript in, ~18 small JSON objects out, under budgets the normaliser
     enforces afterwards — so it belongs on the same local model every other working loop uses."""
     from haarpi import config as _hcfg
-    from haarpi.brain import Brain
+    from haarpi.brain import Brain, ollama_url
     o = (_hcfg.merged_config("razzle") or {}).get("ollama", {})
-    return Brain(o.get("url", "http://localhost:11434"),
+    return Brain(ollama_url(o),
                  o.get("coordinator", "qwen3.6:27b-16k"),
                  o.get("worker", "llama3.1:8b"), tool="razzle")
 

@@ -984,9 +984,9 @@ def classify(stage: str, check: dict, cfg: dict,
 
     `tiers` overrides the stage's registry (a paper deliverable's own tier
     table); `deliverable` names what was annotated, for the prompt."""
-    from .brain import Brain
+    from .brain import Brain, ollama_url
     o = cfg.get("ollama", {})
-    b = Brain(o.get("url", "http://localhost:11434"),
+    b = Brain(ollama_url(o),
               o.get("coordinator", "qwen3.6:27b-16k"),
               o.get("worker", "llama3.1:8b"), tool="haarpi")
     lines = [f'- ({c["author"]}) {c["text"]}' for c in check["unresolved"]]
@@ -1033,12 +1033,12 @@ def decompose(comments: list[dict], cfg: dict, *, fact_base: bool = False,
     to a single ``edit`` task over everything if the brain returns nothing usable — a bad parse
     must degrade to the safe, in-place chain, never crash the gate.
     """
-    from .brain import Brain
+    from .brain import Brain, ollama_url
     texts = [c["text"] for c in comments]
     if not texts:
         return []
     o = cfg.get("ollama", {})
-    b = Brain(o.get("url", "http://localhost:11434"),
+    b = Brain(ollama_url(o),
               o.get("coordinator", "qwen3.6:27b-16k"),
               o.get("worker", "llama3.1:8b"), tool="haarpi")
     numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
@@ -1508,9 +1508,9 @@ def _dispute_verdict(comment: str, sentence: str, f, cfg: dict) -> str | None:
     if floor and (factbase.numbers(sentence) - factbase.numbers(f.text)
                   or _overlap(sentence, f.text) < _MISSTATED_BELOW):
         return "paper"
-    from .brain import Brain
+    from .brain import Brain, ollama_url
     o = cfg.get("ollama", {})
-    b = Brain(o.get("url", "http://localhost:11434"), o.get("coordinator", "qwen3.6:27b-16k"),
+    b = Brain(ollama_url(o), o.get("coordinator", "qwen3.6:27b-16k"),
               o.get("worker", "llama3.1:8b"), tool="haarpi")
     try:
         got = _parse_json_obj(b.coordinator(_DISPUTE_PROMPT.format(
@@ -1722,8 +1722,8 @@ def _recover_wrong_term(markup, right: str, comment: str, cfg: dict) -> str:
         # overlapping ones when there are any.
         cands = overlapping or cands
         o = cfg.get("ollama", {})
-        from .brain import Brain
-        b = Brain(o.get("url", "http://localhost:11434"),
+        from .brain import Brain, ollama_url
+        b = Brain(ollama_url(o),
                   o.get("coordinator", "qwen3.6:27b-16k"),
                   o.get("worker", "llama3.1:8b"), tool="haarpi")
         raw = b.coordinator(
@@ -1791,14 +1791,14 @@ def _plan_sections(directory: str, markup, cfg: dict, section_focus: list[str]) 
     try:
         from rabbithole import config as rhconfig, graft as _rhgraft
         from rabbithole.summarize import Section
-        from .brain import Brain
+        from .brain import Brain, ollama_url
     except ImportError:
         return []
     try:
         rcfg = rhconfig.load_project(directory)
         existing = [Section(heading=h, claim="") for h in _existing_headings(markup)]
         o = cfg.get("ollama", {})
-        b = Brain(o.get("url", "http://localhost:11434"),
+        b = Brain(ollama_url(o),
                   o.get("coordinator", "qwen3.6:27b-16k"),
                   o.get("worker", "llama3.1:8b"), tool="haarpi")
         out: list[dict] = []

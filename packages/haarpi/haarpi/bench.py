@@ -17,7 +17,7 @@ A4 (narrative paragraph redline) was dropped: no recorded markup carries the cor
 evidence it would need to replay faithfully.
 
 Each runner lane points `OLLAMA_URL` at its own card's ollama; the harness passes that URL to
-every brain it builds, including the planner's (which does not read OLLAMA_URL itself yet).
+every brain it builds; the planner and razzle also read OLLAMA_URL themselves (brain.ollama_url).
 """
 
 from __future__ import annotations
