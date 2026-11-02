@@ -132,3 +132,13 @@ def test_off_brief_drops_the_paper_and_unreadable_papers_are_not_offered(tmp_pat
     (paths.work / "facts.json").write_text(json.dumps(blob))
     d = review_page.page_data(paths, "261101_Firm_review_ra")
     assert "k3" not in {c["ck"] for c in d["corpus"]} and "k4" in {c["ck"] for c in d["corpus"]}
+
+
+def test_a_spot_fact_carries_its_papers_title_and_the_topics_it_counts_toward(tmp_path):
+    """A fact read under an author and year alone could not be judged (FirmPathways' Aleti
+    fact, 2026-11-02): the page shows what the paper is and why the fact counts."""
+    d = review_page.page_data(_project(tmp_path), "261101_Firm_review_ra")
+    f = d["spot"][0]
+    assert f["title"].startswith("Paper ") and "<i>" not in f["title"]
+    assert f["topics"] == ["Funding"]
+    assert "Counts toward: " in review_page.to_html(d)

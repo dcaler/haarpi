@@ -48,15 +48,24 @@ NEEDS = {
 
 # ── data ─────────────────────────────────────────────────────────────────────────
 
-def _spot_sample(base: FactBase, links: dict[str, str], seed: str, n: int = SPOT_N) -> list[dict]:
+def _spot_sample(base: FactBase, links: dict[str, str], seed: str, n: int = SPOT_N,
+                 titles: dict[str, str] | None = None) -> list[dict]:
     """A fixed random sample of the facts that count (verbatim quote, useful or central on some
     topic). Seeded by the draft's name, so a reload shows the same facts and a new draft new
-    ones."""
+    ones.
+
+    Each carries its paper's title and the topics it counts toward. A fact read alone, under an
+    author and a year, could not be judged: FirmPathways' "Given the current formulation, the use
+    of crossover has no benefits for the search…" never says it is about search-based software
+    engineering (2026-11-02)."""
+    titles = titles or {}
     pool = sorted((f for fs in base.facts.values() for f in fs if counts(f) >= 2),
                   key=lambda f: f.id)
     pick = random.Random(seed).sample(pool, min(n, len(pool)))
     return [{"id": f.id, "citekey": f.citekey, "text": f.text, "quote": f.quote,
-             "page": f.page, "link": links.get(f.id, ""), "score": counts(f)}
+             "page": f.page, "link": links.get(f.id, ""), "score": counts(f),
+             "title": titles.get(f.citekey, ""),
+             "topics": [t.name for i, t in enumerate(base.topics) if counts(f, i) >= 2]}
             for f in sorted(pick, key=lambda f: f.id)]
 
 
@@ -109,7 +118,9 @@ def page_data(paths, stem: str, *, litmap: str = "") -> dict:
                  for q, text in enumerate(base.focus, 1)]
     return {"stem": stem, "generated": blob.get("generated", ""), "litmap": litmap,
             "questions": questions, "topics": topics, "coverage": blob.get("coverage", []),
-            "spot": _spot_sample(base, links, stem), "spot_recheck": SPOT_RECHECK,
+            "spot": _spot_sample(base, links, stem, titles={
+                c.get("citekey"): re.sub(r"<[^>]+>", "", c.get("title") or "")
+                for c in corpus if c.get("citekey")}), "spot_recheck": SPOT_RECHECK,
             "corpus": _corpus_index(corpus, sources, set(blob.get("unreadable", []))), "labels": labels, "needs": NEEDS,
             "n_facts": len(blob.get("facts", [])), "n_sources": len(sources)}
 
@@ -347,6 +358,8 @@ document.getElementById("spotintro").textContent = `${D.spot.length} facts drawn
 const sp = document.getElementById("spot");
 D.spot.forEach((f, i) => { const r = el("div", {class: "row"}, el("div", {class: "body"},
   el("span", {class: "mut"}, `${i + 1}. ${D.labels[f.citekey] || f.citekey} · `), f.link ? el("a", {href: f.link}, f.page ? "p." + f.page : "open") : (f.page ? "p." + f.page : ""),
+  f.title ? el("div", {class: "mut"}, el("i", {}, f.title)) : null,
+  (f.topics || []).length ? el("div", {class: "mut"}, "Counts toward: " + f.topics.join(" · ")) : null,
   el("div", {}, f.text), f.quote ? el("blockquote", {}, "“" + f.quote + "”") : null, note(S.spot, f.id, "What is wrong (optional)")),
   picker("spot", S.spot, f.id)); rowsByKey["f" + f.id] = r; sp.append(r); });
 
