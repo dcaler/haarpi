@@ -115,7 +115,7 @@ def _cite_score(c: Candidate, max_cpy: float) -> float:
 def rank(candidates: list[Candidate], topic: str, focus: str,
          brain: Brain, method: str = "embedding", rerank_top_n: int = 0,
          target: int = 15, domain_anchor: str = "", exclude_topics: str = "",
-         gather_topics: list[str] | None = None) -> list[Candidate]:
+         gather_topics: list[str] | None = None, methods: bool = False) -> list[Candidate]:
     """Order candidates by relevance to the review — and to each reviewer ask separately.
 
     ``gather_topics`` are this cycle's asks. They are scored as their OWN queries rather than
@@ -178,7 +178,7 @@ def rank(candidates: list[Candidate], topic: str, focus: str,
             ranked = _head_with_ask_share(ranked, asks, n)
             print(f"  {runlog.stamp()}Expert LLM re-rank of top {n}...")
             ranked = _llm_rerank(ranked, topic, focus, brain, n,
-                                 domain_anchor, exclude_topics, max_cpy)
+                                 domain_anchor, exclude_topics, max_cpy, methods=methods)
     return ranked
 
 
@@ -214,9 +214,35 @@ def _head_with_ask_share(ranked: list[Candidate], asks: list[str], n: int) -> li
     return head + [c for c in ranked if id(c) not in seen]
 
 
+def _methods_judge(procedures: str) -> str:
+    """The re-rank question for a methods search: does this source show HOW a procedure was
+    done? Not what it is about. A paper on the project's own subject that never says how it
+    computed anything scores nothing; a paper on anything at all that specifies the procedure
+    is exactly what is wanted."""
+    return ("You are curating a METHODS reading list. The interest is in a PROCEDURE, and "
+            "very nearly nothing else: the list exists so that a choice can cite precedent of "
+            "the form 'X did this procedure in this way', and so that the choice can say why the "
+            "alternatives were NOT preferred. Criticism weighs as much as the procedure itself. "
+            "Score 0-10 for how much this source shows how one of the procedures below, or an "
+            "alternative to it, is carried out or where it fails: 10 = it defines, derives, "
+            "compares or criticises the procedure or its alternatives (a head-to-head "
+            "comparison, a simulation study, a demonstration of bias or failure, a correction "
+            "or extension); 8-9 = it carries the procedure out and states the specification and "
+            "why (costs, block length, number of clusters, interval type, replicate count), so "
+            "it can be cited as precedent; 6-7 = it uses the procedure with enough detail to "
+            "show how; 3-5 = it uses the procedure but never says how; 0-2 = it does not "
+            "involve the procedure. What the source's own study is ABOUT is irrelevant: judge "
+            "only the procedure. A source that discusses a subject, however close to the "
+            "research project, without showing how a procedure was done scores 0-2. Beware "
+            "homographs: the same word used for a different procedure is not a match."
+            f"\nProcedures: {procedures or '(see the topic)'}"
+            "\nRespond with ONLY the number.")
+
+
 def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
                 brain: Brain, top_n: int, domain_anchor: str = "",
-                exclude_topics: str = "", max_cpy: float = 0.0) -> list[Candidate]:
+                exclude_topics: str = "", max_cpy: float = 0.0,
+                methods: bool = False) -> list[Candidate]:
     head = ranked[:top_n]
     anchor = (f"\nComponent fields and key concepts whose ideas may TRANSFER to this work "
               f"(a paper counts only if its use of them genuinely carries over, not merely "
@@ -239,6 +265,8 @@ def _llm_rerank(ranked: list[Candidate], topic: str, focus: str,
            "prestige or citation count."
            + anchor + excl +
            "\nRespond with ONLY the number.")
+    if methods:
+        sys = _methods_judge(domain_anchor)
     jobs = []
     for c in head:
         prompt = (f"Topic: {topic}\nFocus: {focus}\n\n"

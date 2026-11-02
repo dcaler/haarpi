@@ -137,3 +137,25 @@ def test_the_anchor_lists_the_families_not_the_briefs_title():
         "Clustering sequences and choosing the number of clusters")
     assert planner._scope_anchor("Optimal matching and sequence distance measures\nmore") \
         == "Optimal matching and sequence distance measures"
+
+
+def test_each_family_becomes_its_own_gather_ask_with_what_must_be_defended(tmp_path):
+    """One guaranteed set of searches per family, phrased in the brief's own procedural terms;
+    the 'already covered' section is not a family."""
+    import yaml
+    (tmp_path / "haarpi.yaml").write_text(yaml.safe_dump(
+        {"name": "X", "short_title": "X", "brief": "firm funding pathways"}))
+    m = project.load_manifest(tmp_path)
+    d = tmp_path / m.stages["design"]["dir"] / "designdocs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / project.METHODS_SCOPE).write_text(
+        "# Title\n\n## M1 — Sequence dissimilarity\n- **Used in:** A1.\n"
+        "- **Need to defend:** optimal matching cost debate.\n\n"
+        "## M4 — Resampling ordered data\n- **Need to defend:** block bootstrap.\n\n"
+        "## Judged already covered (no new review needed)\n- Burn-in.\n")
+    planner._seed_methods_config(tmp_path, m)
+    cfg = rh.load_project(tmp_path / rh.REVIEW_KINDS["methods"].dir)
+    assert cfg.gather_topics == ["Sequence dissimilarity: optimal matching cost debate.",
+                                 "Resampling ordered data: block bootstrap."]
+    assert cfg.topic.startswith("how to carry out: Sequence dissimilarity")
+    assert "firm funding" not in cfg.research_prompt

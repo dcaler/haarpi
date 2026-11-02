@@ -2360,6 +2360,28 @@ def _scope_anchor(scope: str) -> str:
     return prose[0][:300] if prose else ""
 
 
+def _scope_families(scope: str) -> list[str]:
+    """One gather ask per family: its name and what must be defended about it, in the brief's
+    own procedural vocabulary. Each becomes guaranteed search slots and its own yield line,
+    so a family the literature does not answer is reported rather than crowded out."""
+    out, cur = [], None
+    for line in scope.splitlines():
+        mt = re.match(r"#{2,}\s+(.*)", line.strip())
+        if mt:
+            if cur:
+                out.append(cur)
+            name = re.sub(r"^[A-Z]?\d+[.)]?\s*[—–:-]\s*", "", mt.group(1)).strip()
+            skip = not name or re.search(r"\bcovered\b|not needed|out of scope", name, re.I)
+            cur = None if skip else name
+            continue
+        nd = re.match(r"\s*[-*]\s*\*\*Need to defend:\*\*\s*(.*)", line)
+        if cur and nd:
+            cur = f"{cur}: {nd.group(1).strip()}"
+    if cur:
+        out.append(cur)
+    return [f[:400] for f in out]
+
+
 def _seed_methods_config(root: Path, m: project.Manifest) -> None:
     """Give the methods review a config, from the design session's scope brief.
 
@@ -2379,6 +2401,12 @@ def _seed_methods_config(root: Path, m: project.Manifest) -> None:
     cfg = rh.ProjectConfig(
         project_name=m.name,
         trundlr_project_id=m.trundlr_project_id,
+        topic="how to carry out: " + "; ".join(
+            f.split(":")[0] for f in _scope_families(scope))[:300],
+        focus=("sources where someone carried out, specified, compared or criticised one of "
+               "these procedures, citable as precedent for how it is done; the procedure is "
+               "the interest, not what the source's study was about"),
+        gather_topics=_scope_families(scope),
         research_prompt=(
             "The METHODS apparatus for this project's preregistration. What is needed is the "
             "procedural methodology literature behind the analytical approach — how to compute "

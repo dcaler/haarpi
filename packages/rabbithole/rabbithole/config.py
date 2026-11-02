@@ -260,7 +260,7 @@ def load_project(path: str | Path = ".") -> ProjectConfig:
     brain = BrainConfig(**(raw.pop("brain", {}) or {}))
     cfg = ProjectConfig(**raw)
     cfg.brain = brain
-    _adopt_manifest(cfg, p if p.is_dir() else fp.parent.parent)
+    _adopt_manifest(cfg, p if p.is_dir() else fp.parent.parent, kind=kind_of(fp))
     return cfg
 
 
@@ -275,8 +275,14 @@ _MANIFEST_OWNED = {"project_name": "name", "research_prompt": "brief",
                    "trundlr_project_id": "trundlr_project_id"}
 
 
-def _adopt_manifest(cfg: "ProjectConfig", start: Path) -> None:
-    """Overlay the umbrella-owned fields from haarpi.yaml, when a project has one."""
+def _adopt_manifest(cfg: "ProjectConfig", start: Path, kind: "ReviewKind | None" = None) -> None:
+    """Overlay the umbrella-owned fields from haarpi.yaml, when a project has one.
+
+    The brief is the LITERATURE review's prompt only. A methods review's prompt is the design
+    session's scope brief, and it is deliberately not about the project's subject: overlaying
+    the brief on it replaced DigiPros' six method families with the substantive brief, and the
+    gather then derived a topic from that and searched the subject (2026-11-01).
+    """
     try:
         from haarpi import project as _hproject
         root = _hproject.find_root(start)
@@ -286,6 +292,8 @@ def _adopt_manifest(cfg: "ProjectConfig", start: Path) -> None:
     except Exception:  # noqa: BLE001 — no umbrella, or an unreadable manifest: keep the copy
         return
     for ours, theirs in _MANIFEST_OWNED.items():
+        if ours == "research_prompt" and kind is not None and kind.name != DEFAULT_KIND:
+            continue
         v = getattr(m, theirs, None)
         if v:
             setattr(cfg, ours, v)

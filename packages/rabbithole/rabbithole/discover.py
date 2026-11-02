@@ -229,13 +229,16 @@ Fix every listed problem:
 - Return 8-10 queries total as a JSON array"""
 
 
-def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]:
+def _critique_revise_queries(brain: Brain, cfg, queries: list[str],
+                             methods: bool = False) -> list[str]:
     """One critique→revise cycle on the generated query list."""
+    crit_prompt = _METHODS_QUERY_CRITIQUE_PROMPT if methods else _QUERY_CRITIQUE_PROMPT
+    rev_prompt = _METHODS_QUERY_REVISE_PROMPT if methods else _QUERY_REVISE_PROMPT
     q_str = "\n".join(f"  {i + 1}. {q}" for i, q in enumerate(queries))
     print(f"  {runlog.stamp()}Critiquing search queries...", flush=True)
     try:
         critique = brain.coordinator(
-            _QUERY_CRITIQUE_PROMPT.format(
+            crit_prompt.format(
                 topic=cfg.topic,
                 focus=cfg.focus or "(none)",
                 domain_anchor=cfg.domain_anchor or "(the topic above)",
@@ -251,7 +254,7 @@ def _critique_revise_queries(brain: Brain, cfg, queries: list[str]) -> list[str]
     print(f"  {runlog.stamp()}Revising search queries...", flush=True)
     try:
         raw = brain.coordinator(
-            _QUERY_REVISE_PROMPT.format(
+            rev_prompt.format(
                 topic=cfg.topic,
                 focus=cfg.focus or "(none)",
                 domain_anchor=cfg.domain_anchor or "(the topic above)",
@@ -285,7 +288,7 @@ request. Do not broaden to the parent topic; these queries exist to reach papers
 general search misses. Respond with ONLY a JSON array of query strings, no other text."""
 
 
-def _topic_queries(brain: Brain, cfg, topic: str) -> list[str]:
+def _topic_queries(brain: Brain, cfg, topic: str, methods: bool = False) -> list[str]:
     """Dedicated queries for ONE reviewer ask, outside the general query budget.
 
     An ask parked in `focus` competes with the whole standing scope for the 8-10 slots
@@ -295,12 +298,18 @@ def _topic_queries(brain: Brain, cfg, topic: str) -> list[str]:
     "households withdraw from their savings during high unemployment" where the literature
     says "consumption smoothing" and "precautionary saving".
     """
-    prompt = (f"Research topic (context only): {cfg.topic}\n"
-              f"Sub-topic to cover: {topic}\n"
-              f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
-              f"Search queries (JSON array):")
+    if methods:
+        prompt = (f"Procedure to cover: {topic}\n"
+                  f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+                  f"Search queries (JSON array):")
+    else:
+        prompt = (f"Research topic (context only): {cfg.topic}\n"
+                  f"Sub-topic to cover: {topic}\n"
+                  f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+                  f"Search queries (JSON array):")
     try:
-        raw = brain.coordinator(prompt, _TOPIC_QUERY_SYS, num_ctx=4096)
+        raw = brain.coordinator(prompt, _METHODS_TOPIC_QUERY_SYS if methods else _TOPIC_QUERY_SYS,
+                                num_ctx=4096)
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         out = [str(q).strip() for q in (json.loads(m.group(0)) if m else []) if str(q).strip()]
     except Exception as e:  # noqa: BLE001 — a failed expansion must not lose the general queries
@@ -349,7 +358,80 @@ def _per_topic_yield(cfg, query_origin: dict[str, str], candidates: list[Candida
     return out
 
 
-def _generate_queries(brain: Brain, cfg) -> tuple[list[str], dict[str, str]]:
+# ── methods mode ─────────────────────────────────────────────────────────────
+# A methods search is not a topic search. It looks for sources where someone DID a procedure
+# in a particular way (or defined, compared, or criticised how it is done), so that a choice in
+# the analysis can cite a precedent: "Studer & Ritschard set substitution costs from transition
+# rates". The procedure is very nearly the whole of the interest. What the source's own study
+# was about does not matter, and a source that discusses the project's subject without
+# showing how a procedure was carried out is of no use at all. DigiPros' first methods gather
+# searched the subject and curated papers on segregation and diffusion (2026-11-01).
+METHODS_STANCE = (
+    "This is a METHODS search. It wants sources where someone carried out, specified, "
+    "derived, compared or criticised a PROCEDURE, so that a choice can cite precedent: "
+    "'X did this procedure in this way'. The procedure is the whole of the interest. What the "
+    "source's own study was about is irrelevant, and the research project's subject matter "
+    "must not appear in any query. Criticism carries as much weight as the procedure itself: "
+    "there are usually several ways to do X, and the review must say why one was chosen AND "
+    "why the others were not, so the alternatives, the head-to-head comparisons, and the "
+    "papers showing where each one fails are wanted as much as the chosen procedure.")
+
+_METHODS_QUERYGEN_SYS = METHODS_STANCE + """
+You generate search queries for academic databases (OpenAlex, Crossref, Semantic Scholar).
+Given the procedures to cover, produce 8-10 SHORT keyword queries (3-8 words each) built
+ONLY from the names methodologists use for the procedures, their variants, their parameters
+and their known problems (for example "optimal matching substitution costs", "moving block
+bootstrap block length", "cluster validity index comparison"). For each procedure, cover
+its ALTERNATIVES and the CRITICISM of it: comparisons, simulation studies, bias, and failure
+conditions ("optimal matching critique", "dissimilarity measures comparison"). Include named methods,
+estimators, software or methodologists where an expert would search by name. Never include
+a substantive subject, population, or application field.
+Respond with ONLY a JSON array of query strings, no other text."""
+
+_METHODS_QUERY_CRITIQUE_PROMPT = """\
+Procedures to cover: {domain_anchor}
+Keep out: {exclude_topics}
+
+Search queries to audit:
+{queries}
+
+Check:
+1. Procedure only. Does any query name a subject, population, or application field rather
+   than a procedure? Flag it: a methods search must find how a procedure is done, wherever
+   it was done.
+2. Coverage. Is any procedure listed above left without a query? Is any procedure covered
+   only by its own name, with no query for its alternatives, comparisons or criticism?
+   Flag it.
+3. Distinctness. Are any two queries near-paraphrases? Flag the duplicates.
+4. Query format. Are any queries longer than 8 words, or full sentences? Flag them.
+
+Output: numbered list of problems. Quote the offending query where helpful. If all
+queries are correct, respond "OK"."""
+
+_METHODS_QUERY_REVISE_PROMPT = """\
+Procedures to cover: {domain_anchor}
+Keep out: {exclude_topics}
+
+Current queries:
+{queries}
+
+Problems to fix:
+{critique}
+
+Fix every listed problem. Every query names a procedure, its variants, parameters or known
+problems, in the methodologists' own vocabulary, and nothing about any subject matter.
+Return 8-10 queries total as a JSON array"""
+
+_METHODS_TOPIC_QUERY_SYS = METHODS_STANCE + """
+You are given ONE procedure (a methodological family) and what must be defended about it.
+Produce 3-4 SHORT keyword queries (3-8 words each) that reach sources showing how that
+procedure is carried out and parameterised, AND at least one aimed at its alternatives or
+its criticism (comparisons, simulation studies, bias, when it fails), using the vocabulary
+methodologists use for it. No subject matter, no application field.
+Respond with ONLY a JSON array of query strings, no other text."""
+
+
+def _generate_queries(brain: Brain, cfg, methods: bool = False) -> tuple[list[str], dict[str, str]]:
     """Decompose topic+focus into several targeted search queries (plus the raw topic).
 
     Returns ``(queries, origin)``; ``origin`` maps each query to the ``cfg.gather_topics``
@@ -357,6 +439,8 @@ def _generate_queries(brain: Brain, cfg) -> tuple[list[str], dict[str, str]]:
     set stays capped; per-topic queries are added ON TOP of that cap, never inside it, so a
     reviewer's ask cannot be crowded out by the standing scope.
     """
+    if methods:
+        return _generate_methods_queries(brain, cfg)
     base = cfg.topic.strip()
     prompt = (f"Topic: {cfg.topic}\nFocus: {cfg.focus or '(none)'}\n"
               f"Must be about: {cfg.domain_anchor or '(the topic above)'}\n"
@@ -398,6 +482,66 @@ def _generate_queries(brain: Brain, cfg) -> tuple[list[str], dict[str, str]]:
             seen.add(q.lower())
             queries.append(q)
             origin[q] = topic
+    return queries, origin
+
+
+def _critique_hop(found: list[Candidate], gc, log) -> list[Candidate]:
+    """A methods search's second hop: forward again from the most-cited critiques.
+
+    A method's literature is a chain of argument: the canonical procedure, the paper showing
+    when it fails, the alternatives that answer that, and the comparisons among them (DiD:
+    two-way fixed effects, then Goodman-Bacon's decomposition, then Callaway & Sant'Anna and
+    the rest, then the reviews that compare them). One hop from the canonical paper reaches
+    the critique; the answers to the critique cite the critique, so they are a hop further.
+    """
+    crit = sorted((c for c in found if "chain:critique" in (c.found_by or []) and c.doi_key),
+                  key=lambda c: c.cited_by_count, reverse=True)
+    seeds = list(dict.fromkeys(c.doi_key for c in crit))[:6]
+    if not seeds:
+        return []
+    log(f"Critique chain: following {len(seeds)} critique(s) forward to their answers...")
+    return sources.openalex_snowball(seeds, gc.contact_email, max_seeds=6, per_seed=15,
+                                     critique=True, refs=False)
+
+
+def _generate_methods_queries(brain: Brain, cfg) -> tuple[list[str], dict[str, str]]:
+    """The methods-mode query set: procedure names only, one guaranteed set per family.
+
+    No raw-topic query (a methods topic is a list of procedures, not a search phrase), and no
+    underrepresented-venue query: that rule is about whose findings a topic review hears, and a
+    methods search is after a procedure wherever it was published.
+    """
+    prompt = (f"Procedures to cover: {cfg.domain_anchor or cfg.topic}\n"
+              f"Keep out: {cfg.exclude_topics or '(nothing specific)'}\n\n"
+              f"Search queries (JSON array):")
+    try:
+        raw = brain.coordinator(prompt, _METHODS_QUERYGEN_SYS, num_ctx=4096)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        queries = [str(q).strip() for q in (json.loads(m.group(0)) if m else []) if str(q).strip()]
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] query generation failed ({e}); searching each family by name.",
+              file=sys.stderr)
+        queries = []
+    seen, out = set(), []
+    for q in queries:
+        if q.lower() not in seen:
+            seen.add(q.lower())
+            out.append(q)
+    queries = out[:10]
+    if queries:
+        queries = _critique_revise_queries(brain, cfg, queries, methods=True)
+    origin = {q: "" for q in queries}
+    for family in (getattr(cfg, "gather_topics", None) or []):
+        family = str(family).strip()
+        if not family:
+            continue
+        for q in _topic_queries(brain, cfg, family, methods=True):
+            if q.lower() in seen:
+                origin.setdefault(q, family)
+                continue
+            seen.add(q.lower())
+            queries.append(q)
+            origin[q] = family
     return queries, origin
 
 
@@ -488,7 +632,16 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         """Progress line stamped with elapsed mm:ss, so a long run is legible."""
         print(f"  {runlog.stamp()}{msg}", flush=True)
 
-    if not cfg.topic and cfg.research_prompt:
+    methods = config.kind_of(paths.root).name == "methods"
+    if methods and not (cfg.domain_anchor or cfg.gather_topics):
+        # Deriving a topic from the prompt is how a methods search ends up searching the
+        # subject. A methods review is seeded from the design session's scope brief; without
+        # the families it names there is nothing to search for.
+        print("rabbitHole gather: this methods review names no procedures to search "
+              "(domain_anchor and gather_topics are empty). Re-seed its config from "
+              "METHODS_SCOPE.md before gathering.", file=sys.stderr)
+        return 1
+    if not cfg.topic and cfg.research_prompt and not methods:
         log("Extracting topic and focus from your research prompt...")
         cfg.topic, cfg.focus, cfg.domain_anchor, cfg.exclude_topics = (
             _extract_topic(brain, cfg.research_prompt))
@@ -497,7 +650,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
             log(f"Focus: {cfg.focus}")
         config.save_project(cfg, directory)
 
-    print(f"rabbitHole gather — {cfg.project_name}")
+    print(f"rabbitHole gather — {cfg.project_name}" + (" (methods search)" if methods else ""))
     print(f"  topic: {cfg.topic}")
     if cfg.focus:
         print(f"  focus: {cfg.focus}")
@@ -513,7 +666,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     source_counts: dict[str, int] = {}
 
     log("Generating search queries with the coordinator model...")
-    queries, query_origin = _generate_queries(brain, cfg)
+    queries, query_origin = _generate_queries(brain, cfg, methods=methods)
     log(f"{len(queries)} query angles:")
     for q in queries:
         owner = query_origin.get(q, "")
@@ -618,7 +771,9 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     # in a field-defining paper whose title uses different vocabulary.
     snowballed = 0
     snowball_extra: list[Candidate] = []
-    coll_papers = _zotero_collection_papers(cfg, gc)
+    # The collection is the project's one collection, shared with the topic review: seeding a
+    # methods search from it walks the citation trails of the SUBJECT.
+    coll_papers = [] if methods else _zotero_collection_papers(cfg, gc)
     coll_seed_dois = [p["doi"] for p in coll_papers if p["doi"]]
     by_cites = sorted(kept, key=lambda c: c.cited_by_count, reverse=True)
     cite_seed_dois = [c.doi_key for c in by_cites if c.doi_key][:8]
@@ -640,10 +795,12 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
         raw_snow: list[Candidate] = []
         if review_seed_dois:
             raw_snow += sources.openalex_snowball(
-                review_seed_dois, gc.contact_email, max_seeds=6, per_seed=25)
+                review_seed_dois, gc.contact_email, max_seeds=6, per_seed=25, critique=methods)
         if other_seed_dois:
             raw_snow += sources.openalex_snowball(
-                other_seed_dois, gc.contact_email, max_seeds=10, per_seed=15)
+                other_seed_dois, gc.contact_email, max_seeds=10, per_seed=15, critique=methods)
+        if methods:
+            raw_snow += _critique_hop(raw_snow, gc, log)
         snowball_extra = _merge_new(raw_snow, kept, cfg)
         if snowball_extra:
             snowballed = len(snowball_extra)
@@ -692,7 +849,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
                           target=cfg.target_max,
                           gather_topics=list(getattr(cfg, "gather_topics", None) or []),
                           domain_anchor=cfg.domain_anchor,
-                          exclude_topics=cfg.exclude_topics)
+                          exclude_topics=cfg.exclude_topics, methods=methods)
 
     # Reconcile against Zotero: drop what's already in the collection, auto-file
     # anything you already have elsewhere in your library, and keep only the
@@ -700,7 +857,8 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
     collection_key, already, auto_added = "", 0, 0
     if use_zotero and gc.have_zotero:
         log("Reconciling against your Zotero collection...")
-        collection_key, ranked, already, auto_added = _zotero_filter(cfg, gc, ranked)
+        own: set[str] = set()
+        collection_key, ranked, already, auto_added = _zotero_filter(cfg, gc, ranked, own)
         if collection_key:
             log(f"In collection: {already} already | "
                 f"{auto_added} auto-added from your library | "
@@ -710,7 +868,7 @@ def run(directory: str = ".", use_zotero: bool = True) -> int:
             # Every item in the collection gets a ledger row, and rabbitHole's own finds
             # take THIS review's role — so the common case needs no decision from anyone
             # at `collect`. Only what the human adds on top is left to code in.
-            corpus_ledger.sync(config.project_paths(directory), cfg, gc)
+            corpus_ledger.sync(config.project_paths(directory), cfg, gc, own=own)
     elif use_zotero:
         print("\n[note] No Zotero credentials — listing all candidates "
               "(can't tell which you already have). "
@@ -849,12 +1007,18 @@ class _ZoteroIndex:
         return None
 
 
-def _zotero_filter(cfg, gc, ranked: list[Candidate]):
+def _item_key(item: dict) -> str:
+    return item.get("key") or (item.get("data") or {}).get("key", "")
+
+
+def _zotero_filter(cfg, gc, ranked: list[Candidate], own: set[str] | None = None):
     """Find-or-create the collection, then split `ranked`:
       - already in the collection         -> dropped (counted)
       - in the library but not collection -> added to the collection, dropped
       - absent from the library           -> kept (the human search list)
-    Returns (collection_key, kept, already_in_collection, auto_added)."""
+    Returns (collection_key, kept, already_in_collection, auto_added). `own`, if given,
+    collects the keys of every item THIS search matched, in the collection or filed into it:
+    those, and only those, are this review's finds in the ledger."""
     from . import zotero
     try:
         zc = zotero.ZoteroClient(gc)
@@ -884,12 +1048,17 @@ def _zotero_filter(cfg, gc, ranked: list[Candidate]):
 
     kept, already, added = [], 0, 0
     for c in ranked:
-        if collection.find(c) is not None:
+        hit = collection.find(c)
+        if hit is not None:
             already += 1
+            if own is not None:
+                own.add(_item_key(hit))
             continue
         item = library.find(c)
         if item is not None and zc.add_item_to_collection(item, coll):
             added += 1
+            if own is not None:
+                own.add(_item_key(item))
             continue
         kept.append(c)
     return coll, kept, already, added

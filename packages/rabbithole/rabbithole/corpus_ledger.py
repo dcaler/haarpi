@@ -331,7 +331,8 @@ def format_reconciliation(rec: Reconciliation, *, prefix: str = "  ") -> list[st
     return out
 
 
-def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
+def sync(paths, cfg, gc, *, quiet: bool = False, own: set[str] | None = None,
+         claim_all: bool = False) -> Reconciliation:
     """Bring the ledger level with the live collection, and write it.
 
     Called wherever the collection may have changed under us — after `gather` files its
@@ -342,6 +343,13 @@ def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
 
     Network failures are not fatal. A ledger that is one gather behind is repaired by the
     next sync; refusing to run because Zotero was unreachable would be worse.
+
+    Who claims what. `collect` (`claim_all`) is the human's step: what you add while working
+    on a review is that review's. Anywhere else, only the items this run itself matched
+    (`own`, from gather) take the review's purpose; anything else with no row is filed as
+    literature and named in the log. Without that, a methods gather swept six leftover topic
+    papers into DigiPros' methods corpus (2026-11-01). A topic review is unaffected: its
+    purpose IS literature.
     """
     from . import config as _cfg
     project_root = _cfg.work_root(paths.root).parent
@@ -360,7 +368,25 @@ def sync(paths, cfg, gc, *, quiet: bool = False) -> Reconciliation:
             print(f"  [warn] could not sync the corpus ledger ({e}); it will catch up next run.")
         return Reconciliation()
 
-    rows, rec = reconcile(project_root, items, default_purpose=kind.name, added_by=kind.name)
+    if claim_all or kind.name == LITERATURE:
+        rows, rec = reconcile(project_root, items, default_purpose=kind.name,
+                              added_by=kind.name)
+    else:
+        rows, rec = reconcile(project_root, items, default_purpose=LITERATURE,
+                              added_by=kind.name)
+        own = own or set()
+        for row in rec.added:
+            if row.key in own:
+                row.purpose = [kind.name]
+        for key in own:
+            r = rows.get(key)
+            if r is not None and r not in rec.added and kind.name not in r.purpose:
+                r.purpose = _clean_purpose(list(r.purpose) + [kind.name])
+        stray = [r for r in rec.added if r.key not in own]
+        if stray and not quiet:
+            print(f"  {len(stray)} item(s) this {kind.name} search did not find are filed as "
+                  f"{LITERATURE}; if one is a {kind.name} source, claim it at `collect` "
+                  f"with --purpose KEY={kind.name}.")
     save(project_root, rows)
     if not quiet:
         for line in format_reconciliation(rec):
@@ -402,7 +428,7 @@ def run_collect(directory: str = ".", *, purposes: dict[str, str] | None = None,
         print("  [error] collect needs a Zotero collection (run gather first).")
         return 1
 
-    rec = sync(paths, cfg, gc)
+    rec = sync(paths, cfg, gc, claim_all=True)
     if rec.clean and not purposes and not statuses:
         print(f"  {runlog.stamp()}Ledger is level with the collection "
               f"({rec.total} item(s)); nothing new to code in.")

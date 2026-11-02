@@ -126,9 +126,24 @@ def _openalex_fetch_by_ids(c: httpx.Client, ids: list[str], email: str) -> list[
     return out
 
 
+# A methods search follows a procedure's citers for the work that ARGUES with it: the critique,
+# the correction, the extension, the head-to-head comparison. Most citers of a canonical method
+# paper merely apply it (thousands of studies cite the two-way fixed-effects DiD), so a sort by
+# citations or date returns applications; this search over the citers is what reaches
+# Goodman-Bacon's decomposition and the estimators that answered it.
+CRITIQUE_SEARCH = ("bias OR biased OR robust OR critique OR pitfalls OR problems OR alternative "
+                   "OR comparison OR comparing OR extension OR generalization OR improved OR "
+                   "correction OR simulation OR heterogeneous OR misspecification")
+
+
 def openalex_snowball(seed_dois: list[str], email: str,
-                      max_seeds: int = 8, per_seed: int = 15) -> list[Candidate]:
-    """Expand from seed DOIs via OpenAlex citation trails (references + citers)."""
+                      max_seeds: int = 8, per_seed: int = 15, *,
+                      critique: bool = False, refs: bool = True) -> list[Candidate]:
+    """Expand from seed DOIs via OpenAlex citation trails (references + citers).
+
+    `critique` adds a third forward pass: the seed's citers that match CRITIQUE_SEARCH, ranked
+    by relevance, each tagged `found_by` "chain:critique" so a caller can chain on from them.
+    `refs=False` skips the backward pass (a second hop wants only what came after)."""
     out: list[Candidate] = []
     try:
         with _client(email) as c:
@@ -142,9 +157,10 @@ def openalex_snowball(seed_dois: list[str], email: str,
                 except Exception:  # noqa: BLE001
                     continue
                 wid = (w.get("id") or "").rsplit("/", 1)[-1]
-                refs = [u.rsplit("/", 1)[-1] for u in (w.get("referenced_works") or [])][:per_seed]
-                if refs:
-                    out += _openalex_fetch_by_ids(c, refs, email)
+                back = ([u.rsplit("/", 1)[-1] for u in (w.get("referenced_works") or [])][:per_seed]
+                        if refs else [])
+                if back:
+                    out += _openalex_fetch_by_ids(c, back, email)
                 # Forward citers in two passes: most-cited (established follow-on
                 # work) AND most-recent. A citations-only sort buries recent
                 # high-value work — e.g. a 2024 review — below the per-seed cap,
@@ -160,6 +176,19 @@ def openalex_snowball(seed_dois: list[str], email: str,
                                         for x in rc.json().get("results", [])]
                         except Exception:  # noqa: BLE001
                             pass
+                if wid and critique:
+                    try:
+                        rc = c.get("https://api.openalex.org/works",
+                                   params={"filter": f"cites:{wid}", "search": CRITIQUE_SEARCH,
+                                           "sort": "relevance_score:desc",
+                                           "per-page": per_seed * 2, "mailto": email})
+                        if rc.status_code == 200:
+                            for x in rc.json().get("results", []):
+                                cand = _openalex_work_to_candidate(x)
+                                cand.found_by = list(cand.found_by or []) + ["chain:critique"]
+                                out.append(cand)
+                    except Exception:  # noqa: BLE001
+                        pass
     except Exception as e:  # noqa: BLE001
         _warn(f"OpenAlex snowball failed: {e}")
     return out

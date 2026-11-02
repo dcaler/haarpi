@@ -287,6 +287,26 @@ adjacent to an excluded field. Its minted review says "sequence analysis" 42
 times and names two concrete techniques. The failure was structural, and no
 amount of steering addresses it.
 
+**A methods search looks for how a procedure is done, not for a topic.** What it
+wants is "so-and-so did X in this way": the procedure is very nearly the whole of
+the interest, and what the source's own study was about does not matter. Criticism
+weighs as much as the procedure, because there are usually several ways to do X and
+the design has to say why it chose one *and* why it did not choose the others (which
+may still appear in the SI). So in a methods review:
+
+- each family in `METHODS_SCOPE.md` becomes its own search ask, with what must be
+  defended about it, and its yield is reported on its own line;
+- the queries name procedures, their alternatives and their known problems, never the
+  project's subject, and the brief in `haarpi.yaml` never replaces the scope as the
+  review's prompt;
+- the citation chain runs forward from the canonical method papers to the work that
+  argues with them (critiques, comparisons, corrections, extensions), then forward
+  again from the most-cited critiques to their answers. Difference-in-differences is
+  the model: two-way fixed effects, then the decomposition showing when it is biased,
+  then the estimators that answered it;
+- the ranker scores whether a source shows how a procedure, or an alternative to it,
+  is done or where it fails, and ignores what the source is about.
+
 So a review is a **kind**: a folder, a config stem, and a deliverable infix.
 `litReview/litrev.yaml` mints a `litreview`; `methodsReview/methodsreview.yaml`
 mints a `methodsreview`. The infixes differ because `methods` already belongs to
@@ -304,7 +324,10 @@ independent things about each source:
   on sequence analysis applied to funding pathways is methodological work and
   substantive work at once, and a single collection is pointless if it cannot say
   so. Written by `gather`, from the review that found it; *added to*, never
-  replaced, so nothing takes the first purpose away.
+  replaced, so nothing takes the first purpose away. `gather` claims only what its
+  own search matched: anything else in the collection with no row is filed as
+  `literature`. Only `collect`, your step, gives your additions the purpose of the
+  review you are working in.
 - **status** — whether it is *in* the corpus at all: `corpus`, `quarantine` or
   `retired`. The last two are both "out", and they are not the same fact.
   **`quarantine`** is a machine verdict — `audit` judged a shared word not to
