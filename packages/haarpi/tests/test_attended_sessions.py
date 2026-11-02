@@ -119,7 +119,10 @@ def test_the_genuinely_human_steps_keep_no_command():
 def test_collect_carries_the_ledger_verb():
     s = planner.STAGE_STEPS["litreview"]["collect"]
     assert s.command == "haarpi rabbithole collect" and s.attended
-    assert s.resources == ("human", "claude")
+    # Attended but no Claude session: the person files the PDFs and runs the verb alone.
+    assert s.resources == ("human",)
+    assert planner.STAGE_STEPS["design"]["methods_collect"].resources == ("human",)
+    assert planner.STAGE_STEPS["design"]["design_bind"].resources == ("human", "claude")
 
 
 # ── what reaches the board ───────────────────────────────────────────────────

@@ -61,6 +61,10 @@ class Step:
     # and booked the human resource alone while Claude's time showed as free. A session is
     # both things at once, and the registry has to be able to say so.
     attended: bool = False
+    # ...but not every attended step is a Claude session. `collect` is the person at the
+    # keyboard filing PDFs into Zotero and running the verb: Cale alone (2026-11-02, DigiPros
+    # task 1472 was booked Cale + Claude).
+    session: bool = True
 
     @property
     def human(self) -> bool:
@@ -73,9 +77,10 @@ class Step:
         """Every resource the step occupies.
 
         An attended session books the human AND the Claude agent; booking one of the two
-        makes the other look available. Every other step books exactly what it declared.
+        makes the other look available. An attended step that is no session (`collect`) books
+        the human alone. Every other step books exactly what it declared.
         """
-        if self.attended:
+        if self.attended and self.session:
             return ("human", "claude")
         return ("human",) if self.command is None else (self.resource,)
 
@@ -90,13 +95,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
                         "Search, rank and curate candidate sources into the collect-list. "
                         "The HUMAN adds them to Zotero at `collect`; gather puts nothing "
                         "there itself.", resource="gpu"),
-        # Attended: the downloading and filing is the human's, but `collect` now has a verb
-        # that codes what they added into the corpus ledger and reports which items still
-        # lack a PDF. Both halves happen in one sitting, so it books human + claude.
+        # Attended: the downloading and filing is the human's, and `collect` has a verb that
+        # codes what they added into the corpus ledger and reports which items still lack a
+        # PDF. Both halves are the person's, in one sitting, so it books the human alone.
         "collect": Step("haarpi rabbithole collect", 0.25,
                         "Download the new PDFs and add them to the Zotero collection, then "
                         "code them into the corpus ledger (role + what still needs a PDF).",
-                        resource="human", attended=True),
+                        resource="human", attended=True, session=False),
         "audit":   Step("haarpi rabbithole audit", 0.5,
                         "Word-sense filter: quarantine lexical false-friends (shared word, no "
                         "conceptual transfer) from the finalised corpus (reversible).", resource="gpu"),
@@ -190,7 +195,7 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "methods_collect": Step("haarpi rabbithole collect methods", 0.25,
                                 "Add the real sources to Zotero with their PDFs, then code "
                                 "them into the corpus ledger with purpose `methods`.",
-                                resource="human", attended=True),
+                                resource="human", attended=True, session=False),
         "methods_build": Step("haarpi rabbithole build methods", 1.0,
                               "Embed the methods corpus — only the ledger rows whose purpose "
                               "is `methods`.", resource="gpu"),
