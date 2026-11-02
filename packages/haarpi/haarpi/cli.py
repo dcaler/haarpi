@@ -140,12 +140,13 @@ def _init_dir(rest: list[str]) -> Path:
     return Path(".").resolve()
 
 
-def _write_status(verb: str, init_dir: Path | None = None) -> None:
+def _write_status(verb: str, init_dir: Path | None = None, command: str = "") -> None:
     """Refresh the project's .haarpi/status.json after any verb (raDash reads it). On every exit
-    path, errors included, and never at the cost of the verb's own result."""
+    path, errors included, and never at the cost of the verb's own result. ``command`` is the
+    full command line, so the run's own still-in-progress task is not reported as running."""
     from . import project, status
     root = init_dir if init_dir is not None else project.find_root()
-    status.write_status(root, generated_by=verb)
+    status.write_status(root, generated_by=verb, finished=command)
 
 
 def _dispatch(tool_pkg: str, args: list[str]) -> int:
@@ -240,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return _dispatch(TOOLS[cmd], rest)
         finally:
-            _write_status(f"haarpi {cmd} {rest[0]}" if rest else f"haarpi {cmd}")
+            _write_status(f"haarpi {cmd} {rest[0]}" if rest else f"haarpi {cmd}",
+                          command=" ".join(["haarpi", cmd, *rest]))
     if cmd == "doctor":
         if "--migrate" in rest:
             return _migrate([a for a in rest if a != "--migrate"])
@@ -249,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return _pipeline_verb(cmd, rest)
         finally:
-            _write_status(f"haarpi {cmd}", init_dir=_init_dir(rest) if cmd == "init" else None)
+            _write_status(f"haarpi {cmd}", init_dir=_init_dir(rest) if cmd == "init" else None,
+                          command=" ".join(["haarpi", cmd, *rest]))
     if cmd == "bench":
         from . import bench
         return bench.main(rest)

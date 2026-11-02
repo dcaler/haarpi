@@ -96,7 +96,11 @@ warns and never fails the verb. Code: `haarpi/status.py`.
 ### `waiting_on`
 
 From the milestone's open trundlr tasks when there are any: `running` if one is in progress,
-else `you` when the earliest is a human task, `queue` when it is a runner task. With no open
+else `you` when the earliest is a human task, `queue` when it is a runner task. The task of the
+run writing the file is not counted: it is still in progress on the board as the run exits (the
+runner marks it done afterwards), and counting it froze the file at `running` until the next
+verb. The file is a snapshot as of `generated`: a human task marked done on the board changes
+nothing here until the next `haarpi` verb runs. With no open
 tasks it falls back to the document: a tool draft (`…_ra`) waits on `you`; a reviewer's markup
 (`…_DCR`) waits on the `tool` (a `haarpi next` that is not queued). A deck in flight waits on `you`
 (it is reviewed in place).

@@ -3154,9 +3154,11 @@ def _paper_pick(root: Path, m: project.Manifest, includes: list[str],
     includes = [i.lower() for i in includes]
     exclude = {w for w in _PAPER_DELIVERABLE_WORDS if w not in includes}
     best: Path | None = None
-    for d in {m.output_dir(root, "paper"), m.stage_dir(root, "paper")}:
-        if not d.is_dir():
-            continue
+    # Every live folder, not just paper/ and paper/output/: raconteur writes each deliverable
+    # into its own (paper/onepager/, paper/<venue>/outline/ …), and this two-folder scan made
+    # `haarpi status` and status.json report a one-pager with drafts on disk as not started
+    # (DigiPros, 2026-10-27). The gate's _markup_dirs was fixed the same way earlier.
+    for d in _markup_dirs(root, m, "paper"):
         for p in d.glob("*.docx"):
             parsed = naming.parse(p, m.short_title)
             if not parsed:

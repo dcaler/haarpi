@@ -238,11 +238,22 @@ def _imply(rows: list[dict], m) -> None:
 
 
 # ── trundlr: who it waits on, and when it might land ─────────────────────────────
-def _assign_tasks(rows: list[dict], tasks: list[dict], human_ids: set[int]) -> None:
+def _same_command(a: str | None, b: str | None) -> bool:
+    return bool(a and b) and " ".join(a.split()) == " ".join(b.split())
+
+
+def _assign_tasks(rows: list[dict], tasks: list[dict], human_ids: set[int],
+                  finished: str = "") -> None:
+    """``finished`` is the command of the run writing this file, as it exits. Its task is still
+    in progress on the board — the runner marks it done only after the process ends — so it
+    is skipped: counted, it froze the file at "running" until some later verb rewrote it
+    (postIneq's report 1301, written 28 Oct, still "running" on 1 Nov)."""
     from . import planner
     by_id = {r["id"]: r for r in rows}
     for t in tasks:
         if t.get("status") in ("done", "cancelled"):
+            continue
+        if t.get("status") == "in_progress" and _same_command(t.get("command"), finished):
             continue
         parsed = planner._parse_title(t.get("title", ""))
         if not parsed:
@@ -304,7 +315,7 @@ def _health(r: dict, today: date) -> None:
 # ── the document ─────────────────────────────────────────────────────────────────
 def build(root: Path, m=None, *, tasks: list[dict] | None = None, human_ids=(),
           venues: list[str] | None = None, generated_by: str = "",
-          today: date | None = None) -> dict:
+          today: date | None = None, finished: str = "") -> dict:
     """The whole status document. ``tasks`` are the project's trundlr tasks (None: trundlr was
     not consulted, so nothing is projected); ``venues`` default to the author's selection."""
     from . import planner
@@ -316,7 +327,7 @@ def build(root: Path, m=None, *, tasks: list[dict] | None = None, human_ids=(),
     rows += decks
     _imply(rows, m)
     if tasks is not None:
-        _assign_tasks(rows, tasks, set(human_ids))
+        _assign_tasks(rows, tasks, set(human_ids), finished)
     targets = getattr(m, "milestones", None) or {}
     for r in rows:
         if r["id"] in targets:
@@ -357,7 +368,7 @@ def _trundlr(m) -> tuple[list[dict] | None, set[int]]:
         return None, set()
 
 
-def write_status(root: Path | None, generated_by: str = "") -> Path | None:
+def write_status(root: Path | None, generated_by: str = "", finished: str = "") -> Path | None:
     """Rebuild and atomically write `.haarpi/status.json`. Never raises: a status file that
     cannot be written must not fail the work that triggered it."""
     if root is None or not (root / project.MANIFEST).is_file():
@@ -365,7 +376,8 @@ def write_status(root: Path | None, generated_by: str = "") -> Path | None:
     try:
         m = project.load_manifest(root)
         tasks, human = _trundlr(m)
-        doc = build(root, m, tasks=tasks, human_ids=human, generated_by=generated_by)
+        doc = build(root, m, tasks=tasks, human_ids=human, generated_by=generated_by,
+                    finished=finished)
         fp = status_path(root)
         fp.parent.mkdir(parents=True, exist_ok=True)
         tmp = fp.with_name(f".{fp.name}.{os.getpid()}.tmp")

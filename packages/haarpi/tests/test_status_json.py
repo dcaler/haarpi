@@ -139,3 +139,40 @@ def test_every_haarpi_verb_refreshes_the_file(tmp_path, monkeypatch):
     except ZeroDivisionError:
         pass
     assert status.status_path(tmp_path).is_file()       # written on the error path too
+
+
+def test_the_run_writing_the_file_is_not_reported_as_still_running(tmp_path):
+    """Its own task is in progress until the runner marks it done, after the process exits."""
+    m = _proj(tmp_path)
+    _touch(tmp_path / "litReview" / "output" / "261026_Chords_litreview_ra.md")
+    tasks = [{"id": 5, "title": "rabbithole report 2", "status": "in_progress",
+              "command": "haarpi rabbithole report", "resource_ids": [2]},
+             {"id": 6, "title": "rabbithole comment 2", "status": "todo", "resource_ids": [1]}]
+    lit = _ids(status.build(tmp_path, m, tasks=tasks, human_ids={1}, venues=[],
+                            finished="haarpi  rabbithole report"))["litreview"]
+    assert [t["id"] for t in lit["open_tasks"]] == [6] and lit["waiting_on"] == "you"
+    other = _ids(status.build(tmp_path, m, tasks=tasks, human_ids={1}, venues=[],
+                              finished="haarpi rabbithole build"))["litreview"]
+    assert other["waiting_on"] == "running"            # another run's task still counts
+
+
+def test_a_verb_passes_its_full_command_to_the_status_writer(tmp_path, monkeypatch):
+    _proj(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+    monkeypatch.setattr(status, "write_status",
+                        lambda root, generated_by="", finished="": seen.update(f=finished))
+    monkeypatch.setattr(cli, "_dispatch", lambda *a: 0)
+    cli.main(["rabbithole", "report", "methods"])
+    assert seen["f"] == "haarpi rabbithole report methods"
+
+
+def test_a_one_pager_in_its_own_folder_is_in_flight(tmp_path):
+    """raconteur writes each deliverable into its own folder (paper/onepager/ ...)."""
+    m = _proj(tmp_path)
+    _touch(tmp_path / "paper" / "onepager" / "261027_Chords_onepager_ra.docx")
+    _touch(tmp_path / "paper" / "old" / "261001_Chords_venue_ra.docx")
+    rows = _ids(status.build(tmp_path, m, venues=[]))
+    assert rows["paper.onepager"]["state"] == "in_flight"
+    assert rows["paper.onepager"]["document"] == "261027_Chords_onepager_ra.docx"
+    assert rows["paper.venue"]["document"] is None      # an archived copy is not live work
