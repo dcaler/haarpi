@@ -208,8 +208,11 @@ through line that organizes those facts — the same structure the map draws
 radially.
 
 A second format, the **fact base**, is the default for a new project
-(`report_format: facts`; older reviews stay narrative unless migrated). It has no prose. Each source's salient facts are extracted, every quote is
-checked verbatim against its page, and each fact links to that page in Zotero.
+(`report_format: facts`; older reviews stay narrative unless migrated). It has no prose. From each source only what it would be cited for is extracted:
+its main contribution and its major themes. An incidental detail (background, an aside,
+a sample description, a passing statistic) or a claim the source reports from another
+work never becomes a fact of that source, and no document, page or later stage sees one.
+Every quote is checked verbatim against its page, and each fact links to that page in Zotero.
 Every fact is scored against a person-approved list of topics, each mapped to
 the research questions it serves; facts are grouped by topic and theme with short
 synthesis bullets, and the document links to the contribution map: an
@@ -225,7 +228,7 @@ record rather than prose to annotate. At this gate the question is whether the t
 cover the research question, judged against what each one found; whether the facts can
 carry an argument is tested later, by the stages that use them. `report` writes
 `{date}_{short}_review_ra.html` beside each draft: each topic with its counts and its
-themes, each stated as the claim its facts support; a verdict per question (covers it /
+themes, each named as the claim its facts support; a verdict per question (covers it /
 has gaps, the gap described in words) and per topic (enough / thin / off-target); a box
 for papers that must be there, matched against the corpus as you type; a spot-check of
 15 random facts beside their quotes and pages; and the contribution map, embedded, for
