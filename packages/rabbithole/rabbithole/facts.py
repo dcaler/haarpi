@@ -51,19 +51,25 @@ _MIN_TEXT_CHARS = 2000          # less body text than this: a scan without a tex
 _THIN_SOURCES = 3               # a question whose topics hold useful facts from fewer is THIN
 
 _SYS = """\
-You extract the most salient facts a paper establishes, for a researcher who will check every
-one against the paper itself. Respond with ONLY a JSON array, no other text:
+You extract what a paper is FOR: its main contribution and its major themes, for a researcher
+who will cite the paper for each fact and check it against the paper itself. Respond with ONLY
+a JSON array, no other text:
 
 [
   {"fact": "one self-contained sentence stating what the paper establishes",
+   "role": "contribution | theme",
    "kind": "finding | method | definition | argument | limitation",
    "page": the N of the [p.N] marker the supporting passage sits under,
    "quote": "a passage copied EXACTLY from the text, 8-30 words, that supports the fact"}
 ]
 
 Rules:
-- At most {max_facts} facts. Prefer the paper's own results, methods and definitions over
-  background it merely cites. A fact must be checkable against the quote.
+- At most {max_facts} facts; usually 3-6 are enough. "contribution": the paper's main
+  contribution — what a reader would cite it for. "theme": a major theme the paper develops,
+  argued or evidenced at length. A fact must be checkable against the quote.
+- NEVER extract an incidental detail: background, an aside, an example, a description of the
+  sample or data, a calibration or implementation detail, a passing statistic. A paper is cited
+  for what it is about, so a detail it is not about is not a fact of it.
 - Each fact stands alone: name what it is about instead of writing "this paper" or "they".
 - Reproduce reported quantities EXACTLY (numbers, units, statistics). Never round them away.
 - The quote must be copied character for character from the text, not paraphrased, and must
@@ -162,6 +168,8 @@ class Fact:
     claimed_page: int | None = None                # what the model cited, kept when search
     claimed_quote: str = ""                        # replaced it: to measure looser matching
     scores: list = field(default_factory=list)     # 0-3 per topic, in topic order
+    role: str = ""                                 # contribution | theme | incidental; "" =
+                                                   #   extracted before roles, not yet checked
 
 
 @dataclass
@@ -307,10 +315,12 @@ def _parse_facts(raw: str, citekey: str, n_items: int) -> list[Fact]:
             page = int(d.get("page")) if d.get("page") not in (None, "") else None
         except (TypeError, ValueError):
             page = None
+        role = str(d.get("role") or "").strip().lower()
         out.append(Fact(id=f"{citekey}#{len(out) + 1}", citekey=citekey,
                         text=" ".join(str(d["fact"]).split()),
                         kind=kind if kind in FACT_KINDS else "finding", focus=focus,
-                        page=page, quote=" ".join(str(d.get("quote") or "").split())))
+                        page=page, quote=" ".join(str(d.get("quote") or "").split()),
+                        role=role if role in ROLES else ""))
         if len(out) >= _MAX_FACTS:
             break
     return out
@@ -386,13 +396,68 @@ def reported(f: Fact) -> bool:
     return bool(sents) and all(_REPORTED.search(x) for x in sents)
 
 
-def own_facts(facts: list[Fact], label: str) -> list[Fact]:
-    """The source's own facts: reported claims dropped, each named in the log."""
-    keep = [f for f in facts if not reported(f)]
+ROLES = ("contribution", "theme", "incidental")
+
+_ROLE_SYS = "You judge what a paper is cited for. Respond with ONLY a JSON object."
+
+_ROLE_PROMPT = """\
+Paper: {title}
+Abstract: {abstract}
+
+Facts extracted from it:
+{facts}
+
+For EACH fact, say what it is to this paper:
+  "contribution" = the paper's main contribution: what a reader would cite it for
+  "theme"        = a major theme the paper develops, argued or evidenced at length
+  "incidental"   = anything else: background, an aside, an example, a description of the sample
+                   or data, a calibration or implementation detail, a passing statistic, or
+                   another work's claim the paper reports
+
+Return {{"roles": ["contribution" | "theme" | "incidental", ...]}}: one per fact, in order."""
+
+
+def check_roles(brain, c: Candidate, facts: list[Fact]) -> bool:
+    """Label facts extracted before roles existed, in one call per paper. A fact the model
+    leaves unlabelled stays "" and is kept: losing a contribution is worse than keeping a
+    detail. True if anything was labelled (so the cache is rewritten)."""
+    todo = [f for f in facts if not f.role]
+    if not todo:
+        return False
+    lines = "\n".join(f"{i}. {f.text}" for i, f in enumerate(todo, 1))
+    try:
+        raw = brain.coordinator(_ROLE_PROMPT.format(title=c.title, facts=lines,
+                                                    abstract=(c.abstract or "(none)")[:3000]),
+                                _ROLE_SYS, think=False, num_ctx=16384)
+        m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+        roles = (json.loads(m.group(0)) if m else {}).get("roles") or []
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] {c.title[:50]}: role check failed ({e}); its facts kept unchecked",
+              file=sys.stderr)
+        return False
+    if len(roles) != len(todo):
+        print(f"  [warn] {c.title[:50]}: role check returned {len(roles)} labels for "
+              f"{len(todo)} facts; kept unchecked", file=sys.stderr)
+        return False
+    for f, r in zip(todo, roles):
+        r = str(r).strip().lower()
+        f.role = r if r in ROLES else ""
+    return True
+
+
+def kept_facts(facts: list[Fact], label: str) -> list[Fact]:
+    """What a source may be cited for: its contribution and major themes. Incidental facts and
+    claims it reports from another work are dropped here, before anything is built from them —
+    no document, page, map or later stage ever sees them. Each drop is named in the log."""
+    keep = []
     for f in facts:
-        if reported(f):
-            print(f"  {runlog.stamp()}    {label}: dropped a claim it reports from another "
-                  f"work — “{guards_safe(f.quote or f.text)[:90]}”", flush=True)
+        why = ("incidental to the paper" if f.role == "incidental" else
+               "a claim it reports from another work" if reported(f) else "")
+        if why:
+            print(f"  {runlog.stamp()}    {label}: dropped {why} — "
+                  f"“{guards_safe(f.text)[:90]}”", flush=True)
+        else:
+            keep.append(f)
     return keep
 
 
@@ -425,7 +490,12 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         try:
             blob = json.loads(fp.read_text(encoding="utf-8"))
             if blob.get("_v") == _FACTS_VERSION and blob.get("facts"):
-                out[ck] = own_facts([Fact(**f) for f in blob["facts"]], ck)
+                fs = [Fact(**f) for f in blob["facts"]]
+                if check_roles(brain, c, fs):   # cached before roles: label once, re-cache
+                    blob["facts"] = [asdict(f) for f in fs]
+                    fp.write_text(json.dumps(blob, indent=2, ensure_ascii=False),
+                                  encoding="utf-8")
+                out[ck] = kept_facts(fs, ck)
                 cached += 1
                 continue
         except (OSError, ValueError, TypeError):
@@ -474,12 +544,12 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         if collection is not None:
             locate = lambda texts, _ck=ck: _chroma.locate_list(collection, brain, _ck, texts)  # noqa: E731
         ground(facts, full, locate=locate)
-        facts = own_facts(facts, label)
+        check_roles(brain, c, facts)            # any the extractor left unlabelled
         n_ok = sum(f.verified for f in facts)
         print(f"  {runlog.stamp()}    {len(facts)} facts, {n_ok} quoted verbatim", flush=True)
         fp.write_text(json.dumps({"_v": _FACTS_VERSION, "facts": [asdict(f) for f in facts]},
                                  indent=2, ensure_ascii=False), encoding="utf-8")
-        out[ck] = facts
+        out[ck] = kept_facts(facts, label)
         done += 1
     print(f"  {runlog.stamp()}facts ready: {done} extracted, {cached} cached  "
           f"[{runlog.fmt_dt(time.time() - t0)}]", flush=True)

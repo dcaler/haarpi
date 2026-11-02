@@ -580,7 +580,51 @@ def test_the_sources_own_use_of_cited_work_stays_its_fact():
         assert not facts.reported(_q(q)), q
 
 
-def test_reported_claims_are_dropped_with_a_log_line(capsys):
-    kept = facts.own_facts([_q("Smith (2005) argued X"), _q("Our model shows Y")], "Abdel 2018")
+def test_reported_and_incidental_facts_are_dropped_with_a_log_line(capsys):
+    side = _q("Pinus edulis grows best on dry soils")
+    side.role = "incidental"
+    kept = facts.kept_facts([_q("Smith (2005) argued X"), _q("Our model shows Y"), side],
+                            "Abdel 2018")
     assert [f.quote for f in kept] == ["Our model shows Y"]
-    assert "dropped a claim it reports" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "dropped a claim it reports" in out and "dropped incidental" in out
+
+
+# ── roles: a paper is cited for its contribution and major themes only ─────────
+
+class _RoleBrain:
+    def __init__(self, reply):
+        self.reply, self.prompts = reply, []
+
+    def coordinator(self, prompt, *a, **k):
+        self.prompts.append(prompt)
+        return self.reply
+
+
+def _paper():
+    return Candidate(title="Rise of PPPs", year=2018, abstract="PPPs transfer technology.",
+                     authors=[Author(family="Abdel-Latif", given="A")])
+
+
+def test_the_role_check_labels_only_unchecked_facts():
+    done = _q("a", text="Done.")
+    done.role = "contribution"
+    fs = [done, _q("b", text="PPPs speed transfer."), _q("c", text="FY81 PV budget fell.")]
+    brain = _RoleBrain('{"roles": ["theme", "incidental"]}')
+    assert facts.check_roles(brain, _paper(), fs)
+    assert [f.role for f in fs] == ["contribution", "theme", "incidental"]
+    assert "Done." not in brain.prompts[0] and "PPPs transfer technology." in brain.prompts[0]
+    assert not facts.check_roles(brain, _paper(), fs)      # nothing left: no call
+    assert len(brain.prompts) == 1
+
+
+def test_a_bad_role_reply_keeps_every_fact():
+    fs = [_q("b", text="One."), _q("c", text="Two.")]
+    assert not facts.check_roles(_RoleBrain('{"roles": ["theme"]}'), _paper(), fs)
+    assert [f.role for f in fs] == ["", ""] and len(facts.kept_facts(fs, "x")) == 2
+
+
+def test_the_extractor_s_role_is_read_and_an_unknown_one_left_unchecked():
+    raw = json.dumps([{"fact": "A.", "role": "Contribution", "quote": "q"},
+                      {"fact": "B.", "role": "trivia", "quote": "q"}])
+    assert [f.role for f in facts._parse_facts(raw, "k", 1)] == ["contribution", ""]
