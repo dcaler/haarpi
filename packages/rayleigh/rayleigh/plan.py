@@ -11,6 +11,7 @@ Works in `results/` (the experiments stage's directory), which is exactly where 
 `queue` already read the spec + config from — so no repoint is needed.
 """
 
+import time
 import shutil
 import subprocess
 from datetime import date
@@ -137,6 +138,7 @@ def run_plan(args) -> int:
     print()
     print(f"  Scaffolded results/ for {name} (cycle {cycle}) in {results}")
     interactive = not getattr(args, "no_launch", False) and shutil.which("claude") is not None
+    started = time.time()
     rc = launch_session(root, getattr(args, "no_launch", False), model=cfg.design_model)
     if interactive and rc == 0:
         # The session has authored experiments.yaml — render the experiment DAG onto the pool
@@ -146,6 +148,8 @@ def run_plan(args) -> int:
         dag = rfigures.emit_experiment_dag(root, short)
         if dag and dag.get("svg"):
             print(f"\n  Rendered the experiment DAG: {dag['svg'].relative_to(root)}")
+        from haarpi import project as _hproject, signoff
+        signoff.after_session(_hproject.find_root(root), "experiments", started)
     return rc
 
 

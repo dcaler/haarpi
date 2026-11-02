@@ -28,6 +28,7 @@ runs against the review's experiments_<N>.yaml (the active spec), so it automati
 human-approved changes.
 """
 
+import time
 import re
 import shutil
 import subprocess
@@ -359,7 +360,11 @@ def run_review(args) -> int:
     project = str(spec.get("project") or "project")
     (results / "designdocs").mkdir(parents=True, exist_ok=True)
     _scaffold_review_md(results, spec, cycle, project)
+    started = time.time()
     rc = launch_review(root, getattr(args, "no_launch", False), model=cfg.design_model)
+    if rc == 0 and not getattr(args, "no_launch", False):
+        from haarpi import project as _hproject, signoff
+        signoff.after_session(_hproject.find_root(root), "experiments", started)
     # After the human's review session, read the verdicts back and queue the follow-on work.
     fold_forward(root, cfg, args)
     return rc

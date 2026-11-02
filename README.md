@@ -105,6 +105,15 @@ Claude, and still carries its command, because the person opening it should not
 have to retype a verb the task already knows. `collect` is attended too, but it is
 no session: you file the PDFs and run the verb yourself, so it books you alone.
 
+A session's document has already been read: you built it with Claude. So when an
+interview session exits (ramus `init` and `design`, raster `plan`, rayleigh `plan`
+and `review`), HAARPi itself asks in the terminal whether to sign off the `_ra`
+document it produced, showing its path and outline. Only `yes` or `no` count. A
+`yes` is recorded in `.haarpi/signoffs.json`, keyed on the file's content, and
+`haarpi next` then treats that file as finished markup and mints it; a re-render
+under the same name is not signed off. `no`, or no terminal at all, sends the
+document to review as usual. Claude never answers this question.
+
 ### Rework is scaled to the ask, not to the heaviest ask in the set
 
 This is the load-bearing design decision, and it was learned the hard way.
@@ -653,7 +662,8 @@ Every deliverable is named so that its history is legible from the filename:
 The `YYMMDD` prefix marks a major revision cycle; a new datestamp starts a fresh
 chain. The trailing initials record who last touched the file — `ra` for the
 tool, the author's initials for a human. Tools find the file to work on by
-looking for the most recently modified one whose trailing suffix is *not* `ra`.
+looking for the most recently modified one whose trailing suffix is *not* `ra`, or an `_ra` file the author signed off as a session ended (see
+[How a stage works](#how-a-stage-works)). It keeps its `_ra` name: no one annotated it.
 
 ## Install
 

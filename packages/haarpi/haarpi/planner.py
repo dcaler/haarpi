@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config as hconfig
-from . import comment_kinds, naming, project, redline, trundlr
+from . import comment_kinds, naming, project, redline, signoff, trundlr
 
 
 # ── step registries ──────────────────────────────────────────────────────────
@@ -2140,7 +2140,10 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
                 # A release's last token is a deliverable word ("…_litreview.docx") — not
                 # the tool's, and emphatically not a reviewer's; without this it reads as
                 # markup on itself.
-                if chain and chain[-1].lower() != "ra" and not naming.is_release(chain):
+                # ...or the tool's own draft, signed off by the author in the terminal as an
+                # interview ended (`haarpi.signoff`): reviewed in session, so finished markup.
+                if chain and not naming.is_release(chain) and (
+                        chain[-1].lower() != "ra" or signoff.signed_off(root, p)):
                     t = p.stat().st_mtime
                     if best is None or t > best[0]:
                         best = (t, stage, p)

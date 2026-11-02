@@ -15,6 +15,7 @@ It mints the prereg, which is raster's build target.
 """
 from __future__ import annotations
 
+import time
 import shutil
 import subprocess
 from datetime import date
@@ -100,6 +101,7 @@ def run_design(args) -> int:
     use_model = model if model and model.lower() not in ("claude", "default") else ""
     cmd = ["claude"] + (["--model", use_model] if use_model else []) + [DESIGN_PROMPT]
     log(f"launching the binding session ({use_model or 'default'}) in {root} …")
+    started = time.time()
     rc = subprocess.run(cmd, cwd=str(root)).returncode
     if rc == 0:
         # The bound design is the preregistration. Nothing rendered it before: the prompt told
@@ -114,6 +116,8 @@ def run_design(args) -> int:
                 "design and hands off to raster.")
         else:
             log("could not render the prereg (pandoc missing?) — render it before `haarpi next`.")
+        from haarpi import signoff
+        signoff.after_session(root, "design", started)
     return rc
 
 

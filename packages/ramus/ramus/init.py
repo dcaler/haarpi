@@ -17,6 +17,7 @@ which is interpretation, and there are no results to interpret here. Run from th
 authors into design/ and leaves the root alone.
 """
 
+import time
 import json
 import re
 import shutil
@@ -290,6 +291,7 @@ def run_init(args) -> int:
     print(f"  Scaffolded design/ for {name} (cycle {cycle}) in {design}")
     # design/ is a working folder, not a repo — no git init here (unlike raster).
     interactive = not getattr(args, "no_launch", False) and shutil.which("claude") is not None
+    started = time.time()
     rc = launch_session(root, getattr(args, "no_launch", False), model=cfg.design_model)
     if interactive and rc == 0:
         # The framework is now authored. Render it as the SCOPE rung: minting it (clean, or
@@ -312,4 +314,6 @@ def run_init(args) -> int:
                                          designdocs / "framework.dot", "The analytical framework.")
         if fw and fw.get("svg"):
             print(f"  Rendered the framework schematic: {fw['svg'].relative_to(root)}")
+        from haarpi import signoff
+        signoff.after_session(root, "design", started)
     return rc

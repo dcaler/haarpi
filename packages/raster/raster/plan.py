@@ -7,6 +7,7 @@ you. `--no-launch` (or no `claude` on PATH) falls back to just printing the
 playbook path so you can open a session by hand.
 """
 
+import time
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,4 +51,9 @@ def run_plan(args) -> int:
     # Run from the project root so the session sees code/ AND the sibling litReview/ and
     # paper/ one level up. Inherits this terminal's stdio, so it's fully interactive;
     # returns control to the shell when you exit the session.
-    return subprocess.run(["claude", PLAN_PROMPT], cwd=str(root)).returncode
+    started = time.time()
+    rc = subprocess.run(["claude", PLAN_PROMPT], cwd=str(root)).returncode
+    if rc == 0:      # the session runs on into `raster handoff`, which emits the methods digest
+        from haarpi import project as _hproject, signoff
+        signoff.after_session(_hproject.find_root(root), "build", started)
+    return rc
