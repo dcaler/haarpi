@@ -122,8 +122,10 @@ brief**: each focus item marked covered or THIN by how much of the corpus
 addresses it in its own words.
 
 **Fact base.** The default for a new project. With `report_format: facts` in the project's
-`litrev*.yaml`, `report` writes no prose. It extracts each source's salient
-facts, checks every quote verbatim against its page (a fact whose quote is only
+`litrev*.yaml`, `report` writes no prose. From each source it extracts only what the source
+would be cited for, its main contribution and its major themes, quoted where the paper
+establishes them rather than from its abstract; an incidental detail, or a claim the source
+reports from another work, never becomes a fact of it. It checks every quote verbatim against its page (a fact whose quote is only
 found by search is shown for checking but not counted), scores every fact 0–3
 against the review's approved `topics:` (each mapped to the research questions it
 serves; the questions are the config's `questions:`, or the focus items when it has none), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
@@ -135,9 +137,13 @@ per source (hover for what it contributes, click for its facts and page links).
 (`<date>_<short>_topics_ra.html`); the person accepts, rejects and edits each one and saves
 `…_topics_ra_DCR.json` beside it; `rabbitHole topics --apply` writes them into a new
 numbered config. A new project's opening cycle runs these first.
-The load-bearing list ranks sources by their weight on the topics that serve a
-research question; a source whose PDF has no usable text (an image-only scan) is
-not sent to the model but listed as needing OCR or a better copy.
+A fact's weight is its topic score scaled by its role (contribution over theme) and by
+where it is quoted from (abstract or front matter count for less); the load-bearing list
+ranks sources by that weight on the topics that serve a research question, and themes more
+independent sources agree on come first. A source whose PDF has no usable text (an
+image-only scan) is not sent to the model and is left out of the review, named only in the
+run log. `report` also writes the review page (`<date>_<short>_review_ra.html`) the stage
+is assessed on; `rabbitHole reviewpage` rebuilds it.
 
 The fact base opens with **how to decide whether to release it**: a short checklist, and a
 table of the comment phrasings `haarpi next` recognises and what each costs ("this isn't what
