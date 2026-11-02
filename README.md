@@ -102,7 +102,8 @@ not whether the task carries a command: no runner polls the human or the Claude
 resource. So an **attended** step — the interactive design, build and review
 sessions, which launch a Claude session in the project root — books you *and*
 Claude, and still carries its command, because the person opening it should not
-have to retype a verb the task already knows.
+have to retype a verb the task already knows. `collect` is attended too, but it is
+no session: you file the PDFs and run the verb yourself, so it books you alone.
 
 ### Rework is scaled to the ask, not to the heaviest ask in the set
 
