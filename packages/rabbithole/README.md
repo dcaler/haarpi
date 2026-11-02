@@ -143,7 +143,16 @@ ranks sources by that weight on the topics that serve a research question, and t
 independent sources agree on come first. A source whose PDF has no usable text (an
 image-only scan) is not sent to the model and is left out of the review, named only in the
 run log. `report` also writes the review page (`<date>_<short>_review_ra.html`) the stage
-is assessed on; `rabbitHole reviewpage` rebuilds it.
+is assessed on; `rabbitHole reviewpage` rebuilds it. Each spot-check fact on it shows its
+paper's title and the topics it counts toward.
+
+**Under trial: `fact_prompt: p1`.** The default extraction prompt (`p0`) asks what a paper
+is for in general, starting from a quote. `p1` gives the model the review's questions and
+topics, has it state the claim first and then find the supporting passage, and records each
+fact's domain, method and conditions. A paper may yield nothing for the review, with a
+reason. P1 facts are cached per question set, so changing the questions re-extracts. Which
+prompt and model become the default is being decided by the extraction bake-off
+(`haarpi bench … --tasks X1`; `PLAN_extraction_bench.html`).
 
 The fact base opens with **how to decide whether to release it**: a short checklist, and a
 table of the comment phrasings `haarpi next` recognises and what each costs ("this isn't what

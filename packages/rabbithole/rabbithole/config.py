@@ -155,6 +155,12 @@ class ProjectConfig:
     # it came from, grouped by focus item and theme with short synthesis bullets, and no prose.
     # Opt-in per project while it is tested (DigiPros, 2026-10-09).
     report_format: str = "narrative"
+    # Which fact-extraction prompt the fact base uses. "p0": what a paper is for, in general,
+    # quote first (the default). "p1": question-aware and claim first, each fact carrying its
+    # domain, method and conditions, and a paper may yield nothing for this review. Under trial
+    # in the extraction bake-off (PLAN_extraction_bench.html, 2026-11-02).
+    fact_prompt: str = "p0"
+    fact_think: bool = False          # thinking on for the extraction call (bake-off setting)
     # The fact base's TOPICS: single subjects, approved by a person, each mapped to the research
     # questions (1-based focus items) it serves — [{"name": ..., "serves": [1, 3]}, ...]. Every
     # fact is scored 0-3 against every topic. Unlike `gather_topics` (this cycle's search asks,

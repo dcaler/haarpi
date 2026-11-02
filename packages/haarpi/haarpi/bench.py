@@ -10,6 +10,14 @@ fixtures and results live under ``~/haarpi-bench/`` (or ``$HAARPI_BENCH``).
   haarpi bench run --embedders      the embedder side check (mxbai vs bge-m3)
   haarpi bench report               one HTML table of every result so far
 
+X1, the extraction bake-off (PLAN_extraction_bench.html, 2026-11-02), compares two fact
+prompts across models on 15 FirmPathways papers and is judged blind by a person:
+
+  haarpi bench prepare --x1                      freeze the X1 fixture (needs the embedder)
+  haarpi bench run --coordinator M --tasks X1 --prompt p0|p1 [--think]
+  haarpi bench judge                             write the blind page EVAL_extraction.html
+  haarpi bench unblind EVAL_extraction_DCR.json  score the judgements by prompt and model
+
 The tasks (see PLAN_brainbench.html): A1 fact extraction, A2 topic scoring, A3 theme naming
 (rabbitHole); B1 comment sorting, B2 paper tiers, B3 dispute verdicts (haarpi's planner); C1
 section drafting (raconteur); W1 long-paper condensing (worker); E1 embedder separation.
@@ -33,6 +41,8 @@ from types import SimpleNamespace
 
 BENCH_ROOT = Path(os.environ.get("HAARPI_BENCH") or Path.home() / "haarpi-bench")
 DIGIPROS = Path("/media/lucullus/Cale_Professional/Current_Work_Projects/260208_DigiPros")
+FIRMPATHWAYS = Path("/media/lucullus/Cale_Professional/Current_Work_Projects/260525_FirmPathways")
+HAARPI_DIR = Path(__file__).resolve().parents[3]          # where PLAN_/EVAL_ pages live
 EMBED = "mxbai-embed-large"
 BASELINE_COORDINATOR = "qwen3.6:27b-16k"
 BASELINE_WORKER = "llama3.1:8b"
@@ -243,6 +253,54 @@ def prepare(project: Path = DIGIPROS, out: Path | None = None) -> Path:
                                        "label": lab} for f, lab in zip(sample, _E1_LABELS)]})
     _say(f"fixtures written: {out}")
     return out
+
+
+def prepare_x1(project: Path = FIRMPATHWAYS, out: Path | None = None) -> Path:
+    """Freeze X1: the 15 papers of the review page's current spot-check (drawn at random before
+    this bake-off was planned, so not picked to flatter either prompt), each with its reading
+    text as extraction sees it, its title and abstract, plus the review's questions and topics."""
+    from rabbithole import chroma, config as rhconfig
+    from rabbithole.brain import Brain as RHBrain
+    from rabbithole.models import Candidate
+    from rabbithole.summarize import _paper_text, reading_text
+
+    out = Path(out or BENCH_ROOT / "fixtures")
+    out.mkdir(parents=True, exist_ok=True)
+    lit = project / "litReview"
+    cfg = rhconfig.load_project(str(project))
+    gc = rhconfig.load_global()
+    gc.ollama_url = _url()
+    brain = RHBrain(rhconfig.BrainConfig(embed_model=EMBED), gc)
+    pages = sorted((lit / "output").glob("[0-9]" * 6 + "_*_review_ra.html"))
+    if not pages:
+        raise SystemExit("X1: no review page in litReview/output to take the spot-check from")
+    data = json.loads(re.search(r"const D = (.*);\n", pages[-1].read_text(encoding="utf-8"))
+                      .group(1).replace("<\\/", "</"))
+    keys = list(dict.fromkeys(f["citekey"] for f in data["spot"]))
+    records = {d.get("citekey"): d for d in json.loads(
+        (lit / "work" / "corpus.json").read_text(encoding="utf-8"))}
+    try:
+        collection = chroma.get_collection(lit / "work" / "chroma")
+    except Exception as e:  # noqa: BLE001
+        _say(f"no chroma collection ({e}) — long papers read condensed instead")
+        collection = None
+    papers = []
+    for key in keys:
+        d = records.get(key)
+        if d is None:
+            _say(f"X1: {key} not in the corpus — skipped")
+            continue
+        c = Candidate.from_dict(d)
+        full = _paper_text(c)
+        reading = reading_text(brain, c, cfg, collection, key, text=full)
+        papers.append({"citekey": key, "record": d, "label": c.author_year(),
+                       "title": re.sub(r"<[^>]+>", "", c.title or ""),
+                       "abstract": c.abstract or "", "full": full, "reading": reading})
+        _say(f"X1: {c.author_year()} — {len(reading):,} chars read of {len(full):,}")
+    fp = out / "x1.json"
+    _dump(fp, {"source": pages[-1].name, "questions": list(cfg.questions or []),
+               "topics": list(cfg.topics or []), "focus": cfg.focus, "papers": papers})
+    return fp
 
 
 def _dump(fp: Path, obj) -> None:
@@ -524,6 +582,83 @@ def _auc(scores: list[float], labels: list[int]) -> float | None:
     return round(wins / (len(pos) * len(neg)), 3)
 
 
+_UNRESOLVED = re.compile(r"\b(this (study|paper|article|work|model|approach|method|framework|"
+                         r"analysis|research)|the (current|present|proposed) \w+|the study|"
+                         r"the authors|we|our|us)\b", re.I)
+_DEFINITION = re.compile(r"\b(is|are) (defined|conceptuali[sz]ed|understood) as\b", re.I)
+
+
+def x1_metrics(papers: list[dict], got: dict[str, list], nothing: dict[str, str],
+               secs: float) -> dict:
+    """The automatic half of X1's scoring, from the facts each paper yielded."""
+    from rabbithole.facts import page_texts
+    n = verb = copy = unres = defin = badnum = linked = 0
+    for p in papers:
+        whole = " ".join(page_texts(p["full"]).values())
+        for f in got.get(p["citekey"]) or []:
+            n += 1
+            verb += bool(f.verified)
+            fw, qw = _content(f.text), _content(f.quote)
+            if fw and qw and len(fw & qw) / len(fw | qw) >= 0.6:
+                copy += 1
+            unres += bool(_UNRESOLVED.search(f.text))
+            defin += bool(_DEFINITION.search(f.text))
+            linked += bool(getattr(f, "bears_on", None))
+            nums = set(re.findall(r"\d+(?:\.\d+)?", f.text)) - {str(y) for y in range(1500, 2100)}
+            badnum += any(x not in whole for x in nums)
+    empty = sum(1 for p in papers if not got.get(p["citekey"]))
+    return {"papers": len(papers), "facts": n,
+            "facts_per_paper": round(n / max(1, len(papers)), 2),
+            "empty_papers": empty, "nothing_papers": len(nothing),
+            "verbatim_pct": _pct(verb, n), "copyback_pct": _pct(copy, n),
+            "unresolved_pct": _pct(unres, n), "definition_pct": _pct(defin, n),
+            "number_not_on_page_pct": _pct(badnum, n), "topic_linked_pct": _pct(linked, n),
+            "secs_per_paper": round(secs / max(1, len(papers)), 1)}
+
+
+def task_x1(model: str, work: Path, prompt: str = "p0", think: bool = False) -> dict:
+    """Fact extraction on the X1 fixture, through the real `facts.extract`, with prompt P0 or P1.
+    Returns the metrics and every paper's facts, which `judge` lays out blind."""
+    import shutil
+    from rabbithole import facts as F, summarize
+    from rabbithole.models import Candidate
+    fx = _load("x1.json")
+    brain = _rh_brain(model)
+    cfg = SimpleNamespace(topic="", focus=fx.get("focus") or "", questions=fx["questions"],
+                          topics=fx["topics"], fact_prompt=prompt, fact_think=think)
+    papers = fx["papers"]
+    texts = {p["citekey"]: p for p in papers}
+    corpus = [Candidate.from_dict(p["record"]) for p in papers]
+    citekeys = {i: p["citekey"] for i, p in enumerate(papers)}
+    by_key = {id(c): p for c, p in zip(corpus, papers)}
+    orig_text, orig_read = summarize._paper_text, summarize.reading_text
+    summarize._paper_text = lambda c: by_key[id(c)]["full"]
+    summarize.reading_text = lambda b, c, cfg_, coll, ck, text=None: texts[ck]["reading"]
+    paths = SimpleNamespace(work=work / f"x1_{prompt}_{'think' if think else 'nothink'}")
+    shutil.rmtree(paths.work, ignore_errors=True)        # never a cached answer from a last run
+    paths.work.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    try:
+        got = F.extract(brain, corpus, cfg, paths, None, citekeys)
+    finally:
+        summarize._paper_text, summarize.reading_text = orig_text, orig_read
+    secs = time.time() - t0
+    from rabbithole.summarize import _located_filename
+    nothing = {}
+    for p in papers:
+        for fp in (paths.work / "facts").glob(f"{_located_filename(p['citekey'])}.*json"):
+            b = json.loads(fp.read_text(encoding="utf-8"))
+            if b.get("nothing") and not b.get("facts"):
+                nothing[p["citekey"]] = b["nothing"]
+    out = x1_metrics(papers, got, nothing, secs)
+    out["prompt"], out["think"] = prompt, think
+    out["sets"] = {p["citekey"]: {"facts": [{"text": f.text, "quote": f.quote, "page": f.page}
+                                            for f in got.get(p["citekey"]) or []],
+                                  "nothing": nothing.get(p["citekey"], "")}
+                   for p in papers}
+    return out
+
+
 def _pct(a: int, b: int) -> float | None:
     return round(100 * a / b, 1) if b else None
 
@@ -532,8 +667,12 @@ COORDINATOR_TASKS = {"A1": task_a1, "A2": task_a2, "A3": task_a3, "B": task_b, "
 
 
 def run(coordinator: str = "", worker: str = "", embedders: bool = False,
-        tasks: list[str] | None = None) -> Path:
-    if embedders:
+        tasks: list[str] | None = None, prompt: str = "p0", think: bool = False) -> Path:
+    if tasks and "X1" in tasks:
+        # One results file per model x prompt x thinking: each is one cell of the X1 grid.
+        label = f"x1_{_slug(coordinator)}_{prompt}_{'think' if think else 'nothink'}"
+        todo = {"X1": lambda m, w: task_x1(m, w, prompt, think)}
+    elif embedders:
         label, todo = "embedders", {"E1": lambda m, w: task_e1(w)}
     elif worker:
         label, todo = f"worker_{_slug(worker)}", {"W1": task_w1}
@@ -559,6 +698,157 @@ def run(coordinator: str = "", worker: str = "", embedders: bool = False,
     return fp
 
 
+# ── X1: the blind page, and unblinding ─────────────────────────────────────────
+
+BLIND_KEY = "x1_blind_key.json"
+_LETTERS = "ABCDEFGHIJKLMNOP"
+
+
+def judge(out: Path | None = None) -> Path:
+    """Lay every X1 run's fact set out per paper, shuffled and lettered, with nothing that names
+    the prompt or the model. Only the claim and its quote are shown: P1's extra fields would give
+    it away. (A P1 "nothing for this review" still shows as an empty set with its reason — P0
+    never returns one, so that one set is not blind; the page says so.) The key stays in the
+    bench folder, never in the page."""
+    import random
+    fx = _load("x1.json")
+    runs = sorted((BENCH_ROOT / "results").glob("x1_*.json"))
+    runs = [r for r in runs if r.name != "x1_judged.json"]
+    results = {r.stem: json.loads(r.read_text(encoding="utf-8")) for r in runs}
+    results = {k: v for k, v in results.items() if "sets" in (v.get("X1") or {})}
+    if not results:
+        raise SystemExit("judge: no finished X1 runs in the results folder")
+    key, papers = {}, []
+    for p in fx["papers"]:
+        labels = sorted(results)
+        random.Random(f"x1-{p['citekey']}").shuffle(labels)
+        sets = []
+        for i, lab in enumerate(labels):
+            st = results[lab]["X1"]["sets"].get(p["citekey"]) or {"facts": [], "nothing": ""}
+            sets.append({"label": _LETTERS[i], "facts": st["facts"], "nothing": st["nothing"]})
+            key.setdefault(p["citekey"], {})[_LETTERS[i]] = lab
+        papers.append({"ck": p["citekey"], "label": p["label"], "title": p["title"],
+                       "abstract": p["abstract"], "sets": sets})
+    _dump(BENCH_ROOT / BLIND_KEY, key)
+    out = Path(out or HAARPI_DIR / "EVAL_extraction.html")
+    blob = json.dumps({"papers": papers, "n_runs": len(results)},
+                      ensure_ascii=False).replace("</", "<\\/")
+    out.write_text(_JUDGE_PAGE.replace("__DATA__", blob), encoding="utf-8")
+    return out
+
+
+def unblind(judged: Path) -> dict:
+    """Score the judgements per run and per prompt. A set scores 1 when every claim is one you
+    would cite and every claim is understandable on its own; "some" and "partly" count half.
+    A fact flagged wrong costs its set the faithfulness point outright."""
+    key = _load_bench(BLIND_KEY)
+    marks = json.loads(Path(judged).read_text(encoding="utf-8"))
+    val = {"all": 1.0, "some": 0.5, "none": 0.0, "yes": 1.0, "partly": 0.5, "no": 0.0}
+    per: dict[str, dict] = {}
+    for ck, sets in marks.items():
+        for letter, m in sets.items():
+            lab = (key.get(ck) or {}).get(letter)
+            if not lab:
+                continue
+            r = per.setdefault(lab, {"sets": 0, "cite": 0.0, "understand": 0.0, "both": 0,
+                                     "wrong_facts": 0, "faithful_sets": 0})
+            r["sets"] += 1
+            c, u = val.get(m.get("cite"), 0.0), val.get(m.get("understand"), 0.0)
+            r["cite"] += c
+            r["understand"] += u
+            wrong = len(m.get("wrong") or [])
+            r["wrong_facts"] += wrong
+            r["faithful_sets"] += wrong == 0
+            r["both"] += (c == 1.0 and u == 1.0 and wrong == 0)
+    table = {lab: {"sets": r["sets"], "cite_pct": _pct(round(r["cite"] * 10), r["sets"] * 10),
+                   "understand_pct": _pct(round(r["understand"] * 10), r["sets"] * 10),
+                   "citable_clear_faithful_pct": _pct(r["both"], r["sets"]),
+                   "faithful_sets_pct": _pct(r["faithful_sets"], r["sets"]),
+                   "wrong_facts": r["wrong_facts"]} for lab, r in sorted(per.items())}
+    pooled: dict[str, list] = {}
+    for lab, r in per.items():
+        pooled.setdefault(lab.rsplit("_", 2)[-2], []).append(r)
+    by_prompt = {pr: {"sets": sum(r["sets"] for r in rs),
+                      "citable_clear_faithful_pct": _pct(sum(r["both"] for r in rs),
+                                                         sum(r["sets"] for r in rs))}
+                 for pr, rs in pooled.items()}
+    out = {"runs": table, "by_prompt": by_prompt}
+    _dump(BENCH_ROOT / "results" / "x1_judged.json", out)
+    return out
+
+
+def _load_bench(name: str) -> dict:
+    return json.loads((BENCH_ROOT / name).read_text(encoding="utf-8"))
+
+
+_JUDGE_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Extraction judging</title>
+<style>:root{--bg:#fbfaf7;--fg:#1e1e1e;--mut:#666;--rule:#ddd;--card:#fff;--acc:#3b5bdb;--bad:#c92a2a}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#e8e8e8;--mut:#9a9a9a;--rule:#333;--card:#1f1f1f;--acc:#8ea2ff;--bad:#ff8787}}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;max-width:960px;margin:0 auto;padding:20px 16px 80px}
+h2{font-size:1.1em;margin:1.6em 0 .2em}.mut{color:var(--mut);font-size:.9em}
+.set{background:var(--card);border:1px solid var(--rule);border-radius:6px;padding:8px 12px;margin:.6em 0}
+.set h3{margin:.1em 0 .4em;font-size:1em}.fact{margin:.4em 0}.q{color:var(--mut);font-size:.88em;margin-left:1.4em}
+.ask{margin:.3em 0;display:flex;flex-wrap:wrap;gap:.5em;align-items:center}
+.ask button{border:1px solid var(--rule);background:var(--bg);color:var(--fg);border-radius:4px;padding:2px 9px;cursor:pointer}
+.ask button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.done{border-left:4px solid var(--acc)}.wrongbox{accent-color:var(--bad)}
+#bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--rule);padding:8px 16px;display:flex;gap:1em;align-items:center}
+details{margin:.2em 0}</style></head><body>
+<h1>Extraction bake-off: blind judging</h1>
+<p class="mut">For each paper: its title and abstract, then each run's set of facts, lettered at random (the letters
+mean different runs on different papers). Judge each set on two questions, and tick any fact that is wrong or misleading
+against its quote. A set with no facts says why; that one cannot be blind. Your marks are kept in this browser while you
+work; press <b>Save</b> to download <code>EVAL_extraction_DCR.json</code> into the HAARPi folder.</p>
+<div id="app"></div>
+<div id="bar"><span id="prog"></span><button id="save">Save</button></div>
+<script>
+const D = __DATA__;
+const KEY = "x1-judging";
+let S = {}; try { S = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { S = {}; }
+const keep = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} prog(); };
+const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) { if (x.startsWith("on")) e.addEventListener(x.slice(2), v); else if (x === "class") e.className = v; else e[x] = v; } for (const c of k) if (c != null) e.append(c); return e; };
+const mark = (ck, L) => ((S[ck] = S[ck] || {})[L] = S[ck][L] || {wrong: []});
+function ask(ck, L, field, opts, label, box) {
+  const row = el("div", {class: "ask"}, el("span", {}, label));
+  opts.forEach(o => { const b = el("button", {onclick: () => { mark(ck, L)[field] = o; paint(); keep(); }}, o); row.append(b);
+    const paint = () => { row.querySelectorAll("button").forEach(x => x.classList.toggle("on", (S[ck]?.[L]?.[field]) === x.textContent));
+      box.classList.toggle("done", !!(S[ck]?.[L]?.cite && S[ck]?.[L]?.understand)); }; b.paint = paint; });
+  setTimeout(() => row.querySelectorAll("button").forEach(b => b.paint()), 0);
+  return row;
+}
+const app = document.getElementById("app");
+D.papers.forEach((p, pi) => {
+  app.append(el("h2", {}, `${pi + 1}. ${p.label}`), el("div", {}, el("i", {}, p.title)),
+    p.abstract ? el("details", {}, el("summary", {class: "mut"}, "abstract"), el("div", {class: "mut"}, p.abstract)) : el("div", {class: "mut"}, "(no abstract)"));
+  p.sets.forEach(s => {
+    const box = el("div", {class: "set"}, el("h3", {}, "Set " + s.label));
+    if (!s.facts.length) box.append(el("div", {class: "mut"}, "No facts: " + (s.nothing || "(none returned)")));
+    s.facts.forEach((f, i) => {
+      const cb = el("input", {type: "checkbox", class: "wrongbox", title: "wrong or misleading",
+        checked: (S[p.ck]?.[s.label]?.wrong || []).includes(i),
+        onchange: e => { const m = mark(p.ck, s.label); m.wrong = m.wrong.filter(x => x !== i); if (e.target.checked) m.wrong.push(i); keep(); }});
+      box.append(el("div", {class: "fact"}, el("label", {}, cb, " ", `${i + 1}. ${f.text}`)),
+        f.quote ? el("div", {class: "q"}, `“${f.quote}”` + (f.page ? ` (p.${f.page})` : "")) : null);
+    });
+    box.append(ask(p.ck, s.label, "cite", ["all", "some", "none"], "Would you cite this paper for these?", box),
+      ask(p.ck, s.label, "understand", ["yes", "partly", "no"], "Understandable without the paper?", box));
+    app.append(box);
+  });
+});
+function prog() {
+  const total = D.papers.reduce((n, p) => n + p.sets.length, 0);
+  const done = D.papers.reduce((n, p) => n + p.sets.filter(s => S[p.ck]?.[s.label]?.cite && S[p.ck]?.[s.label]?.understand).length, 0);
+  document.getElementById("prog").textContent = `${done} of ${total} sets judged`;
+}
+prog();
+document.getElementById("save").onclick = () => {
+  const a = el("a", {href: URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], {type: "application/json"})), download: "EVAL_extraction_DCR.json"});
+  document.body.append(a); a.click(); a.remove();
+};
+</script></body></html>"""
+
+
 # ── report ──────────────────────────────────────────────────────────────────────
 
 _COLS = [("A1", "verbatim_pct", "A1 verbatim %"), ("A1", "adds_beyond_quote_pct", "A1 adds-beyond %"),
@@ -568,13 +858,19 @@ _COLS = [("A1", "verbatim_pct", "A1 verbatim %"), ("A1", "adds_beyond_quote_pct"
          ("B", "b1_pct", "B1 %"), ("B", "b2_pct", "B2 %"), ("B", "b3_pct", "B3 %"),
          ("C1", "guard_findings_left", "C1 findings"), ("C1", "traced_to_fact_pct", "C1 traced %"),
          ("C1", "number_mismatches", "C1 bad numbers"), ("C1", "secs", "C1 s")]
+_XCOLS = [("X1", "prompt", "prompt"), ("X1", "think", "think"), ("X1", "facts_per_paper", "facts/paper"),
+          ("X1", "nothing_papers", "nothing"), ("X1", "verbatim_pct", "verbatim %"),
+          ("X1", "copyback_pct", "copy-back %"), ("X1", "unresolved_pct", "unresolved %"),
+          ("X1", "definition_pct", "definitions %"), ("X1", "number_not_on_page_pct", "bad numbers %"),
+          ("X1", "topic_linked_pct", "topic-linked %"), ("X1", "secs_per_paper", "s/paper")]
 _WCOLS = [("W1", "empty_outputs", "empty"), ("W1", "quantities_kept_pct", "quantities kept %"),
           ("W1", "secs_per_chunk", "s/chunk")]
 
 
 def report(out: Path | None = None) -> Path:
     import html
-    rows = [json.loads(p.read_text()) for p in sorted((BENCH_ROOT / "results").glob("*.json"))]
+    rows = [json.loads(p.read_text()) for p in sorted((BENCH_ROOT / "results").glob("*.json"))
+            if p.name != "x1_judged.json"]
     out = Path(out or BENCH_ROOT / "BENCH_report.html")
 
     def table(rs, cols):
@@ -589,6 +885,7 @@ def report(out: Path | None = None) -> Path:
     coord = [r for r in rows if r["label"].startswith("coordinator_")]
     work = [r for r in rows if r["label"].startswith("worker_")]
     emb = next((r for r in rows if r["label"] == "embedders"), {})
+    x1 = [r for r in rows if r.get("label", "").startswith("x1_")]
     misses = "".join(f"<h3><code>{html.escape(r['model'])}</code></h3><ul>"
                      + "".join(f"<li>{html.escape(m)}</li>" for m in (r.get("B") or {}).get("misses", []))
                      + "</ul>" for r in coord)
@@ -603,6 +900,8 @@ th,td{{border-bottom:1px solid var(--rule);padding:5px 7px;text-align:left}}th{{
 <h1>Brain bake-off — results</h1><p style="color:var(--mut)">Baseline: coordinator
 <code>{BASELINE_COORDINATOR}</code>, worker <code>{BASELINE_WORKER}</code>. Rule: see PLAN_brainbench.html §5.</p>
 <h2>Coordinators</h2><div class="wrap">{table(coord, _COLS)}</div>
+<h2>X1 · extraction (automatic half; the judged half is in results/x1_judged.json)</h2>
+<div class="wrap">{table(x1, _XCOLS)}</div>
 <h2>Workers</h2><div class="wrap">{table(work, _WCOLS)}</div>
 <h2>Embedders (E1, AUC on 30 hand-judged pairs)</h2>
 <pre>{html.escape(json.dumps(emb.get('E1', {}), indent=1))}</pre>
@@ -616,19 +915,33 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="haarpi bench")
     sub = ap.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("prepare")
-    p.add_argument("--project", default=str(DIGIPROS))
+    p.add_argument("--project", default="")
+    p.add_argument("--x1", action="store_true", help="freeze the X1 extraction fixture only")
     r = sub.add_parser("run")
     g = r.add_mutually_exclusive_group(required=True)
     g.add_argument("--coordinator")
     g.add_argument("--worker")
     g.add_argument("--embedders", action="store_true")
     r.add_argument("--tasks", nargs="*")
+    r.add_argument("--prompt", choices=["p0", "p1"], default="p0", help="X1: the fact prompt")
+    r.add_argument("--think", action="store_true", help="X1: thinking on for extraction")
     sub.add_parser("report")
+    sub.add_parser("judge", help="X1: write the blind judging page")
+    u = sub.add_parser("unblind", help="X1: score the saved judgements")
+    u.add_argument("judged")
     a = ap.parse_args(argv)
     if a.verb == "prepare":
-        prepare(Path(a.project))
+        if a.x1:
+            print(prepare_x1(Path(a.project or FIRMPATHWAYS)))
+        else:
+            prepare(Path(a.project or DIGIPROS))
     elif a.verb == "run":
-        print(run(a.coordinator or "", a.worker or "", a.embedders, a.tasks))
+        print(run(a.coordinator or "", a.worker or "", a.embedders, a.tasks,
+                  prompt=a.prompt, think=a.think))
+    elif a.verb == "judge":
+        print(judge())
+    elif a.verb == "unblind":
+        print(json.dumps(unblind(Path(a.judged)), indent=1))
     else:
         print(report())
     return 0
