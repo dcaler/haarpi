@@ -68,6 +68,10 @@ Rules:
 - Reproduce reported quantities EXACTLY (numbers, units, statistics). Never round them away.
 - The quote must be copied character for character from the text, not paraphrased, and must
   not span a [p.N] marker.
+- Only claims the paper ITSELF makes. A claim the paper attributes to another work ("Smith
+  (2005) argued ...", "according to [12] ...", "Jones et al. found ...") belongs to that work,
+  not this paper: never extract it, even when the paper agrees with it. Applying another work's
+  method or definition is the paper's own ("we follow Hidalgo et al. (2007) and construct ...").
 - Base everything strictly on the provided text. Do not invent.
 - Extract the paper's own facts whatever its subject. Relevance is judged later, not by you:
   a paper with text always establishes something, so never return an empty array."""
@@ -346,6 +350,52 @@ def ground(facts: list[Fact], marked: str, *, locate=None) -> list[Fact]:
     return facts
 
 
+# A REPORTED CLAIM is another work's, carried by this source: "In 2005, Smith argued that PPPs
+# ..." on Abdel-Latif 2018's p.8 is Smith's point, not Abdel-Latif's (FirmPathways spot-check,
+# 2026-11-01). The quote verifies — it IS on that page — so grounding cannot catch it. The
+# pattern is narrow on purpose: a cited author (a year, a bracket, or "et al.") as the subject
+# of a reporting verb, or "according to" a citation. "We follow X (2007)" is the source's own.
+_CITE_VERBS = (r"(?:has |have |had )?(?:argue[sd]?|suggest(?:s|ed)?|f(?:ou|i)nds?|show(?:s|ed|n)?|"
+               r"claim(?:s|ed)?|note[sd]?|propose[sd]?|points? out|pointed out|report(?:s|ed)?|"
+               r"observe[sd]?|contend(?:s|ed)?|assert(?:s|ed)?|state[sd]?|demonstrate[sd]?|"
+               r"conclude[sd]?|maintain(?:s|ed)?|posit(?:s|ed)?)\b")
+_NAME = r"[A-Z][\w'’-]+(?:\s+(?:and|&)\s+[A-Z][\w'’-]+)?"
+_REPORTED = re.compile(
+    r"\bIn (?:19|20)\d\d,\s+" + _NAME + r"(?:\s+et al\.?)?\s+" + _CITE_VERBS
+    + r"|\b" + _NAME + r"\s+et al\.?\s*(?:\(\s*(?:19|20)\d\d[a-z]?\s*\)|\[\d+(?:[,–-]\s*\d+)*\])?\s*"
+    + _CITE_VERBS
+    + r"|\b" + _NAME + r"\s*(?:\(\s*(?:19|20)\d\d[a-z]?\s*\)|\[\d+(?:[,–-]\s*\d+)*\])\s*" + _CITE_VERBS
+    + r"|\b(?:[Aa]ccording to|[Aa]s (?:argued|noted|shown|suggested) by)\s+(?:" + _NAME
+    + r"(?:\s+et al\.?)?\s*(?:\(\s*(?:19|20)\d\d|\[\d)|\[\d)")
+# ...unless the source takes the cited work up as its own: "We adopt therefore his heuristic".
+_ADOPTED = re.compile(r"\b(?:[Ww]e|[Oo]ur study|[Tt]his (?:paper|study|article))\s+"
+                      r"(?:\w+\s+){0,2}(?:adopts?|follows?|uses?|employs?|applies|apply|builds? on)\b")
+
+
+def reported(f: Fact) -> bool:
+    """Is this fact another work's claim, reported by its source? (See `_REPORTED`.)"""
+    if _ADOPTED.search(f.quote or ""):
+        return False
+    if _REPORTED.search(f.text or ""):
+        return True
+    # Every sentence of the quote must carry the cue: a quote that opens with the source's own
+    # sentence and then cites (Peltoniemi 2005: "...the larger is the smudge... According to
+    # Kelly (1994)...") supports the source's own claim.
+    sents = [x for x in re.split(r"(?<!\be\.g\.)(?<!\bi\.e\.)(?<!\bal\.)(?<!\bcf\.)(?<=[.!?])\s+(?=[A-Z])",
+                                     f.quote or "") if x.strip()]
+    return bool(sents) and all(_REPORTED.search(x) for x in sents)
+
+
+def own_facts(facts: list[Fact], label: str) -> list[Fact]:
+    """The source's own facts: reported claims dropped, each named in the log."""
+    keep = [f for f in facts if not reported(f)]
+    for f in facts:
+        if reported(f):
+            print(f"  {runlog.stamp()}    {label}: dropped a claim it reports from another "
+                  f"work — “{guards_safe(f.quote or f.text)[:90]}”", flush=True)
+    return keep
+
+
 def body_chars(text: str) -> int:
     """Characters of real text once the [p.N] markers and whitespace are gone."""
     return len("".join(_PAGE_SPLIT.sub("", text or "").split()))
@@ -375,7 +425,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         try:
             blob = json.loads(fp.read_text(encoding="utf-8"))
             if blob.get("_v") == _FACTS_VERSION and blob.get("facts"):
-                out[ck] = [Fact(**f) for f in blob["facts"]]
+                out[ck] = own_facts([Fact(**f) for f in blob["facts"]], ck)
                 cached += 1
                 continue
         except (OSError, ValueError, TypeError):
@@ -424,6 +474,7 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
         if collection is not None:
             locate = lambda texts, _ck=ck: _chroma.locate_list(collection, brain, _ck, texts)  # noqa: E731
         ground(facts, full, locate=locate)
+        facts = own_facts(facts, label)
         n_ok = sum(f.verified for f in facts)
         print(f"  {runlog.stamp()}    {len(facts)} facts, {n_ok} quoted verbatim", flush=True)
         fp.write_text(json.dumps({"_v": _FACTS_VERSION, "facts": [asdict(f) for f in facts]},

@@ -551,3 +551,36 @@ if __name__ == "__main__":
                 failed += 1
                 print(f"FAIL {name}: {e}")
     sys.exit(1 if failed else 0)
+
+
+# ── reported claims: another work's point, carried by the source ──────────────
+
+def _q(quote, text="A fact."):
+    return Fact(id="x#1", citekey="x", text=text, quote=quote, verified=True)
+
+
+def test_a_claim_the_source_reports_from_another_work_is_not_its_fact():
+    for q in ["In 2005, Smith argued that PPPs constitute a more potent strategy",
+              "Malan and Engelbrecht [42] point out two relevant features",
+              "Harrington et al. (2000) find prepolicy predictions to be lower",
+              "Newell et al. find that technological change was biased",
+              "According to Ghisetti and Pontoni (2015), most papers find a positive impact",
+              "She shows this is not as tightly coupled as e.g. Siggelkow and Levinthal (2003) suggest"]:
+        assert facts.reported(_q(q)), q
+    assert facts.reported(_q("ok", text="Smith (2005) argued that PPPs transfer faster."))
+
+
+def test_the_sources_own_use_of_cited_work_stays_its_fact():
+    for q in ["we follow Hidalgo et al. (2007) and construct a hierarchically clustered network",
+              "Kauffman [38] proposes a performant search heuristic. We adopt therefore his heuristic",
+              "According to Table 5, 23% of the surveyed firms developed a simple strategy",
+              "CP assessment proceeds according to APINI-NEFCO methodology",
+              "The more complex the system, the larger the smudge. According to Kelly (1994) it copes",
+              "Firms found new peaks when search was distant"]:
+        assert not facts.reported(_q(q)), q
+
+
+def test_reported_claims_are_dropped_with_a_log_line(capsys):
+    kept = facts.own_facts([_q("Smith (2005) argued X"), _q("Our model shows Y")], "Abdel 2018")
+    assert [f.quote for f in kept] == ["Our model shows Y"]
+    assert "dropped a claim it reports" in capsys.readouterr().out
