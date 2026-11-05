@@ -179,3 +179,53 @@ def test_the_cli_sends_x2_runs_to_the_x2_harness(monkeypatch):
     monkeypatch.setattr(X, "run_x2", lambda m, t: got.update(m=m, t=t) or "ok")
     bench.main(["run", "--coordinator", "gpt-oss:20b", "--tasks", "X2J", "X2V"])
     assert got == {"m": "gpt-oss:20b", "t": ["X2J", "X2V"]}
+
+
+# ── what a card reads ───────────────────────────────────────────────────────────
+
+def _paper(intro=True, concl=True, pages=12, per=4000):
+    out = []
+    for n in range(1, pages + 1):
+        head = ("1. Introduction\n" if intro and n == 2 else
+                "5. Conclusions and policy implications\n" if concl and n == pages - 2 else
+                "References\n" if n == pages else "")
+        out.append(f"[p.{n}]\n{head}" + f"page {n} words " * (per // 14) + "\n")
+    out.insert(1, "data from 2015 to 2024.\nModel 2\nmethods of knowledge transfer\n")
+    return "".join(out)
+
+
+def test_headings_are_short_capitalised_lines_not_fragments_or_table_labels():
+    kinds = [(k, h) for k, _, h in X.find_sections(_paper())]
+    assert kinds == [("introduction", "1. Introduction"),
+                     ("conclusion", "5. Conclusions and policy implications"),
+                     ("references", "References")]
+
+
+def test_a_short_paper_is_read_whole_and_never_its_references():
+    r = X.card_read(_paper(pages=5, per=1000))
+    assert r["mode"] == "whole" and "References" not in r["text"]
+
+
+def test_a_long_paper_reads_its_introduction_and_conclusion_whole_within_budget():
+    r = X.card_read(_paper(pages=20))
+    assert r["mode"] == "focused" and r["text"].startswith("[p.2]")
+    assert "1. Introduction" in r["text"] and "5. Conclusions" in r["text"]
+    assert r["read"] <= X.CARD_BUDGET and "References" not in r["text"]
+
+
+def test_a_paper_without_findable_sections_is_read_in_windows_then_merged():
+    r = X.card_read(_paper(intro=False, pages=20))
+    assert r["mode"] == "merge" and len(r["windows"]) >= 3
+    assert all(w.startswith("[p.") for w in r["windows"])
+    assert sum(len(w) for w in r["windows"]) >= r["read"] - 50 * len(r["windows"])
+
+    calls = []
+
+    class Brain:
+        def coordinator(self, prompt, system, **k):
+            calls.append(system)
+            return _reply(("A claim.", "D", "page 3 words page 3 words page 3 words", 3))
+    p = {"label": "X", "title": "T", "abstract": "", "read": r}
+    X.build_card_raw(Brain(), "granite4.2:30b", p)
+    assert len(calls) == len(r["windows"]) + 1
+    assert "part 1 of" in calls[0] and calls[-1] == X.MERGE_SYS

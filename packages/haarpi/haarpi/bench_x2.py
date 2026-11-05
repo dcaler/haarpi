@@ -72,31 +72,136 @@ def _think(model: str) -> bool:
     return model.startswith("gpt-oss")
 
 
+# ── what a card reads ───────────────────────────────────────────────────────────
+# Papers state their contributions in the abstract, the introduction and the conclusion. A
+# card reads those whole (the abstract from the Zotero record), then results passages up to the
+# budget. A paper whose introduction or conclusion cannot be found, or that will not fit, is read
+# in windows and merged instead ("merge"): never a partial read chosen by retrieval.
+
+CARD_BUDGET = 32000          # characters of paper text per card call (~8k tokens): one card
+WINDOW = 24000               # a merge window
+SECTION_CAP = 12000          # an introduction or conclusion longer than this is cut at the cap
+
+_KEY = (r"abstract|introduction|conclusions?|concluding remarks|discussion|results|findings|"
+        r"summary|references|bibliography|literature cited|acknowledge?ments?|methods?|"
+        r"methodology|data|model|literature review|background|theory|appendix")
+_HEAD = re.compile(rf"^\s*((?:\d+|[IVX]+)(?:\.\d+)*\.?\s+)?({_KEY})\b(.{{0,40}})$", re.I)
+
+
+def _kind(word: str) -> str:
+    w = word.lower()
+    if w.startswith("conclu") or w == "summary":
+        return "conclusion"
+    if w in ("references", "bibliography", "literature cited"):
+        return "references"
+    if w.startswith("acknowledg") or w == "appendix":
+        return "end"
+    return {"abstract": "abstract", "introduction": "introduction", "discussion": "discussion",
+            "results": "results", "findings": "results"}.get(w, "other")
+
+
+def find_sections(marked: str) -> list[tuple[str, int, str]]:
+    """Headings in the text, as (kind, offset, heading line). A heading is short, capitalised,
+    ends without punctuation, and is not a table label ("Model 2")."""
+    out, pos = [], 0
+    for line in marked.splitlines(keepends=True):
+        m = _HEAD.match(line.rstrip("\n"))
+        if m:
+            word, rest = m.group(2), (m.group(3) or "").strip()
+            ok = (word[0].isupper() and not re.search(r"[.;:,]$", line.strip())
+                  and not re.fullmatch(r"[\d\-–.]+", rest)
+                  and not re.search(r"[.;,]\s+\w", rest)
+                  and (not rest or rest[0].isupper() or rest[0] in "&-–:" or
+                       rest.split()[0].lower() in ("and", "of", "to", "in", "on")))
+            if ok:
+                out.append((_kind(word), pos, line.strip()))
+        pos += len(line)
+    return out
+
+
+def _marker_before(marked: str, at: int) -> str:
+    from rabbithole.facts import _PAGE_SPLIT
+    last = None
+    for m in _PAGE_SPLIT.finditer(marked, 0, at):
+        last = m
+    return f"[p.{last.group(1)}]\n" if last else ""
+
+
+def _slice(marked: str, a: int, b: int, cap: int) -> str:
+    """Text from a to b (at most `cap` characters), opened with the page it starts on."""
+    piece = marked[a:min(b, a + cap)]
+    return _marker_before(marked, a + 1) + piece if not piece.lstrip().startswith("[p.") else piece
+
+
+def card_read(marked: str, budget: int = CARD_BUDGET) -> dict:
+    """{"mode": "whole" | "focused" | "merge", "text", "windows", "sections", "read", "of"}."""
+    body = marked
+    secs = find_sections(marked)
+    refs = [o for k, o, _ in secs if k == "references" and o > len(marked) * 0.5]
+    if refs:
+        body = marked[:refs[0]]
+    found = [(k, o, h) for k, o, h in secs if o < len(body)]
+    base = {"sections": [h for _, _, h in found][:20], "of": len(marked)}
+    if len(body) <= budget:
+        return dict(base, mode="whole", text=body, windows=[], read=len(body))
+
+    def span(kind: str, last: bool = False) -> tuple[int, int] | None:
+        hits = [i for i, (k, _, _) in enumerate(found) if k == kind]
+        if not hits:
+            return None
+        i = hits[-1] if last else hits[0]
+        end = found[i + 1][1] if i + 1 < len(found) else len(body)
+        return found[i][1], end
+    intro = span("introduction")
+    concl = span("conclusion", last=True) or span("discussion", last=True)
+    if intro and concl and concl[0] > intro[0]:
+        parts = [(intro, "introduction"), (concl, "conclusion")]
+        disc = span("discussion", last=True)
+        if disc and disc != concl and disc[0] > intro[0]:
+            parts.append((disc, "discussion"))
+        chunks = {lab: _slice(body, a, b, SECTION_CAP) for (a, b), lab in parts}
+        used = sum(len(v) for v in chunks.values())
+        res = span("results")
+        if res and used < budget:
+            chunks["results"] = _slice(body, res[0], res[1], budget - used)
+        elif used < budget:
+            # No results heading: the pages leading into the conclusion carry the findings.
+            room = budget - used
+            a = max(min(intro[1], intro[0] + SECTION_CAP), concl[0] - room)
+            if concl[0] - a > 2000:
+                chunks["results"] = _slice(body, a, concl[0], room)
+        order = sorted(chunks, key=lambda lab: dict(
+            introduction=0, results=1, discussion=2, conclusion=3)[lab])
+        text = "\n\n[…]\n\n".join(chunks[lab] for lab in order)[:budget]
+        return dict(base, mode="focused", text=text, windows=[], read=len(text))
+    wins, a = [], 0
+    while a < len(body):
+        b = min(len(body), a + WINDOW)
+        if b < len(body):                         # break at a page marker near the end
+            cut = body.rfind("[p.", a + WINDOW // 2, b)
+            b = cut if cut > a else b
+        wins.append(_slice(body, a, b, WINDOW))
+        a = b
+    return dict(base, mode="merge", text="", windows=wins, read=len(body))
+
+
 # ── prepare ─────────────────────────────────────────────────────────────────────
 
 def prepare_x2(project: Path = B.FIRMPATHWAYS, out: Path | None = None) -> Path:
-    """Freeze the 16 papers: reading text read topic-neutrally (a card belongs to the paper,
-    not to one project), title, authors, abstract, stratum, and the Zotero links."""
-    from rabbithole import chroma, config as rhconfig
+    """Freeze the 16 papers: the card read (see `card_read`; no retrieval, no model), title,
+    authors, abstract, stratum, and the Zotero links. A card belongs to the paper, not to one
+    project, so nothing here depends on FirmPathways' questions."""
+    from rabbithole import config as rhconfig
     from rabbithole import facts as F
-    from rabbithole.brain import Brain as RHBrain
     from rabbithole.models import Candidate
-    from rabbithole.summarize import _paper_text, reading_text
+    from rabbithole.summarize import _paper_text
 
     out = Path(out or B.BENCH_ROOT / "fixtures")
     out.mkdir(parents=True, exist_ok=True)
     lit = project / "litReview"
     gc = rhconfig.load_global()
-    gc.ollama_url = B._url()
-    brain = RHBrain(rhconfig.BrainConfig(embed_model=B.EMBED), gc)
-    neutral = SimpleNamespace(topic="", focus="")
     records = {d.get("citekey"): d for d in json.loads(
         (lit / "work" / "corpus.json").read_text(encoding="utf-8"))}
-    try:
-        collection = chroma.get_collection(lit / "work" / "chroma")
-    except Exception as e:  # noqa: BLE001
-        B._say(f"no chroma collection ({e}) — long papers read condensed instead")
-        collection = None
     papers = []
     for key, stratum in X2_PAPERS:
         d = records.get(key)
@@ -105,15 +210,16 @@ def prepare_x2(project: Path = B.FIRMPATHWAYS, out: Path | None = None) -> Path:
             continue
         c = Candidate.from_dict(d)
         full = _paper_text(c)
-        reading = reading_text(brain, c, neutral, collection, key, text=full)
+        read = card_read(full)
         papers.append({"citekey": key, "stratum": stratum, "record": d,
                        "label": c.author_year(), "title": re.sub(r"<[^>]+>", "", c.title or ""),
                        "authors": [getattr(a, "display", "") or getattr(a, "family", "") or str(a)
                                    for a in (c.authors or [])[:6]],
-                       "abstract": c.abstract or "", "full": full, "reading": reading,
+                       "abstract": c.abstract or "", "full": full, "read": read,
                        "pdf": F.page_link(c, None, gc),
                        "zotero": F.zotero_select(c.zotero_key, gc)})
-        B._say(f"X2: {c.author_year()} — {len(reading):,} chars read of {len(full):,}")
+        B._say(f"X2: {c.author_year()} — {read['mode']}, {read['read']:,} of {len(full):,} chars"
+               + (f", {len(read['windows'])} windows" if read["windows"] else ""))
     fp = out / FIXTURE
     B._dump(fp, {"project": str(project), "papers": papers})
     return fp
@@ -145,6 +251,21 @@ For each contribution give:
 - "support": up to 3 specifics (numbers, sub-results), each with an exact quote and its page.
 
 Reply with JSON only:
+{"count": N, "contributions": [{"claim": "", "domain": "", "method": "", "conditions": "",
+ "quotes": [{"text": "", "page": 0}], "support": [{"text": "", "quote": "", "page": 0}]}]}"""
+
+WINDOW_NOTE = """
+
+This is part {n} of {total} of the paper. List the contributions evident in this part. Another
+pass will merge the parts, so do not worry about the whole paper; the count is for this part."""
+
+MERGE_SYS = """You are given the candidate contributions found in each part of one academic
+paper, and its abstract. Write the paper's card: merge candidates that are the same contribution,
+drop any that are background, cited findings, aims or settings, and keep the rest. Do not invent:
+every claim must come from the candidates, and every quote must be copied exactly from a
+candidate's quotes, with its page. Then state how many distinct contributions the paper makes.
+
+Reply with JSON only, in the same form as the candidates:
 {"count": N, "contributions": [{"claim": "", "domain": "", "method": "", "conditions": "",
  "quotes": [{"text": "", "page": 0}], "support": [{"text": "", "quote": "", "page": 0}]}]}"""
 
@@ -460,6 +581,22 @@ def pair_x2() -> Path:
 
 # ── the runs ────────────────────────────────────────────────────────────────────
 
+def build_card_raw(brain, model: str, p: dict) -> str:
+    """One call for a whole or focused read; for a merge read, one call per window and a merge
+    call over the candidates (quotes are checked against the full text afterwards either way)."""
+    head = f"PAPER: {p['label']}: {p['title']}\nABSTRACT: {p['abstract'] or '(none)'}\n\n"
+    read = p["read"]
+    if read["mode"] != "merge":
+        return brain.coordinator(head + read["text"], CARD_SYS, think=_think(model))
+    cands = []
+    for n, win in enumerate(read["windows"], 1):
+        raw = brain.coordinator(head + win, CARD_SYS + WINDOW_NOTE.format(
+            n=n, total=len(read["windows"])), think=_think(model))
+        cands += [c for c in (_obj(raw).get("contributions") or []) if isinstance(c, dict)]
+    listing = json.dumps({"candidates": cands}, ensure_ascii=False)
+    return brain.coordinator(head + listing, MERGE_SYS, think=_think(model))
+
+
 def task_x2e(model: str, work: Path) -> dict:
     from rabbithole.facts import page_texts
     fx = B._load(FIXTURE)
@@ -469,9 +606,9 @@ def task_x2e(model: str, work: Path) -> dict:
     for p in fx["papers"]:
         t0 = time.time()
         try:
-            raw = brain.coordinator(f"PAPER: {p['label']}: {p['title']}\n\n{p['reading']}",
-                                    CARD_SYS, think=_think(model))
+            raw = build_card_raw(brain, model, p)
             card = parse_card(raw, page_texts(p["full"]), f"{slug}|{p['citekey']}")
+            card["mode"] = p["read"]["mode"]
         except Exception as e:  # noqa: BLE001 — one paper's failure is a result
             card = {"count": None, "contributions": [], "error": f"{type(e).__name__}: {e}"}
         secs[p["citekey"]] = round(time.time() - t0, 1)
