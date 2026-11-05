@@ -18,6 +18,10 @@ prompts across models on 15 FirmPathways papers and is judged blind by a person:
   haarpi bench judge                             write the blind page EVAL_extraction.html
   haarpi bench unblind EVAL_extraction_DCR.json  score the judgements by prompt and model
 
+X2, paper cards (PLAN_paper_cards.html, 2026-11-05), lives in `bench_x2`; its verbs are
+`prepare --x2`, `run --tasks X2E`, `pair --x2`, `run --tasks X2J X2V`, `judge --x2` and
+`unblind --x2`.
+
 The tasks (see PLAN_brainbench.html): A1 fact extraction, A2 topic scoring, A3 theme naming
 (rabbitHole); B1 comment sorting, B2 paper tiers, B3 dispute verdicts (haarpi's planner); C1
 section drafting (raconteur); W1 long-paper condensing (worker); E1 embedder separation.
@@ -917,6 +921,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("prepare")
     p.add_argument("--project", default="")
     p.add_argument("--x1", action="store_true", help="freeze the X1 extraction fixture only")
+    p.add_argument("--x2", action="store_true", help="freeze the X2 paper-card fixture only")
+    pr = sub.add_parser("pair", help="X2: pair candidates, rotate roles, plant canaries")
+    pr.add_argument("--x2", action="store_true", required=True)
     r = sub.add_parser("run")
     g = r.add_mutually_exclusive_group(required=True)
     g.add_argument("--coordinator")
@@ -926,22 +933,41 @@ def main(argv: list[str]) -> int:
     r.add_argument("--prompt", choices=["p0", "p1"], default="p0", help="X1: the fact prompt")
     r.add_argument("--think", action="store_true", help="X1: thinking on for extraction")
     sub.add_parser("report")
-    sub.add_parser("judge", help="X1: write the blind judging page")
-    u = sub.add_parser("unblind", help="X1: score the saved judgements")
+    j = sub.add_parser("judge", help="X1 (or --x2): write the blind judging page")
+    j.add_argument("--x2", action="store_true")
+    u = sub.add_parser("unblind", help="X1 (or --x2): score the saved judgements")
+    u.add_argument("--x2", action="store_true")
     u.add_argument("judged")
     a = ap.parse_args(argv)
     if a.verb == "prepare":
-        if a.x1:
+        if a.x2:
+            from . import bench_x2
+            print(bench_x2.prepare_x2(Path(a.project or FIRMPATHWAYS)))
+        elif a.x1:
             print(prepare_x1(Path(a.project or FIRMPATHWAYS)))
         else:
             prepare(Path(a.project or DIGIPROS))
+    elif a.verb == "pair":
+        from . import bench_x2
+        print(bench_x2.pair_x2())
+    elif a.verb == "run" and a.tasks and any(t.startswith("X2") for t in a.tasks):
+        from . import bench_x2
+        print(bench_x2.run_x2(a.coordinator or "", a.tasks))
     elif a.verb == "run":
         print(run(a.coordinator or "", a.worker or "", a.embedders, a.tasks,
                   prompt=a.prompt, think=a.think))
     elif a.verb == "judge":
-        print(judge())
+        if a.x2:
+            from . import bench_x2
+            print(bench_x2.judge_x2())
+        else:
+            print(judge())
     elif a.verb == "unblind":
-        print(json.dumps(unblind(Path(a.judged)), indent=1))
+        if a.x2:
+            from . import bench_x2
+            print(json.dumps(bench_x2.unblind_x2(Path(a.judged)), indent=1))
+        else:
+            print(json.dumps(unblind(Path(a.judged)), indent=1))
     else:
         print(report())
     return 0
