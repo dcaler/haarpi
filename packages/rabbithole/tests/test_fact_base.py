@@ -64,6 +64,23 @@ def test_an_elided_quote_matches_only_if_every_piece_is_on_one_page():
                             "than to any", pages) is None
 
 
+def test_an_elided_quote_may_join_pages_only_when_asked():
+    # The verifier's span (bench X2, livieratos 2026): the abstract joined to the findings.
+    pages = facts.page_texts(_MARKED)
+    q = "Careers were coded as sequences ... closer to their own type than to any"
+    assert facts.find_quote(q, pages) is None                      # production default unchanged
+    assert facts.find_quote(q, pages, across_pages=True) == 1      # the first piece's page
+    assert facts.find_quote("Careers were coded as sequences ... no such words on any page here",
+                            pages, across_pages=True) is None
+
+
+def test_every_pdf_ligature_reads_as_its_letters():
+    # Only ﬁ and ﬂ were folded, so "effect" never matched a page printing "eﬀect" (bench X2).
+    pages = facts.page_texts("[p.3]\nThe eﬀect on eﬃciency was ﬁrm and ﬂat across the baﬄing cases.")
+    assert facts.find_quote("The effect on efficiency was firm and flat across the baffling cases",
+                            pages) == 3
+
+
 def test_a_paraphrase_or_a_scrap_is_not_verbatim():
     pages = facts.page_texts(_MARKED)
     assert facts.find_quote("Optimal matching found twenty career types", pages) is None

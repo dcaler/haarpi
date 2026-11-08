@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import sys
 import time
 from collections import Counter
@@ -243,7 +244,10 @@ _PAGE_SPLIT = re.compile(r"\[p\.(\d+)\]")
 def _norm(text: str) -> str:
     """Text as compared for a verbatim match: case, whitespace, hyphenation, quote style and
     ligatures do not count; words do."""
-    t = (text or "").replace("ﬁ", "fi").replace("ﬂ", "fl")
+    # NFKC folds every compatibility form, so all the ligatures a PDF keeps (ﬁ ﬂ ﬀ ﬃ ﬄ) read as
+    # their letters. Folding only ﬁ and ﬂ left "eﬀect" and "eﬃciency" unmatchable (bench X2,
+    # 2026-11-08: 10 verifier spans failed on that alone).
+    t = unicodedata.normalize("NFKC", text or "")
     # A soft hyphen (U+00AD) is an invisible break point the PDF keeps where a word was split
     # across a line: "data\xad\nbase" on the page is "database" in the quote (DigiPros,
     # 2026-10-12). Dropped with the whitespace after it, so the word rejoins.
@@ -266,9 +270,12 @@ def page_texts(marked: str) -> dict[int, str]:
     return out
 
 
-def find_quote(quote: str, pages: dict[int, str], hint: int | None = None) -> int | None:
+def find_quote(quote: str, pages: dict[int, str], hint: int | None = None,
+               across_pages: bool = False) -> int | None:
     """The page the quote appears on verbatim, or None. The model's page is tried first; a quote
-    elided with "..." matches when every piece of five or more words is on that one page."""
+    elided with "..." matches when every piece of five or more words is on that one page. With
+    `across_pages`, the pieces may sit on different pages of those given (a passage from the
+    abstract joined to one from the findings); the page of the first piece is returned."""
     pieces = [p.strip(" .,;:") for p in (_norm(x) for x in re.split(r"\.\.\.|…", quote or ""))]
     pieces = [p for p in pieces if p]
     pieces = [p for p in pieces if len(p.split()) >= _MIN_QUOTE_WORDS]
@@ -278,6 +285,10 @@ def find_quote(quote: str, pages: dict[int, str], hint: int | None = None) -> in
     for n in order:
         if all(p in pages[n] for p in pieces):
             return n
+    if across_pages and len(pieces) > 1:
+        found = [next((n for n in order if p in pages[n]), None) for p in pieces]
+        if all(n is not None for n in found):
+            return found[0]
     return None
 
 
