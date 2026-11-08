@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from haarpi import bench
+import bench
 
 
 def test_auc_separates_and_ties_count_half():

@@ -50,8 +50,6 @@ usage:
   haarpi queue              register the trundlr project / queue the opening chain
   haarpi <tool> <args…>     run a stage tool (rabbithole | ramus | raster | rayleigh | raconteur | razzle)
   haarpi doctor             report which stack each binary on PATH resolves to
-  haarpi bench prepare | run --coordinator M | run --worker M | run --embedders | report
-        compare local models on fixed real inputs (results in ~/haarpi-bench/)
 
 example:
   haarpi rabbithole gather
@@ -253,9 +251,6 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             _write_status(f"haarpi {cmd}", init_dir=_init_dir(rest) if cmd == "init" else None,
                           command=" ".join(["haarpi", cmd, *rest]))
-    if cmd == "bench":
-        from . import bench
-        return bench.main(rest)
     print(f"haarpi: unknown command '{cmd}'\n\n{_USAGE}", end="", file=sys.stderr)
     return 2
 

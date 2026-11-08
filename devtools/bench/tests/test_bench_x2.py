@@ -9,7 +9,8 @@ import re
 
 import pytest
 
-from haarpi import bench, bench_x2 as X
+import bench
+import bench_x2 as X
 
 PAGES = {1: "agent based simulation of the mitacs programme shows that reducing partner conflict "
             "from 2 percent to 0.5 percent increases completed projects by 18",

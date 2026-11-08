@@ -632,9 +632,7 @@ drops only when the whole strip will not fit, for both halves at once.
 The [haarpi](packages/haarpi) package is what the tools have in common:
 
 - **the umbrella CLI** — `haarpi init / next / status / queue / authors /
-  doctor / bench`, plus `haarpi <tool> <verb>` to reach any stage tool
-  (`bench` compares local models on fixed real inputs, results in `~/haarpi-bench/`; its X1
-  task is the extraction bake-off, judged blind on `EVAL_extraction.html`)
+  doctor`, plus `haarpi <tool> <verb>` to reach any stage tool
 - **the planner** — the sole litreview planner: decomposes markup, builds
   chains, queues them, mints releases, advances the stage ladder
 - **the redline engine** — tracked-change surgery, comment anchoring, threaded

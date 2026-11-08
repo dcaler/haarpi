@@ -1,22 +1,23 @@
-"""`haarpi bench` — which local model should be the coordinator, and which the worker?
+"""The model bench (dev tool, not shipped: run as `python devtools/bench/bench.py …`) — which local model should be the coordinator, and which the worker?
 
 The same fixed, real inputs are replayed through each candidate and scored by the same
 deterministic code, so the models differ and nothing else does. Read-only on every project:
 fixtures and results live under ``~/haarpi-bench/`` (or ``$HAARPI_BENCH``).
 
-  haarpi bench prepare              build the fixtures once (needs the embedder: a GPU task)
-  haarpi bench run --coordinator M  every coordinator task with M as coordinator
-  haarpi bench run --worker M       the worker task with M as worker
-  haarpi bench run --embedders      the embedder side check (mxbai vs bge-m3)
-  haarpi bench report               one HTML table of every result so far
+  bench.py prepare              build the fixtures once (needs the embedder: a GPU task)
+  bench.py run --coordinator M  every coordinator task with M as coordinator
+  bench.py run --worker M       the worker task with M as worker
+  bench.py run --embedders      the embedder side check (mxbai vs bge-m3)
+  bench.py report               one HTML table of every result so far
 
 X1, the extraction bake-off (PLAN_extraction_bench.html, 2026-11-02), compares two fact
 prompts across models on 15 FirmPathways papers and is judged blind by a person:
 
-  haarpi bench prepare --x1                      freeze the X1 fixture (needs the embedder)
-  haarpi bench run --coordinator M --tasks X1 --prompt p0|p1 [--think]
-  haarpi bench judge                             write the blind page EVAL_extraction.html
-  haarpi bench unblind EVAL_extraction_DCR.json  score the judgements by prompt and model
+  bench.py prepare --x1                      freeze the X1 fixture (needs the embedder)
+  bench.py run --coordinator M --tasks X1      (P0 only: P1 and its thinking switch were removed
+                                                 from rabbitHole on 2026-11-08; X1's results are kept)
+  bench.py judge                             write the blind page EVAL_extraction.html
+  bench.py unblind EVAL_extraction_DCR.json  score the judgements by prompt and model
 
 X2, paper cards (PLAN_paper_cards.html, 2026-11-05), lives in `bench_x2`; its verbs are
 `prepare --x2`, `run --tasks X2E`, `pair --x2`, `run --tasks X2J X2V`, `judge --x2` and
@@ -46,7 +47,7 @@ from types import SimpleNamespace
 BENCH_ROOT = Path(os.environ.get("HAARPI_BENCH") or Path.home() / "haarpi-bench")
 DIGIPROS = Path("/media/lucullus/Cale_Professional/Current_Work_Projects/260208_DigiPros")
 FIRMPATHWAYS = Path("/media/lucullus/Cale_Professional/Current_Work_Projects/260525_FirmPathways")
-HAARPI_DIR = Path(__file__).resolve().parents[3]          # where PLAN_/EVAL_ pages live
+HAARPI_DIR = Path(__file__).resolve().parents[2]          # where PLAN_/EVAL_ pages live
 EMBED = "mxbai-embed-large"
 BASELINE_COORDINATOR = "qwen3.6:27b-16k"
 BASELINE_WORKER = "llama3.1:8b"
@@ -135,7 +136,7 @@ def prepare(project: Path = DIGIPROS, out: Path | None = None) -> Path:
     from rabbithole.models import Candidate
     from rabbithole.summarize import _MAP_CHUNK_CHARS, _chunk, _paper_text, reading_text
 
-    from . import comment_kinds as ck
+    from haarpi import comment_kinds as ck
 
     out = Path(out or BENCH_ROOT / "fixtures")
     out.mkdir(parents=True, exist_ok=True)
@@ -316,7 +317,7 @@ def _load(name: str) -> dict:
 
 
 def _haarpi_brain(coordinator: str, worker: str, embed: str = ""):
-    from .brain import Brain
+    from haarpi.brain import Brain
     return Brain(_url(), coordinator, worker, embed_model=embed, tool="bench")
 
 
@@ -453,7 +454,7 @@ def _planner_cfg(model: str) -> dict:
 
 def task_b(model: str, work: Path) -> dict:
     """The planner's three judgements, on phrasings whose right answer is published."""
-    from . import planner
+    from haarpi import planner
     fx = _load("b.json")
     cfg = _planner_cfg(model)
     t0 = time.time()
@@ -916,7 +917,7 @@ th,td{{border-bottom:1px solid var(--rule);padding:5px 7px;text-align:left}}th{{
 
 def main(argv: list[str]) -> int:
     import argparse
-    ap = argparse.ArgumentParser(prog="haarpi bench")
+    ap = argparse.ArgumentParser(prog="devtools/bench/bench.py")
     sub = ap.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--project", default="")
@@ -930,8 +931,7 @@ def main(argv: list[str]) -> int:
     g.add_argument("--worker")
     g.add_argument("--embedders", action="store_true")
     r.add_argument("--tasks", nargs="*")
-    r.add_argument("--prompt", choices=["p0", "p1"], default="p0", help="X1: the fact prompt")
-    r.add_argument("--think", action="store_true", help="X1: thinking on for extraction")
+    r.add_argument("--prompt", choices=["p0"], default="p0", help="X1: the fact prompt (P0 only)")
     sub.add_parser("report")
     j = sub.add_parser("judge", help="X1 (or --x2): write the blind judging page")
     j.add_argument("--x2", action="store_true")
@@ -941,30 +941,30 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     if a.verb == "prepare":
         if a.x2:
-            from . import bench_x2
+            import bench_x2
             print(bench_x2.prepare_x2(Path(a.project or FIRMPATHWAYS)))
         elif a.x1:
             print(prepare_x1(Path(a.project or FIRMPATHWAYS)))
         else:
             prepare(Path(a.project or DIGIPROS))
     elif a.verb == "pair":
-        from . import bench_x2
+        import bench_x2
         print(bench_x2.pair_x2())
     elif a.verb == "run" and a.tasks and any(t.startswith("X2") for t in a.tasks):
-        from . import bench_x2
+        import bench_x2
         print(bench_x2.run_x2(a.coordinator or "", a.tasks))
     elif a.verb == "run":
         print(run(a.coordinator or "", a.worker or "", a.embedders, a.tasks,
-                  prompt=a.prompt, think=a.think))
+                  prompt=a.prompt, think=False))
     elif a.verb == "judge":
         if a.x2:
-            from . import bench_x2
+            import bench_x2
             print(bench_x2.judge_x2())
         else:
             print(judge())
     elif a.verb == "unblind":
         if a.x2:
-            from . import bench_x2
+            import bench_x2
             print(json.dumps(bench_x2.unblind_x2(Path(a.judged)), indent=1))
         else:
             print(json.dumps(unblind(Path(a.judged)), indent=1))

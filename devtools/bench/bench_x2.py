@@ -6,12 +6,12 @@ judges other families' pairs ("same contribution?") and verifies other families'
 against the text, with planted canaries. A person assesses the statements and a sample of the
 pairs once, paper by paper, and `unblind` scores every model and every 2- or 3-model lineup.
 
-  haarpi bench prepare --x2                         freeze the 16-paper fixture (embedder)
-  haarpi bench run --coordinator M --tasks X2E      M builds its cards
-  haarpi bench pair --x2                            pair candidates, rotate roles, plant canaries
-  haarpi bench run --coordinator M --tasks X2J X2V  M judges and verifies its assigned items
-  haarpi bench judge --x2                           write EVAL_cards.html
-  haarpi bench unblind --x2 EVAL_cards_DCR.json     score it
+  bench.py prepare --x2                         freeze the 16-paper fixture (embedder)
+  bench.py run --coordinator M --tasks X2E      M builds its cards
+  bench.py pair --x2                            pair candidates, rotate roles, plant canaries
+  bench.py run --coordinator M --tasks X2J X2V  M judges and verifies its assigned items
+  bench.py judge --x2                           write EVAL_cards.html
+  bench.py unblind --x2 EVAL_cards_DCR.json     score it
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import bench as B
+import bench as B
 
 # ── the lineup ──────────────────────────────────────────────────────────────────
 

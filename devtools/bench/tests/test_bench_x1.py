@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from haarpi import bench
+import bench
 
 
 def _fact(text, quote="", verified=True, bears_on=()):
