@@ -55,3 +55,6 @@ style_profile.md
 *.pptx
 /logos/
 /razzle_demo.pptx
+
+# Dev-only tools (the model bench): kept on this machine, never in git
+devtools/
