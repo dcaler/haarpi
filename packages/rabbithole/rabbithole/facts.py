@@ -85,108 +85,6 @@ Rules:
 - Extract the paper's own facts whatever its subject. Relevance is judged later, not by you:
   a paper with text always establishes something, so never return an empty array."""
 
-# ── P1: question-aware, claim first ────────────────────────────────────────────
-# P0 asks what a paper is for in general, starting from a quote, and FirmPathways' facts came
-# back as definitions, context-free details, generic lines and findings that bear on nothing in
-# the review — and as quotes copied back ("Given the current formulation, the use of crossover
-# has no benefits…", Aleti 2017, which never says it is about software testing). P1 tells the
-# model what the review asks, has it state the claim first and only then find the passage, and
-# makes each fact carry what it is about, how it was shown and when it holds. An honest "nothing
-# here" is allowed: a forced link is worse than none. (P0 withheld the questions on purpose:
-# given them, the model once answered [] for 11 DigiPros papers — which is why "none" is an
-# explicit, reasoned answer here, and why the bake-off measures how often it is used.)
-_SYS_P1 = """\
-You extract what a literature review would cite a paper FOR. The review asks:
-{questions}
-and is organised under these topics:
-{topics}
-
-Respond with ONLY a JSON array, no other text:
-
-[
-  {"claim": "one sentence a reader who has NOT seen the paper understands: it names what it is
-             about and what was found or argued",
-   "domain": "the system, population or setting the claim is about",
-   "method": "how the paper established it (model, data, case study, review, argument)",
-   "conditions": "when or where it holds; \"\" if the paper states no limit",
-   "bears_on": [the numbers of the topics above this claim bears on],
-   "role": "contribution | theme",
-   "kind": "finding | method | definition | argument | limitation",
-   "page": the N of the [p.N] marker the supporting passage sits under,
-   "quote": "a passage copied EXACTLY from the text, 8-30 words, that supports the claim"}
-]
-
-Rules:
-- Decide the CLAIM first, in your own words, from what the paper establishes; then find the
-  passage that supports it. Never copy the quote as the claim.
-- The claim stands alone: name the system, the method and the outcome. Resolve every "this
-  study", "the current formulation", "the proposed model", "we" into what it refers to.
-- At most {max_facts} facts; usually 2-5. Only claims this review could cite. A claim that
-  bears on none of the topics is not wanted, however central it is to the paper.
-- NEVER extract: a definition or background the paper did not originate; a generic statement
-  with no subject; an incidental detail (sample, calibration, an aside, a passing statistic).
-- Quote where the paper ESTABLISHES the claim (results, discussion, conclusions), never the
-  abstract or introduction. Copy it character for character; it must not span a [p.N] marker.
-- Reproduce reported quantities EXACTLY.
-- Only claims the paper ITSELF makes, never claims it attributes to other works.
-- Base everything strictly on the provided text. Do not invent.
-- If the paper offers this review nothing, return [{"nothing": "one sentence: why"}]. Say so
-  only after reading it; a paper on another subject can still hold a method or a finding a
-  topic above would cite."""
-
-
-def p1_system(cfg) -> str:
-    qs = research_questions(cfg)
-    ts = resolve_topics(cfg)
-    q = "\n".join(f"  Q{n}. {x}" for n, x in enumerate(qs, 1)) or "  (none given)"
-    t = "\n".join(f"  {n}. {x.name}" + (f" — {x.covers}" if x.covers else "")
-                  for n, x in enumerate(ts, 1)) or "  (none given)"
-    return (_SYS_P1.replace("{questions}", q).replace("{topics}", t)
-            .replace("{max_facts}", str(_MAX_FACTS)))
-
-
-def p1_signature(cfg) -> str:
-    """What a P1 extraction depends on besides the paper: the questions and topics. Changing
-    either re-extracts — P1 facts are this review's, not the paper's."""
-    import hashlib
-    return hashlib.sha1(p1_system(cfg).encode()).hexdigest()[:10]
-
-
-def _parse_facts_p1(raw: str, citekey: str, n_topics: int) -> tuple[list[Fact], str]:
-    """P1's facts, and its reason when it says the paper offers this review nothing."""
-    items = _json_objects(raw)
-    out: list[Fact] = []
-    nothing = ""
-    for d in items if isinstance(items, list) else []:
-        if not isinstance(d, dict):
-            continue
-        if d.get("nothing") and not d.get("claim"):
-            nothing = " ".join(str(d["nothing"]).split()) or "nothing for this review"
-            continue
-        claim = " ".join(str(d.get("claim") or "").split())
-        if not claim:
-            continue
-        kind = str(d.get("kind") or "finding").strip().lower()
-        role = str(d.get("role") or "").strip().lower()
-        try:
-            page = int(d.get("page")) if d.get("page") not in (None, "") else None
-        except (TypeError, ValueError):
-            page = None
-        bears = sorted({int(x) for x in (d.get("bears_on") or [])
-                        if str(x).strip().isdigit() and 1 <= int(x) <= n_topics})
-        out.append(Fact(id=f"{citekey}#{len(out) + 1}", citekey=citekey, text=claim,
-                        kind=kind if kind in FACT_KINDS else "finding", page=page,
-                        quote=" ".join(str(d.get("quote") or "").split()),
-                        role=role if role in ROLES else "",
-                        domain=" ".join(str(d.get("domain") or "").split()),
-                        method=" ".join(str(d.get("method") or "").split()),
-                        conditions=" ".join(str(d.get("conditions") or "").split()),
-                        bears_on=bears))
-        if len(out) >= _MAX_FACTS:
-            break
-    return out, ("" if out else nothing)
-
-
 _THEME_SYS = """\
 You organise a literature review's facts. Respond with ONLY a JSON object, no other text."""
 
@@ -277,12 +175,6 @@ class Fact:
                                                    #   extracted before roles, not yet checked
     front: bool | None = None                      # quoted from the abstract / front matter;
                                                    #   None = not yet checked
-    # P1 only (fact_prompt: p1): what the claim is about, how it was established, when it holds,
-    # and the 1-based topics it bears on. Empty under P0.
-    domain: str = ""
-    method: str = ""
-    conditions: str = ""
-    bears_on: list = field(default_factory=list)
 
 
 @dataclass
@@ -610,25 +502,16 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
     d = paths.work / "facts"
     d.mkdir(parents=True, exist_ok=True)
     items = research_questions(cfg)
-    p1 = (getattr(cfg, "fact_prompt", "p0") or "p0").lower() == "p1"
-    sys_prompt = p1_system(cfg) if p1 else _SYS.replace("{max_facts}", str(_MAX_FACTS))
-    n_topics = len(resolve_topics(cfg))
-    # P1 facts belong to this review's questions, so they cache apart from P0's and per question set.
-    suffix = f".p1-{p1_signature(cfg)}" if p1 else ""
+    sys_prompt = _SYS.replace("{max_facts}", str(_MAX_FACTS))
     out: dict[str, list[Fact]] = {}
     t0, done, cached = time.time(), 0, 0
     for i, c in enumerate(corpus):
         ck = citekeys.get(i)
         if not ck:
             continue
-        fp = d / f"{_located_filename(ck)}{suffix}.json"
+        fp = d / f"{_located_filename(ck)}.json"
         try:
             blob = json.loads(fp.read_text(encoding="utf-8"))
-            if p1 and blob.get("_v") == _FACTS_VERSION and blob.get("nothing") \
-                    and not blob.get("facts"):
-                out[ck] = []                     # a reasoned "nothing for this review": final
-                cached += 1
-                continue
             if blob.get("_v") == _FACTS_VERSION and blob.get("facts"):
                 fs = [Fact(**f) for f in blob["facts"]]
                 changed = False
@@ -656,35 +539,22 @@ def extract(brain, corpus: list[Candidate], cfg, paths, collection,
             continue            # left out of the review entirely: named in the log only
         print(f"  {runlog.stamp()}[{i + 1}/{len(corpus)}] facts: {label}", flush=True)
         text = reading_text(brain, c, cfg, collection, ck, text=full)
-        # P0: no review topic or focus here: given them, the model judged off-brief papers to
-        # hold nothing and answered [] (11 DigiPros papers, 2026-10-10). P1 gives them on purpose
-        # and makes "nothing" an explicit, reasoned answer (see _SYS_P1).
+        # No review topic or focus here: given them, the model judged off-brief papers to hold
+        # nothing and answered [] (11 DigiPros papers, 2026-10-10). Relevance is `score`'s job.
         prompt = (f"Paper: {c.title} ({c.author_year()})\n\n"
                   f"--- PAPER TEXT ---\n{text}\n--- END ---\n\nJSON array:")
         facts: list[Fact] = []
         replies: list[str] = []
-        nothing = ""
-        think = bool(getattr(cfg, "fact_think", False))
         for attempt in (1, 2):                    # one retry: a cut-off reply is usually a one-off
             try:
-                raw = brain.coordinator(prompt, sys_prompt, think=think, num_ctx=16384)
+                raw = brain.coordinator(prompt, sys_prompt, think=False, num_ctx=16384)
                 replies.append(raw or "")
-                if p1:
-                    facts, nothing = _parse_facts_p1(raw, ck, n_topics)
-                else:
-                    facts = _parse_facts(raw, ck, len(items))
+                facts = _parse_facts(raw, ck, len(items))
             except Exception as e:  # noqa: BLE001
                 replies.append(f"[exception] {e}")
                 print(f"  [warn] fact extraction failed for {label}: {e}", file=sys.stderr)
-            if facts or nothing:
+            if facts:
                 break
-        if p1 and not facts and nothing:
-            print(f"  {runlog.stamp()}    nothing for this review: {nothing}", flush=True)
-            fp.write_text(json.dumps({"_v": _FACTS_VERSION, "facts": [], "nothing": nothing},
-                                     indent=2, ensure_ascii=False), encoding="utf-8")
-            out[ck] = []
-            done += 1
-            continue
         failed = d / f"{_located_filename(ck)}.failed.txt"
         if not facts:
             # Kept so the next failure is diagnosed rather than guessed at.
