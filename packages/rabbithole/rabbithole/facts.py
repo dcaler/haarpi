@@ -292,6 +292,157 @@ def find_quote(quote: str, pages: dict[int, str], hint: int | None = None,
     return None
 
 
+# ── locating a passage, and swapping in the paper's own words ────────────────────────────────
+# A model's quote is evidence that a passage exists, never the passage itself: models tidy what
+# they copy (a ligature written out, a line-end hyphen dropped, a word or two of spacing fixed,
+# and sometimes a word that matters). So the matcher may tolerate small differences in FINDING a
+# passage, but what it hands on is the paper's text at the place found, widened to whole
+# sentences. A tidied-in error ("increases" for "decreases") then disappears, and the claim is
+# judged against what the paper really says (PLAN_claim_grounding.html, 2026-11-09).
+_TOKEN = re.compile(r"\S+")
+_ELISION = re.compile(r"\[\s*(?:\.\s*){3}\]|(?:\.\s*){3}|…")
+_SENTENCE_END = re.compile(r"[.!?][\"”’)\]]*\s+(?=[\"“‘(\[]?[A-Z0-9])|\n\s*\n")
+_WIDEN_CAP = 600          # characters a passage may grow on each side to reach a sentence edge
+_LOCATE_MIN_WORDS = 5     # a piece shorter than this is too common to locate
+
+
+def _tok(raw: str) -> str:
+    """One word as compared: ligatures folded, soft and ordinary hyphens and the punctuation
+    around it dropped, case ignored. Digits, decimal points and % count."""
+    t = unicodedata.normalize("NFKC", raw).replace("\u00ad", "").replace("-", "").lower()
+    t = t.translate(str.maketrans({"“": "", "”": "", "‘": "", "’": "'", "–": "", "—": ""}))
+    return re.sub(r"^[^\w%]+|[^\w%]+$", "", t)
+
+
+def _words(text: str) -> list[tuple[str, int, int]]:
+    """(word, start, end) for each word of `text`, with page markers left out and a word broken
+    across a line ("ini-" then "tially", or a soft hyphen) joined into one."""
+    out: list[tuple[str, int, int]] = []
+    join = False
+    for m in _TOKEN.finditer(text or ""):
+        raw = m.group(0)
+        if _PAGE_SPLIT.fullmatch(raw):
+            continue
+        w = _tok(raw)
+        if not w:
+            continue
+        if join and out:
+            prev = out[-1]
+            out[-1] = (prev[0] + w, prev[1], m.end())
+        else:
+            out.append((w, m.start(), m.end()))
+        join = raw.endswith(("-", "\u00ad")) and len(raw) > 1
+    return out
+
+
+def _page_at(marked: str, offset: int) -> int | None:
+    page = None
+    for m in _PAGE_SPLIT.finditer(marked):
+        if m.start() > offset:
+            break
+        page = int(m.group(1))
+    return page
+
+
+def _widen(marked: str, start: int, end: int) -> tuple[int, int]:
+    """Grow [start, end) to the sentence edges around it, at most _WIDEN_CAP each way."""
+    lo = max(0, start - _WIDEN_CAP)
+    edges = [m.end() for m in _SENTENCE_END.finditer(marked, lo, start + 1)
+             if m.end() <= start]
+    s = edges[-1] if edges else start
+    m = _SENTENCE_END.search(marked, max(end - 1, 0), min(len(marked), end + _WIDEN_CAP))
+    e = m.start() + 1 if m and not m.group(0).startswith("\n") else (m.start() if m else end)
+    return s, max(e, end)
+
+
+def _passage_text(raw: str) -> str:
+    """The paper's characters, made readable: page markers and soft hyphens out, ligatures read
+    as their letters, a word broken at a line end ("de-" then "creases") rejoined, whitespace
+    collapsed. No word is changed."""
+    t = _PAGE_SPLIT.sub(" ", raw)
+    t = unicodedata.normalize("NFKC", t).replace("\u00ad", "")
+    t = re.sub(r"(\w)-[ \t]*\n\s*(?=[a-z])", r"\1", t)
+    return " ".join(t.split())
+
+
+def _best_window(piece: list[str], paper: list[tuple[str, int, int]]) -> tuple[float, int, int]:
+    """The paper's best match for `piece`, as (share of the piece's words matched in order,
+    first paper word, last paper word + 1)."""
+    from difflib import SequenceMatcher
+    n = len(piece)
+    where: dict[str, list[int]] = {}
+    for i, (w, _, _) in enumerate(paper):
+        where.setdefault(w, []).append(i)
+    # Every shared word votes for where the piece would start; rare words count the most.
+    votes: Counter = Counter()
+    for j, w in enumerate(piece):
+        hits = where.get(w) or []
+        if hits and len(hits) <= 50:
+            for i in hits:
+                votes[i - j] += 1.0 / len(hits)
+    words = [w for w, _, _ in paper]
+    best = (0.0, 0, 0)
+    for start, _ in votes.most_common(8):
+        lo, hi = max(0, start - 3), min(len(paper), start + n + 3)
+        sm = SequenceMatcher(None, piece, words[lo:hi], autojunk=False)
+        blocks = [b for b in sm.get_matching_blocks() if b.size]
+        if not blocks:
+            continue
+        share = sum(b.size for b in blocks) / n
+        first, last = lo + blocks[0].b, lo + blocks[-1].b + blocks[-1].size
+        if share > best[0]:
+            best = (share, first, last)
+    if best[0] < 1.0:
+        # A scanned paper's text can run words together ("increasinglyrugged", "bushyradiation":
+        # Kauffman 1995, Levinthal 1996): spacing is formatting, so the piece also counts as found
+        # whole when its letters occur unbroken with the spaces ignored.
+        flat, owner = [], []
+        for i, w in enumerate(words):
+            flat.append(w)
+            owner.extend([i] * len(w))
+        at = "".join(flat).find("".join(piece))
+        if at >= 0:
+            best = (1.0, owner[at], owner[at + len("".join(piece)) - 1] + 1)
+    return best
+
+
+def locate_passage(quote: str, marked: str, min_share: float = 0.9) -> dict:
+    """Find a model's quote in a [p.N]-marked paper and return the paper's own words there.
+
+    The quote may be elided with "..." (each piece of five or more words is located on its
+    own, anywhere in the paper). A piece is found when at least `min_share` of its words occur
+    in order at one place (1.0: every word, only formatting forgiven). Returns
+    {"found": bool, "passages": [{"page", "start", "end", "text", "share"}], "nearest": [...]}:
+    `passages` are the located pieces widened to whole sentences, in the paper's characters,
+    when every piece is found; `nearest` is the best match for each piece either way (what a
+    later repair of a rejected claim starts from).
+    """
+    paper = _words(marked)
+    pieces = [[w for w, _, _ in _words(p)] for p in _ELISION.split(quote or "")]
+    pieces = [p for p in pieces if len(p) >= _LOCATE_MIN_WORDS]
+    nearest: list[dict] = []
+    for p in pieces:
+        share, i, j = _best_window(p, paper) if paper else (0.0, 0, 0)
+        if j > i:
+            s, e = _widen(marked, paper[i][1], paper[j - 1][2])
+            nearest.append({"page": _page_at(marked, paper[i][1]), "start": s, "end": e,
+                            "text": _passage_text(marked[s:e]), "share": round(share, 3)})
+        else:
+            nearest.append({"page": None, "start": 0, "end": 0, "text": "", "share": 0.0})
+    found = bool(pieces) and all(n["share"] >= min_share for n in nearest)
+    passages: list[dict] = []
+    if found:
+        for n in sorted(nearest, key=lambda n: n["start"]):
+            if passages and n["start"] <= passages[-1]["end"]:   # overlapping pieces: one passage
+                last = passages[-1]
+                last["end"] = max(last["end"], n["end"])
+                last["text"] = _passage_text(marked[last["start"]:last["end"]])
+                last["share"] = min(last["share"], n["share"])
+            else:
+                passages.append(dict(n))
+    return {"found": found, "passages": passages, "nearest": nearest}
+
+
 def _json_objects(raw: str) -> list:
     """The reply's JSON array, or — when the array does not parse — every complete `{...}` object
     in it. One malformed element (an unescaped quote mark inside a verbatim quote, a reply cut
