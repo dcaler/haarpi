@@ -13,6 +13,7 @@ file directly, exactly as before.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 import json
 import os
 import re
@@ -20,7 +21,8 @@ from pathlib import Path
 
 CACHE_ROOT = Path(os.environ.get("HAARPI_PDF_CACHE")
                   or Path.home() / ".cache" / "haarpi" / "pdfs")
-_TEXT_VERSION = 1      # bump when the extraction changes, so cached text is redone
+_TEXT_VERSION = 2      # bump when the extraction changes, so cached text is redone
+                       # 2 (2026-11-09): superscript citation numbers kept inline as [44]
 
 
 def _slot(path: Path) -> Path:
@@ -106,6 +108,105 @@ def _cached_text(path: Path, kind: str, make):
     return val
 
 
+# SUPERSCRIPT CITATIONS. Nature-style papers cite by raised reference numbers ("a collective
+# benefit⁴⁴"). They are set smaller and higher than the line, so plain extraction lifts them out
+# of their sentence: de Visser & Krug 2014 came out as "…a collective benefit\n. This contrast…"
+# with the numbers in stray clusters ("44 45 42 44 44") elsewhere. Without them, a passage that
+# reports a cited study reads as the paper's own. So each page is rebuilt from its characters
+# (identical to plain extraction otherwise) and every superscript reference number is written
+# back where it sits, as "[44]". An exponent after a digit (10³) is left as it was, and so is a
+# number that would land inside a word (a rotated watermark) or on a slanted line. In a paper
+# that cites by author and year, raised numbers are footnote markers, not citations, and are
+# written "[note:3]" so a passage does not read as citing anyone.
+_AUTHOR_YEAR = re.compile(r"\([A-Z][^()]{0,80}?\b(?:19|20)\d\d[a-z]?\b")
+_AUTHOR_YEAR_MIN = 15   # this many "(Name ... 1999" citations: an author-year paper
+_SUP_REF = re.compile(r"^\d{1,3}(?:\s*[,–-]\s*\d{1,3})*$")
+_SUP_SIZE = 0.85        # a superscript is set at most this fraction of the body size
+
+
+def _flat(ln) -> bool:
+    dx, dy = ln.get("dir", (1, 0))
+    return dx > 0.99 and abs(dy) < 0.01
+
+
+def _page_text(page, notes: bool = False) -> str:
+    raw = page.get_text("rawdict")
+    lines = [ln for b in raw.get("blocks", []) if b.get("type") == 0 for ln in b.get("lines", [])]
+    sizes = Counter()
+    for ln in lines:
+        for sp in ln["spans"]:
+            sizes[round(sp["size"], 1)] += len(sp["chars"])
+    if not sizes:
+        return page.get_text()
+    small = sizes.most_common(1)[0][0] * _SUP_SIZE
+    # Every character, as (line, x0, y0, x1, y1, char, is_small).
+    chars = [[(li, *c["bbox"], c["c"], sp["size"] <= small) for sp in ln["spans"] for c in sp["chars"]]
+             for li, ln in enumerate(lines)]
+    # Runs of small digits, commas and dashes, side by side on one source line: one citation each.
+    runs, moved = [], set()
+    for li, row in enumerate(chars):
+        cur: list[int] = []
+        for k, ch in enumerate(row + [None]):
+            ok = ch is not None and ch[6] and (ch[5].isdigit() or ch[5] in ",–- ")
+            if ok and cur and ch[1] - row[cur[-1]][3] > 3:
+                runs.append((li, cur)); cur = []
+            if ok:
+                cur.append(k)
+            elif cur:
+                runs.append((li, cur)); cur = []
+    inserts: dict[int, list[tuple[float, str]]] = {}
+    for li, ks in runs:
+        t = "".join(chars[li][k][5] for k in ks).strip()
+        if not _SUP_REF.match(t) or not _flat(lines[li]):
+            continue
+        x0 = min(chars[li][k][1] for k in ks)
+        y0 = min(chars[li][k][2] for k in ks)
+        y1 = max(chars[li][k][4] for k in ks)
+        best, overlap = None, 0.0
+        for lj, row in enumerate(chars):
+            big = [c for c in row if not c[6] and c[5].strip()]
+            if not big or not _flat(lines[lj]):
+                continue
+            bx0, bx1 = min(c[1] for c in big), max(c[3] for c in big)
+            by0, by1 = min(c[2] for c in big), max(c[4] for c in big)
+            if not (bx0 - 2 <= x0 <= bx1 + 4) or y0 > by1 or y1 < by0:
+                continue
+            ov = min(y1, by1) - max(y0, by0)
+            if ov > overlap and (y0 + y1) / 2 < (by0 + by1) / 2:     # raised against that line
+                best, overlap = lj, ov
+        if best is None:
+            continue
+        before = [c for c in chars[best] if not c[6] and c[3] <= x0 + 1]
+        after = [c for c in chars[best] if not c[6] and c[1] >= x0 - 1]
+        near = [c for k, c in enumerate(chars[best]) if (best, k) not in moved and c[5].strip()
+                and c[3] <= x0 + 1]
+        if near and max(near, key=lambda c: c[3])[5].isdigit():   # 10³, or a table: not a citation
+            continue
+        if before and after and before[-1][5].isalnum() and after[0][5].isalnum():
+            continue                                              # inside a word: not a citation
+        moved.update((li, k) for k in ks)
+        num = re.sub(r"\s+", "", t)
+        inserts.setdefault(best, []).append((x0, f"[note:{num}]" if notes else f"[{num}]"))
+    out = []
+    for li, row in enumerate(chars):
+        kept = [(c[1], c[5]) for k, c in enumerate(row) if (li, k) not in moved]
+        for x, tag in sorted(inserts.get(li, [])):
+            n = next((i for i, (cx, _) in enumerate(kept) if cx >= x), len(kept))
+            kept.insert(n, (x, tag))
+        line = "".join(c for _, c in kept)
+        if row and not line.strip() and any((li, k) in moved for k in range(len(row))):
+            continue                                              # held only moved numbers
+        out.append(line + "\n")
+    return "".join(out)
+
+
+def _doc_pages(doc) -> list[str]:
+    """Each page's text, raised numbers as citations, or as notes in an author-year paper."""
+    plain = "".join(p.get_text() for p in doc)
+    notes = len(_AUTHOR_YEAR.findall(plain)) >= _AUTHOR_YEAR_MIN
+    return [_page_text(p, notes) for p in doc]
+
+
 def _extract_text(path: Path) -> tuple[str, int]:
     try:
         import fitz  # PyMuPDF
@@ -115,7 +216,7 @@ def _extract_text(path: Path) -> tuple[str, int]:
         doc = fitz.open(path)
     except Exception:  # noqa: BLE001
         return "", 0
-    pages = [p.get_text() for p in doc]
+    pages = _doc_pages(doc)
     n = doc.page_count
     doc.close()
     return "\n".join(pages), n
@@ -134,8 +235,8 @@ def _page_marked_text(path: Path) -> str:
     except Exception:  # noqa: BLE001
         return ""
     out = []
-    for i, page in enumerate(doc, 1):
-        out.append(f"[p.{i}]\n{page.get_text()}")
+    for i, text in enumerate(_doc_pages(doc), 1):
+        out.append(f"[p.{i}]\n{text}")
     doc.close()
     return "\n\n".join(out)
 

@@ -241,13 +241,18 @@ def derive_focus(facts: dict[str, list[Fact]], topics: list[Topic]) -> None:
 _PAGE_SPLIT = re.compile(r"\[p\.(\d+)\]")
 
 
+# A citation or note marker the extraction put back ("benefit[44]", "[note:3]") is the page's,
+# not the quoted words: a quote may carry it or drop it, so matching ignores it on both sides.
+_CITE_TAG = re.compile(r"\[(?:note:)?\d{1,3}(?:[,–-]\d{1,3})*\]")
+
+
 def _norm(text: str) -> str:
-    """Text as compared for a verbatim match: case, whitespace, hyphenation, quote style and
-    ligatures do not count; words do."""
+    """Text as compared for a verbatim match: case, whitespace, hyphenation, quote style,
+    ligatures and citation markers do not count; words do."""
     # NFKC folds every compatibility form, so all the ligatures a PDF keeps (ﬁ ﬂ ﬀ ﬃ ﬄ) read as
     # their letters. Folding only ﬁ and ﬂ left "eﬀect" and "eﬃciency" unmatchable (bench X2,
     # 2026-11-08: 10 verifier spans failed on that alone).
-    t = unicodedata.normalize("NFKC", text or "")
+    t = unicodedata.normalize("NFKC", _CITE_TAG.sub("", text or ""))
     # A soft hyphen (U+00AD) is an invisible break point the PDF keeps where a word was split
     # across a line: "data\xad\nbase" on the page is "database" in the quote (DigiPros,
     # 2026-10-12). Dropped with the whitespace after it, so the word rejoins.
@@ -309,7 +314,7 @@ _LOCATE_MIN_WORDS = 5     # a piece shorter than this is too common to locate
 def _tok(raw: str) -> str:
     """One word as compared: ligatures folded, soft and ordinary hyphens and the punctuation
     around it dropped, case ignored. Digits, decimal points and % count."""
-    t = unicodedata.normalize("NFKC", raw).replace("\u00ad", "").replace("-", "").lower()
+    t = unicodedata.normalize("NFKC", _CITE_TAG.sub("", raw)).replace("\u00ad", "").replace("-", "").lower()
     t = t.translate(str.maketrans({"“": "", "”": "", "‘": "", "’": "'", "–": "", "—": ""}))
     return re.sub(r"^[^\w%]+|[^\w%]+$", "", t)
 
