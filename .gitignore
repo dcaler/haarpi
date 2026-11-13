@@ -61,3 +61,4 @@ devtools/
 
 # Paper cards (rabbitHole claim grounding): they hold the papers' text, so they stay on this machine
 /cards/
+/cards_aside/
