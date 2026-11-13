@@ -129,11 +129,14 @@ replaced. Each paper gets a card:
 - each verifier judges the claim against the other's passage, and whether it is the paper's
   own finding.
 
-Only a claim that passes every check is confirmed. A person passes a gate (the map, a sample
-of 25, what is missing) before a claims release is minted for raconteur
-(`../haarpi/DESIGN_claims_release.md`). The reference implementation is the bench
-(`devtools/bench/bench_fp.py`, kept out of git). The fact base, its review page, `revise`,
-`graft` and the docx report retire when the port lands.
+Only a claim that passes every check is confirmed. `rabbithole cards <step>` runs one step per
+call into a card store shared by every project (`cards/` in the HAARPi tree). Each run plants
+its own canaries, and a kind that slips past both verifiers more than one time in ten, even at
+the low end of its 95% interval, holds the release. `cards gate` writes the gate page (`gate.py`):
+the map, the slip rates, a sample of 25 confirmed claims, and what is missing per topic. A person
+saves their answers, and `haarpi next` reads them: a pass releases the claims for raconteur
+(`…_litreview.claims.json`, `../haarpi/DESIGN_claims_release.md`). The fact base, its review
+page, `revise`, `graft` and the docx report retire when the port lands.
 
 **How a paper's text is read.** Every PDF goes through `pdfs.py`:
 - Running headers, footers and page numbers are left out.

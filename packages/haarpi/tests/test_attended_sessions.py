@@ -69,7 +69,7 @@ def test_a_step_must_name_its_resource():
 
 
 def test_every_registered_step_names_a_real_resource():
-    real = {"human", "gpu", "cpu", "claude"}
+    real = {"human", "gpu", "gpus", "cpu", "claude"}      # gpus: both cards at once
     for stage, steps in planner.STAGE_STEPS.items():
         for name, st in steps.items():
             assert st.resource in real, f"{stage}:{name} declares {st.resource!r}"

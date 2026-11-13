@@ -12,6 +12,7 @@ Bench FP's procedure, adopted 2026-11-13, one step per trundlr task:
   confirm --model M   GPU   each verifier judges the claim against the OTHER one's passage
   own --model M       GPU   is it the paper's own, and in what role
   close               CPU   each claim confirmed or where it failed; what the canaries say slipped
+  gate [--seed N]     CPU   the gate page (gate.py); `haarpi next` reads the saved answers
 
 A claim is confirmed only if every check passes for both verifiers. The prompts are
 `ground_prompts.py`, verbatim from the bench. Cards are kept once per paper for every project
@@ -788,12 +789,21 @@ def close(project_dir=".", cfg=None) -> dict:
 STEPS = ("init", "kind", "extract", "plant", "reread", "locate", "confirm", "own", "close")
 
 
-def main(step: str, directory: str = ".", model: str | None = None, part: int = 0, parts: int = 1) -> int:
+def _gate(directory, seed):
+    from . import gate
+    return gate.build(directory, seed=seed)
+
+
+def main(step: str, directory: str = ".", model: str | None = None, part: int = 0, parts: int = 1,
+         seed: int | None = None) -> int:
+    if model in ("1", "2"):                 # the configured model, as a queued task names it
+        cfg = C.load_config()
+        model = (cfg.kind_models if step == "kind" else cfg.verifiers)[int(model) - 1]
     fn = {"init": lambda: init(directory), "kind": lambda: kind(directory, model or ""),
           "extract": lambda: extract(directory, part, parts), "plant": lambda: plant(directory),
           "reread": lambda: reread(directory, model or ""), "locate": lambda: locate(directory),
           "confirm": lambda: confirm(directory, model or ""), "own": lambda: own(directory, model or ""),
-          "close": lambda: close(directory)}[step]
+          "close": lambda: close(directory), "gate": lambda: _gate(directory, seed)}[step]
     from . import runlog
     runlog.start()
     fn()

@@ -315,8 +315,10 @@ def latest_release(root: Path, m: Manifest, stage: str) -> Path | None:
     from . import naming
     infix = m.stages[stage].get("infix") or None
     best: tuple[float, Path] | None = None
+    # A literature review released through the claims gate is a `.claims.json` (2026-11-13).
+    exts = ("docx", "md", "claims.json") if stage in ("litreview", "methodsreview") else ("docx", "md")
     for d in stage_search_dirs(root, m, stage):
-        for ext in ("docx", "md"):
+        for ext in exts:
             got = naming.find_latest_release(d, m.short_title, ext=ext,
                                              chain_includes=infix)
             if got and (best is None or got.stat().st_mtime > best[0]):

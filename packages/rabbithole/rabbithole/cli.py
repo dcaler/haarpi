@@ -259,13 +259,15 @@ def _run(argv: list[str] | None = None) -> int:
 
     crd = sub.add_parser("cards",
                          help="claim grounding: give each paper its card, one step per task "
-                              "(init, kind, extract, plant, reread, locate, confirm, own, close)")
+                              "(init, kind, extract, plant, reread, locate, confirm, own, close, gate)")
     crd.add_argument("step", choices=["init", "kind", "extract", "plant", "reread", "locate",
-                                      "confirm", "own", "close"])
+                                      "confirm", "own", "close", "gate"])
     crd.add_argument("--model", default=None,
                      help="kind, reread, confirm, own: which of the configured models answers")
     crd.add_argument("--part", type=int, default=0, help="extract: this part (0-based) ...")
     crd.add_argument("--parts", type=int, default=1, help="... of this many")
+    crd.add_argument("--seed", type=int, default=None,
+                     help="gate: the sample's seed (default: today's date; a fresh gate takes a new one)")
     _review_arg(crd)
 
     args = parser.parse_args(argv)
@@ -318,7 +320,8 @@ def _run(argv: list[str] | None = None) -> int:
 
     if args.command == "cards":
         from . import ground
-        return ground.main(args.step, args.dir, model=args.model, part=args.part, parts=args.parts)
+        return ground.main(args.step, args.dir, model=args.model, part=args.part, parts=args.parts,
+                           seed=args.seed)
 
     if args.command == "build":
         _check_env(need_pandoc=False)          # brain + Zotero; no docx output

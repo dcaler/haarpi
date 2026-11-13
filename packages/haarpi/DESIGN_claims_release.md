@@ -6,9 +6,15 @@ contract between the two. raconteur does not import rabbitHole; this file is all
 
 ## Where it lives
 
-rabbitHole's **release** step (procedure step 10) writes it, and only after a passed gate:
+`haarpi next` writes it (through `rabbithole.gate.release`), and only when the person's saved
+gate answers say pass:
 
-    {litrev_dir}/output/{YYMMDD}_{project}_release_ra.claims.json
+    {litrev_dir}/output/{YYMMDD}_{short_title}_litreview.claims.json
+
+No author token, like every release (`haarpi.naming`). Changed 2026-11-13 from the first draft's
+`…_release_ra.claims.json`, which the naming law reads as a tool's draft, never a release. The
+answers it is released from are `…_litreview_gate_ra_DCR.json`, their chain ending in the
+person's initials, so `next` reads them as finished markup.
 
 The newest `*.claims.json` in `output/` is the current release. A later release supersedes
 it, and the usual staleness propagation marks drafts built from the older one. raconteur
@@ -21,7 +27,7 @@ never reads rabbitHole's `work/`: an unreleased claim can't reach a draft.
   "format": "claims-release/1",
   "project": "FirmPathways",
   "released": "2026-11-20",
-  "gate": {"file": "261113_FirmPathways_gate_DCR.json", "outcome": "pass",
+  "gate": {"file": "261113_FirmPathways_litreview_gate_ra_DCR.json", "outcome": "pass",
            "sample": 25, "wrong": 0},
   "questions": ["How do cleantech firms navigate ...?"],
   "topics": [{"name": "Sequencing of funding sources", "serves": [1]}, "..."],

@@ -52,7 +52,7 @@ class Step:
     # domains on that same machine, and it hid a real error: `rayleigh process` makes no model
     # calls at all and sat on the GPU, holding the scarce resource for arithmetic. A default
     # is only needed because a step is allowed not to say; requiring it removes the question.
-    resource: str            # "human" | "gpu" | "cpu" | "claude"
+    resource: str            # "human" | "gpu" | "gpus" (both cards) | "cpu" | "claude"
     # An ATTENDED step has a command AND needs a person at the keyboard: the interactive
     # design, build and review sessions, which launch a Claude session in the project root.
     # Attendance used to be inferred from having no command, so the only way to make such a
@@ -149,6 +149,55 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "topics-apply": Step("haarpi rabbithole topics --apply", 0.05,
                              "Adopt the saved questions and topics into a new numbered config.",
                              resource="cpu"),
+        # CLAIM GROUNDING (rabbithole.ground, adopted 2026-11-13): each paper's claims are read
+        # and confirmed in its own words by two verifiers, into the shared card store. A paper
+        # carded before costs nothing, so these cold starts are for a rework's handful of new
+        # papers; history overrides them. `--model 1|2` names the configured model ([cards]),
+        # so a queued command never goes stale when the lineup changes. Linear for now: the
+        # parallel chain (both verifiers side by side on the pool) is the planner slice.
+        "cards-init":      Step("haarpi rabbithole cards init", 0.1,
+                                "Give each paper in the built corpus its card (text from its PDF).",
+                                resource="cpu"),
+        "cards-kind-1":    Step("haarpi rabbithole cards kind --model 1", 0.1,
+                                "Is each new paper a review? (first of two models)", resource="gpu"),
+        "cards-kind-2":    Step("haarpi rabbithole cards kind --model 2", 0.1,
+                                "Is each new paper a review? (second of two models)", resource="gpu"),
+        "cards-extract":   Step("haarpi rabbithole cards extract", 2.0,
+                                "Extract each new paper's claims with their quotes (llama3.3, both "
+                                "cards; ~0.2 h a paper).", resource="gpus"),
+        "cards-plant":     Step("haarpi rabbithole cards plant", 0.05,
+                                "Plant this run's canaries from its own claims.", resource="cpu"),
+        "cards-reread-1":  Step("haarpi rabbithole cards reread --model 1", 0.6,
+                                "First verifier re-reads each claim on its pages.", resource="gpu"),
+        "cards-reread-2":  Step("haarpi rabbithole cards reread --model 2", 0.6,
+                                "Second verifier re-reads each claim on its pages.", resource="gpu"),
+        "cards-locate":    Step("haarpi rabbithole cards locate", 0.1,
+                                "Find the verifiers' spans in the paper's words.", resource="cpu"),
+        "cards-confirm-1": Step("haarpi rabbithole cards confirm --model 1", 0.15,
+                                "First verifier judges each claim on the other's passage.", resource="gpu"),
+        "cards-confirm-2": Step("haarpi rabbithole cards confirm --model 2", 0.15,
+                                "Second verifier judges each claim on the other's passage.", resource="gpu"),
+        "cards-own-1":     Step("haarpi rabbithole cards own --model 1", 0.15,
+                                "Is it the paper's own finding, and in what role? (first verifier)",
+                                resource="gpu"),
+        "cards-own-2":     Step("haarpi rabbithole cards own --model 2", 0.15,
+                                "Is it the paper's own finding, and in what role? (second verifier)",
+                                resource="gpu"),
+        "cards-close":     Step("haarpi rabbithole cards close", 0.05,
+                                "Each claim confirmed or where it failed; what the canaries say slipped.",
+                                resource="cpu"),
+        "cards-gate":      Step("haarpi rabbithole cards gate", 0.05,
+                                "Build the gate page (map, slips, sample, missing) into litReview/output.",
+                                resource="cpu"),
+        "gate":            Step(None, 0.75,
+                                "Do the gate on the newest `*_litreview_gate_ra.html` in litReview/output: "
+                                "the sample (~25 min), then what is missing (~15 min); choose pass / no "
+                                "confidence / hold, save the JSON into litReview/output, then mark this "
+                                "done.", resource="human"),
+        "cards-review":    Step(None, 2.0,
+                                "The gate found too many confirmed claims wrong, or a canary kind holds "
+                                "the release: find what let them through and fix it before a fresh gate.",
+                                resource="human", attended=True),
     },
     "paper": {
         "revise":   Step("haarpi raconteur draft", 2.0,
@@ -704,7 +753,7 @@ def pipeline_config() -> dict:
 def _resource_id(tr_cfg: dict, kind: str) -> int | None:
     """The trundlr resource id for a step's declared kind. No fallbacks: a step names a
     resource that exists, or the misconfiguration is visible rather than absorbed."""
-    key = {"human": "human_resource", "gpu": "gpu_resource",
+    key = {"human": "human_resource", "gpu": "gpu_resource", "gpus": "gpus_resource",
            "cpu": "cpu_resource", "claude": "claude_resource"}[kind]
     return int(tr_cfg.get(key) or 0) or None
 
@@ -2164,7 +2213,151 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
                     t = max(p.stat().st_mtime, picked_at)
                     if best is None or t > best[0]:
                         best = (t, stage, p)
+            # The claims gate (2026-11-13): the person's saved answers ARE the markup —
+            # `…_litreview_gate_ra_DCR.json`, its chain ending in their initials.
+            if stage == "litreview":
+                for p in d.glob("*.json"):
+                    parsed = naming.parse(p, m.short_title)
+                    if not parsed or "gate" not in parsed[1] or naming.is_release(parsed[1]) \
+                            or parsed[1][-1].lower() == "ra":
+                        continue
+                    t = p.stat().st_mtime
+                    if best is None or t > best[0]:
+                        best = (t, stage, p)
     return (best[1], best[2]) if best else None
+
+
+
+# ── the claims gate ───────────────────────────────────────────────────────────
+# A literature review grounded claim by claim (rabbithole.ground, adopted 2026-11-13) is gated
+# on one page, not a redline: the person judges a sample of confirmed claims and says what is
+# missing, and saves their answers. This reads those answers. Nothing needs a model, because
+# every answer is already one of a few kinds, so the rework is read off them directly:
+#
+#   pass, nothing missing    release the claims (minus any judged wrong), advance downstream
+#   pass, ideas missing      no release yet: search for them, card what comes in, a new gate
+#   no confidence            no release: Cale and Claude find what let wrong claims through,
+#                            then a fresh gate on a fresh sample
+#   hold                     nothing, and nothing queued
+#
+# A canary kind that holds the release blocks it whatever the answers say (rabbithole.canaries).
+
+CLAIMS_REWORK = {
+    "missing": ["gather", "collect", "audit", "build", "cards-init", "cards-kind-1", "cards-kind-2",
+                "cards-extract", "cards-plant", "cards-reread-1", "cards-reread-2", "cards-locate",
+                "cards-confirm-1", "cards-confirm-2", "cards-own-1", "cards-own-2", "cards-close",
+                "cards-gate", "gate"],
+    "no_confidence": ["cards-review", "cards-gate", "gate"],
+}
+
+
+def _gate_hash(markup: Path) -> str:
+    import hashlib
+    return "claims-" + hashlib.sha256(markup.read_bytes() + markup.name.encode()).hexdigest()[:16]
+
+
+def _set_aside(markup: Path, gate: dict) -> int:
+    """Move the consumed answers and the page they answered into output/archive/gate/."""
+    dest = markup.parent / "archive" / "gate"
+    n = 0
+    for name in {markup.name, gate.get("page") or "", (gate.get("page") or "").replace("_gate_ra", "_gatemap_ra")}:
+        p = markup.parent / name
+        if name and p.is_file():
+            dest.mkdir(parents=True, exist_ok=True)
+            p.replace(dest / name)
+            n += 1
+    return n
+
+
+def _claims_gate(root: Path, m: project.Manifest, stage: str, markup: Path, *, dry_run: bool,
+                 queueing: bool, tr_cfg: dict, skipped: str) -> int:
+    from rabbithole import config as rhconfig, gate as rgate, ground as rground
+    run = rground.Run(root)
+    gate, close = run.load("gate"), run.load("close")
+    ans = rgate.read_answers(markup, gate)
+    holds = close.get("holds") or []
+    print(f"haarpi next: {stage} · claims gate")
+    print(f"  reading   {markup.name}")
+    print(f"  sample    {len(ans['sample']) - len(ans['unjudged'])} of {len(ans['sample'])} judged, "
+          f"{len(ans['wrong'])} wrong · missing ideas under {len(ans['missing'])} topic(s) · "
+          f"outcome {ans['outcome'] or 'not chosen'}" + (f" · HELD by {'; '.join(holds)}" if holds else ""))
+    if ans["outcome"] is None or (ans["outcome"] == "pass" and ans["unjudged"]):
+        why = "no outcome chosen" if ans["outcome"] is None else f"{len(ans['unjudged'])} sample claim(s) not judged"
+        print(f"haarpi next: the gate is not finished ({why}). Nothing is consumed; finish the page, "
+              f"save it again, and re-run `haarpi next`.")
+        return 0
+    ahash = _gate_hash(markup)
+    if project.already_planned(root, ahash):
+        print(f"  [stop]    these answers were already planned (hash {ahash}) — loop guard.")
+        return 0
+    if ans["outcome"] == "hold":
+        if not dry_run:
+            project.record_plan(root, {"type": "gate", "stage": stage, "annotation_hash": ahash,
+                                       "markup": markup.name, "outcome": "hold"})
+        print("haarpi next: litreview: the gate says HOLD — nothing released, nothing queued.")
+        return 0
+
+    if ans["outcome"] == "pass" and not ans["missing"] and not holds:
+        dst = m.stage_dir(root, stage) / "output" / rgate.release_name(m.short_title, naming.today())
+        if dry_run:
+            print(f"[dry-run] gate passed -> would release {dst.name} "
+                  f"({len(ans['wrong'])} judged wrong left out)")
+            return 0
+        got = rgate.release(root, markup, dst)
+        moved = _set_aside(markup, gate)
+        archived = _archive_chain(root, m, stage, dst)
+        project.record_plan(root, {"type": "gate", "stage": stage, "annotation_hash": ahash,
+                                   "markup": markup.name, "release": dst.name,
+                                   "archived": archived + moved, "outcome": "pass",
+                                   "wrong": ans["wrong"]})
+        opened, refreshed = [], []
+        if queueing:
+            try:
+                client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
+                opened = _advance(root, m, client, tr_cfg)
+                refreshed = _refresh_stale(root, m, client, tr_cfg, stage, dst)
+            except trundlr.TrundlrError as e:
+                print(f"  [trundlr] advance skipped: {e}")
+        print(f"haarpi next: litreview: gate PASSED — released {dst.name} ({got['claims']} claims "
+              f"from {got['sources']} papers; {got['left_out']} judged wrong left out)"
+              + (f"; opened {', '.join(opened)}" if opened else "")
+              + (f"; refresh queued for {', '.join(refreshed)}" if refreshed else "") + skipped)
+        return 0
+
+    if ans["outcome"] == "pass" and ans["missing"]:
+        kind, why = "missing", (f"ideas missing under {', '.join(sorted(ans['missing']))}: searched for "
+                                f"and carded before the release")
+    else:
+        kind = "no_confidence"
+        why = (f"canary kind(s) holding the release: {'; '.join(holds)}" if holds and ans["outcome"] == "pass"
+               else f"no confidence ({len(ans['wrong'])} of {len(ans['sample'])} sample claims wrong)")
+    steps = CLAIMS_REWORK[kind]
+    lines = [q for v in ans["missing"].values() for q in v]
+    if dry_run:
+        print(f"[dry-run] {why} -> would queue {' -> '.join(steps)} -> next"
+              + (f"; gather searches: {lines}" if kind == "missing" else ""))
+        return 0
+    if not queueing:
+        print(f"haarpi next: {why}; nothing queued{skipped or ' (no trundlr project)'} — answers not consumed.")
+        return 0
+    cfg_name = None
+    if kind == "missing":
+        pc = rhconfig.load_project(str(m.stage_dir(root, stage)))
+        pc.gather_topics = list(dict.fromkeys(lines))
+        fp = rhconfig.next_project_file(str(m.stage_dir(root, stage)))
+        rhconfig.save_project_to(pc, fp)
+        cfg_name = fp.name
+    client = trundlr.TrundlrClient(tr_cfg.get("url", ""))
+    built = queue_chain(client, m.trundlr_project_id, stage, steps, tr_cfg,
+                        description=f"Claims gate on {markup.name}: {why}")
+    moved = _set_aside(markup, gate)
+    project.record_plan(root, {"type": "rework", "stage": stage, "annotation_hash": ahash,
+                               "markup": markup.name, "outcome": ans["outcome"], "rework": kind,
+                               "why": why, "config": cfg_name, "archived": moved,
+                               "tasks": [t["id"] for t in built["tasks"]]})
+    print(f"haarpi next: litreview: {why} — queued {len(built['tasks'])} task(s) "
+          f"(cycle {built['cycle']})" + (f"; searches written to {cfg_name}" if cfg_name else ""))
+    return 0
 
 
 def _deck_picks(deck_dir: Path) -> tuple[list[str], float]:
@@ -2620,6 +2813,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                   f"'{stage}' — pass --file to override.")
             return 2
     stage, markup = found
+    if markup.suffix == ".json":
+        return _claims_gate(root, m, stage, markup, dry_run=dry_run, queueing=queueing,
+                            tr_cfg=tr_cfg, skipped=skipped)
 
     # Say where we are and what we are reading BEFORE deciding anything, so the header is
     # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:

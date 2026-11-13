@@ -12,10 +12,27 @@ COVERS = {          # registry step -> the panel key(s) that depict it
  "ingest": "ingest", "audit": "audit", "build": "build", "revise": "revise",
  "topics": "topics", "topics-review": "tvet", "topics-apply": "topics",
 }
+_GROUNDING = ("claim grounding (2026-11-13): not drawn yet; the figure is redrawn with the port's README-and-figures slice")
 OMITS = {           # deliberately not drawn, and why
  "graft": "vestigial: only cli.py reaches graft.run(); its drafting functions live "
           "inside revise (revise.py imports draft_sections/choose_position), and "
           "`haarpi next` never selects it",
+ "cards-init": _GROUNDING,
+ "cards-kind-1": _GROUNDING,
+ "cards-kind-2": _GROUNDING,
+ "cards-extract": _GROUNDING,
+ "cards-plant": _GROUNDING,
+ "cards-reread-1": _GROUNDING,
+ "cards-reread-2": _GROUNDING,
+ "cards-locate": _GROUNDING,
+ "cards-confirm-1": _GROUNDING,
+ "cards-confirm-2": _GROUNDING,
+ "cards-own-1": _GROUNDING,
+ "cards-own-2": _GROUNDING,
+ "cards-close": _GROUNDING,
+ "cards-gate": _GROUNDING,
+ "gate": _GROUNDING,
+ "cards-review": _GROUNDING,
 }
 
 ROWS = [

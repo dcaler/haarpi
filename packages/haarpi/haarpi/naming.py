@@ -78,9 +78,11 @@ def _pattern(short_title: str) -> re.Pattern:
     # revision chain now covers figures too (svg render, dot/mmd/tex source, png/pdf export), so a
     # figure is a first-class chain artifact resolved by the same machinery (see haarpi.figure) —
     # and the deck stage's pptx, which razzle drafts (`_ra`) and mints (bare) as a chain artifact.
+    # And the claims gate (2026-11-13): the person's answers (`…_litreview_gate_ra_DCR.json`) are
+    # its markup, and the release is `…_litreview.claims.json` (no author token, like any other).
     return re.compile(
         rf"^(\d{{6}})_{re.escape(short_title)}((?:_[A-Za-z][A-Za-z0-9]*)*)"
-        rf"\.(md|docx|svg|dot|mmd|tex|png|pdf|pptx)$"
+        rf"\.(md|docx|svg|dot|mmd|tex|png|pdf|pptx|claims\.json|json)$"
     )
 
 
