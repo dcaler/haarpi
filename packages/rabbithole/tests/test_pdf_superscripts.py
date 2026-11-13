@@ -56,3 +56,17 @@ def test_the_matchers_ignore_the_markers():
                             facts.page_texts(marked)) == 2
     r = facts.locate_passage("ruggedness than mutations with a collective benefit", marked, min_share=1.0)
     assert r["found"] and "benefit[44]" in r["passages"][0]["text"]
+
+
+def test_a_raised_2_after_a_unit_is_its_exponent_not_a_citation():
+    body = "range of 0.45 to 0.51 million km"
+    doc = _page([(40, body, 12, 100), (_x_after(body, 40, 12), "2", 8, 95),
+                 (_x_after(body + "2", 40, 12), " per decade", 12, 100), (40, "next line.", 12, 118)])
+    text = pdfs._page_text(doc[0])
+    assert "million km²" in text and "[2]" not in text
+
+
+def test_a_raised_number_after_an_ordinary_word_is_still_a_citation():
+    body = "as shown for them"
+    doc = _page([(40, body, 12, 100), (_x_after(body, 40, 12), "2", 8, 95), (40, "next line.", 12, 118)])
+    assert "them[2]" in pdfs._page_text(doc[0])

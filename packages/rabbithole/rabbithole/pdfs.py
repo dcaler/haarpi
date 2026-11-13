@@ -21,8 +21,9 @@ from pathlib import Path
 
 CACHE_ROOT = Path(os.environ.get("HAARPI_PDF_CACHE")
                   or Path.home() / ".cache" / "haarpi" / "pdfs")
-_TEXT_VERSION = 2      # bump when the extraction changes, so cached text is redone
+_TEXT_VERSION = 3      # bump when the extraction changes, so cached text is redone
                        # 2 (2026-11-09): superscript citation numbers kept inline as [44]
+                       # 3 (2026-11-13): a unit's exponent (km²) kept as one, not a citation
 
 
 def _slot(path: Path) -> Path:
@@ -117,11 +118,28 @@ def _cached_text(path: Path, kind: str, make):
 # back where it sits, as "[44]". An exponent after a digit (10³) is left as it was, and so is a
 # number that would land inside a word (a rotated watermark) or on a slanted line. In a paper
 # that cites by author and year, raised numbers are footnote markers, not citations, and are
-# written "[note:3]" so a passage does not read as citing anyone.
+# written "[note:3]" so a passage does not read as citing anyone. A raised 2 or 3 right after a
+# unit of length is that unit's exponent, not a citation: "million km²" (IPCC 2013 had come out as
+# "km[2]"), written back in place as the superscript character.
 _AUTHOR_YEAR = re.compile(r"\([A-Z][^()]{0,80}?\b(?:19|20)\d\d[a-z]?\b")
 _AUTHOR_YEAR_MIN = 15   # this many "(Name ... 1999" citations: an author-year paper
 _SUP_REF = re.compile(r"^\d{1,3}(?:\s*[,–-]\s*\d{1,3})*$")
 _SUP_SIZE = 0.85        # a superscript is set at most this fraction of the body size
+_UNITS = {"m", "km", "cm", "mm", "µm", "μm", "nm", "ft", "mi", "yd"}   # squared or cubed (² ³)
+_SUPER = {"2": "²", "3": "³"}
+
+
+def _word_before(near: list, x0: float) -> str:
+    """The word the raised run sits against, if it touches it ("" if there is a gap)."""
+    row = sorted(near, key=lambda c: c[3])
+    if not row or x0 - row[-1][3] > 1.5:
+        return ""
+    w, edge = "", x0
+    for c in reversed(row):            # `near` holds no spaces, so a gap is where the word starts
+        if edge - c[3] > 1.5 or not (c[5].isalpha() or c[5] in "µμ"):
+            break
+        w, edge = c[5] + w, c[1]
+    return w
 
 
 def _flat(ln) -> bool:
@@ -186,6 +204,9 @@ def _page_text(page, notes: bool = False) -> str:
             continue                                              # inside a word: not a citation
         moved.update((li, k) for k in ks)
         num = re.sub(r"\s+", "", t)
+        if num in _SUPER and _word_before(near, x0) in _UNITS:     # km²: the unit's exponent
+            inserts.setdefault(best, []).append((x0, _SUPER[num]))
+            continue
         inserts.setdefault(best, []).append((x0, f"[note:{num}]" if notes else f"[{num}]"))
     out = []
     for li, row in enumerate(chars):

@@ -55,3 +55,29 @@ def test_words_run_together_by_a_scan_still_locate():
                              min_share=1.0)
     assert r["found"]
     assert r["passages"][0]["text"] == "Early radical and bushyradiation should be followed by eventual stasis."
+
+
+IPCC = ("[p.7]\nThere is very high confidence that these losses are \nmainly from the northern Antarctic "
+        "Peninsula and the Amundsen Sea sector of West Antarctica. {4.4}\n•\t\nThe annual mean Arctic sea "
+        "ice extent decreased over the period 1979 to 2012 with a rate that was very likely in the \n"
+        "range 3.5 to 4.1% per decade (range of 0.45 to 0.51 million km² per decade). {4.2}\n•\t\n"
+        "The extent of Arctic sea ice has decreased in every season.")
+
+
+def test_a_bullet_ends_the_previous_item_so_the_passage_does_not_reach_back_into_it():
+    r = facts.locate_passage("The annual mean Arctic sea ice extent decreased over the period 1979 to 2012", IPCC)
+    assert r["found"]
+    [p] = r["passages"]
+    assert p["text"].startswith("The annual mean Arctic sea ice extent")
+    assert "Antarctica" not in p["text"] and "every season" not in p["text"]
+
+
+def test_a_braced_section_reference_stays_with_its_sentence():
+    paper = "[p.1]\nFirms learn by search. {2.1} The optimal distance falls as fitness rises over time here."
+    [p] = facts.locate_passage("The optimal distance falls as fitness rises over time", paper)["passages"]
+    assert p["text"].startswith("The optimal distance falls")
+
+
+def test_a_units_exponent_survives_into_the_passage():
+    [p] = facts.locate_passage("range of 0.45 to 0.51 million km2 per decade", IPCC)["passages"]
+    assert "million km² per decade" in p["text"]

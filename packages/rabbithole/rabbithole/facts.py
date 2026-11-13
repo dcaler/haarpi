@@ -306,7 +306,11 @@ def find_quote(quote: str, pages: dict[int, str], hint: int | None = None,
 # judged against what the paper really says (PLAN_claim_grounding.html, 2026-11-09).
 _TOKEN = re.compile(r"\S+")
 _ELISION = re.compile(r"\[\s*(?:\.\s*){3}\]|(?:\.\s*){3}|…")
-_SENTENCE_END = re.compile(r"[.!?][\"”’)\]]*\s+(?=[\"“‘(\[]?[A-Z0-9])|\n\s*\n")
+# A sentence ends at . ! ? before a capital or digit, at a blank line, or at a list bullet. A short
+# braced section reference after the stop ("…West Antarctica. {4.4} The annual…", IPCC style) stays
+# with its sentence: without that, and the bullet, a passage reached back into the previous item.
+_SENTENCE_END = re.compile(r"[.!?][\"”’)\]]*(?:\s*\{[^{}\n]{1,40}\})?\s+(?=[\"“‘(\[]?[A-Z0-9])"
+                           r"|\n\s*\n|\s[•▪●◦‣∙]\s*")
 _WIDEN_CAP = 600          # characters a passage may grow on each side to reach a sentence edge
 _LOCATE_MIN_WORDS = 5     # a piece shorter than this is too common to locate
 
@@ -365,7 +369,9 @@ def _passage_text(raw: str) -> str:
     as their letters, a word broken at a line end ("de-" then "creases") rejoined, whitespace
     collapsed. No word is changed."""
     t = _PAGE_SPLIT.sub(" ", raw)
-    t = unicodedata.normalize("NFKC", t).replace("\u00ad", "")
+    # NFKC reads ligatures as their letters, but would also flatten a unit's exponent (km² → km2).
+    t = "".join(x if x in "²³" else unicodedata.normalize("NFKC", x)
+                for x in re.split(r"([²³])", t)).replace("\u00ad", "")
     t = re.sub(r"(\w)-[ \t]*\n\s*(?=[a-z])", r"\1", t)
     return " ".join(t.split())
 
