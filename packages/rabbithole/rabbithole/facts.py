@@ -27,6 +27,7 @@ Opt-in per project (`report_format: facts`) while it is tested; nothing else cha
 from __future__ import annotations
 
 import json
+import functools
 import re
 import unicodedata
 import sys
@@ -358,22 +359,62 @@ def _widen(marked: str, start: int, end: int) -> tuple[int, int]:
     lo = max(0, start - _WIDEN_CAP)
     edges = [m.end() for m in _SENTENCE_END.finditer(marked, lo, start + 1)
              if m.end() <= start]
-    s = edges[-1] if edges else start
+    s = edges[-1] if edges else (0 if lo == 0 else start)     # the paper's first sentence starts at 0
     m = _SENTENCE_END.search(marked, max(end - 1, 0), min(len(marked), end + _WIDEN_CAP))
     e = m.start() + 1 if m and not m.group(0).startswith("\n") else (m.start() if m else end)
     return s, max(e, end)
 
 
+_SHORT_SHARE = 0.8        # a line shorter than this share of the paper's usual line is not prose
+_LIST_ROW = re.compile(r"^\s*(?:\d{1,3}[a-z]?|[a-z])[.)]\s+\S")   # "18b. Driver…", "a) …"
+
+
+@functools.lru_cache(maxsize=16)
+def _usual_line(marked: str) -> float:
+    lens = sorted(len(ln.strip()) for ln in marked.split("\n") if len(ln.strip()) > 3)
+    return lens[len(lens) // 2] if lens else 0.0
+
+
+def _trim_lead(marked: str, s: int, e: int) -> int:
+    """Start a passage that crosses a page at the new page when all it has before the page is
+    table or list rows: a sentence a table interrupts ends up with the table's last row in
+    front of it ("18b. Driver and contributor to all SDGs", Raswant et al. 2025)."""
+    m = _PAGE_SPLIT.search(marked, s, e)
+    if not m:
+        return s
+    line0 = marked.rfind("\n", 0, s) + 1             # judge whole lines, not the tail the passage starts in
+    lines = [ln for ln in marked[line0:m.start()].split("\n") if ln.strip()]
+    short = _SHORT_SHARE * _usual_line(marked)
+    if lines and all(len(ln.strip()) < short or _LIST_ROW.match(ln) for ln in lines):
+        return min(e, m.end() + len(marked[m.end():e]) - len(marked[m.end():e].lstrip()))
+    return s
+
+
+def _page_span(marked: str, s: int, e: int) -> tuple[int | None, list]:
+    """The page holding most of [s, e), and the first and last page it touches."""
+    cuts = [(m.start(), int(m.group(1))) for m in _PAGE_SPLIT.finditer(marked, s, e)]
+    first = _page_at(marked, s)
+    bounds = [(s, first)] + cuts + [(e, None)]
+    size = {}
+    for (a, pg), (b, _) in zip(bounds, bounds[1:]):
+        size[pg] = size.get(pg, 0) + (b - a)
+    pages = [pg for _, pg in [(s, first)] + cuts]
+    best = max(size, key=lambda pg: size[pg]) if size else first
+    return best, [pages[0], pages[-1]]
+
+
 def _passage_text(raw: str) -> str:
     """The paper's characters, made readable: page markers and soft hyphens out, ligatures read
     as their letters, a word broken at a line end ("de-" then "creases") rejoined, whitespace
-    collapsed. No word is changed."""
+    collapsed. No word is changed. A passage that starts mid-sentence (lower case, after a page
+    break) is shown with a leading "…"."""
     t = _PAGE_SPLIT.sub(" ", raw)
     # NFKC reads ligatures as their letters, but would also flatten a unit's exponent (km² → km2).
     t = "".join(x if x in "²³" else unicodedata.normalize("NFKC", x)
                 for x in re.split(r"([²³])", t)).replace("\u00ad", "")
     t = re.sub(r"(\w)-[ \t]*\n\s*(?=[a-z])", r"\1", t)
-    return " ".join(t.split())
+    t = " ".join(t.split())
+    return "…" + t if t[:1].islower() else t
 
 
 def _best_window(piece: list[str], paper: list[tuple[str, int, int]]) -> tuple[float, int, int]:
@@ -423,7 +464,8 @@ def locate_passage(quote: str, marked: str, min_share: float = 0.9) -> dict:
     The quote may be elided with "..." (each piece of five or more words is located on its
     own, anywhere in the paper). A piece is found when at least `min_share` of its words occur
     in order at one place (1.0: every word, only formatting forgiven). Returns
-    {"found": bool, "passages": [{"page", "start", "end", "text", "share"}], "nearest": [...]}:
+    {"found": bool, "passages": [{"page", "pages", "start", "end", "text", "share"}],
+    "nearest": [...]} (`page` holds most of the passage; `pages` is the first and last it touches):
     `passages` are the located pieces widened to whole sentences, in the paper's characters,
     when every piece is found; `nearest` is the best match for each piece either way (what a
     later repair of a rejected claim starts from).
@@ -436,10 +478,13 @@ def locate_passage(quote: str, marked: str, min_share: float = 0.9) -> dict:
         share, i, j = _best_window(p, paper) if paper else (0.0, 0, 0)
         if j > i:
             s, e = _widen(marked, paper[i][1], paper[j - 1][2])
-            nearest.append({"page": _page_at(marked, paper[i][1]), "start": s, "end": e,
+            s = _trim_lead(marked, s, e)
+            page, pages = _page_span(marked, s, e)
+            nearest.append({"page": page, "pages": pages, "start": s, "end": e,
                             "text": _passage_text(marked[s:e]), "share": round(share, 3)})
         else:
-            nearest.append({"page": None, "start": 0, "end": 0, "text": "", "share": 0.0})
+            nearest.append({"page": None, "pages": [None, None], "start": 0, "end": 0, "text": "",
+                            "share": 0.0})
     found = bool(pieces) and all(n["share"] >= min_share for n in nearest)
     passages: list[dict] = []
     if found:
@@ -448,6 +493,7 @@ def locate_passage(quote: str, marked: str, min_share: float = 0.9) -> dict:
                 last = passages[-1]
                 last["end"] = max(last["end"], n["end"])
                 last["text"] = _passage_text(marked[last["start"]:last["end"]])
+                last["page"], last["pages"] = _page_span(marked, last["start"], last["end"])
                 last["share"] = min(last["share"], n["share"])
             else:
                 passages.append(dict(n))

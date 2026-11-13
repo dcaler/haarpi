@@ -81,3 +81,29 @@ def test_a_braced_section_reference_stays_with_its_sentence():
 def test_a_units_exponent_survives_into_the_passage():
     [p] = facts.locate_passage("range of 0.45 to 0.51 million km2 per decade", IPCC)["passages"]
     assert "million km² per decade" in p["text"]
+
+
+RASWANT = ("[p.16]\nThrough such partnerships MNEs can play a critical role in mitigating contention over "
+           "Space resources and supporting\n17b. Open and equal access and benefits via OST\n18. Sustainable "
+           "Space (NEW)\n18b. Driver and contributor to all SDGs\n\n\n[p.17]\nthe development of an "
+           "institutional framework that balances \nsocial responsibility, global cooperation, environmental "
+           "sustainability, and international security. With Space law still evolving, MNEs can engage in "
+           "public-private partnerships.")
+
+
+def test_table_rows_before_a_page_break_are_not_part_of_the_passage():
+    # The tolerant matcher can start a passage in the table that interrupts a sentence.
+    r = facts.locate_passage("Driver and contributor to all SDGs the development of an institutional "
+                             "framework that balances social responsibility", RASWANT)
+    [p] = r["passages"]
+    assert "SDGs" not in p["text"] and "18b" not in p["text"]
+    assert p["text"].startswith("…the development of an institutional framework")
+    assert p["page"] == 17 and p["pages"] == [17, 17]
+
+
+def test_prose_before_a_page_break_is_kept_and_the_pages_are_a_range():
+    paper = ("[p.4]\nIn the first period of the study the market for storage grew quickly and\n\n"
+             "[p.5]\nfirms entered it from adjacent sectors, which is the pattern we report here.")
+    [p] = facts.locate_passage("the market for storage grew quickly and firms entered it from adjacent sectors",
+                               paper)["passages"]
+    assert p["text"].startswith("In the first period") and p["pages"] == [4, 5]

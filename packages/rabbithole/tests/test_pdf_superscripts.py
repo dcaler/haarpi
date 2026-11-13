@@ -70,3 +70,19 @@ def test_a_raised_number_after_an_ordinary_word_is_still_a_citation():
     body = "as shown for them"
     doc = _page([(40, body, 12, 100), (_x_after(body, 40, 12), "2", 8, 95), (40, "next line.", 12, 118)])
     assert "them[2]" in pdfs._page_text(doc[0])
+
+
+def test_running_headers_footers_and_page_numbers_are_dropped():
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+    body = lambda w: "\n".join(f"{w} sentence {k} of the body, set as prose." for k in range(8))
+    pages = [f"{580 + i}\nJournal of International Business Studies (2025) 56:567–588\n{body(w)}\nFooter Ltd. {i}"
+             for i, w in enumerate(words)]
+    out = pdfs._drop_furniture(pages)
+    assert all("Journal of International" not in pg and not pg.startswith("58") for pg in out)
+    assert all(f"{w} sentence 0 of the body" in pg and f"{w} sentence 7 of the body" in pg
+               for w, pg in zip(words, out))
+
+
+def test_a_short_paper_keeps_its_lines():
+    pages = ["Title line\nBody one.", "Title line\nBody two."]
+    assert pdfs._drop_furniture(pages) == pages

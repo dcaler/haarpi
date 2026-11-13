@@ -23,7 +23,8 @@ CACHE_ROOT = Path(os.environ.get("HAARPI_PDF_CACHE")
                   or Path.home() / ".cache" / "haarpi" / "pdfs")
 _TEXT_VERSION = 3      # bump when the extraction changes, so cached text is redone
                        # 2 (2026-11-09): superscript citation numbers kept inline as [44]
-                       # 3 (2026-11-13): a unit's exponent (km²) kept as one, not a citation
+                       # 3 (2026-11-13): a unit's exponent (km²) kept as one, not a citation;
+                       #   running headers, footers and page numbers dropped
 
 
 def _slot(path: Path) -> Path:
@@ -221,11 +222,50 @@ def _page_text(page, notes: bool = False) -> str:
     return "".join(out)
 
 
+# PAGE FURNITURE. A journal prints its name, volume, page range and the page number on every
+# page ("583\nJournal of International Business Studies (2025) 56:567–588"). Left in, it sits in
+# the middle of any sentence that runs over a page and ends up in passages (Raswant et al. 2025,
+# 2026-11-13). A line among the first or last few of a page is furniture when it is only a page
+# number, or when, digits aside, it recurs in that zone on enough of the paper's pages.
+_EDGE_LINES = 3          # lines at the top and at the bottom of a page that may be furniture
+_FURNITURE_SHARE = 0.3   # recurring on this share of pages (and at least _FURNITURE_MIN) ...
+_FURNITURE_MIN = 3
+_PAGE_NO = re.compile(r"^(?:page\s*)?\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?$", re.I)
+
+
+def _furniture_key(line: str) -> str:
+    return re.sub(r"\d+", "#", " ".join(line.split())).lower()
+
+
+def _edges(lines: list[str]) -> list[int]:
+    """The top and bottom lines of a page; none on a page too short to have a body between them."""
+    filled = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(filled) <= 2 * _EDGE_LINES:
+        return []
+    return sorted(set(filled[:_EDGE_LINES] + filled[-_EDGE_LINES:]))
+
+
+def _drop_furniture(pages: list[str]) -> list[str]:
+    split = [pg.split("\n") for pg in pages]
+    seen = Counter()
+    for lines in split:
+        seen.update({_furniture_key(lines[i]) for i in _edges(lines)})
+    need = max(_FURNITURE_MIN, _FURNITURE_SHARE * len(pages))
+    repeated = {k for k, n in seen.items() if n >= need and len(k) > 1} if len(pages) >= _FURNITURE_MIN else set()
+    out = []
+    for lines in split:
+        drop = {i for i in _edges(lines)
+                if _PAGE_NO.match(lines[i].strip()) or _furniture_key(lines[i]) in repeated}
+        out.append("\n".join(ln for i, ln in enumerate(lines) if i not in drop))
+    return out
+
+
 def _doc_pages(doc) -> list[str]:
-    """Each page's text, raised numbers as citations, or as notes in an author-year paper."""
+    """Each page's text, raised numbers as citations, or as notes in an author-year paper, with
+    running headers, footers and page numbers left out."""
     plain = "".join(p.get_text() for p in doc)
     notes = len(_AUTHOR_YEAR.findall(plain)) >= _AUTHOR_YEAR_MIN
-    return [_page_text(p, notes) for p in doc]
+    return _drop_furniture([_page_text(p, notes) for p in doc])
 
 
 def _extract_text(path: Path) -> tuple[str, int]:
