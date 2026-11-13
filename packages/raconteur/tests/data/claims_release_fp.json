@@ -1,0 +1,307 @@
+{
+ "format": "claims-release/1",
+ "project": "FirmPathways",
+ "released": "2026-11-13",
+ "gate": {
+  "file": "261113_FirmPathways_gate_DCR.json",
+  "outcome": "pass",
+  "sample": 25,
+  "wrong": 0
+ },
+ "questions": [
+  "How do cleantech firms navigate the public funding ecosystem during commercialization?"
+ ],
+ "topics": [
+  {
+   "name": "Sequencing of funding sources",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Choosing between grants, public-private partnerships and venture capital",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Firm learning and capability development",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Sequence analysis techniques (optimal matching and alternatives)",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Firm and project lifecycle milestones",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Measures of commercialization success",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Business ecosystems",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Fitness landscapes and search on them",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "The NK model",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Competition and cooperation in complex systems",
+   "serves": [
+    1
+   ]
+  },
+  {
+   "name": "Coevolutionary dynamics",
+   "serves": [
+    1
+   ]
+  }
+ ],
+ "sources": {
+  "beinhockerRobust1999": {
+   "label": "Beinhocker, 1999",
+   "title": "Robust Adaptive Strategies",
+   "pdf": "zotero://open-pdf/library/items/J4EXTPEF"
+  },
+  "bergmannValuing2006": {
+   "label": "Bergmann et al., 2006",
+   "title": "Valuing the attributes of renewable energy investments",
+   "pdf": "zotero://open-pdf/library/items/DL4HG3C8"
+  },
+  "chenGreen2024": {
+   "label": "Chen et al., 2024",
+   "title": "Green building practices to integrate renewable energy in the construction sector: a review",
+   "pdf": "zotero://open-pdf/library/items/NXQBRPP4"
+  },
+  "gaoInnovationFirmSurvival2023": {
+   "label": "Gao, 2023",
+   "title": "Innovation and firm survival: the role of timing, funding, and networks",
+   "pdf": "zotero://open-pdf/library/items/TRQZD5ES"
+  },
+  "raswantSpace2025": {
+   "label": "Raswant et al., 2025",
+   "title": "Space: a new frontier for international business",
+   "pdf": "zotero://open-pdf/library/items/V4KAVCCI"
+  }
+ },
+ "claims": [
+  {
+   "id": "beinhockerRobust1999#2",
+   "citekey": "beinhockerRobust1999",
+   "claim": "In a correlated fitness landscape, a mixture of adaptive walks and occasional medium and long jumps is the best strategy for searching, as it balances progress towards higher fitness levels with the risk of getting stuck on local peaks.",
+   "role": null,
+   "passages": [
+    {
+     "page": 10,
+     "pages": [
+      10,
+      10
+     ],
+     "text": "The best strategy for searching a correlated fitness landscape is really a mixture of an adaptive walk with the occasional medium and long pogo jump (see Figure 3). This can be proven mathematically and through computer simulation but makes intuitive sense as well.[note:15] The adaptive walk ensures that most of the time you are heading toward a higher fitness level, while the jumps keep you from getting stuck on local peaks and occasionally yield significant improvements, though at the cost of occasional drops in fitness."
+    }
+   ],
+   "scores": [
+    0,
+    0,
+    2,
+    0,
+    2,
+    2,
+    3,
+    3,
+    2,
+    3,
+    3
+   ],
+   "origin": "llama3.3_latest|beinhockerRobust1999|3",
+   "paper_kind": "not review"
+  },
+  {
+   "id": "bergmannValuing2006#1",
+   "citekey": "bergmannValuing2006",
+   "claim": "The choice experiment method can be used to estimate the economic value of different renewable energy projects, and households in Scotland place the greatest value on off-shore wind farms, with the major determinant being the absence of landscape impacts.",
+   "role": "finding",
+   "passages": [
+    {
+     "page": 10,
+     "pages": [
+      10,
+      10
+     ],
+     "text": "These Scottish households place the greatest value on off-shore wind farms, with the major determinant of the prospective welfare change being the absence of landscape impacts."
+    },
+    {
+     "page": 10,
+     "pages": [
+      10,
+      10
+     ],
+     "text": "The choice experiment method used in this paper enables these effects to be jointly evaluated in welfare-consistent terms."
+    }
+   ],
+   "scores": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "origin": "llama3.3_latest|bergmannValuing2006|1",
+   "paper_kind": "not review"
+  },
+  {
+   "id": "chenGreen2024#1",
+   "citekey": "chenGreen2024",
+   "claim": "Intelligent building technology and the energy internet can enable buildings to achieve intelligent regulation and optimize energy use, and the integration of architecture and energy internet can further enhance the effective utilization rate of energy.",
+   "role": "synthesis",
+   "passages": [
+    {
+     "page": 25,
+     "pages": [
+      25,
+      25
+     ],
+     "text": "Intelligent building and energy internet Intelligent buildings and the energy internet have been widely recognized as important directions for the future development of the construction industry. With the continuous progress of technology, buildings will gradually become intelligent and digitized, creating more intelligent conditions for efficient energy utilization. In future, intelligent building technology will play an important role in enabling buildings to achieve intelligent regulation and optimize energy use. Through the application of sensors, data analysis, and automatic control systems, buildings can collect environmental information such as energy consumption, temperature, humidity, brightness, and room occupancy, allowing for energy decomposition and equipment identification and generating timely and personalized recommendations to achieve efficient energy utilization (Alsalemi et al. 2022). For example, in cold winter, the system can automatically adjust the temperature and time of the heating system to ensure a comfortable indoor environment while minimizing energy waste. The integration of architecture and energy internet will further enhance the effective utilization rate of energy. By connecting the building energy system to the energy internet, buildings can achieve precise matching with energy supply. The energy internet will allow buildings to flexibly adjust according to actual demand and energy supply, thereby maximizing energy utilization. For example, when there is sufficient energy supply, buildings can store excess energy, and when there is a shortage of energy supply, priority can be given to utilizing reserve energy to ensure the normal operation of the building."
+    }
+   ],
+   "scores": [
+    1,
+    1,
+    2,
+    0,
+    0,
+    1,
+    2,
+    0,
+    0,
+    0,
+    0
+   ],
+   "origin": "llama3.3_latest|chenGreen2024|3",
+   "paper_kind": "review"
+  },
+  {
+   "id": "gaoInnovationFirmSurvival2023#1",
+   "citekey": "gaoInnovationFirmSurvival2023",
+   "claim": "In SMEs in the high-tech nanotechnology industry, premature innovation is accompanied by the risk of exit, and engaging in innovation at a later stage when firms are more stabilized would be more beneficial to firm survival.",
+   "role": "finding",
+   "passages": [
+    {
+     "page": 9,
+     "pages": [
+      9,
+      9
+     ],
+     "text": "The results suggest that there is a negative relationship between SMEs’ innovation in the early stage and their survival. This finding reveals that premature innovation is accompanied by the risk of exit. By contrast, engaging in innovation at a later stage when firms are more stabilized would be more beneficial to firm survival."
+    },
+    {
+     "page": 10,
+     "pages": [
+      10,
+      10
+     ],
+     "text": "This study draws on a sample of 229 SMEs in the high-tech nanotechnology industry, which provides a suitable context for our empirical investigation."
+    },
+    {
+     "page": 13,
+     "pages": [
+      13,
+      13
+     ],
+     "text": "The findings suggest that innovation during the early stage might not contribute as much to firm survival as usually expected. By contrast, engaging in innovation at a later stage when firms are more stabilized would be more beneficial to firm survival."
+    }
+   ],
+   "scores": [
+    0,
+    0,
+    3,
+    0,
+    1,
+    2,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "origin": "llama3.3_latest|gaoInnovationFirmSurvival2023|0",
+   "paper_kind": "not review"
+  },
+  {
+   "id": "raswantSpace2025#1",
+   "citekey": "raswantSpace2025",
+   "claim": "The commercialization of Space presents unique challenges and opportunities for international business, including congestion, contention, and competition, which disrupt conventional international business theories.",
+   "role": "proposal",
+   "passages": [
+    {
+     "page": 1,
+     "pages": [
+      1,
+      1
+     ],
+     "text": "Buckley[note:3] Received: 29 April 2024 / Revised: 11 February 2025 / Accepted: 18 February 2025 / Published online: 13 June 2025 © The Author(s) 2025 Abstract This article examines (outer) Space as a new frontier for international business (IB) and highlights the unique challenges and opportunities it presents."
+    },
+    {
+     "page": 1,
+     "pages": [
+      1,
+      1
+     ],
+     "text": "Unlike terrestrial business environments, Space is characterized by extreme physical conditions, ambiguous property rights, and an institutional vacuum, which disrupt conventional IB theories. The study identifies three key challenges—congestion, contention, and competition—arising from the commercialization of Space and the increasing presence of multinational enterprises (MNEs) in the sector."
+    },
+    {
+     "page": 2,
+     "pages": [
+      2,
+      2
+     ],
+     "text": "Hence, Space is congested, contested, and competitive (US-DoD & US- Office-of-the-DNI, 2011, p. 1), and these challenges resonate particularly well with IB theories on frontier expansion, uniquely positioning IB scholars to address the opening of Space for commercial, recreational, and political purposes."
+    }
+   ],
+   "scores": [
+    0,
+    2,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0,
+    0,
+    2,
+    0
+   ],
+   "origin": "llama3.3_latest|raswantSpace2025|0",
+   "paper_kind": "not review"
+  }
+ ],
+ "credited": []
+}

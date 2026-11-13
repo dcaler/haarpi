@@ -9,6 +9,7 @@ section facts — each traced back to its page once the section is written.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from raconteur import context, factbase, paper
 
@@ -148,3 +149,72 @@ def test_a_narrative_review_is_read_exactly_as_before(tmp_path):
     (out / "r.md").write_text("# Review\n\n## Thread one\n\nA thesis [@a].\n")
     assert context.load_litreview_threads(tmp_path, "litReview")[0].heading == "Thread one"
     assert context.load_litreview(tmp_path, "litReview").startswith("# Review")
+
+
+# ── a claims release (DESIGN_claims_release.md): five real FirmPathways claims from bench FP ──
+
+_RELEASE = Path(__file__).parent / "data" / "claims_release_fp.json"
+
+
+def _with_release(tmp_path):
+    root = _project(tmp_path)                       # an old fact-base snapshot is there too
+    (root / "litReview" / "output" / "261120_FirmPathways_release_ra.claims.json").write_text(
+        _RELEASE.read_text(encoding="utf-8"))
+    return root
+
+
+def test_a_claims_release_wins_over_the_fact_base(tmp_path):
+    root = _with_release(tmp_path)
+    assert factbase.find(root, "litReview").name == "261120_FirmPathways_release_ra.claims.json"
+    fb = factbase.load(root, "litReview")
+    assert fb.kind == "claims"
+    # bergmannValuing2006#1 scores below 2 on every topic: it does not count
+    assert set(fb.facts) == {"gaoInnovationFirmSurvival2023#1", "raswantSpace2025#1",
+                             "chenGreen2024#1", "beinhockerRobust1999#2"}
+
+
+def test_a_claim_is_a_fact_with_its_passages_page_link_and_role(tmp_path):
+    fb = factbase.load(_with_release(tmp_path), "litReview")
+    f = fb.facts["gaoInnovationFirmSurvival2023#1"]
+    assert f.role == "finding" and f.weight == 3 and f.page
+    assert f.link == f"zotero://open-pdf/library/items/TRQZD5ES?page={f.page}"
+    assert f.quote and f.quote != f.text                       # the paper's words, not the claim
+    assert fb.facts["beinhockerRobust1999#2"].role == ""       # the verifiers disagreed
+    assert fb.labels["gaoInnovationFirmSurvival2023"] == "Gao, 2023"
+
+
+def test_the_topics_are_the_themes(tmp_path):
+    fb = factbase.load(_with_release(tmp_path), "litReview")
+    assert all(fb.theme_heading(t).startswith(f"T{t.topic} · ") for t in fb.themes)
+    assert all(not t.synthesis for t in fb.themes)
+    assert "claims checked against each source's own words" in factbase.digest(fb)
+    assert context.load_litreview_threads(_with_release(tmp_path / "b"), "litReview")
+
+
+def test_a_section_is_told_to_weave_and_how_firmly_each_role_may_be_stated(tmp_path):
+    fb = factbase.load(_with_release(tmp_path), "litReview")
+    block = factbase.section_block(list(fb.facts.values()))
+    assert "Weave one connected argument" in block and "no \"X finds\"" in block
+    assert "[@raswantSpace2025] (p." in block and "[proposal] {raswantSpace2025#1}" in block
+    # an old fact base carries no roles, so its block is exactly as before
+    old = factbase.load(_project(tmp_path / "b"), "litReview")
+    assert "Weave" not in factbase.section_block(list(old.facts.values()))
+
+
+def test_the_trace_flags_a_proposal_stated_as_a_result(tmp_path):
+    fb = factbase.load(_with_release(tmp_path), "litReview")
+    f = fb.facts["raswantSpace2025#1"]
+    plain = f"{f.text.rstrip('.')} [@raswantSpace2025]."
+    hedged = f"Space commercialization may present unique challenges and opportunities [@raswantSpace2025]."
+    assert factbase.states_proposal_as_result(plain, f)        # the claim as written has no hedge
+    assert not factbase.states_proposal_as_result(hedged, f)
+    assert not factbase.states_proposal_as_result(plain, fb.facts["gaoInnovationFirmSurvival2023#1"])
+    stated = "Space commercialization presents unique challenges and opportunities for firms [@raswantSpace2025]."
+    fp = factbase.write_trace(tmp_path / "p.facttrace.md", [("Background", stated)],
+                              {"Background": [f]}, fb)
+    out = fp.read_text()
+    assert "1 state a proposal as a result (⚠)" in out and "[proposal]" in out
+
+
+def test_a_claim_id_copied_into_the_prose_is_removed():
+    assert factbase.strip_ids("A result {gaoInnovationFirmSurvival2023#1} holds.") == "A result holds."

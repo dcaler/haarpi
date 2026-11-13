@@ -18,12 +18,19 @@ Read three ways:
 Only facts that COUNT are used: quoted verbatim on their page, and scoring useful (2) or
 central (3) on a topic that serves a research question. Search-placed facts and background
 facts stay in the review for a human to read; they never reach a draft.
+
+A CLAIMS RELEASE (`*.claims.json`, packages/haarpi/DESIGN_claims_release.md) is the newer
+contract: confirmed claims from rabbitHole's claim-grounding procedure, each with the paper's
+own passages and a role (finding / proposal / synthesis). It is read into the same Facts, so
+every reading below works on it unchanged; when a project has one, it wins. The role sets how
+firmly a claim may be stated in the narrative, never who it is attributed to.
 """
 
 from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +40,9 @@ from haarpi.text import sentence_units
 from .log import log
 
 SNAPSHOT_GLOB = "*.facts.json"          # haarpi.planner.facts_snapshot_name
+CLAIMS_GLOB = "*.claims.json"           # rabbitHole's release (DESIGN_claims_release.md)
+CLAIMS_FORMAT = "claims-release/"
+ROLES = ("finding", "proposal", "synthesis")
 FACT_BASE_MARK = "*Format:* fact base"  # rabbithole.mindmap.FACT_BASE_MARK
 SECTION_FACTS = 40                      # facts offered to one section, at most
 SECTION_CHARS = 6000                    # …and the characters they may take
@@ -47,6 +57,7 @@ class Fact:
     link: str = ""
     quote: str = ""
     weight: int = 0                     # best score on a question-serving topic (0 = not counted)
+    role: str = ""                      # a claims release's finding / proposal / synthesis
 
 
 @dataclass
@@ -67,6 +78,7 @@ class FactBase:
     labels: dict                        # citekey -> "Author, Year"
     coverage: list = field(default_factory=list)
     load_bearing: list = field(default_factory=list)
+    kind: str = "facts"                 # "claims" for a claims release
 
     def theme_heading(self, th: Theme) -> str:
         return f"T{th.topic} · {th.name}"
@@ -75,9 +87,13 @@ class FactBase:
 # ── finding and loading ─────────────────────────────────────────────────────────
 
 def find(project_dir: Path, subdir: str) -> Path | None:
-    """The facts to read: the snapshot frozen with the newest release; failing that, the live
-    sidecar — but only when the newest review document IS a fact base (and it says so)."""
+    """The facts to read: the newest claims release; failing that, the fact-base snapshot
+    frozen with the newest release; failing that, the live sidecar — but only when the newest
+    review document IS a fact base (and it says so)."""
     out = Path(project_dir) / subdir / "output"
+    claims = sorted(out.glob(CLAIMS_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
+    if claims:
+        return claims[0]
     snaps = sorted(out.glob(SNAPSHOT_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
     if snaps:
         return snaps[0]
@@ -105,7 +121,43 @@ def load(project_dir: Path, subdir: str) -> FactBase | None:
     except (OSError, ValueError) as e:
         log(f"[warn] could not read the fact base {fp.name} ({e}) — reading the review prose")
         return None
+    if str(blob.get("format", "")).startswith(CLAIMS_FORMAT):
+        return from_claims(blob, fp)
     return from_blob(blob, fp)
+
+
+def from_claims(blob: dict, source: Path) -> FactBase:
+    """A claims release, read as a fact base: each confirmed claim a Fact (its passages the
+    quote), each serving topic a theme. Every claim in a release has passed every check, so
+    nothing is filtered on verification; a claim counts, as a fact does, at a weight of 2."""
+    topics = blob.get("topics") or []
+    serving = {i for i, t in enumerate(topics) if t.get("serves")} or set(range(len(topics)))
+    sources = blob.get("sources") or {}
+    facts: dict[str, Fact] = {}
+    for d in blob.get("claims", []):
+        scores = d.get("scores") or []
+        w = max((sc for i, sc in enumerate(scores) if i in serving), default=0)
+        if w < 2:
+            continue
+        ps = d.get("passages") or []
+        page = ps[0].get("page") if ps else None
+        pdf = (sources.get(d["citekey"]) or {}).get("pdf") or ""
+        link = f"{pdf}?page={page}" if pdf and page else pdf
+        role = d.get("role") if d.get("role") in ROLES else ""
+        facts[d["id"]] = Fact(d["id"], d["citekey"], " ".join((d.get("claim") or "").split()),
+                              page, link, " … ".join(" ".join((p.get("text") or "").split())
+                                                     for p in ps), w, role)
+    scores = {d["id"]: d.get("scores") or [] for d in blob.get("claims", [])}
+    on = lambda cid, i: scores[cid][i] if i < len(scores[cid]) else 0
+    themes = []
+    for i in sorted(serving):
+        fs = sorted((f for f in facts.values() if on(f.id, i) >= 2), key=lambda f: (-on(f.id, i), f.id))
+        if fs:
+            themes.append(Theme(i + 1, topics[i].get("name", ""), [], fs))
+    labels = {ck: (s.get("label") or ck) for ck, s in sources.items()}
+    by_ck = Counter(f.citekey for f in facts.values())
+    return FactBase(source, topics, blob.get("questions") or [], themes, facts, labels,
+                    [], [ck for ck, _ in by_ck.most_common(10)], kind="claims")
 
 
 def from_blob(blob: dict, source: Path) -> FactBase:
@@ -136,7 +188,9 @@ def from_blob(blob: dict, source: Path) -> FactBase:
 def digest(fb: FactBase) -> str:
     """What stands in for the review prose: its shape, not its content. The content reaches a
     section as that section's facts."""
-    lines = ["(A fact base: the review is facts from each source, grouped into topics and "
+    lines = ["(A claims release: the review is claims checked against each source's own words, "
+             "grouped by topic. Each section is given the claims it may cite.)" if fb.kind == "claims"
+             else "(A fact base: the review is facts from each source, grouped into topics and "
              "themes. Each section is given the facts it may cite.)", "", "Topics:"]
     for i, t in enumerate(fb.topics, 1):
         qs = ", ".join(f"Q{q}" for q in t.get("serves") or []) or "no research question"
@@ -164,7 +218,8 @@ def thread_parts(fb: FactBase) -> list[tuple[str, str, tuple, str]]:
 
 def fact_line(f: Fact) -> str:
     where = f" (p.{f.page})" if f.page else ""
-    return f"- {f.text} [@{f.citekey}]{where} {{{f.id}}}"
+    role = f" [{f.role}]" if f.role else ""
+    return f"- {f.text} [@{f.citekey}]{where}{role} {{{f.id}}}"
 
 
 # ── per-section facts ───────────────────────────────────────────────────────────
@@ -229,13 +284,26 @@ class SectionFacts:
         return out
 
 
+# How a role may be stated. The narrative is the writer's own, woven through the facts; a role
+# governs how firmly a fact is asserted, never who it is attributed to ("X finds", "X argues"
+# break the narrative and are not wanted, 2026-11-13).
+ROLE_GUIDE = (
+    "Weave one connected argument through these facts in your own voice. Do not attribute them "
+    "sentence by sentence (no \"X finds\", \"X argues\", \"according to X\"): cite in parentheses "
+    "as [@citekey]. The tag after each fact says how firmly it may be stated: [finding] is an "
+    "established result, state it plainly; [proposal] is an argument or a possibility, carry it "
+    "as one (may, could, a route, a case for) and never as a result; [synthesis] is what a body "
+    "of work shows together, use it for the shape of the field, not for a single result.")
+
+
 def section_block(facts: list[Fact]) -> str:
     if not facts:
         return ""
+    roles = ROLE_GUIDE + "\n" if any(f.role for f in facts) else ""
     return ("Facts you may use — each is what its source establishes, checked verbatim at the "
             "page shown. Cite a fact's source as [@citekey] where you use it; keep its numbers "
             "exactly. The {…} after each fact is its id, for tracing only — never write it in the text:\n"
-            + "\n".join(fact_line(f) for f in facts))
+            + roles + "\n".join(fact_line(f) for f in facts))
 
 
 # ── after drafting: trace and number fidelity ──────────────────────────────────
@@ -299,6 +367,19 @@ def number_findings(text: str, supplied: list[Fact]) -> list:
     return out
 
 
+# A proposal carried as one: a modal, a verb of arguing or suggesting, a conditional. A sentence
+# traced to a [proposal] fact with none of these states an argument as a result; the trace
+# flags it for the reader (it is not repaired: the writer decides how to carry it).
+_HEDGE = re.compile(r"\b(may|might|could|would|should|can|perhaps|possib\w*|potential\w*|likely|"
+                    r"suggest\w*|propos\w*|argu\w*|contend\w*|posit\w*|hypothes\w*|conjectur\w*|"
+                    r"expect\w*|plausib\w*|if|whether|unless|route|case for|call\w* for|aim\w*|"
+                    r"envisag\w*|recommend\w*|advocat\w*)\b", re.I)
+
+
+def states_proposal_as_result(sentence: str, f: Fact | None) -> bool:
+    return bool(f and f.role == "proposal" and not _HEDGE.search(sentence))
+
+
 _ID = re.compile(r"\s?\{[^{}\s]+#\d+\}")
 
 
@@ -315,7 +396,7 @@ def write_trace(path: Path, sections: list[tuple[str, str]],
              f"{fb.source.name}). The link opens the source at the fact's page. “No matching "
              f"fact” means the sentence cites a source without using a fact it was given — "
              f"check it against the source.*", ""]
-    n_all = n_hit = 0
+    n_all = n_hit = n_flag = 0
     for heading, text in sections:
         rows = trace(text, supplied.get(heading, []))
         if not rows:
@@ -330,13 +411,20 @@ def write_trace(path: Path, sections: list[tuple[str, str]],
                 continue
             n_hit += 1
             page = f"[p.{f.page}]({f.link})" if f.page and f.link else (f.link or "")
-            lines.append(f"- {r['sentence']}  \n  → {{{f.id}}} {f.text} — {page}")
+            role = f" [{f.role}]" if f.role else ""
+            flag = ""
+            if states_proposal_as_result(r["sentence"], f):
+                n_flag += 1
+                flag = "  \n  ⚠ *states a proposal as a result: carry it as an argument or a possibility*"
+            lines.append(f"- {r['sentence']}  \n  → {{{f.id}}}{role} {f.text} — {page}{flag}")
         lines.append("")
-    lines[2:2] = [f"*{n_hit} of {n_all} cited sentences matched to a fact.*", ""]
+    lines[2:2] = [f"*{n_hit} of {n_all} cited sentences matched to a fact"
+                  + (f"; {n_flag} state a proposal as a result (⚠)" if n_flag else "") + ".*", ""]
     try:
         path.write_text("\n".join(lines), encoding="utf-8")
     except OSError as e:
         log(f"[warn] could not write the fact trace ({e})")
         return None
-    log(f"[raconteur] fact trace: {path.name} ({n_hit}/{n_all} cited sentences matched)")
+    log(f"[raconteur] fact trace: {path.name} ({n_hit}/{n_all} cited sentences matched"
+        + (f", {n_flag} proposal(s) stated as results" if n_flag else "") + ")")
     return path
