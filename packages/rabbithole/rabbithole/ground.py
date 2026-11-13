@@ -12,6 +12,7 @@ Bench FP's procedure, adopted 2026-11-13, one step per trundlr task:
   confirm --model M   GPU   each verifier judges the claim against the OTHER one's passage
   own --model M       GPU   is it the paper's own, and in what role
   close               CPU   each claim confirmed or where it failed; what the canaries say slipped
+  topics              GPU   each confirmed claim scored 0-3 against the project's topics
   gate [--seed N]     CPU   the gate page (gate.py); `haarpi next` reads the saved answers
 
 A claim is confirmed only if every check passes for both verifiers. The prompts are
@@ -167,6 +168,7 @@ def need(project_dir=".", cfg=None) -> dict:
         for s in ("reread", "confirm", "own"):
             for m in run.cfg.verifiers:
                 out[s][m] += fresh or not (cd.dir / f"{s}_{C.slug(m)}.json").is_file()
+    out["topics"] = topics_need(run, keys)
     return out
 
 
@@ -818,6 +820,88 @@ def close(project_dir=".", cfg=None) -> dict:
 STEPS = ("init", "kind", "extract", "plant", "reread", "locate", "confirm", "own", "close")
 
 
+# ── topics ──────────────────────────────────────────────────────────────────────
+
+TOPICS_SAVE_EVERY = 10
+
+
+def topic_listing(project_dir) -> tuple[list, str, str]:
+    """The project's topics, their fingerprint (editing a topic changes it), and the listing
+    the scorer reads. Topics belong to the project, so their scores do too (not the card)."""
+    from . import config as rhconfig
+    from .facts import resolve_topics, topics_signature
+    T = resolve_topics(rhconfig.load_project(project_dir))
+    listing = "\n".join(f"T{i}. {t.name}" + (f" — covers: {t.covers}" if t.covers else "")
+                        for i, t in enumerate(T, 1))
+    return T, topics_signature(T), listing
+
+
+def confirmed_claims(cd: C.Card) -> list[tuple[str, str]]:
+    return [(cid, r["claim"]) for cid, r in sorted((cd.step("verdict").get("claims") or {}).items())
+            if r.get("confirmed")]
+
+
+def topics(project_dir=".", cfg=None) -> dict:
+    """Every confirmed claim's 0-3 score against every topic of this project, one call per
+    paper, with the fact base's own prompt (on DigiPros, 93% of its scores were the same when
+    scored twice, all within one point). Kept in work/claims/topics.json under the topics'
+    fingerprint: editing the topics re-scores everything, and nothing else re-scores."""
+    from .facts import _SCORE_PROMPT, _SCORE_SYS, _parse_scores
+    run = Run(project_dir, cfg)
+    T, sig, listing = topic_listing(run.project)
+    store = run.load("topics")
+    if store.get("sig") != sig:
+        store = {"sig": sig, "topics": [t.name for t in T], "model": run.cfg.topic_model, "scores": {}}
+    brain = brain_for(run.cfg, run.cfg.topic_model)
+    done = failed = 0
+    for cd in run.cards():
+        cl = confirmed_claims(cd)
+        if not cl or all(cid in store["scores"] for cid, _ in cl):
+            continue
+        prompt = _SCORE_PROMPT.format(topics=listing, label=(cd.meta() or {}).get("label") or cd.citekey,
+                                      n=len(T), facts="\n".join(f"F{j}. {c}" for j, (_, c) in enumerate(cl, 1)))
+        rows = None
+        for _ in (1, 2):
+            try:
+                rows = _parse_scores(brain.coordinator(prompt, _SCORE_SYS, think=False, num_ctx=8192),
+                                     len(cl), len(T))
+            except Exception as e:  # noqa: BLE001
+                _say(f"cards topics: {cd.citekey}: {type(e).__name__}: {e}")
+            if rows:
+                break
+        if not rows:
+            failed += 1
+            _say(f"cards topics: {cd.citekey}: not scored (asked again next run)")
+            continue
+        for (cid, _), row in zip(cl, rows):
+            store["scores"][cid] = row
+        done += 1
+        if done % TOPICS_SAVE_EVERY == 0:
+            run.dump("topics", store)
+            _say(f"cards topics: {done} papers scored")
+    run.dump("topics", store)
+    _say(f"cards topics: {done} papers scored this run, {failed} failed; "
+         f"{len(store['scores'])} claims scored against {len(T)} topics")
+    return store
+
+
+def topics_need(run: "Run", keys: list[str]) -> int:
+    """Papers whose confirmed claims are not all scored against the current topics; a paper
+    with no verdict yet counts (it may have some)."""
+    try:
+        _, sig, _ = topic_listing(run.project)
+    except Exception:  # noqa: BLE001
+        return len(keys)
+    store = run.load("topics")
+    scored = store.get("scores") or {} if store.get("sig") == sig else {}
+    n = 0
+    for ck in keys:
+        cd = run.card(ck)
+        if not cd.step("verdict") or any(cid not in scored for cid, _ in confirmed_claims(cd)):
+            n += 1
+    return n
+
+
 def _gate(directory, seed):
     from . import gate
     return gate.build(directory, seed=seed)
@@ -832,7 +916,8 @@ def main(step: str, directory: str = ".", model: str | None = None, part: int = 
           "extract": lambda: extract(directory, part, parts), "plant": lambda: plant(directory),
           "reread": lambda: reread(directory, model or ""), "locate": lambda: locate(directory),
           "confirm": lambda: confirm(directory, model or ""), "own": lambda: own(directory, model or ""),
-          "close": lambda: close(directory), "gate": lambda: _gate(directory, seed)}[step]
+          "close": lambda: close(directory), "topics": lambda: topics(directory),
+          "gate": lambda: _gate(directory, seed)}[step]
     from . import runlog
     runlog.start()
     fn()

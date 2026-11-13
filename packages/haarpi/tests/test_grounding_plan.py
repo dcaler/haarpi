@@ -17,7 +17,8 @@ K = ("gemma", "qwen")
 
 def _need(new: int, papers: int = 200) -> dict:
     return {"papers": papers, "extract": new, "kind": {m: new for m in K},
-            "reread": {m: new for m in V}, "confirm": {m: new for m in V}, "own": {m: new for m in V}}
+            "reread": {m: new for m in V}, "confirm": {m: new for m in V}, "own": {m: new for m in V},
+            "topics": new}
 
 
 def _by(plan):
@@ -33,7 +34,8 @@ def test_each_task_waits_on_all_its_inputs_and_the_verifiers_on_each_other_never
     assert p["cards-own-1"]["after"] == ["cards-locate", "cards-kind-1", "cards-kind-2"]
     assert set(p["cards-close"]["after"]) == {"cards-locate", "cards-confirm-1", "cards-confirm-2",
                                               "cards-own-1", "cards-own-2"}
-    assert [p[n]["after"] for n in ("cards-gate", "gate", "next")] == [["cards-close"], ["cards-gate"], ["gate"]]
+    assert [p[n]["after"] for n in ("cards-topics", "cards-gate", "gate", "next")] == \
+        [["cards-close"], ["cards-topics"], ["cards-gate"], ["gate"]]
     # a task never waits on one that comes after it
     order = [t["name"] for t in planner.grounding_plan(_need(10))]
     for i, n in enumerate(order):
@@ -60,6 +62,14 @@ def test_a_fully_carded_project_queues_no_gpu_work():
     assert [t["name"] for t in plan] == ["cards-init", "cards-plant", "cards-locate", "cards-close",
                                          "cards-gate", "gate", "next"]
     assert _by(plan)["cards-close"]["after"] == ["cards-locate"]
+    assert _by(plan)["cards-gate"]["after"] == ["cards-close"]       # nothing new to score
+
+
+def test_new_topics_alone_rescore_without_any_other_gpu_work():
+    need = dict(_need(0), topics=150)
+    p = _by(planner.grounding_plan(need))
+    assert [n for n, t in p.items() if t["step"] in ("cards-topics",)] == ["cards-topics"]
+    assert p["cards-topics"]["hours"] == 1.5 and p["cards-gate"]["after"] == ["cards-topics"]
 
 
 class _Client:

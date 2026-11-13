@@ -259,9 +259,9 @@ def _run(argv: list[str] | None = None) -> int:
 
     crd = sub.add_parser("cards",
                          help="claim grounding: give each paper its card, one step per task "
-                              "(init, kind, extract, plant, reread, locate, confirm, own, close, gate)")
+                              "(init, kind, extract, plant, reread, locate, confirm, own, close, topics, gate)")
     crd.add_argument("step", choices=["init", "kind", "extract", "plant", "reread", "locate",
-                                      "confirm", "own", "close", "gate"])
+                                      "confirm", "own", "close", "topics", "gate"])
     crd.add_argument("--model", default=None,
                      help="kind, reread, confirm, own: which of the configured models answers")
     crd.add_argument("--part", type=int, default=0, help="extract: this part (0-based) ...")

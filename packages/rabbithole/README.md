@@ -132,7 +132,9 @@ replaced. Each paper gets a card:
 Only a claim that passes every check is confirmed. `rabbithole cards <step>` runs one step per
 call into a card store shared by every project (`cards/` in the HAARPi tree). Each run plants
 its own canaries, and a kind that slips past both verifiers more than one time in ten, even at
-the low end of its 95% interval, holds the release. `cards gate` writes the gate page (`gate.py`):
+the low end of its 95% interval, holds the release. `cards topics` scores each confirmed claim
+0–3 against the project's topics, and the scores belong to the project (editing a topic re-scores).
+`cards gate` writes the gate page (`gate.py`):
 the map, the slip rates, a sample of 25 confirmed claims, and what is missing per topic. A person
 saves their answers, and `haarpi next` reads them: a pass releases the claims for raconteur
 (`…_litreview.claims.json`, `../haarpi/DESIGN_claims_release.md`). The fact base, its review

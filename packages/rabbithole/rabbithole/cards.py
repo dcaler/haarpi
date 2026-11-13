@@ -32,6 +32,9 @@ DEFAULT_DIR = HAARPI_ROOT / "cards"
 DEFAULT_EXTRACTOR = "llama3.3:latest"
 DEFAULT_VERIFIERS = ("gemma4:31b-it-q4_K_M", "gpt-oss:20b")
 DEFAULT_KIND_MODELS = ("gemma4:31b-it-q4_K_M", "qwen3.6:27b-16k")
+# Scores each confirmed claim against the project's topics. The fact base scored with the
+# coordinator (qwen3.6), so the scores mean what they meant there.
+DEFAULT_TOPIC_MODEL = "qwen3.6:27b-16k"
 
 
 @dataclass
@@ -40,12 +43,14 @@ class CardsConfig:
     extractor: str = DEFAULT_EXTRACTOR
     verifiers: tuple = DEFAULT_VERIFIERS
     kind_models: tuple = DEFAULT_KIND_MODELS
+    topic_model: str = DEFAULT_TOPIC_MODEL
     ollama_url: str = ""
     extra: dict = field(default_factory=dict)
 
 
 def load_config() -> CardsConfig:
-    """`[cards]` in ~/.config/haarpi/config.toml: dir, extractor, verifiers, kind_models."""
+    """`[cards]` in ~/.config/haarpi/config.toml: dir, extractor, verifiers, kind_models,
+    topic_model."""
     from haarpi import config as haarpi_config
     from . import config as rhconfig
     data = haarpi_config.merged_config("rabbithole", rhconfig._legacy_normalized()).get("cards", {})
@@ -54,6 +59,7 @@ def load_config() -> CardsConfig:
         extractor=data.get("extractor", DEFAULT_EXTRACTOR),
         verifiers=tuple(data.get("verifiers") or DEFAULT_VERIFIERS),
         kind_models=tuple(data.get("kind_models") or DEFAULT_KIND_MODELS),
+        topic_model=data.get("topic_model") or DEFAULT_TOPIC_MODEL,
         ollama_url=rhconfig.load_global().ollama_url)
     if len(cfg.verifiers) != 2:
         raise ValueError(f"[cards] verifiers must name two models, not {list(cfg.verifiers)}")

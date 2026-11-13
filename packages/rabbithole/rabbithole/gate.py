@@ -17,9 +17,10 @@ confirmed); what the planted canaries say slipped past both verifiers; a sample 
 claims to judge, which measures how often a confirmed claim is still wrong; and, per topic,
 what a reader of the field would expect and not find (each line goes to gather as a search).
 
-Placing papers under topics is a stopgap until claims are scored on their own: a paper goes
-under every topic it has a central fact, or two useful ones, for in rabbitHole's old
-`work/facts.json`, else its best topic; with no facts it is unplaced.
+Papers are placed by their confirmed claims' topic scores (`cards topics`): a paper goes under
+every topic it has a central claim, or two useful ones, for, else its best topic; a paper with
+no confirmed claim, or none of any use, is unplaced. Each claim in the release carries its own
+scores.
 """
 from __future__ import annotations
 
@@ -79,16 +80,22 @@ def verdicts(run: G.Run) -> dict[str, dict]:
     return out
 
 
-def _paper_scores(run: G.Run, n_topics: int) -> dict[str, list[list[int]]]:
-    """Per paper, its old facts' scores per topic (the stopgap), or {}."""
-    fp = Path(run.paths.work) / "facts.json"
-    try:
-        facts = json.loads(fp.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+def claim_scores(run: G.Run) -> tuple[list, dict[str, list[int]]]:
+    """The project's topics and each confirmed claim's scores against them. Refuses when the
+    claims are not scored against the topics as they now stand."""
+    T, sig, _ = G.topic_listing(run.project)
+    store = run.load("topics")
+    if store.get("sig") != sig:
+        raise SystemExit("cards: the confirmed claims are not scored against this project's topics "
+                         "(run `rabbithole cards topics` first)")
+    return T, store.get("scores") or {}
+
+
+def _per_paper(V: dict[str, dict], scores: dict[str, list[int]]) -> dict[str, list[list[int]]]:
     per: dict[str, list[list[int]]] = defaultdict(list)
-    for f in facts.get("facts") or []:
-        per[f["citekey"]].append(list(f.get("scores") or [])[:n_topics])
+    for cid, r in V.items():
+        if r.get("confirmed") and cid in scores:
+            per[r["paper"]].append(scores[cid])
     return per
 
 
@@ -103,12 +110,6 @@ def placement(per_paper: dict[str, list[list[int]]], n_topics: int) -> dict[str,
             ts = [max(range(n_topics), key=lambda t: tot[t])]
         out[ck] = ts
     return out
-
-
-def paper_best(per_paper: dict[str, list[list[int]]], n_topics: int) -> dict[str, list[int]]:
-    """A paper's best fact score per topic: the release's stopgap `scores`."""
-    return {ck: [max((r[t] for r in rows if t < len(r)), default=0) for t in range(n_topics)]
-            for ck, rows in per_paper.items()}
 
 
 def pick_sample(confirmed: list[dict], seed: int, n: int = SAMPLE, per_paper: int = PER_PAPER) -> list[dict]:
@@ -172,7 +173,8 @@ def build(project_dir=".", cfg=None, seed: int | None = None, initials: str = "D
         raise SystemExit("cards gate: no closed run (run `cards close` first)")
     pc = _project(run)
     short = short or pc.project_name or run.project.name
-    names = [t["name"] for t in pc.topics or []]
+    T, scores = claim_scores(run)
+    names = [t.name for t in T]
     question = (pc.questions or [""])[0]
     date = time.strftime("%y%m%d")
     prev = run.load("gate")
@@ -186,8 +188,7 @@ def build(project_dir=".", cfg=None, seed: int | None = None, initials: str = "D
     for r in sorted(conf, key=lambda r: r["id"]):
         by_paper[r["paper"]].append(r)
     n_claims = Counter(r["paper"] for r in V.values())
-    per = _paper_scores(run, len(names))
-    placed = placement(per, len(names))
+    placed = placement(_per_paper(V, scores), len(names))
     cited = sum(1 for r in V.values() if (r.get("failed_at") or "").startswith("step 2b"))
 
     out = Path(run.paths.output)
@@ -295,8 +296,9 @@ def release(project_dir, answers_fp: Path, dst: Path, cfg=None) -> dict:
     if ans["outcome"] != "pass":
         raise SystemExit(f"cards release: the gate says {ans['outcome'] or 'nothing'}, not pass")
     pc = _project(run)
-    topics = list(pc.topics or [])
-    best = paper_best(_paper_scores(run, len(topics)), len(topics))
+    T, scores = claim_scores(run)
+    topics = [{"name": t.name, "serves": list(t.serves or []), **({"covers": t.covers} if t.covers else {})}
+              for t in T]
     metas = {cd.citekey: cd.meta() or {} for cd in run.cards()}
     origin = {c["id"]: c.get("origin") or c["id"] for cd in run.cards() for c in cd.claims()}
     wrong = set(ans["wrong"])
@@ -308,14 +310,13 @@ def release(project_dir, answers_fp: Path, dst: Path, cfg=None) -> dict:
         claims.append({"id": cid, "citekey": ck, "claim": r["claim"], "role": r.get("role"),
                        "passages": [{"page": p["page"], "pages": p.get("pages") or [p["page"], p["page"]],
                                      "text": p["text"]} for p in r.get("passages") or []],
-                       "scores": best.get(ck) or [0] * len(topics), "origin": origin.get(cid, cid)})
+                       "scores": scores.get(cid) or [0] * len(topics), "origin": origin.get(cid, cid)})
     sources = {ck: {"label": metas[ck].get("label"), "title": metas[ck].get("title"), "pdf": metas[ck].get("pdf")}
                for ck in sorted({c["citekey"] for c in claims})}
     blob = {"format": RELEASE_FORMAT, "project": gate.get("short") or pc.project_name,
             "released": time.strftime("%Y-%m-%d"),
             "gate": {"file": Path(answers_fp).name, "outcome": "pass", "sample": len(ans["sample"]),
                      "wrong": len(wrong), "canaries": close.get("canaries")},
-            "scores_from": "paper (stopgap: the paper's best old fact score per topic)",
             "questions": list(pc.questions or []), "topics": topics, "sources": sources,
             "claims": claims, "credited": []}
     Path(dst).parent.mkdir(parents=True, exist_ok=True)

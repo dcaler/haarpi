@@ -31,6 +31,7 @@ OMITS = {           # deliberately not drawn, and why
  "cards-own-1": _GROUNDING,
  "cards-own-2": _GROUNDING,
  "cards-close": _GROUNDING,
+ "cards-topics": _GROUNDING,
  "cards-gate": _GROUNDING,
  "gate": _GROUNDING,
  "cards-review": _GROUNDING,

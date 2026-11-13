@@ -53,7 +53,9 @@ never reads rabbitHole's `work/`: an unreleased claim can't reach a draft.
     disagreed.
   - `passages` are the paper's own words that the claim was checked against, with the page
     holding most of each one and the pages it touches.
-  - `scores` holds a 0–3 relevance per topic (3 central, 2 useful), aligned with `topics`.
+  - `scores` holds the claim's own 0–3 relevance per topic (3 central, 2 useful), aligned
+    with `topics`. rabbitHole's `cards topics` scores each confirmed claim, with the fact
+    base's scoring prompt and model, against the topics as they stood at the gate.
 - **`topics` and `questions`**: the project's, as in its `litrev` config.
 - **`sources`**: one entry per cited paper, giving its "Author, Year" label and PDF link.
 - **`credited`**: borrowed ideas the credit check gave to their originals (step 8). They are

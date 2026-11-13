@@ -193,6 +193,9 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         "cards-close":     Step("haarpi rabbithole cards close", 0.05,
                                 "Each claim confirmed or where it failed; what the canaries say slipped.",
                                 resource="cpu"),
+        "cards-topics":    Step("haarpi rabbithole cards topics", 0.5,
+                                "Score each confirmed claim 0-3 against the project's topics "
+                                "(one call a paper).", resource="gpu"),
         "cards-gate":      Step("haarpi rabbithole cards gate", 0.05,
                                 "Build the gate page (map, slips, sample, missing) into litReview/output.",
                                 resource="cpu"),
@@ -2261,7 +2264,9 @@ CLAIMS_REWORK = {
 # Hours per paper still to do, from bench FP on FirmPathways (191 papers, 2026-11-10..13). A
 # step's work grows with its papers, so these scale it; the realised history of one run (say
 # 190 papers) would be the wrong estimate for the next (say 6), and is not used for them.
-CARD_RATES = {"kind": 15 / 3600, "extract": 0.2, "reread": 0.055, "confirm": 0.011, "own": 0.012}
+CARD_RATES = {"kind": 15 / 3600, "extract": 0.2, "reread": 0.055, "confirm": 0.011, "own": 0.012,
+              # not measured yet: one non-thinking call a paper, ~36 s (2026-11-13 guess)
+              "topics": 0.01}
 CARD_MIN_HOURS = 0.05
 EXTRACT_PART_HOURS = 8.0       # one extract task's work: a reboot loses at most this much
 
@@ -2299,8 +2304,10 @@ def grounding_plan(need: dict) -> list[dict]:
                 last.append(name)
                 tasks.append({"step": name, "after": ["cards-locate", *(kinds if s == "own" else [])],
                               "hours": hrs(s, n)})
-    tasks += [{"step": "cards-close", "after": ["cards-locate", *last]},
-              {"step": "cards-gate", "after": ["cards-close"]},
+    tasks.append({"step": "cards-close", "after": ["cards-locate", *last]})
+    if need.get("topics"):
+        tasks.append({"step": "cards-topics", "after": ["cards-close"], "hours": hrs("topics", need["topics"])})
+    tasks += [{"step": "cards-gate", "after": ["cards-topics" if need.get("topics") else "cards-close"]},
               {"step": "gate", "after": ["cards-gate"]},
               {"step": "next", "after": ["gate"]}]
     for t in tasks:

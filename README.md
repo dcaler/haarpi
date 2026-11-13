@@ -407,7 +407,7 @@ reporting which sources still lack a PDF.
 | `revise` | answers every comment in kind (see the table above) |
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
-| `cards` | claim grounding, one step per call (`init kind extract plant reread locate confirm own close gate`): each paper's claims are re-read and confirmed in its own words by two verifiers, into one shared store of paper cards (`cards/`, a paper carded once serves every project); `close` measures the planted canaries and holds the release if a kind slips past both verifiers more than one time in ten |
+| `cards` | claim grounding, one step per call (`init kind extract plant reread locate confirm own close topics gate`): each paper's claims are re-read and confirmed in its own words by two verifiers, into one shared store of paper cards (`cards/`, a paper carded once serves every project); `close` measures the planted canaries and holds the release if a kind slips past both verifiers more than one time in ten |
 | `topics` | a fact base's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new fact base's opening cycle |
 | `reviewpage` | (re)builds a fact-base draft's review page from `work/facts.json`, and re-skins its map so the page can embed it; `report` does this itself. `--restate-themes` first re-names the themes as claims (brain) |
 | `mindmap` | regenerates the contribution map (an interactive HTML page) beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |

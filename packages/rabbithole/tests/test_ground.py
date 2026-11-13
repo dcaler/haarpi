@@ -16,6 +16,7 @@ import pytest
 from rabbithole import canaries as K
 from rabbithole import cards as C
 from rabbithole import ground as G
+from rabbithole import facts as F
 from rabbithole import ground_prompts as P
 
 PAPERS = {
@@ -55,6 +56,7 @@ def _section(prompt: str, head: str, nxt: str | None) -> str:
 
 class FakeBrain:
     """Supports a claim only where its words are on the pages or passages it is shown."""
+    scored: list = []
 
     def coordinator(self, prompt: str, system: str = "", think: bool = True, num_ctx: int = 16384) -> str:
         if system == P.KIND_SYS:
@@ -79,6 +81,15 @@ class FakeBrain:
             cited = f"found that {_norm(claim)}" in _norm(_section(prompt, "PASSAGES", None))
             return json.dumps({"own_finding": "no" if cited else "yes", "role": "" if cited else "finding",
                                "source": "Smith 2006" if cited else "", "reason": "fake"})
+        if system == F._SCORE_SYS:
+            n = int(re.search(r"\[(\d+) scores", prompt).group(1))
+            rows = re.findall(r"^F(\d+)\. (.*)$", prompt, re.M)
+            self.scored.append(prompt)
+            # "Grants" (T1) is central to a claim about grants or money, "Partners" (T2) to one
+            # about partners; anything else is background
+            return json.dumps({f"F{j}": [3 if ("grant" in c.lower() or "money" in c.lower()) and t == 0
+                                         else 3 if "partner" in c.lower() and t == 1 else 1
+                                         for t in range(n)] for j, c in rows})
         raise AssertionError(f"unexpected prompt: {system[:60]}")
 
 
@@ -87,7 +98,8 @@ def run(tmp_path, monkeypatch):
     cfg = C.CardsConfig(dir=tmp_path / "cards")
     proj = tmp_path / "Proj"
     (proj / "litReview" / "work").mkdir(parents=True)
-    (proj / "litReview" / "litrev.yaml").write_text("project_name: Proj\ntopic: firms\n")
+    (proj / "litReview" / "litrev.yaml").write_text(
+        "project_name: Proj\ntopic: firms\ntopics:\n- name: Grants\n  serves: [1]\n- name: Partners\n  serves: [1]\n")
     monkeypatch.setattr(G, "brain_for", lambda cfg_, model: FakeBrain())
     r = G.Run(proj, cfg)
     for ck, (label, title, authors, text) in PAPERS.items():
@@ -111,7 +123,9 @@ def _all_steps(r: G.Run) -> dict:
     for m in r.cfg.verifiers:
         G.confirm(d, m, cfg=r.cfg)
         G.own(d, m, cfg=r.cfg)
-    return G.close(d, cfg=r.cfg)
+    s = G.close(d, cfg=r.cfg)
+    G.topics(d, cfg=r.cfg)
+    return s
 
 
 def test_every_real_claim_passes_and_no_canary_slips(run):
@@ -189,3 +203,58 @@ def test_a_kind_holds_only_when_even_its_low_bound_is_above_one_in_ten():
                               "holds": False}
     assert K.slips({f"c{i}": "number" for i in range(10)}, {f"c{i}" for i in range(6)})["number"]["holds"]
 
+
+
+# ── topic scores (2026-11-13) ─────────────────────────────────────────────────────
+
+def test_each_confirmed_claim_is_scored_against_each_topic_one_call_a_paper(run):
+    FakeBrain.scored = []
+    _all_steps(run)
+    store = run.load("topics")
+    assert len(FakeBrain.scored) == 2 and store["topics"] == ["Grants", "Partners"]
+    assert store["scores"]["alpha2020#1"] == [3, 1]          # grants
+    assert store["scores"]["alpha2020#2"] == [1, 3]          # partners
+    assert store["scores"]["alpha2020#3"] == [3, 1]          # public money
+
+
+def test_scores_are_kept_until_the_topics_change(run, monkeypatch):
+    _all_steps(run)
+
+    class NoCalls:
+        def coordinator(self, *a, **k):
+            raise AssertionError("scored again with the topics unchanged")
+    monkeypatch.setattr(G, "brain_for", lambda cfg_, model: NoCalls())
+    G.topics(run.project, cfg=run.cfg)
+    monkeypatch.setattr(G, "brain_for", lambda cfg_, model: FakeBrain())
+    fp = run.project / "litReview" / "litrev.yaml"
+    fp.write_text(fp.read_text() + "- name: Learning\n  serves: [1]\n")
+    FakeBrain.scored = []
+    G.topics(run.project, cfg=run.cfg)
+    assert len(FakeBrain.scored) == 2 and len(run.load("topics")["scores"]["beta2021#1"]) == 3
+
+
+def test_papers_are_placed_by_their_claims_and_the_release_carries_each_claims_scores(run, tmp_path):
+    from rabbithole import gate as RG
+    _all_steps(run)
+    V = RG.verdicts(run)
+    _, scores = RG.claim_scores(run)
+    placed = RG.placement(RG._per_paper(V, scores), 2)
+    assert placed["alpha2020"] == [0, 1] and placed["beta2021"] == [1]   # beta: only partners is central
+    RG.build(run.project, cfg=run.cfg, short="Proj")
+    gate = run.load("gate")
+    ans = tmp_path / gate["answers"]
+    a = {f"{q}|{i}": "yes" for i in gate["sample"] for q in ("says", "own")}
+    ans.write_text(json.dumps({"gate": "pass", "sample": gate["sample"], "answers": a}))
+    RG.release(run.project, ans, tmp_path / "rel.claims.json", cfg=run.cfg)
+    blob = json.loads((tmp_path / "rel.claims.json").read_text())
+    by = {c["id"]: c for c in blob["claims"]}
+    assert by["alpha2020#2"]["scores"] == [1, 3] and by["alpha2020#1"]["scores"] == [3, 1]
+    assert [t["name"] for t in blob["topics"]] == ["Grants", "Partners"] and "scores_from" not in blob
+
+
+def test_the_gate_waits_for_the_scores(run):
+    from rabbithole import gate as RG
+    _all_steps(run)
+    run.file("topics").unlink()
+    with pytest.raises(SystemExit, match="cards topics"):
+        RG.build(run.project, cfg=run.cfg)
