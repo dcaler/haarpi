@@ -195,8 +195,8 @@ not "improve" them while rewriting around them. Concretely:
 
 ### 1 · Literature review — rabbitHole
 
-**A literature review is grounded claim by claim** (adopted 2026-11-13,
-`PLAN_claim_grounding.html`). Each paper gets a card, made once and shared by every project
+**A literature review is grounded claim by claim** (adopted 2026-11-13;
+`packages/rabbithole/rabbithole/ground.py`). Each paper gets a card, made once and shared by every project
 that cites it:
 - one model extracts what the paper claims;
 - two verifiers from other model families each re-read the paper and point to the passage

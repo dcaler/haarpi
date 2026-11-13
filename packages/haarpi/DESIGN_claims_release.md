@@ -1,7 +1,7 @@
 # The claims release: what rabbitHole hands raconteur
 
 Agreed 2026-11-13, when the FP claim-grounding run became the rabbitHole procedure
-(`PLAN_claim_grounding.html`). It replaces the fact base (`<release>.facts.json`) as the
+(`rabbithole/ground.py`, `rabbithole/gate.py`). It replaces the fact base (`<release>.facts.json`) as the
 contract between the two. raconteur does not import rabbitHole; this file is all it reads.
 
 ## Where it lives
