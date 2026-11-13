@@ -11,12 +11,12 @@ Bench FP's procedure, adopted 2026-11-13, one step per trundlr task:
   locate              CPU   the spans found in the paper's words; step-4 canaries; 2b items
   confirm --model M   GPU   each verifier judges the claim against the OTHER one's passage
   own --model M       GPU   is it the paper's own, and in what role
-  close               CPU   each claim confirmed or where it failed; canary slips and re-checks
+  close               CPU   each claim confirmed or where it failed; what the canaries say slipped
 
 A claim is confirmed only if every check passes for both verifiers. The prompts are
 `ground_prompts.py`, verbatim from the bench. Cards are kept once per paper for every project
 (`cards.py`); what belongs to this project's run (its canaries and their answers, the
-re-checks, the summary) is kept in `<litReview>/work/claims/`.
+summary) is kept in `<litReview>/work/claims/`.
 """
 from __future__ import annotations
 
@@ -744,11 +744,11 @@ def close_card(cd: C.Card, V: tuple) -> dict:
 
 def close(project_dir=".", cfg=None) -> dict:
     """Every card's verdicts, then this run's: what slipped past both verifiers, by kind and
-    check; whether any kind holds the release; and the re-check of every confirmed claim of a
-    kind that slipped. The direction re-check (the claim's direction word against its passages)
-    FLAGS a claim for the gate; it does not reject it: on FirmPathways all three it caught were
-    right ("state-owned firms are less affected" over "four times as large ... than for
-    state-owned ones"), so a word check is not evidence enough to drop a confirmed claim."""
+    check, and whether any kind holds the release. Nothing re-checks the confirmed claims of a
+    kind that slipped (decided 2026-11-13): a lexical direction check caught three claims on
+    FirmPathways and all three were right, and a third model would add its own errors to mop up
+    a small remainder the hold line and the gate sample already cover. The slip rates go to the
+    gate; if its sample finds a real error of a kind that slipped past both, revisit this."""
     run = Run(project_dir, cfg)
     V = run.cfg.verifiers
     verdicts = {}
@@ -767,14 +767,6 @@ def close(project_dir=".", cfg=None) -> dict:
               "step 4": K.slips({k: c["canary"] for k, c in S4.items()}, slipped4),
               "step 2b": K.slips({k: "cited" for k in cited}, slippedo)}
     holds = sorted(f"{chk}: {kind_}" for chk, per in checks.items() for kind_, s in per.items() if s["holds"])
-    slipped_kinds = {kind_ for per in checks.values() for kind_, s in per.items() if s["slipped"]}
-    flagged = {}
-    if "direction" in slipped_kinds:
-        for cid, r in verdicts.items():
-            if r["confirmed"]:
-                w = K.direction_conflict(r["claim"], [p["text"] for p in r["passages"]])
-                if w:
-                    flagged[cid] = f"direction: {w}"
     confirmed = [cid for cid, r in verdicts.items() if r["confirmed"]]
     by_stage = Counter(r["failed_at"].split(" (")[0] for r in verdicts.values() if not r["confirmed"])
     summary = {
@@ -782,14 +774,13 @@ def close(project_dir=".", cfg=None) -> dict:
         "claims": len(verdicts), "confirmed": len(confirmed),
         "papers": len(run.citekeys()),
         "papers_with_a_confirmed_claim": len({verdicts[c]["paper"] for c in confirmed}),
-        "rejected_by_stage": dict(by_stage), "flagged_for_the_gate": flagged,
-        "unchecked_slipped_kinds": sorted(slipped_kinds - {"direction"}),
+        "rejected_by_stage": dict(by_stage),
         "canaries": checks, "holds": holds,
         "roles": dict(Counter(verdicts[c]["role"] or "-" for c in confirmed))}
     run.dump("close", summary)
     _say(f"cards close: {len(confirmed)}/{len(verdicts)} confirmed on "
          f"{summary['papers_with_a_confirmed_claim']}/{summary['papers']} papers; rejected "
-         f"{dict(by_stage)}; {len(flagged)} flagged for the gate; "
+         f"{dict(by_stage)}; "
          + (f"HOLD ({'; '.join(holds)})" if holds else "no kind holds the release"))
     return summary
 

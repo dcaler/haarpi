@@ -11,11 +11,11 @@ reviewed. The generators are bench X2/X3's, unchanged:
   neighbour  another claim from the same paper, over this claim's passages (step 4 only)
   cited      "X (2006) found that Y" turned into the claim "Y" (step 2b only)
 
-A canary never reaches any output. What it tells us (`slips`) is read three ways at close: the
-rate per kind is shown at the gate; a kind that slips past both verifiers more than one time in
-ten, even at the low end of its 95% interval, holds the release; and every real claim of a kind
-that slipped at all gets one more machine check (for direction, `direction_conflict`, which
-flags a claim for the gate rather than rejecting it).
+A canary never reaches any output. What it tells us (`slips`) is read two ways at close: the
+rate per kind is shown at the gate, and a kind that slips past both verifiers more than one time
+in ten, even at the low end of its 95% interval, holds the release. No further check runs on the
+real claims of a kind that slipped (2026-11-13: the lexical direction check it had caught only
+correct claims on FirmPathways).
 """
 from __future__ import annotations
 
@@ -241,15 +241,3 @@ def slips(kinds: dict[str, str], slipped: set[str]) -> dict[str, dict]:
                      "holds": lo > HOLD_RATE}
     return out
 
-
-def direction_conflict(claim: str, passages: list[str]) -> str | None:
-    """The re-check for a direction slip: the claim uses a direction word whose opposite the
-    passages use and the word itself they never do. Returns "claim word / passage word"."""
-    text = " ".join(passages).lower()
-    low = (claim or "").lower()
-    for a, b in DIRECTION:
-        for x, y in ((a, b), (b, a)):
-            if re.search(rf"\b{re.escape(x)}\b", low) and re.search(rf"\b{re.escape(y)}\b", text) \
-                    and not re.search(rf"\b{re.escape(x)}\b", text):
-                return f"{x} / {y}"
-    return None

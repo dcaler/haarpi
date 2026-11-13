@@ -117,7 +117,7 @@ def _all_steps(r: G.Run) -> dict:
 def test_every_real_claim_passes_and_no_canary_slips(run):
     s = _all_steps(run)
     assert s["claims"] == 6 and s["confirmed"] == 6 and s["papers_with_a_confirmed_claim"] == 2
-    assert s["holds"] == [] and s["roles"] == {"finding": 6}
+    assert s["holds"] == [] and s["roles"] == {"finding": 6} and "flagged_for_the_gate" not in s
     planted = {chk: sum(v["planted"] for v in per.values()) for chk, per in s["canaries"].items()}
     assert planted["step 2"] >= 4 and planted["step 4"] >= 4 and planted["step 2b"] == 2
     assert all(v["slipped"] == 0 for per in s["canaries"].values() for v in per.values())
@@ -189,9 +189,3 @@ def test_a_kind_holds_only_when_even_its_low_bound_is_above_one_in_ten():
                               "holds": False}
     assert K.slips({f"c{i}": "number" for i in range(10)}, {f"c{i}" for i in range(6)})["number"]["holds"]
 
-
-def test_the_direction_recheck_flags_and_never_rejects(run, monkeypatch):
-    monkeypatch.setattr(K, "direction_conflict", lambda claim, ps: "more / less")
-    s = _all_steps(run)
-    assert s["confirmed"] == 6                                # nothing slipped: no re-check ran
-    assert s["flagged_for_the_gate"] == {}
