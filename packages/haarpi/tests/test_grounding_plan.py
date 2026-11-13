@@ -107,3 +107,13 @@ def test_the_queued_graph_names_lanes_commands_and_dependencies(monkeypatch):
     assert t["rabbithole gate 1"]["resource_ids"] == [1] and t["rabbithole gate 1"].get("command") is None
     assert c.tasks[-1]["command"] == "haarpi next"
     assert got["cycle"] == 1 and len(got["tasks"]) == len(c.tasks)
+
+
+def test_the_graph_takes_the_cycle_of_the_cards_plan_that_queued_it(monkeypatch):
+    from rabbithole import ground as rground
+    monkeypatch.setattr(rground, "need", lambda root: _need(0))
+    c = _Client()
+    c.tasks_for_project = lambda pid: [{"title": "rabbithole build 5"}, {"title": "rabbithole cards-plan 5"}]
+    got = planner.queue_grounding(None, SimpleNamespace(trundlr_project_id=7), c,
+                                  {"cpu_resource": 3, "human_resource": 1, "gpu_resource": 9})
+    assert got["cycle"] == 5 and all(t["title"].endswith(" 5") for t in c.tasks)

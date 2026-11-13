@@ -210,8 +210,9 @@ that cites it:
   is the paper's own finding or one it reports from other work.
 
 Only a claim that passes every check is confirmed. Planted bad claims in every run measure
-what still gets through. A borrowed idea is never credited to the paper that reported it:
-its original is chased, collected and read the same way.
+what still gets through. A borrowed idea (the paper reporting another work's result) is
+rejected, so it never reaches raconteur credited to the paper that reported it. An original
+that matters is caught at the gate, under what is missing.
 
 A person then spends about 40 minutes at the **gate**, whatever the size of the corpus:
 - the contribution map;

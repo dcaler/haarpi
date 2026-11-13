@@ -258,3 +258,34 @@ def test_the_gate_waits_for_the_scores(run):
     run.file("topics").unlink()
     with pytest.raises(SystemExit, match="cards topics"):
         RG.build(run.project, cfg=run.cfg)
+
+
+def test_a_judged_claim_is_never_sampled_again_and_one_judged_wrong_stays_out(run, tmp_path, monkeypatch):
+    from rabbithole import gate as RG
+    monkeypatch.setattr(RG, "SAMPLE", 3)
+    monkeypatch.setattr(RG, "pick_sample", lambda conf, seed, n=3, per_paper=2:
+                        sorted(conf, key=lambda r: r["id"])[:n])
+    _all_steps(run)
+    RG.build(run.project, cfg=run.cfg, short="Proj")
+    first = run.load("gate")["sample"]
+    ans = tmp_path / "a.json"
+    a = {f"says|{i}": "yes" for i in first} | {f"own|{i}": "yes" for i in first}
+    a[f"says|{first[0]}"] = "no"
+    ans.write_text(json.dumps({"gate": "no_confidence", "sample": first, "answers": a}))
+    assert RG.record_judged(run.project, ans, cfg=run.cfg) == 3
+    RG.build(run.project, cfg=run.cfg, short="Proj")
+    second = run.load("gate")["sample"]
+    assert not set(first) & set(second)
+    b = {f"{q}|{i}": "yes" for i in second for q in ("says", "own")}
+    ans2 = tmp_path / "b.json"
+    ans2.write_text(json.dumps({"gate": "pass", "sample": second, "answers": b}))
+    RG.release(run.project, ans2, tmp_path / "r.claims.json", cfg=run.cfg)
+    ids = {c["id"] for c in json.loads((tmp_path / "r.claims.json").read_text())["claims"]}
+    assert first[0] not in ids and set(first[1:]) <= ids
+
+
+def test_a_judgment_lapses_when_the_claim_is_re_extracted_differently(run, tmp_path):
+    from rabbithole import gate as RG
+    _all_steps(run)
+    run.dump("judged", {"alpha2020#1": {"claim": "Something else entirely.", "wrong": True}})
+    assert RG.judged_ids(run, RG.verdicts(run)) == set()

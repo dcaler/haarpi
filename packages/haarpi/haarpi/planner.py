@@ -2324,7 +2324,11 @@ def queue_grounding(root: Path, m: project.Manifest, client, tr_cfg: dict, *,
     if dry_run:
         return {"need": need, "plan": plan, "tasks": []}
     history = client.all_tasks()
-    cycle = next_cycle([t.get("title", "") for t in client.tasks_for_project(m.trundlr_project_id)], stage)
+    titles = [t.get("title", "") for t in client.tasks_for_project(m.trundlr_project_id)]
+    # The graph belongs to the chain whose `cards-plan` queued it: same cycle number.
+    plans = [p[3] for p in map(_parse_title, titles)
+             if p and p[0] == stage and p[1] == "cards-plan" and p[3] is not None]
+    cycle = max(plans) if plans else next_cycle(titles, stage)
     ids: dict[str, int] = {}
     queued = []
     for t in plan:
@@ -2406,6 +2410,9 @@ def _claims_gate(root: Path, m: project.Manifest, stage: str, markup: Path, *, d
     if project.already_planned(root, ahash):
         print(f"  [stop]    these answers were already planned (hash {ahash}) — loop guard.")
         return 0
+    if not dry_run:
+        n = rgate.record_judged(root, markup)          # pinned, whatever the outcome
+        print(f"  pinned    {n} judged claim(s): never sampled again; any judged wrong stay out")
     if ans["outcome"] == "hold":
         if not dry_run:
             project.record_plan(root, {"type": "gate", "stage": stage, "annotation_hash": ahash,

@@ -196,7 +196,9 @@ def build(project_dir=".", cfg=None, seed: int | None = None, initials: str = "D
     mp = out / map_name(short, date)
     mp.write_text(_map(run, metas, by_paper, n_claims, placed, names, short), encoding="utf-8")
 
-    pick = pick_sample(conf, seed)
+    # only claims never judged at an earlier gate (PLAN §5): a judged claim is pinned
+    seen = judged_ids(run, V)
+    pick = pick_sample([r for r in conf if r["id"] not in seen], seed)
     cards = []
     for i, r in enumerate(pick, 1):
         meta = metas[r["paper"]]
@@ -285,6 +287,35 @@ def read_answers(fp: Path, gate: dict) -> dict:
             "unjudged": unjudged, "missing": missing, "seed": blob.get("seed") or gate.get("seed")}
 
 
+def record_judged(project_dir, answers_fp: Path, cfg=None) -> int:
+    """Pin what the person judged: each sample claim's answers, with its text, into
+    work/claims/judged.json. `haarpi next` calls this when it reads the answers. A later gate
+    never shows a judged claim again, and a claim judged wrong stays out of every release. A
+    judgment holds only while the claim's text is the same (a re-extraction can reuse an id)."""
+    run = G.Run(project_dir, cfg)
+    blob = json.loads(Path(answers_fp).read_text(encoding="utf-8"))
+    ans = read_answers(answers_fp, run.load("gate"))
+    a = blob.get("answers") or {}
+    V = verdicts(run)
+    store = run.load("judged")
+    n = 0
+    for cid in ans["sample"]:
+        if cid in ans["unjudged"] or cid not in V:
+            continue
+        store[cid] = {"claim": V[cid]["claim"], "says": a.get(f"says|{cid}"), "own": a.get(f"own|{cid}"),
+                      "wrong": cid in ans["wrong"], "answers": Path(answers_fp).name,
+                      "date": time.strftime("%Y-%m-%d")}
+        n += 1
+    run.dump("judged", store)
+    return n
+
+
+def judged_ids(run: G.Run, V: dict, wrong_only: bool = False) -> set[str]:
+    """Claims judged at an earlier gate whose text is unchanged."""
+    return {cid for cid, j in run.load("judged").items()
+            if cid in V and V[cid]["claim"] == j.get("claim") and (j.get("wrong") or not wrong_only)}
+
+
 def release(project_dir, answers_fp: Path, dst: Path, cfg=None) -> dict:
     """Write the claims release (packages/haarpi/DESIGN_claims_release.md) from a passed gate:
     every confirmed claim but those the person judged wrong. Refuses while a kind holds."""
@@ -301,7 +332,7 @@ def release(project_dir, answers_fp: Path, dst: Path, cfg=None) -> dict:
               for t in T]
     metas = {cd.citekey: cd.meta() or {} for cd in run.cards()}
     origin = {c["id"]: c.get("origin") or c["id"] for cd in run.cards() for c in cd.claims()}
-    wrong = set(ans["wrong"])
+    wrong = set(ans["wrong"]) | judged_ids(run, verdicts(run), wrong_only=True)
     claims = []
     for cid, r in sorted(verdicts(run).items()):
         if not r["confirmed"] or cid in wrong:
@@ -347,7 +378,7 @@ Hover for a paper's first confirmed claim, click for all of them. <a href="{mapf
 or setting, a cited result passed off as the paper's own) and counts how many get past both verifiers.</p>
 {slips}
 <p class="small mut">Not here, because it needs no decision: {cited} claims passed every check but were the paper
-reporting someone else's work. They wait for the step that fetches each named original.</p>
+reporting someone else's work. They are left out of the release. If an original matters, say so under what is missing.</p>
 
 <h2>1 · A sample of {n} confirmed claims <span class=mut>(~25 min)</span></h2>
 <p class=small>Drawn at random (seed {seed}), weighted twice toward claims with a direction (increase, lower, …), which the

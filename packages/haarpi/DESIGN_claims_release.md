@@ -58,9 +58,9 @@ never reads rabbitHole's `work/`: an unreleased claim can't reach a draft.
     base's scoring prompt and model, against the topics as they stood at the gate.
 - **`topics` and `questions`**: the project's, as in its `litrev` config.
 - **`sources`**: one entry per cited paper, giving its "Author, Year" label and PDF link.
-- **`credited`**: borrowed ideas the credit check gave to their originals (step 8). They are
-  recorded for the record; raconteur cites the original, which is in `claims` under its own
-  citekey.
+- **`credited`**: always empty for now. It was meant for borrowed ideas a credit check gave to
+  their originals (the plan's steps 5–8). Those steps were never piloted, so they are not in
+  the port (2026-11-13). raconteur does not read the field.
 
 ## How raconteur reads it (`raconteur/factbase.py`)
 
