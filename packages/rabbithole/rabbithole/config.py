@@ -245,6 +245,12 @@ def next_project_file(path: str | Path = ".") -> Path:
     return d / f"{stem}_{n + 1}.yaml"
 
 
+# Fields that once existed and were removed. A project file written while they lived still carries
+# them, and must still load: `fact_prompt` and `fact_think` (the P1 extraction trial, dropped
+# 2026-11) are in DigiPros' methodsreview.yaml.
+RETIRED_KEYS = ("fact_prompt", "fact_think")
+
+
 def load_project(path: str | Path = ".") -> ProjectConfig:
     """Load the latest numbered project config from <dir>/litReview (or a given file)."""
     p = Path(path)
@@ -258,6 +264,8 @@ def load_project(path: str | Path = ".") -> ProjectConfig:
             )
     raw = yaml.safe_load(fp.read_text(encoding="utf-8")) or {}
     brain = BrainConfig(**(raw.pop("brain", {}) or {}))
+    for key in RETIRED_KEYS:            # a field a trial added and its retirement removed
+        raw.pop(key, None)
     cfg = ProjectConfig(**raw)
     cfg.brain = brain
     _adopt_manifest(cfg, p if p.is_dir() else fp.parent.parent, kind=kind_of(fp))
