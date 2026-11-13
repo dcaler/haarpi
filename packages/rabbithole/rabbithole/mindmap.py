@@ -1029,18 +1029,12 @@ def run(directory: str = ".", brain_override: str | None = None, *, fig_id: str 
     brain = Brain(cfg.brain, gc, backend_override=brain_override)
     review_md, refs_bib = _read_review(review), refs.read_text()
     if is_fact_base(review_md):
-        from . import facts as _facts
-        base = _facts.load_sidecar(paths)
-        if base is None:
-            print(f"[mindmap] {review.name} is a fact base but work/facts.json is missing — "
-                  "re-run report.", file=sys.stderr)
-            return 1
-        threads, evidence, weight = _facts.map_inputs(base)
-        extra = {"details": _facts.map_details(paths, base, gc), "pin_slices": True}
-    else:
-        threads, evidence = parse_threads(review_md), citation_evidence(review_md)
-        weight = evidence_weight(review_md)
-        extra = {"details": {k: {"facts": [{"text": s} for s in v]} for k, v in evidence.items()}}
+        from .summarize import FACT_BASE_RETIRED
+        print(f"[mindmap] {review.name} is a fact base: {FACT_BASE_RETIRED}", file=sys.stderr)
+        return 2
+    threads, evidence = parse_threads(review_md), citation_evidence(review_md)
+    weight = evidence_weight(review_md)
+    extra = {"details": {k: {"facts": [{"text": s} for s in v]} for k, v in evidence.items()}}
     make_map(brain, gc, paths.output, short, threads, refs_bib, evidence, weight, fig_id=fig_id,
              datestamp=_draft_datestamp(review.stem), **extra)
     return 0

@@ -2462,6 +2462,9 @@ def build_corpus(cfg, gc, paths, brain, *, from_folder: bool = False,
     return corpus, notes, citekeys, collection
 
 
+FACT_BASE_RETIRED = ("the fact base was retired on 2026-11-13: the literature review is grounded claim by claim (`haarpi ground`, then the claims gate). The fact base is archived in packages/rabbithole/archive/factbase/ and at the git tag factbase-retired.")
+
+
 def run(directory: str = ".", brain_override: str | None = None,
         from_folder: bool = False, refresh_notes: bool = True) -> int:
     cfg = config.load_project(directory)
@@ -2474,6 +2477,9 @@ def run(directory: str = ".", brain_override: str | None = None,
           f"(coordinator={cfg.brain.coordinator_model}, worker={cfg.brain.worker_model})")
     print(f"  {corpus_mod.zotero_status(cfg, gc, from_folder)}")
     corpus_mod.require_zotero(gc, from_folder)     # before style training or any GPU work
+    if (cfg.report_format or "narrative") == "facts":
+        print(f"rabbitHole report: {FACT_BASE_RETIRED}", file=sys.stderr)
+        return 2
     print("  plan: build the corpus (ingest, citekeys, index) → [1/3] read papers (notes) → "
           "[2/3] synthesise the review → [3/3] locate claims, bibliography, render")
     print()
@@ -2497,10 +2503,6 @@ def run(directory: str = ".", brain_override: str | None = None,
         return 1
     corpus, notes, citekeys, collection = built
     t0 = runlog.start()
-    if (cfg.report_format or "narrative") == "facts":
-        from . import facts as _facts
-        return _facts.report(cfg, gc, paths, brain, corpus, notes, citekeys, collection)
-
     print(f"\n{_stamp()}[2/3] Synthesising the review...")
     style_profile = ""
     if cfg.use_style:

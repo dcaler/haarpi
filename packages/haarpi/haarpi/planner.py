@@ -342,8 +342,8 @@ STAGE_TIERS: dict[str, dict[str, list[str]]] = {
         # one-pager is a human gate, so the outline must not be rebuilt from a
         # through-line the author has not signed off on.
         "narrative":  ["recut", "comment"],
-        "upstream_literature": ["litreview:gather", "litreview:collect",
-                                "litreview:report", "litreview:comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect", "litreview:audit",
+                                "litreview:build", "litreview:cards-plan"],
     },
     "experiments": {
         "cosmetic": ["process", "comment"],
@@ -449,15 +449,15 @@ PAPER_DELIVERABLE_TIERS: dict[str, dict[str, list[str]]] = {
         "cosmetic":   ["onepager", "comment"],
         "structural": ["recut", "comment"],
         "narrative":  ["recut", "comment"],
-        "upstream_literature": ["litreview:gather", "litreview:collect",
-                                "litreview:report", "litreview:comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect", "litreview:audit",
+                                "litreview:build", "litreview:cards-plan"],
     },
     "outline": {
         "cosmetic":   ["outline", "comment"],
         "structural": ["outline", "comment"],
         "narrative":  ["recut", "comment"],
-        "upstream_literature": ["litreview:gather", "litreview:collect",
-                                "litreview:report", "litreview:comment"],
+        "upstream_literature": ["litreview:gather", "litreview:collect", "litreview:audit",
+                                "litreview:build", "litreview:cards-plan"],
     },
 }
 PAPER_DELIVERABLE_TIERS["venue"] = PAPER_DELIVERABLE_TIERS["outline"]
@@ -478,8 +478,8 @@ PAPER_DELIVERABLE_TIERS["skeleton"] = {
     # A narrative complaint about the structure is a complaint about the through-line, and
     # the through-line is the one-pager's.
     "narrative":  ["recut", "comment"],
-    "upstream_literature": ["litreview:gather", "litreview:collect",
-                            "litreview:report", "litreview:comment"],
+    "upstream_literature": ["litreview:gather", "litreview:collect", "litreview:audit",
+                            "litreview:build", "litreview:cards-plan"],
 }
 
 
@@ -1081,14 +1081,9 @@ _LITREVIEW_NEEDS = ("edit", "sources", "section", "ingest", "cite", "redirect", 
 # deliverable's release guide is rendered from, so the phrasings a reviewer is told to use are
 # the phrasings the classifier is told to recognise. See haarpi/comment_kinds.py.
 _DECOMPOSE_PROMPT = comment_kinds.decompose_prompt(comment_kinds.LITREVIEW_NARRATIVE)
-_FACT_NEEDS = comment_kinds.LITREVIEW_FACTS.names
-_FACT_DECOMPOSE_PROMPT = comment_kinds.decompose_prompt(
-    comment_kinds.LITREVIEW_FACTS,
-    extra="The review's research questions, for the \"serves\" field:\n{questions}")
 
 
-def decompose(comments: list[dict], cfg: dict, *, fact_base: bool = False,
-              questions: list[str] | None = None) -> list[dict]:
+def decompose(comments: list[dict], cfg: dict) -> list[dict]:
     """Per-comment task list for a litreview annotation set (the 'list all the tasks' step).
 
     Returns ``[{comments: [texts], need: <one of _LITREVIEW_NEEDS>, query: str}]``. Falls back
@@ -1104,21 +1099,16 @@ def decompose(comments: list[dict], cfg: dict, *, fact_base: bool = False,
               o.get("coordinator", "qwen3.6:27b-16k"),
               o.get("worker", "llama3.1:8b"), tool="haarpi")
     numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
-    if fact_base:
-        qs = "\n".join(f"{i}. {q}" for i, q in enumerate(questions or [], 1)) or "(none)"
-        prompt = _FACT_DECOMPOSE_PROMPT.format(annotations=numbered, questions=qs)
-    else:
-        prompt = _DECOMPOSE_PROMPT.format(annotations=numbered)
+    prompt = _DECOMPOSE_PROMPT.format(annotations=numbered)
     try:
         raw = _parse_json_obj(b.coordinator(prompt, _SYS, think=False))
         parsed = raw.get("tasks") or []
     except (ValueError, json.JSONDecodeError):
         parsed = []
-    return _normalise_tasks(parsed, texts, fact_base=fact_base)
+    return _normalise_tasks(parsed, texts)
 
 
-def _normalise_tasks(parsed: list[dict], texts: list[str], *,
-                     fact_base: bool = False) -> list[dict]:
+def _normalise_tasks(parsed: list[dict], texts: list[str]) -> list[dict]:
     """Coerce the model's task list into the contract, and guarantee total coverage.
 
     Every comment lands in exactly one task: unknown needs become ``edit``, a comment named
@@ -1129,7 +1119,7 @@ def _normalise_tasks(parsed: list[dict], texts: list[str], *,
     n = len(texts)
     claimed: set[int] = set()
     tasks: list[dict] = []
-    allowed = _FACT_NEEDS if fact_base else _LITREVIEW_NEEDS
+    allowed = _LITREVIEW_NEEDS
     for t in parsed:
         need = t.get("need") if isinstance(t, dict) else None
         if need not in allowed:
@@ -1176,18 +1166,7 @@ def _normalise_tasks(parsed: list[dict], texts: list[str], *,
     if missed:
         tasks.append({"comments": [texts[i - 1] for i in missed],
                       "need": "edit", "query": ""})
-    # A fact base's own kinds are already specific — "I've fixed the PDF in Zotero" is `pdf`,
-    # not a request to cite — so the floors leave them alone.
-    keep = ("topic", "topic_scope", "pdf", "fact", "drop") if fact_base else ()
-    tasks = _promote_explicit_cites(_promote_explicit_sections(tasks, keep), keep)
-    if fact_base:
-        # The deterministic section floor files "a section on X" as `section`; in a fact base
-        # the same ask is a new topic, which is what gets searched for and scored against.
-        for t in tasks:
-            if t["need"] == "section":
-                t["need"] = "topic"
-                t.setdefault("serves", [])
-    return tasks
+    return _promote_explicit_cites(_promote_explicit_sections(tasks))
 
 
 # A reviewer who writes "a section on X" is asking for STRUCTURE, and an in-place reviser
@@ -1320,7 +1299,7 @@ def consume_declines(root) -> None:
         project.record_plan(root, {"type": "needs_gather_consumed", "upto": top})
 
 
-def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
+def chain_from_tasks(tasks: list[dict]) -> dict:
     """Derive the litreview rework chain, its instructions, and a summary tier FROM the tasks.
 
     The chain is BUILT, not looked up. Sources reach the corpus by two routes that end the
@@ -1342,12 +1321,7 @@ def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
 
     ``tier`` is emergent (redirection > gap_fill > cosmetic), so the confirm-gate and notify that
     key on it keep working as a SUMMARY of the decomposition rather than its driver.
-
-    ``fact_base``: the review renders as a fact base — see `_fact_chain`. Its ``report`` draws
-    and links the map itself, so no ``mindmap`` follows (one redrew the same files for 22 min).
     """
-    if fact_base:
-        return _fact_chain(tasks)
     needs = {t["need"] for t in tasks}
     gather_topics = [t["query"] for t in tasks
                      if t["need"] in ("sources", "section", "redirect") and t["query"]]
@@ -1404,35 +1378,6 @@ def chain_from_tasks(tasks: list[dict], *, fact_base: bool = False) -> dict:
             "gather_topics": gather_topics, "section_focus": section_focus}
 
 
-def _fact_chain(tasks: list[dict]) -> dict:
-    """The rework chain for a fact base. Every kind ends in `report`, never `revise`: a fact
-    base is rebuilt from its caches, so re-running `report` after invalidating exactly what the
-    comments name IS the incremental rework (about an hour plus whatever was invalidated), and
-    no comment is ever answered by rewording a fact.
-
-    What is invalidated — a source's facts, a topic's scope — is applied by `haarpi next`
-    through rabbitHole's fact_rework before the chain is queued, as corrections are."""
-    needs = {t["need"] for t in tasks}
-    gather_topics = [t["query"] for t in tasks
-                     if t["need"] in ("sources", "topic", "redirect") and t["query"]]
-    corrections = [{"wrong": t["wrong"], "right": t["right"]} for t in tasks
-                   if t["need"] == "correct" and t.get("wrong") and t.get("right")]
-    steps: list[str] = []
-    if "ingest" in needs:
-        steps.append("ingest")
-    gathers = bool(needs & {"sources", "topic", "redirect"})
-    if gathers:
-        steps += ["gather", "collect"]
-    elif "ingest" in needs:
-        steps.append("collect")
-    if "collect" in steps:
-        steps.append("audit")
-    if "collect" in steps or "cite" in needs:
-        steps.append("build")
-    steps += ["report", "comment"]      # report draws and embeds its own map
-    tier = ("redirection" if "redirect" in needs else "gap_fill" if gathers else "cosmetic")
-    return {"steps": steps, "tier": tier, "corrections": corrections,
-            "gather_topics": gather_topics, "section_focus": [], "fact_base": True}
 
 
 def opening_chain(directory) -> list[str]:
@@ -1443,62 +1388,14 @@ def opening_chain(directory) -> list[str]:
             "cards-plan"]
 
 
-def _is_fact_base(directory: str) -> bool:
-    """Does this review render as a fact base (`report_format: facts`)? False on any doubt."""
-    try:
-        from rabbithole import config as rhconfig
-        return (rhconfig.load_project(directory).report_format or "narrative") == "facts"
-    except Exception:                         # noqa: BLE001 — unknown means the default chain
-        return False
 
 
-def facts_snapshot_name(release: Path) -> str:
-    """Where a released fact base's facts live: beside the release, named after it."""
-    return f"{Path(release).stem}.facts.json"
 
 
-def _snapshot_facts(root: Path, m, stage: str, dst: Path) -> Path | None:
-    """Freeze a fact base's facts with its release.
-
-    Downstream reads releases, and the sidecar is the fact base's structured content — but
-    `work/facts.json` is rewritten by every later report, so a litreview reworked while the
-    paper is drafted would change the facts under the paper. The copy beside the release is
-    what raconteur reads."""
-    review_dir = Path(root) / (m.stages.get(stage, {}).get("dir") or "litReview")
-    if not _is_fact_base(str(review_dir)):
-        return None
-    src = review_dir / "work" / "facts.json"
-    if not src.is_file():
-        print(f"  [warn] {stage} is a fact base but has no work/facts.json to release with it")
-        return None
-    out = Path(dst).with_name(facts_snapshot_name(dst))
-    shutil.copy2(src, out)
-    print(f"  facts released with it: {out.name}")
-    return out
 
 
-def _focus_items(directory: str) -> list[str]:
-    """The fact base's research questions (its `questions:`, else the focus items)."""
-    try:
-        from rabbithole import config as rhconfig, facts as rhfacts
-        return rhfacts.research_questions(rhconfig.load_project(directory))
-    except Exception:                         # noqa: BLE001
-        return []
 
 
-def _fact_rework(directory: str, tasks: list[dict], check: dict, markup, built: dict, *,
-                 dry_run: bool) -> dict:
-    """Apply (or, dry, describe) what a fact base's comments invalidate, via rabbitHole."""
-    try:
-        from rabbithole import fact_rework
-        anchors = redline.comment_anchors(markup)
-        return fact_rework.apply(directory, tasks, check["unresolved"], anchors,
-                                 gather="gather" in built["steps"],
-                                 markup=getattr(markup, "name", str(markup)), dry_run=dry_run)
-    except Exception as e:                    # noqa: BLE001 — never wedge the gate
-        print(f"  [warn] fact-base rework could not be applied ({e}) — the chain still "
-              f"re-runs report, but nothing was invalidated")
-        return {"lines": [], "config": None, "responses": []}
 
 
 # ── a disputed claim in the paper ─────────────────────────────────────────────
@@ -1623,29 +1520,20 @@ def _paper_disputes(root: Path, m, markup: Path, check: dict, cfg: dict) -> list
 
 
 def _apply_disputes(root: Path, m, markup: Path, disputes: list[dict]) -> list[str]:
-    """Write the disputes for raconteur's revise, and send each disputed FACT back to the
-    litreview as a `fact` rework (its cached facts move aside; its response is recorded, so
-    the litreview's next report shows the paper comment under "Your comments")."""
+    """Write the disputes for raconteur's revise. A dispute at the SOURCE (the claim misreads
+    its paper) used to send the fact back through the fact base's rework; that route was retired
+    with the fact base (2026-11-13) and nothing replaces it yet: the revise still rewrites or
+    removes the sentence, and the plan names each claim disputed at its source, but the claim
+    itself is not re-checked."""
     lines = []
     (Path(markup).parent / DISPUTES_FILE).write_text(json.dumps(
         {"markup": Path(markup).name, "disputes": disputes}, indent=2, ensure_ascii=False),
         encoding="utf-8")
     lines.append(f"  disputes written for the revise: {DISPUTES_FILE}")
-    to_source = [d for d in disputes if d["where"] == "source"]
-    if to_source:
-        lit_dir = Path(root) / ((m.stages.get("litreview") or {}).get("dir") or "litReview")
-        try:
-            from rabbithole import fact_rework
-            tasks = [{"need": "fact", "comments": [d["comment"]], "query": ""} for d in to_source]
-            asks = [{"id": d["id"], "text": d["comment"]} for d in to_source]
-            anchors = {d["id"]: {"headings": ["Paper dispute"], "text": f"[@{d['citekey']}]"}
-                       for d in to_source}
-            done = fact_rework.apply(str(lit_dir), tasks, asks, anchors, gather=False,
-                                     markup=f"the paper ({Path(markup).name})")
-            lines += ["  sent back to the litreview:"] + done["lines"]
-        except Exception as e:                # noqa: BLE001 — the paper revise still runs
-            lines.append(f"  [warn] could not send the disputed fact(s) back to the "
-                         f"litreview ({e}); the revise will work from the facts as they are")
+    for d in disputes:
+        if d["where"] == "source":
+            lines.append(f"  disputed at the source: {d['fact_id']} — the revise rewrites it; "
+                         "the claim is not re-checked")
     return lines
 
 
@@ -1653,7 +1541,7 @@ def _tasks_assessment(tasks: list[dict]) -> str:
     """One-line human summary of the task breakdown, for the plan record and the log."""
     from collections import Counter
     counts = Counter(t["need"] for t in tasks)
-    order = list(dict.fromkeys(_LITREVIEW_NEEDS + _FACT_NEEDS))
+    order = list(_LITREVIEW_NEEDS)
     return ", ".join(f"{counts[n]}×{n}" for n in order if counts[n])
 
 
@@ -2195,7 +2083,9 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
         for d in _markup_dirs(root, m, stage):
             for p in d.glob("*.docx"):
                 parsed = naming.parse(p, m.short_title)
-                if not parsed:
+                # The literature review is gated on its claims page, not a redline (2026-11-13):
+                # an old litreview draft left marked up is history, not work to plan.
+                if not parsed or stage == "litreview":
                     continue
                 _, chain, _ = parsed
                 # A release's last token is a deliverable word ("…_litreview.docx") — not
@@ -2939,6 +2829,11 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     if markup.suffix == ".json":
         return _claims_gate(root, m, stage, markup, dry_run=dry_run, queueing=queueing,
                             tr_cfg=tr_cfg, skipped=skipped)
+    if stage == "litreview":
+        print(f"haarpi next: {markup.name} is a redlined literature-review draft, but the "
+              f"literature review is gated on its claims page now (2026-11-13): grounded claim by "
+              f"claim (`haarpi ground`), judged and released at the claims gate. Nothing planned.")
+        return 0
 
     # Say where we are and what we are reading BEFORE deciding anything, so the header is
     # there whether this mints, queues rework, or refuses. Resolved but unsaid until now:
@@ -3070,8 +2965,6 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
             result = redline.mint_release(
                 markup, dst, post=post,
                 md_sibling=stage != "paper")
-            if stage in LITERATURE_STAGES:
-                _snapshot_facts(root, m, stage, dst)
 
         if deliverable:
             # A ladder rung, not the stage: mint this deliverable's release and
@@ -3129,9 +3022,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # The general solution: decompose the comments into a per-comment task list, derive the
         # chain the tasks require, and steer each verb with what its tasks need. Open-loop — the
         # human is the verification loop. See DESIGN_next_orchestration.md.
-        fact_base = _is_fact_base(str(root))
-        tasks = decompose(check["unresolved"], cfg, fact_base=fact_base,
-                          questions=_focus_items(str(root)) if fact_base else None)
+        tasks = decompose(check["unresolved"], cfg)
         # A correction whose wrong term the reviewer never stated: look it up in the draft
         # before the chain is built, so it becomes a real substitution rather than a no-op.
         for t in tasks:
@@ -3143,20 +3034,16 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         # AUTOMATIC RE-RUN OF A DECLINED SECTION. A synthetic `section` task, so the chain it
         # implies (gather -> collect -> audit -> build -> revise) is derived by the same rule as
         # any other section ask, and the decline's own brief becomes the gather query.
-        carried = [] if fact_base else carried_declines(root)
+        carried = carried_declines(root)
         for c in carried:
             tasks.append({"comments": [c.get("ask") or c["heading"]],
                           "need": "section", "query": c["missing"]})
-        built = chain_from_tasks(tasks, fact_base=fact_base)
+        built = chain_from_tasks(tasks)
         built["carried"] = carried
         # PLAN THE SECTIONS FIRST, so the gather searches what will be written rather than how
         # it was asked for. Replaces each section ask in `gather_topics` with its heading and
         # claim; the ask itself is kept for any that could not be planned.
-        built["sections"] = ([] if fact_base else
-                             _plan_sections(str(root), markup, cfg, built["section_focus"]))
-        if fact_base:
-            built["fact_rework"] = _fact_rework(str(root), tasks, check, markup, built,
-                                                dry_run=True)
+        built["sections"] = _plan_sections(str(root), markup, cfg, built["section_focus"])
         # Carried sections keep the heading and claim they were planned with. Re-planning them
         # would invent a different compression of the same ask, and the whole point is that the
         # section the reviewer was promised is the section that gets written.
@@ -3201,12 +3088,9 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
                     "assessment": f"{len(disputes)} disputed claim(s), nothing else"}
         tier = plan["tier"]
         steps = list((dtiers or STAGE_TIERS[stage])[tier])
-        if any(d["where"] == "source" for d in disputes) and tier != "upstream_literature":
-            # The fact is suspect: the litreview re-reads the source and you release it (the
-            # paper reads only RELEASED facts), then this chain carries straight on into the
-            # paper's own rework. Not back through a paper `next`: its loop guard would
-            # refuse this same annotation set a second time.
-            steps = ["litreview:report", "litreview:comment", "litreview:next"] + steps
+        # A dispute at the source no longer sends the litreview back through a re-read: that
+        # route was the fact base's (retired 2026-11-13). The revise answers it, and the plan
+        # names the disputed claim for the litreview's next gate (`_apply_disputes`).
     what = f"{stage} [{deliverable}]" if deliverable else stage
     if venue:
         what += f" ({venue})"
@@ -3232,9 +3116,6 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
         summary.append(f"  dispute → {d['where']}: {d['comment'][:60]!r} on [@{d['citekey']}] — "
                        f"fact {d['fact_id']} (p.{d.get('page') or '?'})"
                        + (f"; {d['note']}" if d.get("note") else ""))
-    if built and built.get("fact_rework"):
-        summary += ["  per comment (fact base — routed, never reworded):"] \
-            + built["fact_rework"]["lines"]
     if built and built.get("carried"):
         summary.append(f"  carried forward: {len(built['carried'])} section(s) a previous "
                        f"revise could not draft — searched for and re-drafted without the "
@@ -3246,11 +3127,7 @@ def run_next(root: Path, stage: str | None = None, file: Path | None = None,
     # INSTRUCT: write the numbered litrev config that steers the gather/report at the tasks'
     # queries. This is a file side-effect, so it happens only past the dry-run return, and for
     # both the queued and the manual paths (a manual gather deserves steering too).
-    if built and built.get("fact_base"):
-        done = _fact_rework(str(root), tasks, check, markup, built, dry_run=False)
-        steer_config = done["config"]
-    else:
-        steer_config = _write_litreview_steering(str(root), built) if built else None
+    steer_config = _write_litreview_steering(str(root), built) if built else None
     if steer_config:
         summary.append(f"  steering config: {steer_config}")
     # Past the dry-run return, so inspecting a plan never burns the carried entries.

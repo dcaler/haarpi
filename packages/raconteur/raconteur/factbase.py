@@ -87,26 +87,15 @@ class FactBase:
 # ── finding and loading ─────────────────────────────────────────────────────────
 
 def find(project_dir: Path, subdir: str) -> Path | None:
-    """The facts to read: the newest claims release; failing that, the fact-base snapshot
-    frozen with the newest release; failing that, the live sidecar — but only when the newest
-    review document IS a fact base (and it says so)."""
+    """The facts to read: the newest claims release; failing that, a fact-base snapshot frozen
+    with an earlier release. The live `work/facts.json` of an unreleased fact base is no longer
+    read: the fact base was retired on 2026-11-13 (rabbitHole tag `factbase-retired`), and only
+    what was released before then is still drafted from."""
     out = Path(project_dir) / subdir / "output"
-    claims = sorted(out.glob(CLAIMS_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
-    if claims:
-        return claims[0]
-    snaps = sorted(out.glob(SNAPSHOT_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
-    if snaps:
-        return snaps[0]
-    mds = sorted(out.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-    live = Path(project_dir) / subdir / "work" / "facts.json"
-    if mds and live.is_file():
-        try:
-            head = mds[0].read_text(encoding="utf-8", errors="replace")[:4000]
-        except OSError:
-            return None
-        if FACT_BASE_MARK in head:
-            log(f"[raconteur] fact base not released yet — reading the live {live.name}")
-            return live
+    for glob in (CLAIMS_GLOB, SNAPSHOT_GLOB):
+        hits = sorted(out.glob(glob), key=lambda p: p.stat().st_mtime, reverse=True)
+        if hits:
+            return hits[0]
     return None
 
 

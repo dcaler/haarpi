@@ -151,15 +151,11 @@ kind it is sorted into, so the kinds and the phrasings that trigger them are one
 table per deliverable (`haarpi/comment_kinds.py`). The classifier's prompt is
 generated from it, and so is the **release guide** a deliverable opens with —
 what releasing means, the agent's own checklist, and "write something like … and
-this happens", with the cost. The literature review's fact base (on test) is the
-first to carry one; its comments are routed, never answered by rewording a fact.
-Its facts are frozen beside its release, and raconteur drafts each section from
-the facts chosen for it, writing a trace from every cited sentence to its page.
-A claims release, when a project has one, takes the fact base's place (stage 1 below).
-A reviewer who disputes a claim in the paper gets it fixed where the error is:
-the sentence (rewritten to its fact) or the fact (the source is re-read in the
-literature review, re-released, and the paper revised from it) — the one route
-that crosses a stage boundary, and so the one `haarpi next` takes itself.
+this happens", with the cost. raconteur drafts each section from the claims chosen
+for it out of the literature review's **claims release** (stage 1 below), writing a
+trace from every cited sentence to its page. A reviewer who disputes a claim in the
+paper gets the sentence rewritten or removed by the revise; the claim itself is not
+re-checked (that route went with the fact base, retired 2026-11-13).
 
 **Sections are planned before the gather that has to find their literature.**
 The heading and one-sentence claim are decided in `haarpi next`, so the search
@@ -199,7 +195,7 @@ not "improve" them while rewriting around them. Concretely:
 
 ### 1 · Literature review — rabbitHole
 
-**Claim grounding replaces the fact base** (adopted 2026-11-13; being built into rabbitHole,
+**A literature review is grounded claim by claim** (adopted 2026-11-13,
 `PLAN_claim_grounding.html`). Each paper gets a card, made once and shared by every project
 that cites it:
 - one model extracts what the paper claims;
@@ -212,7 +208,8 @@ that cites it:
 Only a claim that passes every check is confirmed. Planted bad claims in every run measure
 what still gets through. A borrowed idea (the paper reporting another work's result) is
 rejected, so it never reaches raconteur credited to the paper that reported it. An original
-that matters is caught at the gate, under what is missing.
+that matters is caught at the gate, under what is missing. Each confirmed claim is scored
+against the project's topics, which the opening cycle settles with the person first (`topics`).
 
 A person then spends about 40 minutes at the **gate**, whatever the size of the corpus:
 - the contribution map;
@@ -223,65 +220,20 @@ A person then spends about 40 minutes at the **gate**, whatever the size of the 
 
 Only a passed gate mints a **claims release**, the file raconteur drafts from
 (`packages/haarpi/DESIGN_claims_release.md`). On all 191 FirmPathways papers with text, 395
-of 896 claims were confirmed, on 153 papers. Until the port lands, rabbitHole still runs the
-fact base described below. That format, its review page, `revise`, `graft` and the docx
-report then retire.
+of 896 claims were confirmed, on 153 papers.
 
-**The literature review is a coverage instrument, not a draft chapter.** It is
-not what you would drop into a paper; it is an organized collection of facts,
-some of which feed one later, and its job is to let a human decide whether the
-corpus is good enough to start the work. So it is built to be *checked* rather
-than read through.
+**The fact base is retired** (2026-11-13). Its code and tests are archived in
+`packages/rabbithole/archive/factbase/`, and the tag `factbase-retired` holds the tree as it
+was. A litreview docx is no longer read as markup. Fact-base snapshots released before then
+(`<release>.facts.json`) are still read by raconteur when a project has no claims release.
 
-It opens with the **most load-bearing sources** — the top 5% of the corpus by
-how much of the review's argument each one carries, with a sentence on what the
-project relies on it for — and then **coverage against the brief**, which marks
-each focus item covered or THIN by how much of the corpus addresses it in its own
-words. That is the one place the document can say the corpus falls short; the
-prose always connects its sources to the brief. Below that sits an annotated
-bibliography where every claim is page-located in its source, a quote that does
-not match its claim is labelled weak support, and beside it a **contribution map** that
-bands the same sources at the 5% / 25% / 50% marks, so the map's innermost ring
-and the opening list are one ranking seen two ways. The prose carries the
-through line that organizes those facts — the same structure the map draws
-radially.
-
-A second format, the **fact base**, is the default for a new project
-(`report_format: facts`; older reviews stay narrative unless migrated). It has no prose. From each source only what it would be cited for is extracted:
-its main contribution and its major themes. An incidental detail (background, an aside,
-a sample description, a passing statistic) or a claim the source reports from another
-work never becomes a fact of that source, and no document, page or later stage sees one.
-Every quote is checked verbatim against its page, and each fact links to that page in Zotero.
-A fact's weight is its topic score scaled by its role (a paper's main contribution outweighs
-a theme it develops) and by where it is quoted from (the abstract or front matter, which only
-announce a claim, count for less than the body that establishes it); within a topic, themes
-more independent sources agree on come first. A source with no usable text is left out of
-the review entirely and named only in the run log.
-Every fact is scored against a person-approved list of topics, each mapped to
-the research questions it serves; facts are grouped by topic and theme with short
-synthesis bullets, and the document links to the contribution map: an
-interactive page (hover a source for what it contributes, click for its facts).
-The research questions (`questions:`, one to three, asked when the project is set up, or drafted
-from the brief) are kept apart from the search `focus`, whose items are lenses rather
-than questions. A fact base's opening cycle settles both before it searches: `topics`
-drafts them as a page, the person accepts or rejects each one, and `topics --apply`
-writes the result into the config.
-
-A fact base is assessed on its **review page**, not by redlining the docx, which is a
-record rather than prose to annotate. At this gate the question is whether the topics
-cover the research question, judged against what each one found; whether the facts can
-carry an argument is tested later, by the stages that use them. `report` writes
-`{date}_{short}_review_ra.html` beside each draft: each topic with its counts and its
-themes, each named as the claim its facts support; a verdict per question, right under it
-(covers it / has gaps, the gap described in words), and per topic (enough / thin /
-off-target); a box
-for papers that must be there, matched against the corpus as you type; a spot-check of
-15 random facts beside their quotes and pages (right / distorted / unsupported, or off-brief
-when the paper does not belong at all); and the contribution map, embedded, for
-flagging a source. Nothing is assumed: every question and spot-check fact needs a verdict,
-and **Release** is a button pressed, not silence. Release or Hold saves
-`…_review_ra_DCR.json`, each verdict tagged with the comment kind it stands for. The
-docx-comment route still works; `haarpi next` does not read the JSON yet (on trial).
+**The narrative report now serves the methods review.** `report` writes it: the most
+load-bearing sources (the top 5% of the corpus by how much of the review's argument each one
+carries), coverage against the brief (each focus item covered or THIN), an annotated
+bibliography where every claim is page-located in its source, and a contribution map that
+bands the same sources at the 5% / 25% / 50% marks. `revise`, `graft` and `refresh` rework it.
+What the methods review is for, and so what it should look like, is the next thing to be
+redesigned.
 
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
@@ -404,13 +356,12 @@ reporting which sources still lack a PDF.
 | `ingest` | pulls reviewer-supplied references into the corpus |
 | `audit` | quarantines lexical false-friends by word sense — reversibly; `--retire` marks out-of-scope sources so they are never judged |
 | `build` | embeds the audited corpus (candidates, citekeys, ChromaDB, notes) |
-| `report` | generates the first review — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
-| `revise` | answers every comment in kind (see the table above) |
+| `report` | generates a methods review's first draft — and `refs.bib`, and the embedded corpus; re-plans on a `redirect` |
+| `revise` | answers every comment on a methods review in kind (see the table above) |
 | `graft` | **vestigial** — nothing calls it; its drafting lives inside `revise` |
 | `refresh` | recomputes the load-bearing block (and coverage) on an existing draft |
 | `cards` | claim grounding, one step per call (`init kind extract plant reread locate confirm own close topics gate`): each paper's claims are re-read and confirmed in its own words by two verifiers, into one shared store of paper cards (`cards/`, a paper carded once serves every project); `close` measures the planted canaries and holds the release if a kind slips past both verifiers more than one time in ten |
-| `topics` | a fact base's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new fact base's opening cycle |
-| `reviewpage` | (re)builds a fact-base draft's review page from `work/facts.json`, and re-skins its map so the page can embed it; `report` does this itself. `--restate-themes` first re-names the themes as claims (brain) |
+| `topics` | a review's research questions and topics: drafts them from the brief as a review page the person accepts or rejects item by item; `--apply` writes the saved answers into the config. Runs first in a new review's opening cycle |
 | `mindmap` | regenerates the contribution map (an interactive HTML page) beside each new draft — reading the `.md`, or the tracked-change `.docx` when a redline revise is the draft |
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |
@@ -425,8 +376,8 @@ saved answers (`…_litreview_gate_ra_DCR.json`) are the litreview's markup. `ha
 releases the claims (`…_litreview.claims.json`, the claims judged wrong left out) on a pass with
 nothing missing. A pass with missing ideas searches for them, cards what comes in and draws a new
 gate. No confidence, or a canary kind holding the release, sends the run to Cale and Claude and
-then to a fresh sample. Hold does nothing. Still to come: `build` giving each paper its card, and
-`report`, `revise`, `graft`, `refresh` and `reviewpage` retiring with the fact base.
+then to a fresh sample. Hold does nothing. `report`, `revise`, `graft` and `refresh` serve the
+methods review only; the fact base they once also wrote is retired.
 
 Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
 `revise` reads a cached corpus and never embeds, so every rework chain that changes the

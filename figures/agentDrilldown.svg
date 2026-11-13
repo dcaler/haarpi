@@ -1,99 +1,123 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="5382pt" height="1341pt" viewBox="0 0 5382 1341">
+<svg xmlns="http://www.w3.org/2000/svg" width="5382pt" height="1513pt" viewBox="0 0 5382 1513">
 <rect width="100%" height="100%" fill="#ffffff"/>
 <text x="2691" y="42" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="27" font-weight="bold" fill="#0f172a">Inside each agent — the process every stage runs, and who acts at each step</text>
 <text x="2691" y="68" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12.5" fill="#334155">amber = the Human’s step · indigo = the agent alone · purple = HAARPi, the conductor · green = a clean gate  —  solid = the work moves on · dashed grey = the step produces that artifact · dashed purple = the revision cycle</text>
-<svg x="22.0" y="96" width="868.0" height="974.4" viewBox="0 0 868.0 974.4" overflow="visible">
+<svg x="22.0" y="96" width="868.0" height="1331.2" viewBox="0 0 868.0 1331.2" overflow="visible">
 <rect width="100%" height="100%" fill="#ffffff"/>
-<rect x="12.0" y="286.2" width="844.0" height="509.8" rx="10" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="7,5"/>
-<text x="20.0" y="281.2" font-family="Helvetica,Arial,sans-serif" font-size="11.5" font-weight="bold" fill="#7c3aed">revisions</text>
+<rect x="12.0" y="298.8" width="844.0" height="817.6" rx="10" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="7,5"/>
+<text x="20.0" y="293.8" font-family="Helvetica,Arial,sans-serif" font-size="11.5" font-weight="bold" fill="#7c3aed">revisions</text>
 <g color="#334155"><path d="M475.0,81.3 V93.0" fill="none" stroke="#334155" stroke-width="1.4"/>
 <polygon points="475.0,102.0 470.0,93.0 480.0,93.0" fill="currentColor"/></g>
 <g color="#334155"><path d="M475.0,143.2 V154.2" fill="none" stroke="#334155" stroke-width="1.4"/>
 <polygon points="475.0,163.2 470.0,154.2 480.0,154.2" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,217.0 V228.0" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,237.0 470.0,228.0 480.0,228.0" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,278.2 V295.5" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,304.5 470.0,295.5 480.0,295.5" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,345.7 V375.6" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,384.6 470.0,375.6 480.0,375.6" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,438.4 V468.3" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,477.3 470.0,468.3 480.0,468.3" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,531.1 V721.2" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,730.1999999999999 470.0,721.1999999999999 480.0,721.1999999999999" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,229.6 V240.6" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,249.6 470.0,240.6 480.0,240.6" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,290.8 V308.1" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,317.1 470.0,308.1 480.0,308.1" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,358.3 V388.2" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,397.20000000000005 470.0,388.20000000000005 480.0,388.20000000000005" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,451.0 V480.9" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,489.90000000000003 470.0,480.90000000000003 480.0,480.90000000000003" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,531.1 V548.4" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,557.4 470.0,548.4 480.0,548.4" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,623.8 V634.8" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,643.8 470.0,634.8 480.0,634.8" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,697.6 V708.6" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,717.5999999999999 470.0,708.5999999999999 480.0,708.5999999999999" fill="currentColor"/></g>
 <g color="#334155"><path d="M475.0,784.0 V795.0" fill="none" stroke="#334155" stroke-width="1.4"/>
 <polygon points="475.0,803.9999999999999 470.0,794.9999999999999 480.0,794.9999999999999" fill="currentColor"/></g>
-<g color="#334155"><path d="M475.0,845.2 V856.2" fill="none" stroke="#334155" stroke-width="1.4"/>
-<polygon points="475.0,865.1999999999999 470.0,856.1999999999999 480.0,856.1999999999999" fill="currentColor"/></g>
-<g color="#16a34a"><path d="M475.0,906.4 V918.1" fill="none" stroke="#16a34a" stroke-width="1.4"/>
-<polygon points="475.0,927.1 470.0,918.1 480.0,918.1" fill="currentColor"/></g>
-<text x="483.0" y="919.8" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#16a34a">all comments resolved</text>
+<g color="#334155"><path d="M475.0,883.0 V894.0" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,902.9999999999999 470.0,893.9999999999999 480.0,893.9999999999999" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,969.4 V980.4" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,989.3999999999999 470.0,980.3999999999999 480.0,980.3999999999999" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,1030.6 V1041.6" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,1050.6 470.0,1041.6 480.0,1041.6" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,1104.4 V1115.4" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,1124.3999999999999 470.0,1115.3999999999999 480.0,1115.3999999999999" fill="currentColor"/></g>
+<g color="#334155"><path d="M475.0,1178.2 V1189.2" fill="none" stroke="#334155" stroke-width="1.4"/>
+<polygon points="475.0,1198.1999999999998 470.0,1189.1999999999998 480.0,1189.1999999999998" fill="currentColor"/></g>
+<g color="#16a34a"><path d="M475.0,1252.0 V1269.3" fill="none" stroke="#16a34a" stroke-width="1.4"/>
+<polygon points="475.0,1278.2999999999997 470.0,1269.2999999999997 480.0,1269.2999999999997" fill="currentColor"/></g>
+<text x="483.0" y="1268.1" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#16a34a">a pass, nothing missing</text>
 <g color="#a8a29e"><path d="M640.0,122.6 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
 <polygon points="674,122.6 665.0,117.6 665.0,127.6" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,190.1 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,190.1 665.0,185.1 665.0,195.1" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,325.1 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,325.1 665.0,320.1 665.0,330.1" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,504.2 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,504.2 665.0,499.2 665.0,509.2" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,504.2 H657.0 V590.6 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,590.5999999999999 665.0,585.5999999999999 665.0,595.5999999999999" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,504.2 H657.0 V677.0 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,676.9999999999999 665.0,671.9999999999999 665.0,681.9999999999999" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,757.1 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,757.0999999999999 665.0,752.0999999999999 665.0,762.0999999999999" fill="currentColor"/></g>
-<g color="#a8a29e"><path d="M640.0,941.4 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
-<polygon points="674,941.4 665.0,936.4 665.0,946.4" fill="currentColor"/></g>
-<g color="#7c3aed"><path d="M310.0,885.8 H147.0 V805.0" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="7,5"/>
-<polygon points="147.0,795.9999999999999 142.0,804.9999999999999 152.0,804.9999999999999" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,196.4 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,196.4 665.0,191.4 665.0,201.4" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,337.7 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,337.70000000000005 665.0,332.70000000000005 665.0,342.70000000000005" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,510.5 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,510.50000000000006 665.0,505.50000000000006 665.0,515.5" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,670.7 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,670.6999999999999 665.0,665.6999999999999 665.0,675.6999999999999" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,936.2 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,936.1999999999998 665.0,931.1999999999998 665.0,941.1999999999998" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,1077.5 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,1077.4999999999998 665.0,1072.4999999999998 665.0,1082.4999999999998" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,1151.3 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,1151.2999999999997 665.0,1146.2999999999997 665.0,1156.2999999999997" fill="currentColor"/></g>
+<g color="#a8a29e"><path d="M640.0,1292.6 H665.0" fill="none" stroke="#a8a29e" stroke-width="1.2" stroke-dasharray="5,4"/>
+<polygon points="674,1292.5999999999997 665.0,1287.5999999999997 665.0,1297.5999999999997" fill="currentColor"/></g>
+<g color="#7c3aed"><path d="M310.0,1225.1 H147.0 V1125.4" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="7,5"/>
+<polygon points="147.0,1116.3999999999999 142.0,1125.3999999999999 152.0,1125.3999999999999" fill="currentColor"/></g>
 <rect x="310.0" y="52.7" width="330.0" height="28.6" rx="7" fill="#e2e8f0" stroke="#64748b" stroke-width="1"/>
 <text x="475.0" y="70.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" font-weight="bold" fill="#0f172a">1. rabbitHole surveys the literature</text>
 <rect x="310.0" y="102.0" width="330.0" height="41.2" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
 <text x="475.0" y="119.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">haarpi init: the Human sets the brief — the research questions, how</text><text x="475.0" y="132.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">many sources, the Zotero collection</text>
 <path d="M674.0,136.9 L674.0,108.3 L726.8,108.3 L733.8,117.3 L850.0,117.3 L850.0,136.9 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
 <text x="762.0" y="130.1" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">litrev.yaml</text>
-<rect x="310.0" y="163.2" width="330.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="475.0" y="181.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">topics → drafts the research questions (unless init took them) and the</text><text x="475.0" y="193.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">topics every fact will be scored against, as a review page; after the</text><text x="475.0" y="206.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">Human's review, `topics --apply` writes them into the config</text>
-<path d="M674.0,204.4 L674.0,175.8 L726.8,175.8 L733.8,184.8 L850.0,184.8 L850.0,204.4 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="197.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the topics page</text>
-<rect x="310.0" y="237.0" width="330.0" height="41.2" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
-<text x="475.0" y="254.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the Human accepts or rejects each question and topic on that page</text><text x="475.0" y="267.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">and saves the answers beside it</text>
-<rect x="310.0" y="304.5" width="330.0" height="41.2" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="475.0" y="322.3" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">gather → searches, ranks and curates candidate sources, and writes</text><text x="475.0" y="334.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the collect-list for the Human to verify</text>
-<rect x="18.0" y="298.2" width="258.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="147.0" y="316.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">ingest → fetches the references a reviewer NAMED,</text><text x="147.0" y="328.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">matching what it can against Zotero and listing the</text><text x="147.0" y="341.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">rest for `collect`</text>
-<path d="M674.0,339.4 L674.0,310.8 L726.8,310.8 L733.8,319.8 L850.0,319.8 L850.0,339.4 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="332.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the collect-list</text>
-<rect x="310.0" y="384.6" width="330.0" height="53.8" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
-<text x="475.0" y="402.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">collect: the Human adds each real source to Zotero WITH its PDF —</text><text x="475.0" y="415.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">verifying it exists, which is what guards against hallucinated citations</text><text x="475.0" y="427.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">— then `collect` codes them into the corpus ledger</text>
-<rect x="18.0" y="372.0" width="258.0" height="79.0" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="147.0" y="389.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">audit → re-judges each paper against THE ASK THAT</text><text x="147.0" y="402.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">FETCHED IT, and marks the false-friends (shared</text><text x="147.0" y="415.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">word, different sense) `quarantine` in the corpus</text><text x="147.0" y="427.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">ledger — they stay in Zotero and in refs.bib, and leave</text><text x="147.0" y="440.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the corpus only</text>
-<rect x="310.0" y="477.3" width="330.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="475.0" y="495.1" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">report → plans the review's sections and synthesises the FIRST draft</text><text x="475.0" y="507.7" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">from the corpus, embedding it as it goes. Later, only a redirect</text><text x="475.0" y="520.3" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">re-plans it</text>
-<rect x="18.0" y="471.0" width="258.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="147.0" y="488.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">build → reads THIS review's rows of the audited</text><text x="147.0" y="501.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">collection into the working corpus: candidates,</text><text x="147.0" y="514.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">citekeys, the ChromaDB index, per-paper notes.</text><text x="147.0" y="526.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">`revise` reads that cache and never embeds</text>
-<path d="M674.0,518.5 L674.0,489.9 L726.8,489.9 L733.8,498.9 L850.0,498.9 L850.0,518.5 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="511.7" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the review .docx</text>
-<rect x="18.0" y="557.4" width="258.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="147.0" y="575.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">revise → answers EVERY comment in kind: a tracked</text><text x="147.0" y="587.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">rewrite where prose can carry it, a drafted section</text><text x="147.0" y="600.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">spliced in at the comment that asked for it, the cycle's</text><text x="147.0" y="613.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">corrections applied across the document</text>
-<path d="M674.0,604.9 L674.0,576.3 L726.8,576.3 L733.8,585.3 L850.0,585.3 L850.0,604.9 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="598.1" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">refs.bib</text>
-<rect x="18.0" y="643.8" width="258.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="147.0" y="661.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">correct → replaces a term the reviewer says is</text><text x="147.0" y="674.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">wrong across the brief, the litrev config, the draft</text><text x="147.0" y="686.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">.md and the .docx. Deterministic, and applied</text><text x="147.0" y="699.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">BEFORE the chain is built — so it queues no step at all</text>
-<path d="M674.0,691.3 L674.0,662.7 L726.8,662.7 L733.8,671.7 L850.0,671.7 L850.0,691.3 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="684.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the embedded corpus</text>
-<rect x="310.0" y="730.2" width="330.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
-<text x="475.0" y="748.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">mindmap → places every cited source by how much of the review's</text><text x="475.0" y="760.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">argument it carries, banded at the 5% / 25% / 50% marks of the</text><text x="475.0" y="773.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">corpus</text>
-<path d="M674.0,771.4 L674.0,742.8 L726.8,742.8 L733.8,751.8 L850.0,751.8 L850.0,771.4 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
-<text x="762.0" y="764.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the contribution map</text>
-<rect x="310.0" y="804.0" width="330.0" height="41.2" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
-<text x="475.0" y="821.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">comment: the Human redlines the review — accept and resolve are</text><text x="475.0" y="834.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">human-only</text>
-<rect x="310.0" y="865.2" width="330.0" height="41.2" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
-<text x="475.0" y="883.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">haarpi next → decomposes the markup ONE COMMENT AT A TIME</text><text x="475.0" y="895.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">into what each asks for, then BUILDS the chain those needs require</text>
-<rect x="310.0" y="927.1" width="330.0" height="28.6" rx="10" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5"/><rect x="314.0" y="931.1" width="322.0" height="20.6" rx="7" fill="none" stroke="#4f46e5" stroke-width="1"/>
-<text x="475.0" y="944.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" font-weight="bold" fill="#0f172a">litreview release</text>
-<path d="M674.0,955.7 L674.0,927.1 L726.8,927.1 L733.8,936.1 L850.0,936.1 L850.0,955.7 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
-<text x="762.0" y="948.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the released review</text>
+<rect x="310.0" y="163.2" width="330.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="181.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">topics → drafts the research questions (unless init took them) and the</text><text x="475.0" y="193.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">topics every confirmed claim will be scored against, as a review</text><text x="475.0" y="206.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">page; after the Human's review, `topics --apply` writes them into the</text><text x="475.0" y="218.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">config</text>
+<path d="M674.0,210.7 L674.0,182.1 L726.8,182.1 L733.8,191.1 L850.0,191.1 L850.0,210.7 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="203.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the topics page</text>
+<rect x="310.0" y="249.6" width="330.0" height="41.2" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+<text x="475.0" y="267.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the Human accepts or rejects each question and topic on that page</text><text x="475.0" y="280.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">and saves the answers beside it</text>
+<rect x="310.0" y="317.1" width="330.0" height="41.2" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="334.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">gather → searches, ranks and curates candidate sources, and writes</text><text x="475.0" y="347.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the collect-list for the Human to verify</text>
+<rect x="18.0" y="310.8" width="258.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="147.0" y="328.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">ingest → fetches the references a reviewer NAMED,</text><text x="147.0" y="341.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">matching what it can against Zotero and listing the</text><text x="147.0" y="353.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">rest for `collect`</text>
+<path d="M674.0,352.0 L674.0,323.4 L726.8,323.4 L733.8,332.4 L850.0,332.4 L850.0,352.0 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="345.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the collect-list</text>
+<rect x="310.0" y="397.2" width="330.0" height="53.8" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+<text x="475.0" y="415.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">collect: the Human adds each real source to Zotero WITH its PDF —</text><text x="475.0" y="427.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">verifying it exists, which is what guards against hallucinated citations</text><text x="475.0" y="440.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">— then `collect` codes them into the corpus ledger</text>
+<rect x="18.0" y="384.6" width="258.0" height="79.0" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="147.0" y="402.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">audit → re-judges each paper against THE ASK THAT</text><text x="147.0" y="415.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">FETCHED IT, and marks the false-friends (shared</text><text x="147.0" y="427.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">word, different sense) `quarantine` in the corpus</text><text x="147.0" y="440.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">ledger — they stay in Zotero, and leave the corpus</text><text x="147.0" y="452.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">only</text>
+<rect x="310.0" y="489.9" width="330.0" height="41.2" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="507.7" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">build → reads THIS review's rows of the audited collection into the</text><text x="475.0" y="520.3" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">working corpus: candidates, citekeys, per-paper notes</text>
+<rect x="18.0" y="483.6" width="258.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="147.0" y="501.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards-review → Cale and Claude look at what the</text><text x="147.0" y="514.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">person had no confidence in, or at the canary kind</text><text x="147.0" y="526.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">that held, before `cards gate` draws a fresh sample</text>
+<path d="M674.0,524.8 L674.0,496.2 L726.8,496.2 L733.8,505.2 L850.0,505.2 L850.0,524.8 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="518.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the working corpus</text>
+<rect x="310.0" y="557.4" width="330.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="575.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">haarpi ground → counts what each step still has to do from the card</text><text x="475.0" y="587.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">store and queues the grounding as a graph: each task waits on every</text><text x="475.0" y="600.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">input it needs, sized from per-paper rates. A paper carded before</text><text x="475.0" y="613.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">costs nothing</text>
+<rect x="310.0" y="643.8" width="330.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="661.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards init · kind · extract → reads each paper's text into its card, two</text><text x="475.0" y="674.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">models say what kind of paper it is, and one extracts what the paper</text><text x="475.0" y="686.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">claims (on both cards, in parts of about 8 h)</text>
+<path d="M674.0,691.3 L674.0,650.1 L726.8,650.1 L733.8,659.1 L850.0,659.1 L850.0,691.3 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="671.9" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">paper cards (cards/, shared by every</text><text x="762.0" y="684.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">project)</text>
+<rect x="310.0" y="717.6" width="330.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="735.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards plant → plants this run's canaries: bad claims made by code</text><text x="475.0" y="748.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">from the project's own claims (a changed number, a flipped direction,</text><text x="475.0" y="760.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">another paper's claim or setting, a borrowed result). None reaches</text><text x="475.0" y="773.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">any output</text>
+<rect x="310.0" y="804.0" width="330.0" height="79.0" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="821.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards reread · locate · confirm · own → two verifiers from other</text><text x="475.0" y="834.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">model families each re-read the paper and point to the passage that</text><text x="475.0" y="847.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">says the claim; code finds it in the paper's own words; each judges</text><text x="475.0" y="859.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the claim against the OTHER's passage, and whether it is the paper's</text><text x="475.0" y="872.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">own finding. A borrowed idea is rejected</text>
+<rect x="310.0" y="903.0" width="330.0" height="66.4" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="920.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards close → confirms only a claim that passed every check, and</text><text x="475.0" y="933.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">measures what the canaries say slipped: a kind that slips past both</text><text x="475.0" y="946.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">verifiers more than 1 in 10, even at the low end of its 95% interval,</text><text x="475.0" y="958.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">holds the release</text>
+<path d="M674.0,950.5 L674.0,921.9 L726.8,921.9 L733.8,930.9 L850.0,930.9 L850.0,950.5 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="943.7" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the slip rates</text>
+<rect x="310.0" y="989.4" width="330.0" height="41.2" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="1007.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards topics → scores each confirmed claim 0–3 against the project's</text><text x="475.0" y="1019.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">topics (the scores belong to the project; editing a topic re-scores)</text>
+<rect x="310.0" y="1050.6" width="330.0" height="53.8" rx="7" fill="#eef2ff" stroke="#94a3b8" stroke-width="1"/>
+<text x="475.0" y="1068.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">cards gate → writes the gate page: the contribution map, what slipped,</text><text x="475.0" y="1081.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">a sample of 25 confirmed claims never judged before, and the claims</text><text x="475.0" y="1093.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">under each topic</text>
+<path d="M674.0,1091.8 L674.0,1063.2 L726.8,1063.2 L733.8,1072.2 L850.0,1072.2 L850.0,1091.8 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="1085.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the gate page + map</text>
+<rect x="310.0" y="1124.4" width="330.0" height="53.8" rx="7" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+<text x="475.0" y="1142.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">gate: the Human spends about 40 minutes on that page — does the</text><text x="475.0" y="1154.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">evidence say the claim, is it the paper's own, what would a reader of</text><text x="475.0" y="1167.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">the field expect and not find — then pass, no confidence, or hold</text>
+<path d="M674.0,1171.9 L674.0,1130.7 L726.8,1130.7 L733.8,1139.7 L850.0,1139.7 L850.0,1171.9 Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1" stroke-linejoin="round"/>
+<text x="762.0" y="1152.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the saved answers</text><text x="762.0" y="1165.1" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">(…_gate_ra_DCR.json)</text>
+<rect x="310.0" y="1198.2" width="330.0" height="53.8" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+<text x="475.0" y="1216.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">haarpi next → reads the saved answers: missing ideas are searched</text><text x="475.0" y="1228.6" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">for and carded; no confidence, or a canary kind holding, goes to Cale</text><text x="475.0" y="1241.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" fill="#0f172a">and Claude and a fresh sample; a pass with nothing missing releases</text>
+<rect x="310.0" y="1278.3" width="330.0" height="28.6" rx="10" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5"/><rect x="314.0" y="1282.3" width="322.0" height="20.6" rx="7" fill="none" stroke="#4f46e5" stroke-width="1"/>
+<text x="475.0" y="1296.1" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="9.5" font-weight="bold" fill="#0f172a">litreview release</text>
+<path d="M674.0,1313.2 L674.0,1272.0 L726.8,1272.0 L733.8,1281.0 L850.0,1281.0 L850.0,1313.2 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
+<text x="762.0" y="1293.8" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the claims release</text><text x="762.0" y="1306.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">(…_litreview.claims.json)</text>
 </svg>
 <svg x="916.0" y="96" width="868.0" height="776.8" viewBox="0 0 868.0 776.8" overflow="visible">
 <rect width="100%" height="100%" fill="#ffffff"/>
@@ -518,19 +542,19 @@
 <path d="M674.0,686.8 L674.0,645.6 L726.8,645.6 L733.8,654.6 L850.0,654.6 L850.0,686.8 Z" fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5" stroke-linejoin="round"/>
 <text x="762.0" y="667.4" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">the minted deck,</text><text x="762.0" y="680.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="8.6" fill="#0f172a">one per format</text>
 </svg>
-<path d="M497.0,1051.7 V1301.0 H1208.0 V163.0 H1217.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
+<path d="M497.0,1402.9 V1473.2 H1208.0 V163.0 H1217.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
 <polygon points="1226.0,163.0 1217.0,158.5 1217.0,167.5" fill="#4f46e5"/>
-<text x="852.5" y="1293.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the review opens the design conversation</text>
-<path d="M1391.0,854.8 V1301.0 H2102.0 V163.0 H2111.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
+<text x="852.5" y="1465.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the review opens the design conversation</text>
+<path d="M1391.0,854.8 V1473.2 H2102.0 V163.0 H2111.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
 <polygon points="2120.0,163.0 2111.0,158.5 2111.0,167.5" fill="#4f46e5"/>
-<text x="1746.5" y="1293.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the prereg unlocks the build</text>
-<path d="M2285.0,853.7 V1301.0 H2996.0 V163.0 H3005.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
+<text x="1746.5" y="1465.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the prereg unlocks the build</text>
+<path d="M2285.0,853.7 V1473.2 H2996.0 V163.0 H3005.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
 <polygon points="3014.0,163.0 3005.0,158.5 3005.0,167.5" fill="#4f46e5"/>
-<text x="2640.5" y="1293.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the methods digest unlocks the experiments</text>
-<path d="M3179.0,868.1 V1301.0 H3890.0 V163.0 H3899.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
+<text x="2640.5" y="1465.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the methods digest unlocks the experiments</text>
+<path d="M3179.0,868.1 V1473.2 H3890.0 V163.0 H3899.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
 <polygon points="3908.0,163.0 3899.0,158.5 3899.0,167.5" fill="#4f46e5"/>
-<text x="3534.5" y="1293.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the findings unlock the paper</text>
-<path d="M4073.0,1230.7 V1301.0 H4784.0 V163.0 H4793.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
+<text x="3534.5" y="1465.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the findings unlock the paper</text>
+<path d="M4073.0,1230.7 V1473.2 H4784.0 V163.0 H4793.0" fill="none" stroke="#4f46e5" stroke-width="2"/>
 <polygon points="4802.0,163.0 4793.0,158.5 4793.0,167.5" fill="#4f46e5"/>
-<text x="4428.5" y="1293.0" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the submission unlocks the deck</text>
+<text x="4428.5" y="1465.2" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="bold" fill="#4f46e5">the submission unlocks the deck</text>
 </svg>

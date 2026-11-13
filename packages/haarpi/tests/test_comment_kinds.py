@@ -54,17 +54,3 @@ def test_the_release_guide_is_haarpis_frame_around_the_agents_checklist():
     assert "| **fact** |" in out
 
 
-def test_a_section_ask_on_a_fact_base_becomes_a_topic():
-    """The deterministic section floor still catches "a section on X" whatever the model said;
-    on a fact base the same ask is a new topic."""
-    tasks = planner._normalise_tasks([{"comments": [1], "need": "edit"}],
-                                     ["we need a section on archival bias"], fact_base=True)
-    assert [t["need"] for t in tasks] == ["topic"] and tasks[0]["serves"] == []
-
-
-def test_the_fact_kinds_are_not_second_guessed_by_the_cite_floor():
-    tasks = planner._normalise_tasks(
-        [{"comments": [1], "need": "pdf"}, {"comments": [2], "need": "topic_scope", "topic": "T7",
-                                             "query": "gaps in surviving records only"}],
-        ["I've fixed the PDF, it's now in Zotero", "T7 is too broad"], fact_base=True)
-    assert [t["need"] for t in tasks] == ["pdf", "topic_scope"] and tasks[1]["topic"] == 7

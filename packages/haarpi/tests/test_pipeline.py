@@ -265,24 +265,24 @@ def test_init_clamps_a_priority_trundlr_would_reject(tmp_path, servers):
     assert tr.projects[0]["priority"] == trundlr.PRIORITY_MAX
 
 
-def test_clean_markup_mints_release_and_advances(proj, servers):
+def test_a_litreview_docx_is_no_longer_markup(proj, servers):
+    """A literature review is gated on its claims page now (test_claims_gate.py); an old
+    narrative draft left marked up in litReview/output is history, not work to plan."""
     tr, _ = servers
     m = project.load_manifest(proj)
     out = m.output_dir(proj, "litreview")
     markup = out / "260710_myproj_litreview_ra_DCR.docx"
     _make_markup(markup, resolved=True, tracked=True)
-
+    assert planner.find_finished_markup(proj, m) is None
+    before = len(tr.tasks)
     assert planner.run_next(proj) == 0
+    assert len(tr.tasks) == before and markup.exists()
+    assert project.latest_release(proj, m, "litreview") is None
 
-    releases = [p.name for p in out.glob("*.docx")]
-    assert len(releases) == 1 and "_ra" not in releases[0]      # bare-chain release
-    assert (out.parent / "archive").is_dir()                     # spent chain archived
-    entries = project.list_plans(proj)
-    assert any(e["type"] == "gate" for e in entries)
-    # design (prereg) became unlocked -> attended session task; build stays locked (needs design)
-    assert any(t["title"] == "ramus analytical framework" for t in tr.tasks)
-    assert not any(t["title"] == "raster build design" for t in tr.tasks)
-    assert project.latest_release(proj, m, "litreview") is not None
+
+_NARRATIVE_RETIRED = pytest.mark.skip(
+    reason="2026-11-13: a litreview docx is no longer markup, so the narrative rework path "
+           "(decompose -> chain_from_tasks) is unreachable; kept for the methods-review redesign")
 
 
 def _narrative(root):
@@ -293,6 +293,7 @@ def _narrative(root):
     rh.save_project(cfg, root)
 
 
+@_NARRATIVE_RETIRED
 def test_dirty_markup_classifies_queues_and_loop_guards(proj, servers):
     tr, ol = servers
     _narrative(proj)
@@ -328,6 +329,7 @@ def test_status_reports_stage_states(proj, capsys):
     assert "waiting" in outp                                     # downstream stages gated
 
 
+@_NARRATIVE_RETIRED
 def test_redirection_runs_hands_free_by_default(proj, servers):
     """The author's COMMENTS are the gate. By default (confirm_tiers empty) even a redirection
     queues its fix chain with NO 'approve plan' task — the head is the first real step."""
@@ -346,6 +348,7 @@ def test_redirection_runs_hands_free_by_default(proj, servers):
     assert "depends_on_ids" not in new[0]                        # nothing gates the head
 
 
+@_NARRATIVE_RETIRED
 def test_confirm_tiers_can_gate_a_chain_when_opted_in(proj, servers, monkeypatch):
     """The knob is retained: set confirm_tiers and the 'approve plan' human gate returns at the
     head of that tier's chain."""
@@ -379,29 +382,33 @@ def test_paper_markup_escalates_upstream_literature(proj, servers):
     before = len(tr.tasks)
     assert planner.run_next(proj) == 0
     steps = [t["title"].rsplit(" ", 1)[0] for t in tr.tasks[before:]]
-    assert steps == ["rabbithole gather", "rabbithole collect", "rabbithole report",
-                     "rabbithole comment", "raconteur next"]        # cross-stage chain
+    # cross-stage chain: new sources are carded and grounded, and the claims gate (queued by
+    # `haarpi ground`) decides what comes back to the paper
+    assert steps == ["rabbithole gather", "rabbithole collect", "rabbithole audit",
+                     "rabbithole build", "rabbithole cards-plan"]
+    assert tr.tasks[-1]["command"] == "haarpi ground"
     assert tr.tasks[before]["command"].startswith("haarpi rabbithole")
 
 
 def test_release_refreshes_idle_downstream_stage(proj, servers):
     tr, _ = servers
     m = project.load_manifest(proj)
-    # paper already produced a release earlier (idle, no in-flight work)
+    from haarpi import redline
+    # the litreview is released, and the paper already produced a release (idle, nothing in flight)
+    _make_markup(m.output_dir(proj, "litreview") / "260709_myproj_litreview.docx", resolved=True)
     paper_rel = m.output_dir(proj, "paper") / "260709_myproj.docx"
     _make_markup(paper_rel, resolved=True)
-    from haarpi import redline
     redline.mint_release(paper_rel, paper_rel, md_sibling=False)  # normalize in place
 
-    markup = m.output_dir(proj, "litreview") / "260710_myproj_litreview_ra_DCR.docx"
+    markup = m.output_dir(proj, "design") / "260710_myproj_prereg_ra_DCR.docx"
     _make_markup(markup, resolved=True)
     before = len(tr.tasks)
-    assert planner.run_next(proj) == 0                          # mints litreview release
+    assert planner.run_next(proj) == 0                          # mints the prereg
 
     titles = [t["title"] for t in tr.tasks[before:]]
     assert any(t.startswith("raconteur revise") for t in titles)    # staleness re-fired paper
     entry = [e for e in project.list_plans(proj) if e.get("type") == "refresh"][-1]
-    assert entry["stage"] == "paper" and entry["bindings"].get("litreview")
+    assert entry["stage"] == "paper" and entry["bindings"].get("design")
 
 
 def test_reordered_ladder_puts_design_before_build(proj):

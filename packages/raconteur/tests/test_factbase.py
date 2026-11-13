@@ -68,13 +68,11 @@ def test_only_facts_that_count_reach_raconteur(tmp_path):
                                                         "T2 · Pattern validation"]
 
 
-def test_the_released_snapshot_wins_and_the_live_sidecar_needs_the_marker(tmp_path):
+def test_the_released_snapshot_is_read_and_the_live_sidecar_never(tmp_path):
     root = _project(tmp_path)
     assert factbase.find(root, "litReview").name == "P_litreview.facts.json"
     root2 = _project(tmp_path / "b", snapshot=False)
-    assert factbase.find(root2, "litReview").name == "facts.json"   # unreleased, marked
-    root3 = _project(tmp_path / "c", snapshot=False, mark=False)
-    assert factbase.find(root3, "litReview") is None                 # a narrative review
+    assert factbase.find(root2, "litReview") is None   # an unreleased fact base is retired
 
 
 def test_the_review_is_read_as_its_digest_not_its_opening_instructions(tmp_path):

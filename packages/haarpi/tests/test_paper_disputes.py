@@ -105,7 +105,9 @@ def test_a_source_already_re_read_is_not_re_read_again(tmp_path, monkeypatch):
     assert got[0]["where"] == "paper" and "already re-read" in got[0]["note"]
 
 
-def test_a_disputed_fact_is_sent_back_and_the_revise_is_told(tmp_path, monkeypatch):
+def test_a_disputed_source_is_named_and_the_revise_is_told(tmp_path, monkeypatch):
+    """The fact base's send-back (re-read the source) was retired with it on 2026-11-13: a
+    dispute at the source now reaches the revise and is named in the plan, and nothing more."""
     got, markup, _ = _disputes(
         tmp_path, monkeypatch,
         "Pattern-oriented validation compared 12 patterns across 3 scales [@grimm2006].",
@@ -113,12 +115,8 @@ def test_a_disputed_fact_is_sent_back_and_the_revise_is_told(tmp_path, monkeypat
     lines = planner._apply_disputes(tmp_path, _M, markup, got)
     blob = json.loads((markup.parent / planner.DISPUTES_FILE).read_text())
     assert blob["markup"] == markup.name and blob["disputes"][0]["where"] == "source"
-    facts = tmp_path / "litReview" / "work" / "facts"
-    assert not (facts / "grimm2006.json").exists()                 # moved aside to re-read
-    assert (facts / "old_rework" / "grimm2006.json").exists()
-    assert any("re-extracting Grimm et al., 2006" in ln for ln in lines)
-    resp = json.loads((tmp_path / "litReview" / "work" / "comment_responses.json").read_text())
-    assert resp["markup"].startswith("the paper (") and resp["responses"][0]["kind"] == "fact"
+    assert any("disputed at the source" in ln and "not re-checked" in ln for ln in lines)
+    assert not (tmp_path / "litReview" / "work" / "facts" / "old_rework").exists()
 
 
 def test_a_chain_may_pass_through_another_stages_gate():

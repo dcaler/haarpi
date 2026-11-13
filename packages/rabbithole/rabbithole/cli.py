@@ -3,7 +3,7 @@
     rabbitHole init       interactive project setup -> litrev.yaml
     rabbitHole gather     discover & curate sources missing from your Zotero collection
     rabbitHole report     read the Zotero corpus -> literature review (.md + .docx)
-    rabbitHole topics     a fact base's research questions + topics, for review (--apply adopts)
+    rabbitHole topics     a review's research questions + topics, for review (--apply adopts)
     rabbitHole graft      add a requested section, leaving the rest of the review untouched
     rabbitHole refresh    recompute the load-bearing block on an existing draft
     rabbitHole revise     apply reviewer annotations from a _ra.docx to re-draft the narrative
@@ -209,17 +209,8 @@ def _run(argv: list[str] | None = None) -> int:
                     help="override the brain backend for this run")
     _review_arg(mm)
 
-    rp = sub.add_parser("reviewpage",
-                        help="(re)build a fact-base draft's review page: coverage verdicts, "
-                             "known papers, a fact spot-check and the map, saved as _DCR.json")
-    rp.add_argument("--restate-themes", action="store_true",
-                    help="first re-name the themes as the claims their facts support (brain)")
-    rp.add_argument("--brain", choices=["ollama", "claude"], default=None,
-                    help="override the brain backend for this run")
-    _review_arg(rp)
-
     tp = sub.add_parser("topics",
-                        help="draft a fact base's research questions and topics as a review page; "
+                        help="draft a review's research questions and topics as a review page; "
                              "--apply adopts the reviewer's saved answers into the config")
     tp.add_argument("--apply", action="store_true",
                     help="adopt the newest saved review (or the draft as drafted) into a new "
@@ -393,13 +384,6 @@ def _run(argv: list[str] | None = None) -> int:
         _check_env(need_pandoc=False)          # needs the brain (Ollama); no pandoc
         from . import mindmap
         return mindmap.run(args.dir, brain_override=args.brain)
-
-    if args.command == "reviewpage":
-        if args.restate_themes:
-            _check_env(need_pandoc=False)      # restating needs the brain
-        from . import review_page
-        return review_page.run(args.dir, brain_override=args.brain,
-                               restate=args.restate_themes)
 
     if args.command == "audit":
         _check_env(need_pandoc=False)          # brain + Zotero; no pandoc

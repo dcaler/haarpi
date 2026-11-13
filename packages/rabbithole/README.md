@@ -121,8 +121,8 @@ The review opens with the most load-bearing sources and **coverage against the
 brief**: each focus item marked covered or THIN by how much of the corpus
 addresses it in its own words.
 
-**Claim grounding (adopted 2026-11-13, being ported).** The fact base below is being
-replaced. Each paper gets a card:
+**Claim grounding (adopted 2026-11-13)** is how a literature review is built. Each paper
+gets a card:
 - llama3.3 extracts its claims;
 - two verifiers from other model families each point to the passage that says a claim;
 - code finds that passage in the paper's own words;
@@ -137,8 +137,18 @@ the low end of its 95% interval, holds the release. `cards topics` scores each c
 `cards gate` writes the gate page (`gate.py`):
 the map, the slip rates, a sample of 25 confirmed claims, and what is missing per topic. A person
 saves their answers, and `haarpi next` reads them: a pass releases the claims for raconteur
-(`…_litreview.claims.json`, `../haarpi/DESIGN_claims_release.md`). The fact base, its review
-page, `revise`, `graft` and the docx report retire when the port lands.
+(`…_litreview.claims.json`, `../haarpi/DESIGN_claims_release.md`).
+
+`rabbitHole topics` drafts the questions and topics from the brief as a review page
+(`<date>_<short>_topics_ra.html`); the person accepts, rejects and edits each one and saves
+`…_topics_ra_DCR.json` beside it; `rabbitHole topics --apply` writes them into a new
+numbered config. A new project's opening cycle runs these first.
+
+**The fact base is retired** (2026-11-13). `report_format: facts` now makes `report` and
+`mindmap` refuse with a note. Its modules (`facts.py` as it was, `fact_rework.py`,
+`review_page.py`) and their tests are in `archive/factbase/`, with how to bring them back;
+the tag `factbase-retired` holds the tree as it was. `facts.py` keeps only the helpers the
+live code uses (passage location, topic scoring, the reported-work patterns).
 
 **How a paper's text is read.** Every PDF goes through `pdfs.py`:
 - Running headers, footers and page numbers are left out.
@@ -152,41 +162,11 @@ When `facts.locate_passage` hands on the paper's words for a quote:
 - a passage that crosses a page drops table rows left before the break;
 - it carries the pages it touches.
 
-**Fact base.** The default for a new project until claim grounding is ported. With `report_format: facts` in the project's
-`litrev*.yaml`, `report` writes no prose. From each source it extracts only what the source
-would be cited for, its main contribution and its major themes, quoted where the paper
-establishes them rather than from its abstract; an incidental detail, or a claim the source
-reports from another work, never becomes a fact of it. It checks every quote verbatim against its page (a fact whose quote is only
-found by search is shown for checking but not counted), scores every fact 0–3
-against the review's approved `topics:` (each mapped to the research questions it
-serves; the questions are the config's `questions:`, or the focus items when it has none), and groups the facts by topic and theme with short synthesis bullets. Each fact links to its page:
-the link opens the PDF in Zotero at that page. The document links to the
-contribution map, an interactive page beside it: one slice per topic and a dot
-per source (hover for what it contributes, click for its facts and page links).
-`work/facts.json` holds the same facts for tools.
-`rabbitHole topics` drafts the questions and topics from the brief as a review page
-(`<date>_<short>_topics_ra.html`); the person accepts, rejects and edits each one and saves
-`…_topics_ra_DCR.json` beside it; `rabbitHole topics --apply` writes them into a new
-numbered config. A new project's opening cycle runs these first.
-A fact's weight is its topic score scaled by its role (contribution over theme) and by
-where it is quoted from (abstract or front matter count for less); the load-bearing list
-ranks sources by that weight on the topics that serve a research question, and themes more
-independent sources agree on come first. A source whose PDF has no usable text (an
-image-only scan) is not sent to the model and is left out of the review, named only in the
-run log. `report` also writes the review page (`<date>_<short>_review_ra.html`) the stage
-is assessed on; `rabbitHole reviewpage` rebuilds it. Each spot-check fact on it shows its
-paper's title and the topics it counts toward.
-
-The fact base opens with **how to decide whether to release it**: a short checklist, and a
-table of the comment phrasings `haarpi next` recognises and what each costs ("this isn't what
-the paper says" re-extracts that source; "T7 should only mean …" scopes the topic and
-re-scores; "not relevant" quarantines the source). Comments are answered by re-running the
-cached report, never by rewording a fact, and the next version opens with what became of each.
-
 Output:
 ```
-litReview/output/<project>_litreview_<brain>.md
-litReview/output/<project>_litreview_<brain>.docx
+litReview/output/<date>_<short>_litreview_gate_ra.html     the gate page (and …_gatemap_ra.html)
+litReview/output/<date>_<short>_litreview.claims.json      the claims release, on a pass
+methodsReview/output/<project>_litreview_<brain>.md|.docx  a methods review's narrative report
 ```
 
 ---

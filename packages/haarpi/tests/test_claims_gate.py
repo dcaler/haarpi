@@ -116,6 +116,9 @@ def test_a_pass_releases_the_claims_and_leaves_out_the_wrong_ones(proj):
     assert blob["format"] == "claims-release/1" and blob["gate"]["wrong"] == 1
     assert len(blob["claims"]) == 5 and set(blob["sources"]) == set(TG.PAPERS)
     assert not fp.exists() and (fp.parent / "archive" / "gate" / fp.name).is_file()
+    # design (prereg) is unlocked and opens on its session; build still waits on design
+    titles = [t["title"] for t in FakeClient.tasks]
+    assert "ramus analytical framework" in titles and not any(t.startswith("raster") for t in titles)
     assert planner.run_next(root) == 0                              # nothing left to read
     assert [e for e in project.list_plans(root) if e.get("release") == rel.name]
 
