@@ -127,12 +127,8 @@ def test_missing_ideas_are_searched_for_before_any_release(proj):
     m = project.load_manifest(root)
     assert project.latest_release(root, m, "litreview") is None
     steps = [t["title"].split()[1] for t in FakeClient.tasks]
-    assert steps[:4] == ["gather", "collect", "audit", "build"] and steps[-2:] == ["gate", "next"]
-    assert "cards-extract" in steps
-    ex = next(t for t in FakeClient.tasks if " cards-extract " in t["title"])
-    assert ex["resource_ids"] == [8] and ex["command"] == "haarpi rabbithole cards extract"
-    rr = next(t for t in FakeClient.tasks if " cards-reread-2 " in t["title"])
-    assert rr["command"].endswith("reread --model 2") and rr["resource_ids"] == [9]
+    assert steps == ["gather", "collect", "audit", "build", "cards-plan"]   # it queues the rest
+    assert FakeClient.tasks[-1]["command"] == "haarpi ground"
     from rabbithole import config as rhconfig
     pc = rhconfig.load_project(str(m.stage_dir(root, "litreview")))
     assert pc.gather_topics == ["procurement as a first customer", "loan guarantees"]

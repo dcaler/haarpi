@@ -155,6 +155,13 @@ STAGE_STEPS: dict[str, dict[str, Step]] = {
         # papers; history overrides them. `--model 1|2` names the configured model ([cards]),
         # so a queued command never goes stale when the lineup changes. Linear for now: the
         # parallel chain (both verifiers side by side on the pool) is the planner slice.
+        # Queues the grounding below as a graph, sized from the card store once the corpus is
+        # built (`haarpi ground`, `queue_grounding`): the chain that opens or reworks a review
+        # ends here, and this step queues the rest, the gate and the `haarpi next` itself.
+        "cards-plan":      Step("haarpi ground", 0.05,
+                                "Count what each grounding step still has to do and queue the steps "
+                                "as a graph: verifiers side by side, extract in ~8 h parts, the gate "
+                                "and the next `haarpi next` last.", resource="cpu"),
         "cards-init":      Step("haarpi rabbithole cards init", 0.1,
                                 "Give each paper in the built corpus its card (text from its PDF).",
                                 resource="cpu"),
@@ -611,13 +618,13 @@ def _queue_packaging(root: Path, m, client, tr_cfg: dict, venue: str, release: P
         description=f"Assemble + compile the {venue} submission from {release.name}.",
         resource_id=_resource_id(tr_cfg, "cpu"),
         duration=estimate_hours(client.all_tasks(), "paper", "package", 0.3),
-        depends_on_id=_template_task_id(client, m, venue))
+        depends_on_ids=[t for t in [_template_task_id(client, m, venue)] if t])
     client.create_task(
         _title("paper", "submission", venue, cycle), m.trundlr_project_id,
         description=(f"Read paper/submission/{venue}/submission.pdf, finish submission.tex "
                      "(author, affiliations, abstract, keywords), and submit."),
         resource_id=_resource_id(tr_cfg, "human"), duration=1.0,
-        depends_on_id=pkg["id"])
+        depends_on_ids=[pkg["id"]])
     return f"; queued packaging for {venue} (cycle {cycle}: package -> submission)"
 
 
@@ -972,10 +979,13 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
         st, _, sname = name.rpartition(":")
         st = st or stage
         plan_steps.append((st, sname, _step_of(stage, name)))
-    plan_steps.append((stage, "next",
-                       Step("haarpi next", 0.1,
-                            "Read the finished markup; mint a release or queue rework.",
-                            resource="gpu")))
+    # A chain ending in `cards-plan` hands on: that step queues the grounding, its gate and the
+    # `haarpi next` behind the gate. A `next` here would fire before the gate existed.
+    if not (steps and steps[-1].rpartition(":")[2] == "cards-plan"):
+        plan_steps.append((stage, "next",
+                           Step("haarpi next", 0.1,
+                                "Read the finished markup; mint a release or queue rework.",
+                                resource="gpu")))
     prev_id = None
     queued = []
     first = True
@@ -991,7 +1001,7 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
         task = client.create_task(
             title, project_id,
             command=command,
-            depends_on_id=prev_id,
+            depends_on_ids=[prev_id] if prev_id else [],
             description=desc,
             resource_ids=rids,
             duration=estimate_hours(history, st, name, step.hours),
@@ -1426,9 +1436,8 @@ def opening_chain(directory) -> list[str]:
     """The litreview's first cycle. A fact base settles its questions and topics with the person
     first — before gather, so the hour of searching and the collect sitting come after the scope
     is agreed — and its `report` draws and links its own map."""
-    if _is_fact_base(str(directory)):
-        return ["topics", "topics-review", "topics-apply", "gather", "collect", "report", "comment"]
-    return ["gather", "collect", "report", "mindmap", "comment"]
+    return ["topics", "topics-review", "topics-apply", "gather", "collect", "audit", "build",
+            "cards-plan"]
 
 
 def _is_fact_base(directory: str) -> bool:
@@ -2243,12 +2252,112 @@ def find_finished_markup(root: Path, m: project.Manifest) -> tuple[str, Path] | 
 # A canary kind that holds the release blocks it whatever the answers say (rabbithole.canaries).
 
 CLAIMS_REWORK = {
-    "missing": ["gather", "collect", "audit", "build", "cards-init", "cards-kind-1", "cards-kind-2",
-                "cards-extract", "cards-plant", "cards-reread-1", "cards-reread-2", "cards-locate",
-                "cards-confirm-1", "cards-confirm-2", "cards-own-1", "cards-own-2", "cards-close",
-                "cards-gate", "gate"],
+    "missing": ["gather", "collect", "audit", "build", "cards-plan"],
     "no_confidence": ["cards-review", "cards-gate", "gate"],
 }
+
+
+# ── the grounding graph ───────────────────────────────────────────────────────
+# Hours per paper still to do, from bench FP on FirmPathways (191 papers, 2026-11-10..13). A
+# step's work grows with its papers, so these scale it; the realised history of one run (say
+# 190 papers) would be the wrong estimate for the next (say 6), and is not used for them.
+CARD_RATES = {"kind": 15 / 3600, "extract": 0.2, "reread": 0.055, "confirm": 0.011, "own": 0.012}
+CARD_MIN_HOURS = 0.05
+EXTRACT_PART_HOURS = 8.0       # one extract task's work: a reboot loses at most this much
+
+
+def grounding_plan(need: dict) -> list[dict]:
+    """The grounding as tasks, each naming every task it waits on (by step name). Pure: no
+    trundlr, so it is tested on its own. A step with nothing to do is left out, and what
+    waited on it waits on what it waited on."""
+    import math
+    hrs = lambda step, n: round(max(CARD_MIN_HOURS, CARD_RATES[step] * n), 3)    # noqa: E731
+    tasks: list[dict] = [{"step": "cards-init", "after": []}]
+    kinds = [f"cards-kind-{i}" for i, n in enumerate(need["kind"].values(), 1) if n]
+    for i, n in enumerate(need["kind"].values(), 1):
+        if n:
+            tasks.append({"step": f"cards-kind-{i}", "after": ["cards-init"], "hours": hrs("kind", n)})
+    parts = math.ceil(need["extract"] * CARD_RATES["extract"] / EXTRACT_PART_HOURS) if need["extract"] else 0
+    extracts = []
+    for k in range(parts):
+        n = len(range(k, need["extract"], parts))
+        name = f"cards-extract#{k + 1}"
+        extracts.append(name)
+        tasks.append({"step": "cards-extract", "name": name, "after": ["cards-init"],
+                      "hours": hrs("extract", n), "part": (k, parts)})
+    tasks.append({"step": "cards-plant", "after": ["cards-init", *extracts]})
+    rereads = [f"cards-reread-{i}" for i, n in enumerate(need["reread"].values(), 1) if n]
+    for i, n in enumerate(need["reread"].values(), 1):
+        if n:
+            tasks.append({"step": f"cards-reread-{i}", "after": ["cards-plant"], "hours": hrs("reread", n)})
+    tasks.append({"step": "cards-locate", "after": ["cards-plant", *rereads]})
+    last = []
+    for s in ("confirm", "own"):
+        for i, n in enumerate(need[s].values(), 1):
+            if n:
+                name = f"cards-{s}-{i}"
+                last.append(name)
+                tasks.append({"step": name, "after": ["cards-locate", *(kinds if s == "own" else [])],
+                              "hours": hrs(s, n)})
+    tasks += [{"step": "cards-close", "after": ["cards-locate", *last]},
+              {"step": "cards-gate", "after": ["cards-close"]},
+              {"step": "gate", "after": ["cards-gate"]},
+              {"step": "next", "after": ["gate"]}]
+    for t in tasks:
+        t.setdefault("name", t["step"])
+    return tasks
+
+
+def queue_grounding(root: Path, m: project.Manifest, client, tr_cfg: dict, *,
+                    stage: str = "litreview", dry_run: bool = False) -> dict:
+    """Size the grounding from the card store and queue it as a graph."""
+    from rabbithole import ground as rground
+    need = rground.need(root)
+    plan = grounding_plan(need)
+    if dry_run:
+        return {"need": need, "plan": plan, "tasks": []}
+    history = client.all_tasks()
+    cycle = next_cycle([t.get("title", "") for t in client.tasks_for_project(m.trundlr_project_id)], stage)
+    ids: dict[str, int] = {}
+    queued = []
+    for t in plan:
+        step = _GATE_STEP if t["step"] == "next" else _step_of(stage, t["step"])
+        command, desc = step.command, step.desc
+        venue = ""
+        if "part" in t:
+            k, n = t["part"]
+            if n > 1:
+                command, venue = f"{command} --part {k} --parts {n}", f"p{k + 1}of{n}"
+                desc = f"{desc} Part {k + 1} of {n}."
+        hours = t.get("hours") or estimate_hours(history, stage, t["step"], step.hours)
+        task = client.create_task(
+            _title(stage, t["step"], venue, cycle), m.trundlr_project_id, command=command,
+            depends_on_ids=[ids[a] for a in t["after"]], description=desc,
+            resource_ids=[i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i],
+            duration=hours)
+        ids[t["name"]] = task["id"]
+        queued.append({"title": task.get("title"), "id": task["id"], "command": command})
+    return {"need": need, "plan": plan, "tasks": queued, "cycle": cycle}
+
+
+def run_ground(root: Path, dry_run: bool = False) -> int:
+    """`haarpi ground`: the `cards-plan` step."""
+    m = project.load_manifest(root)
+    tr_cfg = pipeline_config().get("trundlr", {})
+    if not m.trundlr_project_id and not dry_run:
+        print("haarpi ground: this project has no trundlr project — nothing can be queued.")
+        return 2
+    client = None if dry_run else trundlr.TrundlrClient(tr_cfg.get("url", ""))
+    got = queue_grounding(root, m, client, tr_cfg, dry_run=dry_run)
+    n = got["need"]
+    print(f"haarpi ground: {n['papers']} papers, {n['extract']} to extract; verifiers "
+          + ", ".join(f"{s} {max(v.values(), default=0)}" for s, v in n.items() if isinstance(v, dict)))
+    for t in got["plan"]:
+        print(f"  {t['name']:<18} after {', '.join(t['after']) or '-':<40} "
+              + (f"{t['hours']} h" if t.get("hours") else ""))
+    if not dry_run:
+        print(f"haarpi ground: queued {len(got['tasks'])} task(s) (cycle {got['cycle']})")
+    return 0
 
 
 def _gate_hash(markup: Path) -> str:
@@ -2638,7 +2747,7 @@ def _open_deck(client, m: project.Manifest, tr_cfg: dict) -> None:
     client.create_task(
         _title("deck", "next", "", 1), m.trundlr_project_id,
         command="haarpi next",
-        depends_on_id=(interview or {}).get("id"),
+        depends_on_ids=[interview["id"]] if interview else [],
         description="Read the deck config the interview just wrote and queue one authoring chain "
                     "per format.",
         resource_id=_resource_id(tr_cfg, "gpu"), duration=0.1)

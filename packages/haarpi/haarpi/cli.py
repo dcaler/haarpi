@@ -46,6 +46,8 @@ usage:
   haarpi authors [list | add | set | remove] [--name N --initials I --affiliation A
                  (repeatable) --email E --orcid O --position K --corresponding]
         the same list, non-interactively — for scripts and queued tasks
+  haarpi ground [--dry-run] size the claim grounding from the card store and queue it
+                            as a graph (the `cards-plan` step that follows `build`)
   haarpi status             stages: released / in flight / unlocked / waiting / stale
   haarpi queue              register the trundlr project / queue the opening chain
   haarpi <tool> <args…>     run a stage tool (rabbithole | ramus | raster | rayleigh | raconteur | razzle)
@@ -115,6 +117,11 @@ def _pipeline_verb(cmd: str, rest: list[str]) -> int:
                                    initials=a.initials, affiliation=a.affiliation,
                                    email=a.email, orcid=a.orcid, position=a.position,
                                    corresponding=a.corresponding)
+    if cmd == "ground":
+        ap = argparse.ArgumentParser(prog="haarpi ground")
+        ap.add_argument("--dry-run", action="store_true", help="say what would be queued")
+        a = ap.parse_args(rest)
+        return planner.run_ground(root, dry_run=a.dry_run)
     if cmd == "next":
         ap = argparse.ArgumentParser(prog="haarpi next")
         ap.add_argument("--stage")
@@ -227,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     # ROOT, not the cwd: a verb run from a stage directory belongs to the same project, and a
     # command run outside a project leaves no litter behind. `init` is excluded — there is no
     # root to write into until it has made one.
-    if cmd in TOOLS or cmd in ("next", "status", "queue", "authors"):
+    if cmd in TOOLS or cmd in ("next", "status", "queue", "authors", "ground"):
         from . import project
         root = project.find_root()
         if root is not None:
@@ -245,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         if "--migrate" in rest:
             return _migrate([a for a in rest if a != "--migrate"])
         return _doctor()
-    if cmd in ("init", "next", "status", "queue", "authors"):
+    if cmd in ("init", "next", "status", "queue", "authors", "ground"):
         try:
             return _pipeline_verb(cmd, rest)
         finally:

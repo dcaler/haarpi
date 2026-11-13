@@ -414,7 +414,11 @@ reporting which sources still lack a PDF.
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |
 
-`cards gate` builds the gate page into `litReview/output/`: the map first, then what the planted
+A new review's opening chain ends in `cards-plan` (`haarpi ground`), which counts what each
+step still has to do from the card store and queues the grounding as a graph. Extract runs on
+both cards in parts of about 8 h, the two verifiers run side by side on the GPU pool, and each
+task waits on every input it needs. A paper carded before costs nothing, so a project whose
+papers are all carded queues no GPU work. `cards gate` builds the gate page into `litReview/output/`: the map first, then what the planted
 canaries say slipped, a sample of confirmed claims to judge, and per topic what is missing. The
 saved answers (`…_litreview_gate_ra_DCR.json`) are the litreview's markup. `haarpi next`
 releases the claims (`…_litreview.claims.json`, the claims judged wrong left out) on a pass with
@@ -681,7 +685,7 @@ drops only when the whole strip will not fit, for both halves at once.
 The [haarpi](packages/haarpi) package is what the tools have in common:
 
 - **the umbrella CLI** — `haarpi init / next / status / queue / authors /
-  doctor`, plus `haarpi <tool> <verb>` to reach any stage tool
+  ground / doctor`, plus `haarpi <tool> <verb>` to reach any stage tool
 - **the planner** — the sole litreview planner: decomposes markup, builds
   chains, queues them, mints releases, advances the stage ladder
 - **the redline engine** — tracked-change surgery, comment anchoring, threaded
@@ -784,6 +788,7 @@ its model calls to `OLLAMA_URL` when it is set, else to the config's `ollama.url
 haarpi init                  # one interview → manifest, scaffold, first chain
 haarpi status                # what is released, in flight, unlocked, stale
 haarpi next                  # read the markup: mint a release, or queue rework
+haarpi ground                # size the claim grounding from the card store, queue it as a graph
 haarpi rabbithole gather     # or drive any stage tool directly
 ```
 

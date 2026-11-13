@@ -17,6 +17,7 @@ OMITS = {           # deliberately not drawn, and why
  "graft": "vestigial: only cli.py reaches graft.run(); its drafting functions live "
           "inside revise (revise.py imports draft_sections/choose_position), and "
           "`haarpi next` never selects it",
+ "cards-plan": _GROUNDING,
  "cards-init": _GROUNDING,
  "cards-kind-1": _GROUNDING,
  "cards-kind-2": _GROUNDING,

@@ -141,6 +141,35 @@ class Run:
 
 # ── init: each paper's text and record into its card ───────────────────────────
 
+def need(project_dir=".", cfg=None) -> dict:
+    """How many papers each step still has to do, read from the card store before anything
+    runs: what `haarpi ground` sizes and times its tasks by. A paper carded by these models
+    already costs nothing; a paper whose claims are new needs every verifier step again. No
+    model, and nothing written but the run's own directory."""
+    run = Run(project_dir, cfg)
+    try:
+        recs = json.loads(Path(run.paths.corpus_json).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        recs = []
+    # A paper the last init found no text for costs nothing: it would be skipped again. (One
+    # that has since gained its PDF is carded by this graph's init and extracted by the next.)
+    textless = {s.get("citekey") for s in run.load("papers").get("skipped") or [] if s.get("why") == "no text"}
+    keys = sorted({d.get("citekey") for d in recs if d.get("citekey")} - textless)
+    out = {"papers": len(keys), "extract": 0,
+           **{s: {m: 0 for m in ms} for s, ms in (("kind", run.cfg.kind_models), ("reread", run.cfg.verifiers),
+                                                   ("confirm", run.cfg.verifiers), ("own", run.cfg.verifiers))}}
+    for ck in keys:
+        cd = run.card(ck)
+        fresh = not cd.extracted_by(run.cfg.extractor)
+        out["extract"] += fresh
+        for m in run.cfg.kind_models:
+            out["kind"][m] += not cd.step("kind", m)
+        for s in ("reread", "confirm", "own"):
+            for m in run.cfg.verifiers:
+                out[s][m] += fresh or not (cd.dir / f"{s}_{C.slug(m)}.json").is_file()
+    return out
+
+
 def init(project_dir=".", cfg=None) -> Run:
     """Each paper in the built corpus with text gets a card directory (an existing card is left
     as it is). Writes the run's paper list: the papers every later step works on."""

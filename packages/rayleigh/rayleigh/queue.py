@@ -1,7 +1,7 @@
 """`rayleigh queue` — linearize experiments.yaml into a trundlr chain and submit it.
 
-For running at scale off your laptop. The chain is flat and single-parent (trundlr keys
-`depends_on` to one task): one `rayleigh conduct_exp <E>` node per experiment, then a final
+For running at scale off your laptop. The chain is flat, each node waiting on the one before
+(`depends_on_ids`, one id each): one `rayleigh conduct_exp <E>` node per experiment, then a final
 `rayleigh process_outputs` node. A failure breaks everything downstream (trundlr
 dependency_broken). Each conduct node still fans its cells out locally (its own
 ProcessPoolExecutor) on the machine trundlr assigns it — so the coarse experiment chain
@@ -140,7 +140,7 @@ def run_queue(args) -> int:
                 "command": c["command"],
                 "project_id": pid,
                 "resource_ids": c["resources"],
-                "depends_on_id": prev_id,
+                "depends_on_ids": [prev_id] if prev_id else [],
                 "duration": c["duration"],
                 "status": "todo",
             })

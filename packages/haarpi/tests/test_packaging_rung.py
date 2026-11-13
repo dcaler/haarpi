@@ -59,12 +59,12 @@ def test_packaging_queues_a_runner_then_a_human_review():
     assert pkg["title"] == "raconteur package css2026 2"           # one past the template's cycle 1
     assert pkg["command"] == "haarpi raconteur package --venue css2026"
     assert pkg["resource_id"] == 3
-    assert pkg["depends_on_id"] == 5
+    assert pkg["depends_on_ids"] == [5]
     # the human review: reads the PDF, gated on the package having run
     assert review["title"] == "raconteur submission css2026 2"
     assert "command" not in review
     assert review["resource_id"] == 1
-    assert review["depends_on_id"] == pkg["id"]
+    assert review["depends_on_ids"] == [pkg["id"]]
     assert "css2026" in note
 
 
@@ -77,4 +77,4 @@ def test_packaging_without_a_template_task_has_no_dependency():
 
     pkg = client.created[0]
     assert pkg["title"] == "raconteur package css2026 1"           # nothing prior -> cycle 1
-    assert pkg["depends_on_id"] is None
+    assert pkg["depends_on_ids"] == []

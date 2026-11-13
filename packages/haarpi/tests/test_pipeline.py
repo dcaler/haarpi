@@ -121,20 +121,20 @@ def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):
     assert (proj / "litReview" / "output").is_dir()
     assert (proj / ".haarpi" / "plans").is_dir()
     titles = [t["title"] for t in tr.tasks]
-    # a new review is a fact base: questions and topics are settled with the person first,
-    # and its report draws its own map
+    # a new review is grounded claim by claim (2026-11-13): questions and topics are settled
+    # with the person first, and the chain ends in `cards-plan`, which queues the grounding,
+    # its gate and the `next` behind it once the corpus is built
     assert titles == ["rabbithole topics 1", "rabbithole topics-review 1",
                       "rabbithole topics-apply 1", "rabbithole gather 1", "rabbithole collect 1",
-                      "rabbithole report 1", "rabbithole comment 1", "rabbithole next 1"]
+                      "rabbithole audit 1", "rabbithole build 1", "rabbithole cards-plan 1"]
     cfg = yaml.safe_load((proj / "litReview" / "litrev.yaml").read_text())
     assert cfg["report_format"] == "facts" and cfg["questions"] == []
     # chained, umbrella-form commands, human steps command-less
-    assert tr.tasks[1]["depends_on_id"] == tr.tasks[0]["id"]
+    assert tr.tasks[1]["depends_on_ids"] == [tr.tasks[0]["id"]]
     assert tr.tasks[0]["command"] == "haarpi rabbithole topics"
     assert "command" not in tr.tasks[1]                            # the person reviews the page
     assert tr.tasks[2]["command"] == "haarpi rabbithole topics --apply"
-    assert "command" not in tr.tasks[6]                            # comment is the human step
-    assert tr.tasks[7]["command"] == "haarpi next"
+    assert tr.tasks[7]["command"] == "haarpi ground"
 
 
 def test_init_does_not_publish_runnable_work_before_the_project_exists(
@@ -343,7 +343,7 @@ def test_redirection_runs_hands_free_by_default(proj, servers):
     new = tr.tasks[before:]
     assert not any(t["title"].startswith("rabbithole approve") for t in new)  # no gate
     assert new[0]["command"].startswith("haarpi rabbithole")   # head is the first real step
-    assert "depends_on_id" not in new[0]                        # nothing gates the head
+    assert "depends_on_ids" not in new[0]                        # nothing gates the head
 
 
 def test_confirm_tiers_can_gate_a_chain_when_opted_in(proj, servers, monkeypatch):
@@ -363,7 +363,7 @@ def test_confirm_tiers_can_gate_a_chain_when_opted_in(proj, servers, monkeypatch
     new = tr.tasks[before:]
     assert new[0]["title"].startswith("rabbithole approve")     # confirm_tiers head
     assert "command" not in new[0]                             # human, command-less
-    assert new[1]["depends_on_id"] == new[0]["id"]             # chain gated behind it
+    assert new[1]["depends_on_ids"] == [new[0]["id"]]             # chain gated behind it
     assert "gather topics: Y" in new[0]["description"]         # the human reads the plan
 
 
@@ -550,7 +550,7 @@ def test_deck_opens_with_the_interview_and_a_next_behind_it(proj, servers):
         assert configure["resource_ids"] == [1]
 
         assert nxt["command"] == "haarpi next"
-        assert nxt["depends_on_id"] == configure["id"]          # cannot read a config not yet written
+        assert nxt["depends_on_ids"] == [configure["id"]]          # cannot read a config not yet written
 
 
 def test_next_queues_one_deck_chain_per_configured_format(proj, servers):

@@ -242,7 +242,7 @@ def run_queue(args) -> int:
                 "command": c["command"],          # null for checkpoints => no runner claims it
                 "project_id": pid,
                 "resource_ids": c.get("resources") or [c["resource"]],
-                "depends_on_id": prev_id,
+                "depends_on_ids": [prev_id] if prev_id else [],
                 "duration": c["duration"],
                 "status": "todo",
             })

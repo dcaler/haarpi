@@ -160,7 +160,7 @@ class TrundlrClient:
         return list_tasks(self.base)
 
     def create_task(self, title: str, project_id: int, *, command: str | None = None,
-                    depends_on_id: int | None = None, description: str = "",
+                    depends_on_ids: list[int] | None = None, description: str = "",
                     resource_id: int | None = None, duration: float | None = None,
                     resource_ids: list[int] | None = None) -> dict:
         """Create one trundlr task.
@@ -174,8 +174,11 @@ class TrundlrClient:
             body["command"] = command
         if description:
             body["description"] = description
-        if depends_on_id is not None:
-            body["depends_on_id"] = depends_on_id
+        # Every task it waits on, ALL of which must be done. trundlr deprecated the single
+        # `depends_on_id` (2026-11); a task that needs two inputs says both.
+        deps = [int(i) for i in (depends_on_ids or []) if i is not None]
+        if deps:
+            body["depends_on_ids"] = deps
         ids = [i for i in (resource_ids if resource_ids is not None else [resource_id])
                if i is not None]
         if ids:

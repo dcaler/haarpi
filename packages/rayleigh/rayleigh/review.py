@@ -174,8 +174,7 @@ def parse_verdicts(review_md: Path, eids) -> dict:
 
 def plan_chain(verdicts: dict, spec: dict, exec_cmd: str, resources: dict,
                human_resource: int) -> list:
-    """Flat single-parent trundlr chain from the verdicts (trundlr keys depends_on to one
-    task): a `conduct_exp <E>` node per re-conduct experiment, then one `process_outputs`,
+    """Flat trundlr chain from the verdicts, each node waiting on the one before: a `conduct_exp <E>` node per re-conduct experiment, then one `process_outputs`,
     then a command-less `review` human gate. accept/re-init contribute no nodes."""
     exps = {str(e.get("id")): e for e in spec.get("experiments") or []}
     reconduct = sorted(e for e, v in verdicts.items() if v == "re-conduct")
@@ -237,7 +236,7 @@ def _submit_chain(api: str, pid_raw, root: Path, brief: str, chain: list) -> int
     prev_id = None
     for c in chain:
         body = {"title": c["title"], "description": c["description"], "project_id": pid,
-                "resource_ids": c["resources"], "depends_on_id": prev_id,
+                "resource_ids": c["resources"], "depends_on_ids": [prev_id] if prev_id else [],
                 "duration": c["duration"], "status": "todo"}
         if c["command"]:                              # human gate carries no command
             body["command"] = c["command"]
@@ -249,7 +248,7 @@ def _submit_chain(api: str, pid_raw, root: Path, brief: str, chain: list) -> int
         prev_id = created["id"]
         tag = "you" if c.get("human") else "runner"
         log(f"created #{prev_id:<4} {c['title']} [{tag}]"
-            + (f" dep #{body['depends_on_id']}" if body["depends_on_id"] else ""))
+            + (f" dep #{body['depends_on_ids'][0]}" if body["depends_on_ids"] else ""))
     log(f"done — queued {len(chain)} task(s) under project {pid}")
     return 0
 
