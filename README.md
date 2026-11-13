@@ -155,6 +155,7 @@ this happens", with the cost. The literature review's fact base (on test) is the
 first to carry one; its comments are routed, never answered by rewording a fact.
 Its facts are frozen beside its release, and raconteur drafts each section from
 the facts chosen for it, writing a trace from every cited sentence to its page.
+A claims release, when a project has one, takes the fact base's place (stage 1 below).
 A reviewer who disputes a claim in the paper gets it fixed where the error is:
 the sentence (rewritten to its fact) or the fact (the source is re-read in the
 literature review, re-released, and the paper revised from it) — the one route
@@ -197,6 +198,33 @@ not "improve" them while rewriting around them. Concretely:
 ## The stages in detail
 
 ### 1 · Literature review — rabbitHole
+
+**Claim grounding replaces the fact base** (adopted 2026-11-13; being built into rabbitHole,
+`PLAN_claim_grounding.html`). Each paper gets a card, made once and shared by every project
+that cites it:
+- one model extracts what the paper claims;
+- two verifiers from other model families each re-read the paper and point to the passage
+  that says it;
+- code finds that passage in the paper's own words;
+- each verifier judges the claim against the passage the *other* one found, and whether it
+  is the paper's own finding or one it reports from other work.
+
+Only a claim that passes every check is confirmed. Planted bad claims in every run measure
+what still gets through. A borrowed idea is never credited to the paper that reported it:
+its original is chased, collected and read the same way.
+
+A person then spends about 40 minutes at the **gate**, whatever the size of the corpus:
+- the contribution map;
+- a sample of 25 confirmed claims beside their evidence, judged for whether the evidence
+  says the claim and whether it is the paper's own;
+- the confirmed claims under each topic, to say what a reader of the field would expect and
+  not find.
+
+Only a passed gate mints a **claims release**, the file raconteur drafts from
+(`packages/haarpi/DESIGN_claims_release.md`). On all 191 FirmPathways papers with text, 395
+of 896 claims were confirmed, on 153 papers. Until the port lands, rabbitHole still runs the
+fact base described below. That format, its review page, `revise`, `graft` and the docx
+report then retire.
 
 **The literature review is a coverage instrument, not a draft chapter.** It is
 not what you would drop into a paper; it is an organized collection of facts,
@@ -385,6 +413,10 @@ reporting which sources still lack a PDF.
 | `style` | trains an author-voice profile from the author's own publications |
 | `chroma` | shows who holds the vector store's write lock, and releases an abandoned one; `--push` copies this machine's index up to the project |
 
+When claim grounding is built in, `build` also gives each paper its card. Release and the
+gate page join the verbs, and the gate page embeds the map. `report`, `revise`, `graft`,
+`refresh` and `reviewpage` go with the fact base.
+
 Two invariants worth knowing. **`build` is the embedder the re-draft path needs** —
 `revise` reads a cached corpus and never embeds, so every rework chain that changes the
 corpus carries a `build` before it. `report` is not an exception so much as outside the
@@ -523,6 +555,17 @@ the ladder it was raised, and an **upstream_literature** comment escalates out o
 stage entirely — back to gather, collect, report and comment in the literature review,
 because the claim it doubts is not in the corpus yet. `package` assembles and compiles
 the venue submission.
+
+**raconteur weaves a narrative through the claims; it does not attribute them one by one.**
+From a claims release, each section is handed the confirmed claims chosen for it, with the
+paper's own words and each claim's role. The role sets how firmly a claim may be stated, never
+who it is attributed to: there is no "X finds" or "X argues", and citations are parenthetical.
+- A finding is stated as established.
+- A proposal is carried as an argument or a possibility, never as a result.
+- A synthesis speaks to the shape of a field.
+
+The fact trace beside each draft flags (⚠) any sentence that states a proposal without
+hedging. It is a flag for the reader; nothing is rewritten.
 
 **A Methods section cites the methods literature when there is any.** raconteur's
 only methods input used to be raster's writeup — what *this project's code does* —

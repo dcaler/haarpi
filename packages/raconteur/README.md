@@ -320,6 +320,19 @@ that serves a research question. Every draft writes `paper.facttrace.md` beside
 it: each cited sentence, the fact it drew on, and a link to that fact's page. A
 sentence that changes its fact's numbers is sent back to be repaired.
 
+**A claims release** (`*.claims.json` in `litReview/output/`, rabbitHole's claim-grounding
+procedure; the format is `../haarpi/DESIGN_claims_release.md`) wins over a fact base when a
+project has one.
+- Each confirmed claim is read as a fact: the paper's own passages are its quote, its best
+  topic score its weight. Each topic is a theme.
+- The claim's role (finding, proposal or synthesis) sets how firmly it may be stated in a
+  narrative woven through the claims. Sources are cited in parentheses and never attributed
+  sentence by sentence.
+- The fact trace flags (⚠) a sentence that states a proposal as a result.
+
+The fact-base and narrative readers stay until every project has been redone on claim
+grounding.
+
 **Every manuscript opens with a review guide** — a comment on its title saying
 how to decide whether to release it, and how to ask for each kind of rework.
 Resolve it once read; it blocks the release until you do. One of those kinds is

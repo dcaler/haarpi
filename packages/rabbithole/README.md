@@ -121,7 +121,33 @@ The review opens with the most load-bearing sources and **coverage against the
 brief**: each focus item marked covered or THIN by how much of the corpus
 addresses it in its own words.
 
-**Fact base.** The default for a new project. With `report_format: facts` in the project's
+**Claim grounding (adopted 2026-11-13, being ported).** The fact base below is being
+replaced. Each paper gets a card:
+- llama3.3 extracts its claims;
+- two verifiers from other model families each point to the passage that says a claim;
+- code finds that passage in the paper's own words;
+- each verifier judges the claim against the other's passage, and whether it is the paper's
+  own finding.
+
+Only a claim that passes every check is confirmed. A person passes a gate (the map, a sample
+of 25, what is missing) before a claims release is minted for raconteur
+(`../haarpi/DESIGN_claims_release.md`). The reference implementation is the bench
+(`devtools/bench/bench_fp.py`, kept out of git). The fact base, its review page, `revise`,
+`graft` and the docx report retire when the port lands.
+
+**How a paper's text is read.** Every PDF goes through `pdfs.py`:
+- Running headers, footers and page numbers are left out.
+- A raised reference number is kept in its sentence as `[44]`, or as `[note:3]` in a paper
+  that cites by author and year.
+- A unit's exponent stays one (`km²`).
+
+When `facts.locate_passage` hands on the paper's words for a quote:
+- the passage is widened to whole sentences;
+- a list bullet or a braced section reference (`{4.4}`) ends a sentence;
+- a passage that crosses a page drops table rows left before the break;
+- it carries the pages it touches.
+
+**Fact base.** The default for a new project until claim grounding is ported. With `report_format: facts` in the project's
 `litrev*.yaml`, `report` writes no prose. From each source it extracts only what the source
 would be cited for, its main contribution and its major themes, quoted where the paper
 establishes them rather than from its abstract; an incidental detail, or a claim the source
