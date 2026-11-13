@@ -369,7 +369,8 @@ reporting which sources still lack a PDF.
 A new review's opening chain ends in `cards-plan` (`haarpi ground`), which counts what each
 step still has to do from the card store and queues the grounding as a graph. Extract runs on
 both cards in parts of about 8 h, the two verifiers run side by side on the GPU pool, and each
-task waits on every input it needs. A paper carded before costs nothing, so a project whose
+task waits on every input it needs. Every chain and graph is written in one batch, so trundlr
+re-flows its schedule once rather than once per task. A paper carded before costs nothing, so a project whose
 papers are all carded queues no GPU work. `cards gate` builds the gate page into `litReview/output/`: the map first, then what the planted
 canaries say slipped, a sample of confirmed claims to judge, and per topic what is missing. The
 saved answers (`…_litreview_gate_ra_DCR.json`) are the litreview's markup. `haarpi next`

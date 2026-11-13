@@ -37,6 +37,10 @@ class FakeTrundlr(BaseHTTPRequestHandler):
             self._json({}, 404)
 
     def do_POST(self):
+        self.server.posts.append(self.path)
+        if self.path.startswith("/api/schedule/reflow"):
+            self._json({})
+            return
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n))
         if self.path.startswith("/api/projects/"):
@@ -74,7 +78,7 @@ class FakePlannerOllama(BaseHTTPRequestHandler):
 @pytest.fixture()
 def servers(tmp_path, monkeypatch):
     tr = ThreadingHTTPServer(("127.0.0.1", 0), FakeTrundlr)
-    tr.projects, tr.tasks = [], []
+    tr.projects, tr.tasks, tr.posts = [], [], []
     ol = ThreadingHTTPServer(("127.0.0.1", 0), FakePlannerOllama)
     ol.reply = json.dumps({"tier": "gap_fill", "assessment": "needs more on X",
                            "gather_topics": ["X"]})
@@ -110,6 +114,17 @@ def proj(tmp_path, servers):
                           brief="test brief", initials="DCR", priority=2)
     assert rc == 0
     return root
+
+
+def test_a_chain_is_queued_with_one_reflow_not_one_per_task(proj, servers):
+    """trundlr re-flows the board after every write unless told not to (2026-11-13): the
+    opening chain's tasks skip it, and one re-flow follows them."""
+    tr, _ = servers
+    task_posts = [p for p in tr.posts if p.startswith("/api/tasks/")]
+    assert len(task_posts) == len(tr.tasks) > 1
+    assert all(p.endswith("?skip_reflow=true") for p in task_posts)
+    assert tr.posts.count("/api/schedule/reflow") == 1
+    assert tr.posts[-1] == "/api/schedule/reflow"
 
 
 def test_init_writes_manifest_scaffold_and_opening_chain(proj, servers):

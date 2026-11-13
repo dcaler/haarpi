@@ -117,3 +117,21 @@ def test_the_graph_takes_the_cycle_of_the_cards_plan_that_queued_it(monkeypatch)
     got = planner.queue_grounding(None, SimpleNamespace(trundlr_project_id=7), c,
                                   {"cpu_resource": 3, "human_resource": 1, "gpu_resource": 9})
     assert got["cycle"] == 5 and all(t["title"].endswith(" 5") for t in c.tasks)
+
+
+def test_the_graph_is_written_in_one_batch_so_trundlr_reflows_once(monkeypatch):
+    from contextlib import contextmanager
+    from rabbithole import ground as rground
+    monkeypatch.setattr(rground, "need", lambda root: _need(50))
+    c, inside = _Client(), []
+
+    @contextmanager
+    def batch():
+        inside.append(len(c.tasks))
+        yield c
+        inside.append(len(c.tasks))
+    c.batch = batch
+    planner.queue_grounding(None, SimpleNamespace(trundlr_project_id=7), c,
+                            {"gpu_resource": 9, "gpus_resource": 8, "cpu_resource": 3,
+                             "human_resource": 1})
+    assert inside == [0, len(c.tasks)] and len(c.tasks) > 10     # every task, one block

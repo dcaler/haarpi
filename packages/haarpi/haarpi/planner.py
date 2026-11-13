@@ -955,6 +955,13 @@ def _scoped(command: str | None, stage: str) -> str | None:
     return f"{command} {kind}"
 
 
+def _batched(client):
+    """The client's batch() (one re-flow for many writes), or nothing for a client without one."""
+    import contextlib
+    b = getattr(client, "batch", None)
+    return b() if callable(b) else contextlib.nullcontext()
+
+
 def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
                 steps: list[str], tr_cfg: dict, description: str = "",
                 approval: bool = False, venue: str = "") -> dict:
@@ -992,26 +999,28 @@ def queue_chain(client: trundlr.TrundlrClient, project_id: int, stage: str,
     prev_id = None
     queued = []
     first = True
-    for st, name, step in plan_steps:
-        rids = [i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i]
-        # the venue belongs to the paper stage; an escalation into litreview is shared work
-        v = venue if (venue and st == stage) else ""
-        title = _title(st, name, v, cycle)
-        command = _scoped(_venued(step.command, v), st)
-        desc = step.desc
-        if first and description:
-            desc = f"{description} — {step.desc}"    # the plan + the instructions
-        task = client.create_task(
-            title, project_id,
-            command=command,
-            depends_on_ids=[prev_id] if prev_id else [],
-            description=desc,
-            resource_ids=rids,
-            duration=estimate_hours(history, st, name, step.hours),
-        )
-        prev_id = task["id"]
-        first = False
-        queued.append({"title": title, "id": task["id"], "command": command})
+    # one re-flow for the whole chain, not one per task
+    with _batched(client):
+        for st, name, step in plan_steps:
+            rids = [i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i]
+            # the venue belongs to the paper stage; an escalation into litreview is shared work
+            v = venue if (venue and st == stage) else ""
+            title = _title(st, name, v, cycle)
+            command = _scoped(_venued(step.command, v), st)
+            desc = step.desc
+            if first and description:
+                desc = f"{description} — {step.desc}"    # the plan + the instructions
+            task = client.create_task(
+                title, project_id,
+                command=command,
+                depends_on_ids=[prev_id] if prev_id else [],
+                description=desc,
+                resource_ids=rids,
+                duration=estimate_hours(history, st, name, step.hours),
+            )
+            prev_id = task["id"]
+            first = False
+            queued.append({"title": title, "id": task["id"], "command": command})
     return {"cycle": cycle, "tasks": queued, "venue": venue}
 
 
@@ -2221,23 +2230,25 @@ def queue_grounding(root: Path, m: project.Manifest, client, tr_cfg: dict, *,
     cycle = max(plans) if plans else next_cycle(titles, stage)
     ids: dict[str, int] = {}
     queued = []
-    for t in plan:
-        step = _GATE_STEP if t["step"] == "next" else _step_of(stage, t["step"])
-        command, desc = step.command, step.desc
-        venue = ""
-        if "part" in t:
-            k, n = t["part"]
-            if n > 1:
-                command, venue = f"{command} --part {k} --parts {n}", f"p{k + 1}of{n}"
-                desc = f"{desc} Part {k + 1} of {n}."
-        hours = t.get("hours") or estimate_hours(history, stage, t["step"], step.hours)
-        task = client.create_task(
-            _title(stage, t["step"], venue, cycle), m.trundlr_project_id, command=command,
-            depends_on_ids=[ids[a] for a in t["after"]], description=desc,
-            resource_ids=[i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i],
-            duration=hours)
-        ids[t["name"]] = task["id"]
-        queued.append({"title": task.get("title"), "id": task["id"], "command": command})
+    # one re-flow for the whole graph, not one per task
+    with _batched(client):
+        for t in plan:
+            step = _GATE_STEP if t["step"] == "next" else _step_of(stage, t["step"])
+            command, desc = step.command, step.desc
+            venue = ""
+            if "part" in t:
+                k, n = t["part"]
+                if n > 1:
+                    command, venue = f"{command} --part {k} --parts {n}", f"p{k + 1}of{n}"
+                    desc = f"{desc} Part {k + 1} of {n}."
+            hours = t.get("hours") or estimate_hours(history, stage, t["step"], step.hours)
+            task = client.create_task(
+                _title(stage, t["step"], venue, cycle), m.trundlr_project_id, command=command,
+                depends_on_ids=[ids[a] for a in t["after"]], description=desc,
+                resource_ids=[i for i in (_resource_id(tr_cfg, k) for k in step.resources) if i],
+                duration=hours)
+            ids[t["name"]] = task["id"]
+            queued.append({"title": task.get("title"), "id": task["id"], "command": command})
     return {"need": need, "plan": plan, "tasks": queued, "cycle": cycle}
 
 

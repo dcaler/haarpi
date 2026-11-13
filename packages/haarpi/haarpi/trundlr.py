@@ -17,8 +17,10 @@ than crashing the pipeline.
 from __future__ import annotations
 
 import json
+import sys
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 
 
 def coerce_id(v):
@@ -105,14 +107,25 @@ def resolve_project_id(api_url: str, name: str, folder: str = None,
 
 # ── tasks ────────────────────────────────────────────────────────────────────
 
-def create_task(api_url: str, body: dict) -> dict:
+# trundlr re-flows the whole board after every create, update and delete. A script writing many
+# tasks passes `?skip_reflow=true` on each and asks for one re-flow at the end
+# (POST /api/schedule/reflow; trundlr README, 2026-11-13).
+_SKIP = "?skip_reflow=true"
+
+
+def create_task(api_url: str, body: dict, *, skip_reflow: bool = False) -> dict:
     """Create one trundlr task (the `queue` verbs use this to chain work)."""
-    return _api(api_url, "POST", "/tasks/", body)
+    return _api(api_url, "POST", "/tasks/" + (_SKIP if skip_reflow else ""), body)
 
 
-def update_task(api_url: str, task_id: int, body: dict) -> dict:
+def update_task(api_url: str, task_id: int, body: dict, *, skip_reflow: bool = False) -> dict:
     """PATCH one existing trundlr task (e.g. re-budget its `duration`)."""
-    return _api(api_url, "PATCH", f"/tasks/{task_id}", body)
+    return _api(api_url, "PATCH", f"/tasks/{task_id}" + (_SKIP if skip_reflow else ""), body)
+
+
+def reflow(api_url: str) -> None:
+    """Re-place every unpinned `todo` task, once, after writes that skipped it."""
+    _api(api_url, "POST", "/schedule/reflow")
 
 
 def list_tasks(api_url: str, project_id: int | None = None) -> list:
@@ -137,6 +150,32 @@ class TrundlrClient:
             raise TrundlrError("no trundlr url configured ([trundlr] url in config.toml)")
         self.base = api_url.rstrip("/")
         self.runner_resource_id = runner_resource_id
+        self._batch = 0             # open batch() blocks
+        self._unflowed = False      # a write inside them skipped the re-flow
+
+    @contextmanager
+    def batch(self):
+        """Write many tasks with ONE re-flow: every create/update inside skips trundlr's
+        re-flow, and the outermost block asks for one when it closes, even if a write failed
+        part way, since the tasks already made still need placing. A failed re-flow is only
+        reported: trundlr re-flows on its own at the next claim, finish or timer."""
+        self._batch += 1
+        try:
+            yield self
+        finally:
+            self._batch -= 1
+            if self._batch == 0 and self._unflowed:
+                self._unflowed = False
+                try:
+                    reflow(self.base)
+                except TrundlrError as e:
+                    print(f"[trundlr] the tasks are queued, but the re-flow failed: {e}",
+                          file=sys.stderr)
+
+    def _skip(self) -> bool:
+        if self._batch:
+            self._unflowed = True
+        return bool(self._batch)
 
     # projects
     def list_projects(self) -> list[dict]:
@@ -185,11 +224,11 @@ class TrundlrClient:
             body["resource_ids"] = ids
         if duration is not None:
             body["duration"] = duration
-        return create_task(self.base, body)
+        return create_task(self.base, body, skip_reflow=self._skip())
 
     def update_task(self, task_id: int, **fields) -> dict:
         """PATCH a task (e.g. duration=1.3 to correct a queued estimate)."""
-        return update_task(self.base, task_id, fields)
+        return update_task(self.base, task_id, fields, skip_reflow=self._skip())
 
     def list_tasks(self, project_id: int | None = None) -> list:
         return list_tasks(self.base, project_id)
