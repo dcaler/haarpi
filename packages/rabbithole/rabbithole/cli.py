@@ -257,6 +257,17 @@ def _run(argv: list[str] | None = None) -> int:
                            "(runs never do this on their own)")
     _review_arg(chr_)
 
+    crd = sub.add_parser("cards",
+                         help="claim grounding: give each paper its card, one step per task "
+                              "(init, kind, extract, plant, reread, locate, confirm, own, close)")
+    crd.add_argument("step", choices=["init", "kind", "extract", "plant", "reread", "locate",
+                                      "confirm", "own", "close"])
+    crd.add_argument("--model", default=None,
+                     help="kind, reread, confirm, own: which of the configured models answers")
+    crd.add_argument("--part", type=int, default=0, help="extract: this part (0-based) ...")
+    crd.add_argument("--parts", type=int, default=1, help="... of this many")
+    _review_arg(crd)
+
     args = parser.parse_args(argv)
 
     # WHICH REVIEW, resolved once. Every verb below takes a directory, so the named review
@@ -304,6 +315,10 @@ def _run(argv: list[str] | None = None) -> int:
         return summarize.run(args.dir, brain_override=args.brain,
                              from_folder=args.from_folder,
                              refresh_notes=not args.no_refresh_notes)
+
+    if args.command == "cards":
+        from . import ground
+        return ground.main(args.step, args.dir, model=args.model, part=args.part, parts=args.parts)
 
     if args.command == "build":
         _check_env(need_pandoc=False)          # brain + Zotero; no docx output

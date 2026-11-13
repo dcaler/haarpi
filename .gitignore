@@ -58,3 +58,6 @@ style_profile.md
 
 # Dev-only tools (the model bench): kept on this machine, never in git
 devtools/
+
+# Paper cards (rabbitHole claim grounding): they hold the papers' text, so they stay on this machine
+/cards/
