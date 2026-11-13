@@ -37,10 +37,12 @@ methods docx and its `comment` step, and the choice written unattended.
 
 ## The structure
 
-### 1. Scope (unchanged)
+### 1. Scope
 
 The `ramus init` session names the families in `METHODS_SCOPE.md`: per family, where the
-project uses it and what must be defended.
+project uses it and what must be defended. A joint session's output is not redlined (decided
+2026-11-13): the scope goes straight to the search, and the prereg from `ramus design`
+straight to release.
 
 ### 2. Search: follow the argument until it stops
 
@@ -51,7 +53,8 @@ critiques. Added:
 - **Following, iterated.** From a procedure, its citers that argue with it (critique,
   correction, comparison, extension). From each of those, their own citers that answer them.
   Back to the original of anything the argument cites and the corpus lacks. A family is done
-  when every critique has been followed to its answers or shown to have none, within a budget.
+  when a round of following finds no new critique or answer; a paper budget per family is the
+  backstop (decided 2026-11-13).
 - **The frontier.** The newest answer has few citers yet, so following misses it. Per family,
   also search by recency: the newest work by authors already in the lineage, and the newest
   papers naming the procedure.
@@ -79,9 +82,10 @@ Each record keeps its passage in B's own words, and the citation in that passage
 "Goodman-Bacon (2021)"), resolved through B's reference list to a citekey. A target that does
 not resolve is a lead: the search fetches it.
 
-Per **procedure** (not per paper): its status (published, working paper, talk), its date, and
-its implementation (R, Stata or Python package, or replication code; and whether that covers
-the case the project needs, as continuous-treatment DiD shows it may not).
+Per **procedure** (not per paper): its status (published, working paper, talk) and its date,
+and any software the paper itself names ("we provide the R package …"). Whether software exists
+and covers the project's case is not checked here: it is a standard question of the design
+session (§7).
 
 A paper reporting someone else's method ("following Künsch (1989), we use a moving block") is
 not rejected, as a borrowed idea is in the literature review. It is an *applies* record for B,
@@ -92,7 +96,6 @@ and its target is the lead to the original.
 - **B says it.** The two verifiers from other model families, each judging the record against
   the passage the other located (as in the claim grounding).
 - **The target is right.** Code: the citation in the passage resolves to that reference.
-- **The software exists.** Code: the package is on CRAN, PyPI or the named repository.
 
 Nothing judges whether B is right. The review records the argument; it does not referee it.
 
@@ -120,7 +123,10 @@ A pass releases the lineage: `{YYMMDD}_{short}_methodsreview.lineage.json`.
 ### 7. The choice: the `ramus design` session
 
 The session reads the lineage with the person. Per family: which critiques apply to this
-project's data, which answer is used, what it still leaves open, and how that is handled. The
+project's data, which answer is used, what it still leaves open, and how that is handled. **Does
+the software exist** is a standard question for every procedure in contention: is it implemented
+(R, Stata or Python package, or the authors' code), and does it cover this project's case
+(continuous-treatment DiD exists as an estimator but not yet in R). The
 real options are often three: the best-answered procedure that is implemented (saying which
 critiques remain); a newer one implemented by us, which becomes a `raster` task carrying the
 paper and the passages that specify it; or the newer one as a robustness check. The prereg
@@ -147,10 +153,10 @@ BCa and the replies, the choice of B. Steps, each judged before the next:
 3. **Port** what held, into `rabbitHole` and `haarpi`, and only then redo DigiPros' whole
    methods review (M1–M6), replacing the 261103 one.
 
-## Open
+## Decided 2026-11-13
 
-- How far following goes before it stops: hops, a paper budget per family, or "no new critique
-  in the last round".
-- Whether the implementation check is worth automating, or is a question the session asks.
-- Whether a joint session's output (the scope, the prereg) still needs a redline. If not, the
-  scope goes straight to the search.
+- Following stops when a round finds no new critique or answer, with a paper budget per family
+  as the backstop.
+- "Does the software exist" is a standard question of the `ramus design` session, not a check
+  the review automates.
+- A joint session's output (the scope, the prereg) is not redlined.
