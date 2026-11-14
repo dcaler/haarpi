@@ -219,6 +219,7 @@ def _short(oaid: str | None) -> str:
 def _openalex_fetch_refs(dois: list[str], email: str) -> list[dict]:
     """Batch OpenAlex works by DOI -> [{id, doi, referenced_works}]. Best-effort; [] on failure."""
     import httpx
+    from .sources import openalex_headers
     out: list[dict] = []
     for i in range(0, len(dois), 50):
         filt = "doi:" + "|".join(dois[i:i + 50])
@@ -227,7 +228,7 @@ def _openalex_fetch_refs(dois: list[str], email: str) -> list[dict]:
                           params={"filter": filt, "per-page": 50,
                                   "select": "id,doi,referenced_works,cited_by_count",
                                   "mailto": email},
-                          timeout=30)
+                          headers=openalex_headers(), timeout=30)
             r.raise_for_status()
             out += r.json().get("results", [])
         except Exception as e:  # noqa: BLE001 — a citation graph is a bonus, never fatal

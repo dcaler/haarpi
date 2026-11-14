@@ -380,6 +380,9 @@ class GlobalConfig:
     zotero_library_type: str = "user"  # "user" | "group"
     anthropic_api_key: str = ""
     s2_api_key: str = ""               # optional Semantic Scholar key
+    # OpenAlex key (free): without one, a machine shares a small daily budget with its whole IP
+    # (1,000 credits, 10 per search); with one, 10,000. Sent as a header, never in a URL.
+    openalex_api_key: str = ""
     # trundlr task queue (`haarpi next` submits gather/collect/audit/build/revise chains here).
     trundlr_url: str = ""             # e.g. http://100.87.86.57:8251
     trundlr_runner_resource_id: int | None = None  # cpu/gpu resource the runner polls
@@ -407,7 +410,7 @@ def _legacy_normalized() -> dict:
         return {}
     tr = data.get("trundlr", {})
     out = {k: v for k, v in data.items()
-           if k in ("contact_email", "zotero", "anthropic", "semantic_scholar")}
+           if k in ("contact_email", "zotero", "anthropic", "semantic_scholar", "openalex")}
     if "ollama_url" in data:
         out["ollama"] = {"url": data["ollama_url"]}
     if tr:
@@ -426,6 +429,7 @@ def load_global() -> GlobalConfig:
     z = data.get("zotero", {})
     a = data.get("anthropic", {})
     s2 = data.get("semantic_scholar", {})
+    oa = data.get("openalex", {})
     tr = data.get("trundlr", {})
 
     gc = GlobalConfig(
@@ -436,6 +440,7 @@ def load_global() -> GlobalConfig:
         zotero_library_type=z.get("library_type", "user"),
         anthropic_api_key=a.get("api_key", ""),
         s2_api_key=s2.get("api_key", ""),
+        openalex_api_key=oa.get("api_key", ""),
         trundlr_url=tr.get("url", ""),
         trundlr_runner_resource_id=tr.get("runner_resource") or None,
         trundlr_human_resource_id=tr.get("human_resource") or None,
@@ -449,6 +454,7 @@ def load_global() -> GlobalConfig:
     gc.zotero_library_type = os.environ.get("ZOTERO_LIBRARY_TYPE", gc.zotero_library_type)
     gc.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", gc.anthropic_api_key)
     gc.s2_api_key = os.environ.get("S2_API_KEY", gc.s2_api_key)
+    gc.openalex_api_key = os.environ.get("OPENALEX_API_KEY", gc.openalex_api_key)
     gc.trundlr_url = os.environ.get("TRUNDLR_URL", gc.trundlr_url)
     _rid = os.environ.get("TRUNDLR_RUNNER_RESOURCE_ID")
     if _rid:

@@ -51,11 +51,19 @@ library_type = "user"               # "user" or "group"
 
 [anthropic]                         # only for the Claude brain
 api_key = "sk-ant-..."
+
+[openalex]                          # free key; recommended (see below)
+api_key = "xxxxxxxx"
 ```
+
+OpenAlex's free daily budget without a key is shared by every machine on your IP (1,000 credits,
+10 per search), and one large gather can spend it. A free key from openalex.org raises it to
+10,000. rabbitHole sends the key as a header, never in a URL. When the budget runs out, a run
+stops and says so, rather than treating every later search as empty.
 
 Anything here can be overridden by environment variables:
 `OLLAMA_URL`, `RABBITHOLE_CONTACT_EMAIL`, `ZOTERO_API_KEY`, `ZOTERO_LIBRARY_ID`,
-`ZOTERO_LIBRARY_TYPE`, `ANTHROPIC_API_KEY`, `S2_API_KEY`.
+`ZOTERO_LIBRARY_TYPE`, `ANTHROPIC_API_KEY`, `S2_API_KEY`, `OPENALEX_API_KEY`.
 
 Find your Zotero `library_id` and create an API key at
 <https://www.zotero.org/settings/keys> (give it write access to create

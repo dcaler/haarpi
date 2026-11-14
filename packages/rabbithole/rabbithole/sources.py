@@ -21,9 +21,70 @@ def _warn(msg: str) -> None:
     print(f"  [warn] {msg}", file=sys.stderr)
 
 
+OPENALEX_HOST = "api.openalex.org"
+
+
+class OpenAlexBudgetSpent(SystemExit):
+    """OpenAlex's daily budget is used up (2026-11-14). Every further call fails the same way
+    until it resets, and the search functions would turn each failure into an empty result,
+    which reads as "nothing found". So it stops the run instead; as a SystemExit it passes
+    through the `except Exception` that guards each call."""
+
+
+_KEY: list[str] = []
+
+
+def openalex_key() -> str:
+    """The OpenAlex API key from the global config (or OPENALEX_API_KEY), read once."""
+    if not _KEY:
+        try:
+            from .config import load_global
+            _KEY.append(load_global().openalex_api_key or "")
+        except Exception:  # noqa: BLE001
+            _KEY.append("")
+    return _KEY[0]
+
+
+def openalex_headers() -> dict:
+    """The key as a header, so it is never part of a URL, and so of no logged error."""
+    k = openalex_key()
+    return {"Authorization": f"Bearer {k}"} if k else {}
+
+
+def budget_spent(r: httpx.Response) -> OpenAlexBudgetSpent | None:
+    """The stop to raise when `r` says OpenAlex's daily budget is spent; None otherwise.
+    An ordinary 429 (too many requests a second) is left to the caller's retry."""
+    if r.status_code != 429 or r.request.url.host != OPENALEX_HOST:
+        return None
+    r.read()
+    if "budget" not in r.text.lower():
+        return None
+    hours = int(r.headers.get("retry-after") or r.headers.get("x-ratelimit-reset") or 0) // 3600
+    keyed = "with" if openalex_key() else "without"
+    return OpenAlexBudgetSpent(f"OpenAlex's daily budget is used up ({keyed} an API key); it "
+                               f"resets in about {hours} h. Stopping rather than reading every "
+                               f"further search as empty.")
+
+
+def _openalex_request(request: httpx.Request) -> None:
+    if request.url.host == OPENALEX_HOST:
+        request.headers.update(openalex_headers())
+
+
+def _openalex_response(response: httpx.Response) -> None:
+    stop = budget_spent(response)
+    if stop:
+        raise stop
+
+
+_TRANSPORT: httpx.BaseTransport | None = None     # a test's stand-in for the network
+
+
 def _client(email: str) -> httpx.Client:
     ua = f"rabbitHole/0.1 (mailto:{email})" if email else "rabbitHole/0.1"
-    return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": ua}, follow_redirects=True)
+    return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": ua}, follow_redirects=True,
+                        transport=_TRANSPORT, event_hooks={"request": [_openalex_request],
+                                     "response": [_openalex_response]})
 
 
 # ──────────────────────────────────────────────────────────────────────────
