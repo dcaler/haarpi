@@ -24,6 +24,21 @@ def _client(email: str) -> httpx.Client:
     )
 
 
+def openalex_headers() -> dict:
+    """The OpenAlex API key (the shared [openalex] api_key in ~/.config/haarpi/config.toml, or
+    OPENALEX_API_KEY) as a header, so it is never part of a URL and so of no logged error. Sent
+    to OpenAlex only (2026-11-14)."""
+    import os
+    key = os.environ.get("OPENALEX_API_KEY", "")
+    if not key:
+        try:
+            from haarpi import config as haarpi_config
+            key = (haarpi_config.merged_config("raconteur").get("openalex") or {}).get("api_key", "")
+        except Exception:  # noqa: BLE001
+            key = ""
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def _strip_html(text: str, max_chars: int = 3000) -> str:
     text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.DOTALL)
     text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL)
@@ -97,7 +112,13 @@ def openalex_source(name: str, email: str) -> dict[str, Any]:
         if email:
             params["mailto"] = email
         with _client(email) as client:
-            r = client.get("https://api.openalex.org/sources", params=params)
+            r = client.get("https://api.openalex.org/sources", params=params,
+                           headers=openalex_headers())
+        if r.status_code == 429 and "budget" in r.text.lower():
+            # a spent daily budget is not "no such journal"
+            print(f"[web] OpenAlex's daily budget is used up; no venue data for {name!r}",
+                  file=sys.stderr)
+            return {}
         data = r.json()
         results = data.get("results", [])
         if not results:
