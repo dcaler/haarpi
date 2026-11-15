@@ -232,8 +232,11 @@ load-bearing sources (the top 5% of the corpus by how much of the review's argum
 carries), coverage against the brief (each focus item covered or THIN), an annotated
 bibliography where every claim is page-located in its source, and a contribution map that
 bands the same sources at the 5% / 25% / 50% marks. `revise`, `graft` and `refresh` rework it.
-What the methods review is for, and so what it should look like, is the next thing to be
-redesigned.
+That shape is being replaced. The methods review is being redesigned as groundwork for a
+choice (`packages/haarpi/DESIGN_methods_review.md`): one decision table per family, giving the
+options for the project's case, the critique a reviewer would raise against each, what answers
+it, and the software and papers to cite. It proposes no path; the choice is made in
+`ramus design`. It is on the bench, and nothing of it is ported yet.
 
 Reference targets are a diagnostic band, never a cap; a review is expected to
 exceed them when the work asks for it.
@@ -727,7 +730,9 @@ access to your project folders; see [its README](https://github.com/dcaler/radas
 You will also need [Ollama](https://ollama.com) for the local models, `pandoc`
 for document rendering, `graphviz` with its neato layout engine for the figures
 (a separate package on recent Ubuntu: `libgvplugin-neato-layout8`), and a Zotero library with
-API access for the literature stage. The deck's illustrations need an `imagine` command on the GPU
+API access for the literature stage. A free OpenAlex API key (`[openalex] api_key`) is
+recommended: without one, every machine on your IP shares a small daily search budget, and
+one large gather can spend it. The deck's illustrations need an `imagine` command on the GPU
 runner's PATH (local Stable Diffusion); without it the `illustrate` step fails, saying why, and the
 briefs stay as notes. `report` and `build` stop before doing any
 work if Zotero isn't configured; `--from-folder` builds from `./pdfs/` only when
